@@ -697,6 +697,39 @@ void registerLists(TestRunner &runner) {
        )",
                  "1\n4\n5");
 
+  runner.addTest("List Slice",
+                 R"(
+            list<int> l = [0, 1, 2, 3, 4, 5];
+            list<int> s1 = l.slice(1, 4);
+            print(s1.length);
+            print(s1[0] .. "," .. s1[1] .. "," .. s1[2]);
+
+            list<int> s2 = l.slice(0, 2);
+            print(s2[0] .. "," .. s2[1]);
+
+            list<int> s3 = l.slice(4, 6);
+            print(s3[0] .. "," .. s3[1]);
+
+            list<int> s4 = l.slice(-3, -1);
+            print(s4.length);
+       )",
+                 "3\n1,2,3\n0,1\n4,5\n2");
+
+  runner.addTest("List Join",
+                 R"(
+            list<any> l1 = [1, 2, 3];
+            print(l1.join(","));
+            print(l1.join(" - "));
+            print(l1.join(""));
+
+            list<string> l2 = ["hello", "world"];
+            print(l2.join(" "));
+
+            list<any> empty = [];
+            print("[" .. empty.join(",") .. "]");
+       )",
+                 "1,2,3\n1 - 2 - 3\n123\nhello world\n[]");
+
   runner.addTest("List in Loop",
                  R"(
             list<int> l = [10, 20, 30, 40, 50];
@@ -914,6 +947,31 @@ void registerStrings(TestRunner &runner) {
             print(chars[2]);
        )",
                  "3\na\nb\nc");
+
+  runner.addTest("String Find",
+                 R"(
+            string s = "hello world";
+            print(s.find("world"));
+            print(s.find("o"));
+            print(s.find("xyz"));
+       )",
+                 "6\n4\n-1");
+
+  runner.addTest("String Replace",
+                 R"(
+            string s1 = "hello world";
+            print(s1.replace("world", "there"));
+
+            string s2 = "aaa";
+            print(s2.replace("a", "bb"));
+
+            string s3 = "no match";
+            print(s3.replace("xyz", "abc"));
+
+            string s4 = "a-b-c";
+            print(s4.replace("-", ""));
+       )",
+                 "hello there\nbbbbbb\nno match\nabc");
 }
 
 // =========================================================

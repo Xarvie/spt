@@ -88,6 +88,61 @@ static Value listRemoveAt(VM *vm, Value receiver, int argc, Value *argv) {
   return result;
 }
 
+static Value listSlice(VM *vm, Value receiver, int argc, Value *argv) {
+  if (!receiver.isList() || argc < 2)
+    return Value::nil();
+  ListObject *list = static_cast<ListObject *>(receiver.asGC());
+
+  if (!argv[0].isInt() || !argv[1].isInt())
+    return Value::nil();
+
+  int64_t start = argv[0].asInt();
+  int64_t end = argv[1].asInt();
+  int64_t len = static_cast<int64_t>(list->elements.size());
+
+  if (start < 0)
+    start = std::max(int64_t(0), len + start);
+  if (end < 0)
+    end = std::max(int64_t(0), len + end);
+
+  start = std::clamp(start, int64_t(0), len);
+  end = std::clamp(end, int64_t(0), len);
+
+  if (end <= start) {
+    return Value::object(vm->allocateList(0));
+  }
+
+  ListObject *result = vm->allocateList(0);
+  vm->protect(Value::object(result));
+
+  for (int64_t i = start; i < end; ++i) {
+    result->elements.push_back(list->elements[i]);
+  }
+
+  vm->unprotect(1);
+  return Value::object(result);
+}
+
+static Value listJoin(VM *vm, Value receiver, int argc, Value *argv) {
+  if (!receiver.isList())
+    return Value::object(vm->allocateString(""));
+  ListObject *list = static_cast<ListObject *>(receiver.asGC());
+
+  std::string sep = "";
+  if (argc >= 1 && argv[0].isString()) {
+    sep = static_cast<StringObject *>(argv[0].asGC())->data;
+  }
+
+  std::string result;
+  for (size_t i = 0; i < list->elements.size(); ++i) {
+    if (i > 0)
+      result += sep;
+    result += list->elements[i].toString();
+  }
+
+  return Value::object(vm->allocateString(result));
+}
+
 static Value listIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 1)
     return Value::integer(-1);
@@ -337,6 +392,34 @@ static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
   return Value::object(result);
 }
 
+static Value stringFind(VM *vm, Value receiver, int argc, Value *argv) {
+  return stringIndexOf(vm, receiver, argc, argv);
+}
+
+static Value stringReplace(VM *vm, Value receiver, int argc, Value *argv) {
+  if (!receiver.isString() || argc < 2)
+    return receiver;
+  if (!argv[0].isString() || !argv[1].isString())
+    return receiver;
+
+  StringObject *str = static_cast<StringObject *>(receiver.asGC());
+  StringObject *oldStr = static_cast<StringObject *>(argv[0].asGC());
+  StringObject *newStr = static_cast<StringObject *>(argv[1].asGC());
+
+  if (oldStr->data.empty()) {
+    return receiver;
+  }
+
+  std::string result = str->data;
+  size_t pos = 0;
+  while ((pos = result.find(oldStr->data, pos)) != std::string::npos) {
+    result.replace(pos, oldStr->data.length(), newStr->data);
+    pos += newStr->data.length();
+  }
+
+  return Value::object(vm->allocateString(result));
+}
+
 struct MethodEntry {
   const char *name;
   NativeFn fn;
@@ -346,18 +429,25 @@ struct MethodEntry {
 static const MethodEntry listMethods[] = {
     {"push", listPush, 1},         {"pop", listPop, 0},           {"insert", listInsert, 2},
     {"clear", listClear, 0},       {"removeAt", listRemoveAt, 1}, {"indexOf", listIndexOf, 1},
-    {"contains", listContains, 1}, {nullptr, nullptr, 0}};
+    {"contains", listContains, 1}, {"slice", listSlice, 2},       {"join", listJoin, -1},
+    {nullptr, nullptr, 0}};
 
 static const MethodEntry mapMethods[] = {{"has", mapHas, 1},       {"clear", mapClear, 0},
                                          {"keys", mapKeys, 0},     {"values", mapValues, 0},
                                          {"remove", mapRemove, 1}, {nullptr, nullptr, 0}};
 
-static const MethodEntry stringMethods[] = {
-    {"slice", stringSlice, 2},       {"indexOf", stringIndexOf, 1},
-    {"contains", stringContains, 1}, {"startsWith", stringStartsWith, 1},
-    {"endsWith", stringEndsWith, 1}, {"toUpper", stringToUpper, 0},
-    {"toLower", stringToLower, 0},   {"trim", stringTrim, 0},
-    {"split", stringSplit, -1},      {nullptr, nullptr, 0}};
+static const MethodEntry stringMethods[] = {{"slice", stringSlice, 2},
+                                            {"indexOf", stringIndexOf, 1},
+                                            {"find", stringFind, 1},
+                                            {"contains", stringContains, 1},
+                                            {"startsWith", stringStartsWith, 1},
+                                            {"endsWith", stringEndsWith, 1},
+                                            {"toUpper", stringToUpper, 0},
+                                            {"toLower", stringToLower, 0},
+                                            {"trim", stringTrim, 0},
+                                            {"split", stringSplit, -1},
+                                            {"replace", stringReplace, 2},
+                                            {nullptr, nullptr, 0}};
 
 bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fieldName,
                                    Value &outValue) {
