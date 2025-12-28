@@ -1,4 +1,5 @@
 #include "VM.h"
+#include "SptStdlibs.h"
 #include <algorithm>
 #include <cstdarg>
 #include <cstring>
@@ -46,12 +47,14 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "print",
-      [this](int argc, Value *args) -> Value {
+      // 参数增加了: [this](VM* vm, Value receiver, int argc, Value *args)
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         std::string outputBuffer;
         for (int i = 0; i < argc; ++i) {
           if (i > 0)
             outputBuffer += " ";
           std::string s = args[i].toString();
+          // 处理数字格式化... (保持原有逻辑)
           if (args[i].isNumber() && !args[i].isInt()) {
             size_t dotPos = s.find('.');
             if (dotPos != std::string::npos) {
@@ -75,7 +78,8 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "type",
-      [this](int argc, Value *args) -> Value {
+
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc != 1)
           return Value::nil();
         StringObject *str = this->allocateString(args[0].typeName());
@@ -300,7 +304,6 @@ dispatch_loop:
     }
 
     case OpCode::OP_GETFIELD: {
-
       Value object = frame->slots[B];
       const auto &keyConst = frame->closure->proto->constants[C];
 
@@ -311,12 +314,32 @@ dispatch_loop:
 
       const std::string &fieldName = std::get<std::string>(keyConst);
 
+      // ================== 【插入开始】标准库拦截 ==================
+      // 优先检查标准库方法 (List.length, Map.keys, String.slice 等)
+      if (object.isList() || object.isMap() || object.isString()) {
+        Value result;
+        // 调用 StdlibDispatcher 查询属性或方法
+        if (StdlibDispatcher::getProperty(this, object, fieldName, result)) {
+          frame->slots[A] = result;
+          break; // 成功处理，跳出 switch
+        }
+
+        // 如果是 List 或 String 但没找到属性（比如 list.wrong），直接报错。
+        // Map 则允许继续往下走，因为 map.key 可能是在访问字段。
+        if (!object.isMap()) {
+          runtimeError("Type '%s' has no property '%s'", object.typeName(), fieldName.c_str());
+          return InterpretResult::RUNTIME_ERROR;
+        }
+      }
+      // ================== 【插入结束】 ==================
+
       if (object.isInstance()) {
 
         auto *instance = static_cast<Instance *>(object.asGC());
 
         Value result = instance->getField(fieldName);
 
+        // 如果字段不存在，尝试查找类方法
         if (result.isNil() && instance->klass) {
           auto it = instance->klass->methods.find(fieldName);
           if (it != instance->klass->methods.end()) {
@@ -333,12 +356,13 @@ dispatch_loop:
         if (it != klass->methods.end()) {
           frame->slots[A] = it->second;
         } else {
-
+          // 查找静态成员
           auto itStatic = klass->statics.find(fieldName);
           frame->slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
         }
 
       } else if (object.isMap()) {
+        // 原有的 Map 字段访问逻辑 (map.field 形式)
         auto *map = static_cast<MapObject *>(object.asGC());
 
         Value result = Value::nil();
@@ -352,6 +376,7 @@ dispatch_loop:
           }
         }
 
+        // 这里的逻辑似乎是为了支持从 Global 查找 fallback，保持原有行为
         if (result.isNil()) {
           auto it = globals_.find(fieldName);
           if (it != globals_.end()) {
@@ -731,7 +756,7 @@ dispatch_loop:
           return InterpretResult::RUNTIME_ERROR;
         }
 
-        Value result = native->function(argCount, argsStart);
+        Value result = native->function(this, native->receiver, argCount, argsStart);
 
         frame->slots[A] = result;
 
@@ -999,7 +1024,7 @@ void VM::registerNative(const std::string &name, NativeFn fn, int arity, uint8_t
   native->name = name;
   native->function = fn;
   native->arity = arity;
-  native->flags = flags;
+  native->receiver = Value::nil(); // 【新增】普通函数没有 receiver
   defineGlobal(name, Value::object(native));
 }
 

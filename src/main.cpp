@@ -193,6 +193,45 @@ void registerDataStructs(TestRunner &runner) {
             print(complex["str"]);
        )",
                  "List size: 0\nhello");
+  runner.addTest("List & Map Remove",
+                 R"(
+            // --- List Test ---
+            list<any> l = [10, 20, 30];
+
+            // 移除索引 1 (20)
+            any removedVal = l.removeAt(1);
+            print("List removed: " .. removedVal);
+
+            // 验证剩下的元素 [10, 30]
+            print("List[1] is now: " .. l[1]);
+            print("List length: " .. l.length);
+
+            // 测试越界移除
+            print("List invalid: " .. l.removeAt(99));
+
+            // --- Map Test ---
+            map<string, any> m = {"a": 100, "b": 200};
+
+            // 移除存在的 key
+            any valA = m.remove("a");
+            print("Map removed: " .. valA);
+
+            // 验证 key 是否还在
+            print("Map has 'a': " .. m.has("a"));
+            print("Map has 'b': " .. m.has("b"));
+
+            // 移除不存在的 key
+            print("Map invalid: " .. m.remove("z"));
+       )",
+                 // 预期输出
+                 "List removed: 20\n"
+                 "List[1] is now: 30\n"
+                 "List length: 2\n"
+                 "List invalid: nil\n"
+                 "Map removed: 100\n"
+                 "Map has 'a': false\n"
+                 "Map has 'b': true\n"
+                 "Map invalid: nil");
 }
 
 // =========================================================

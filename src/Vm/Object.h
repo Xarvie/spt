@@ -9,6 +9,8 @@
 
 namespace spt {
 
+class VM;
+
 // ============================================================================
 // UpValue - 闭包捕获的变量
 // ============================================================================
@@ -64,15 +66,20 @@ struct Instance : GCObject {
 // ============================================================================
 // 原生函数
 // ============================================================================
-using NativeFn = std::function<Value(int argc, Value *args)>;
+using NativeFn = std::function<Value(VM *vm, Value receiver, int argc, Value *args)>;
 
 struct NativeFunction : public GCObject {
   std::string name;
   NativeFn function;
   int arity;
-  uint8_t flags = FUNC_NONE;
+  // 对于全局函数(print)，它是 nil。
+  // 对于方法(list.push)，它是那个 list 对象。
+  Value receiver = Value::nil();
 
-  NativeFunction() { type = ValueType::NativeFunc; }
+  NativeFunction() {
+    type = ValueType::NativeFunc;
+    receiver = Value::nil();
+  }
 };
 
 } // namespace spt

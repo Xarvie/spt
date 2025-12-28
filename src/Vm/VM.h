@@ -94,6 +94,10 @@ public:
 
   InterpretResult executeModule(const CompiledChunk &chunk);
 
+  inline void protect(Value value) { *stackTop_++ = value; }
+
+  inline void unprotect(int count = 1) { stackTop_ -= count; }
+
 private:
   // === 执行循环 ===
   InterpretResult run(int minFrameCount);
@@ -101,9 +105,7 @@ private:
   // === 内置函数注册 ===
   void registerBuiltinFunctions();
 
-  inline void protect(Value value) { *stackTop_++ = value; }
 
-  inline void unprotect(int count = 1) { stackTop_ -= count; }
 
   void resetStack();
 

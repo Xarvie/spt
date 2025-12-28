@@ -157,9 +157,11 @@ void GC::traceReferences() {
       break;
     }
 
-    case ValueType::NativeFunc:
-
+    case ValueType::NativeFunc: { // 注意这里是 NativeFunc
+      auto *native = static_cast<NativeFunction *>(obj);
+      markValue(native->receiver);
       break;
+    }
     default:
       break;
     }
