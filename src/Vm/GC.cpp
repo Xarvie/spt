@@ -193,6 +193,7 @@ void GC::removeWhiteStrings() {
     }
   }
 }
+
 void GC::freeObject(GCObject *obj) {
   if (vm_->config_.debugMode) {
   }

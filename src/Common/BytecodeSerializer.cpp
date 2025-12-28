@@ -5,9 +5,7 @@
 
 namespace spt {
 
-
-static constexpr uint32_t MAGIC = 0x58454C46; 
-
+static constexpr uint32_t MAGIC = 0x58454C46;
 
 void BytecodeSerializer::Writer::writeU8(uint8_t v) { buffer_.push_back(v); }
 
@@ -47,7 +45,6 @@ void BytecodeSerializer::Writer::writeBytes(const void *data, size_t len) {
 }
 
 std::vector<uint8_t> BytecodeSerializer::Writer::finish() { return std::move(buffer_); }
-
 
 BytecodeSerializer::Reader::Reader(const std::vector<uint8_t> &data) : data_(data) {}
 
@@ -97,13 +94,12 @@ std::string BytecodeSerializer::Reader::readString() {
 
 bool BytecodeSerializer::Reader::eof() const { return pos_ >= data_.size(); }
 
-
 void BytecodeSerializer::writeConstant(Writer &w, const ConstantValue &val) {
   w.writeU8(static_cast<uint8_t>(val.index()));
   std::visit(
       [&w](auto &&arg) {
         using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, std::nullptr_t>) { 
+        if constexpr (std::is_same_v<T, std::nullptr_t>) {
         } else if constexpr (std::is_same_v<T, bool>) {
           w.writeU8(arg ? 1 : 0);
         } else if constexpr (std::is_same_v<T, int64_t>) {
@@ -135,7 +131,6 @@ ConstantValue BytecodeSerializer::readConstant(Reader &r) {
   }
 }
 
-
 void BytecodeSerializer::writePrototype(Writer &w, const Prototype &proto) {
   w.writeString(proto.name);
   w.writeString(proto.source);
@@ -146,29 +141,24 @@ void BytecodeSerializer::writePrototype(Writer &w, const Prototype &proto) {
   w.writeU8(proto.maxStackSize);
   w.writeU8(proto.isVararg ? 1 : 0);
 
-  
   w.writeU32(static_cast<uint32_t>(proto.code.size()));
   for (auto inst : proto.code)
     w.writeU32(inst);
 
-  
   w.writeU32(static_cast<uint32_t>(proto.constants.size()));
   for (const auto &c : proto.constants)
     writeConstant(w, c);
 
-  
   w.writeU32(static_cast<uint32_t>(proto.lineInfo.size()));
   for (auto line : proto.lineInfo)
     w.writeU32(static_cast<uint32_t>(line));
 
-  
   w.writeU8(static_cast<uint8_t>(proto.upvalues.size()));
   for (const auto &uv : proto.upvalues) {
     w.writeU8(uv.index);
     w.writeU8(uv.isLocal ? 1 : 0);
   }
 
-  
   w.writeU32(static_cast<uint32_t>(proto.protos.size()));
   for (const auto &p : proto.protos)
     writePrototype(w, p);
@@ -185,25 +175,21 @@ Prototype BytecodeSerializer::readPrototype(Reader &r) {
   proto.maxStackSize = r.readU8();
   proto.isVararg = r.readU8() != 0;
 
-  
   uint32_t codeSize = r.readU32();
   proto.code.reserve(codeSize);
   for (uint32_t i = 0; i < codeSize; ++i)
     proto.code.push_back(r.readU32());
 
-  
   uint32_t constSize = r.readU32();
   proto.constants.reserve(constSize);
   for (uint32_t i = 0; i < constSize; ++i)
     proto.constants.push_back(readConstant(r));
 
-  
   uint32_t lineSize = r.readU32();
   proto.lineInfo.reserve(lineSize);
   for (uint32_t i = 0; i < lineSize; ++i)
     proto.lineInfo.push_back(static_cast<int>(r.readU32()));
 
-  
   uint8_t uvSize = r.readU8();
   proto.upvalues.reserve(uvSize);
   for (uint8_t i = 0; i < uvSize; ++i) {
@@ -213,7 +199,6 @@ Prototype BytecodeSerializer::readPrototype(Reader &r) {
     proto.upvalues.push_back(uv);
   }
 
-  
   uint32_t protoSize = r.readU32();
   proto.protos.reserve(protoSize);
   for (uint32_t i = 0; i < protoSize; ++i)
@@ -222,19 +207,16 @@ Prototype BytecodeSerializer::readPrototype(Reader &r) {
   return proto;
 }
 
-
 std::vector<uint8_t> BytecodeSerializer::serialize(const CompiledChunk &chunk) {
   Writer w;
   w.writeU32(MAGIC);
   w.writeU32(chunk.version);
   w.writeString(chunk.moduleName);
 
-  
   w.writeU32(static_cast<uint32_t>(chunk.exports.size()));
   for (const auto &exp : chunk.exports)
     w.writeString(exp);
 
-  
   writePrototype(w, chunk.mainProto);
   return w.finish();
 }
@@ -280,4 +262,4 @@ CompiledChunk BytecodeSerializer::loadFromFile(const std::string &path) {
   return deserialize(data);
 }
 
-} 
+} // namespace spt

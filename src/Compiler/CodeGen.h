@@ -22,6 +22,7 @@ public:
   // === 类管理 ===
   void beginClass(const std::string &name);
   void endClass();
+
   bool isInClass() const { return currentClass_ != nullptr; }
 
   // === 作用域管理 ===
@@ -72,7 +73,9 @@ public:
 
   // 获取当前内部状态 (仅供特定高级操作使用，尽量少用)
   FunctionState *current() { return current_; }
+
   ClassState *currentClass() { return currentClass_; }
+
   const std::string &moduleName() const { return moduleName_; }
 
 private:

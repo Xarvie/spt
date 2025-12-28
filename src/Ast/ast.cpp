@@ -23,11 +23,13 @@ static std::vector<AstType *> cloneAstTypeList(const std::vector<AstType *> &sou
 
 // --- 基类构造/析构函数实现 ---
 AstType::AstType(SourceLocation loc) : location(std::move(loc)) {}
+
 AstType::~AstType() = default;
 
 // AstNode 构造函数现在初始化 nodeType
 AstNode::AstNode(SourceLocation loc, NodeType type)
     : location(std::move(loc)), nodeType(type) {} // <--- 实现修改
+
 AstNode::~AstNode() = default;
 
 // Expression 构造函数传递 type 给 AstNode
@@ -45,37 +47,57 @@ Declaration::Declaration(SourceLocation loc, NodeType type)
 // --- 具体类型节点构造函数和析构函数 ---
 PrimitiveType::PrimitiveType(PrimitiveTypeKind kind, SourceLocation loc)
     : AstType(std::move(loc)), primitiveKind(kind) {}
+
 PrimitiveType::~PrimitiveType() = default;
+
 AnyType::AnyType(SourceLocation loc) : AstType(std::move(loc)) {}
+
 AnyType::~AnyType() = default;
+
 AutoType::AutoType(SourceLocation loc) : AstType(std::move(loc)) {}
+
 AutoType::~AutoType() = default;
+
 ListType::ListType(AstType *elemType, SourceLocation loc)
     : AstType(std::move(loc)), elementType(elemType) {}
+
 ListType::~ListType() { delete elementType; }
+
 MapType::MapType(AstType *kType, AstType *vType, SourceLocation loc)
     : AstType(std::move(loc)), keyType(kType), valueType(vType) {}
+
 MapType::~MapType() {
   delete keyType;
   delete valueType;
 }
+
 UnionType::UnionType(std::vector<AstType *> members, SourceLocation loc)
     : AstType(std::move(loc)), memberTypes(std::move(members)) {}
+
 UnionType::~UnionType() { deleteVectorItems(memberTypes); }
+
 TupleType::TupleType(std::vector<AstType *> elements, SourceLocation loc)
     : AstType(std::move(loc)), elementTypes(std::move(elements)) {}
+
 TupleType::~TupleType() { deleteVectorItems(elementTypes); }
 
 UserType::~UserType() = default;
+
 FunctionKeywordType::FunctionKeywordType(SourceLocation loc) : AstType(std::move(loc)) {}
+
 FunctionKeywordType::~FunctionKeywordType() = default;
+
 CoroutineKeywordType::CoroutineKeywordType(SourceLocation loc) : AstType(std::move(loc)) {}
+
 CoroutineKeywordType::~CoroutineKeywordType() = default;
 
 // --- 具体类型节点 CLONE 方法实现 ---
 AstType *PrimitiveType::clone() const { return new PrimitiveType(*this); }
+
 AstType *AnyType::clone() const { return new AnyType(*this); }
+
 AstType *AutoType::clone() const { return new AutoType(*this); }
+
 AstType *ListType::clone() const {
   AstType *clonedElementType = nullptr;
   try {
@@ -88,6 +110,7 @@ AstType *ListType::clone() const {
     throw;
   }
 }
+
 AstType *MapType::clone() const {
   AstType *clonedKeyType = nullptr;
   AstType *clonedValueType = nullptr;
@@ -101,12 +124,17 @@ AstType *MapType::clone() const {
     throw;
   }
 }
+
 AstType *UnionType::clone() const { return new UnionType(cloneAstTypeList(memberTypes), location); }
+
 AstType *TupleType::clone() const {
   return new TupleType(cloneAstTypeList(elementTypes), location);
 }
+
 AstType *UserType::clone() const { return new UserType(this->qualifiedNameParts, this->location); }
+
 AstType *FunctionKeywordType::clone() const { return new FunctionKeywordType(*this); }
+
 AstType *CoroutineKeywordType::clone() const { return new CoroutineKeywordType(*this); }
 
 // --- 具体 AST 节点构造函数和析构函数 ---
@@ -119,68 +147,88 @@ LiteralFloatNode::~LiteralFloatNode() = default;
 LiteralStringNode::~LiteralStringNode() = default;
 LiteralBoolNode::~LiteralBoolNode() = default;
 LiteralNullNode::~LiteralNullNode() = default;
+
 LiteralListNode::~LiteralListNode() { deleteVectorItems(elements); }
+
 MapEntryNode::~MapEntryNode() {
   delete key;
   delete value;
 }
+
 LiteralMapNode::~LiteralMapNode() { deleteVectorItems(entries); }
 
 // 表达式
 IdentifierNode::~IdentifierNode() = default;
+
 UnaryOpNode::~UnaryOpNode() { delete operand; }
+
 BinaryOpNode::~BinaryOpNode() {
   delete left;
   delete right;
 }
+
 FunctionCallNode::~FunctionCallNode() {
   delete functionExpr;
   deleteVectorItems(arguments);
 }
+
 MemberAccessNode::~MemberAccessNode() { delete objectExpr; }
+
 MemberLookupNode::~MemberLookupNode() { delete objectExpr; }
+
 IndexAccessNode::~IndexAccessNode() {
   delete arrayExpr;
   delete indexExpr;
 }
+
 ParameterDeclNode::~ParameterDeclNode() { delete typeAnnotation; }
+
 LambdaNode::~LambdaNode() {
   deleteVectorItems(params);
   delete returnType;
   delete body;
 }
+
 NewExpressionNode::~NewExpressionNode() {
   delete classType;
   deleteVectorItems(arguments);
 }
+
 ThisExpressionNode::~ThisExpressionNode() = default;
 VarArgsNode::~VarArgsNode() = default;
 
 // 语句
 BlockNode::~BlockNode() { deleteVectorItems(statements); }
+
 ExpressionStatementNode::~ExpressionStatementNode() { delete expression; }
+
 AssignmentNode::~AssignmentNode() {
   deleteVectorItems(lvalues); // 清理左值 vector
   deleteVectorItems(rvalues); // 清理右值 vector
 }
+
 UpdateAssignmentNode::~UpdateAssignmentNode() {
   delete lvalue;
   delete rvalue;
 }
+
 IfClauseNode::~IfClauseNode() {
   delete condition;
   delete body;
 }
+
 IfStatementNode::~IfStatementNode() {
   delete condition;
   delete thenBlock;
   deleteVectorItems(elseIfClauses);
   delete elseBlock;
 }
+
 WhileStatementNode::~WhileStatementNode() {
   delete condition;
   delete body;
 }
+
 ForCStyleStatementNode::~ForCStyleStatementNode() {
   if (initializer.has_value()) {
     std::visit(
@@ -206,13 +254,16 @@ ForCStyleStatementNode::~ForCStyleStatementNode() {
   deleteVectorItems(updateActions);
   delete body;
 }
+
 ForEachStatementNode::~ForEachStatementNode() {
   deleteVectorItems(loopVariables); // 清理 vector 中的所有指针
   delete iterableExpr;
   delete body;
 }
+
 BreakStatementNode::~BreakStatementNode() = default;
 ContinueStatementNode::~ContinueStatementNode() = default;
+
 ReturnStatementNode::~ReturnStatementNode() { deleteVectorItems(returnValue); }
 
 // 声明
@@ -220,17 +271,22 @@ VariableDeclNode::~VariableDeclNode() {
   delete typeAnnotation;
   delete initializer;
 }
+
 MutiVariableDeclarationNode::~MutiVariableDeclarationNode() { delete initializer; }
+
 FunctionDeclNode::~FunctionDeclNode() {
   deleteVectorItems(params);
   delete returnType;
   delete body;
 }
+
 ClassMemberNode::~ClassMemberNode() { delete memberDeclaration; }
+
 ClassDeclNode::~ClassDeclNode() { deleteVectorItems(members); }
 
 ImportSpecifierNode::~ImportSpecifierNode() = default; // std::optional<std::string> 会自动管理
 ImportNamespaceNode::~ImportNamespaceNode() = default;
+
 ImportNamedNode::~ImportNamedNode() { deleteVectorItems(specifiers); }
 
 // --- 顶级删除函数 ---

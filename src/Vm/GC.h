@@ -32,6 +32,7 @@ public:
   // === 回收控制 ===
   void collect();
   void collectIfNeeded();
+
   void setEnabled(bool enabled) { enabled_ = enabled; }
 
   // === 写屏障 (增量 GC 预留) ===
@@ -39,7 +40,9 @@ public:
 
   // === 统计 ===
   size_t bytesAllocated() const { return bytesAllocated_; }
+
   size_t threshold() const { return threshold_; }
+
   size_t objectCount() const { return objectCount_; }
 
   // === 根集注册 ===

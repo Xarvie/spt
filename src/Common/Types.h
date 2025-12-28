@@ -58,6 +58,7 @@ struct Prototype {
     uint8_t index; // 在父函数中的索引
     bool isLocal;  // true=父函数局部变量, false=父函数UpValue
   };
+
   std::vector<UpvalueDesc> upvalues;
 };
 
@@ -75,6 +76,7 @@ inline constexpr Instruction MAKE_ABC(uint8_t op, uint8_t a, uint8_t b, uint8_t 
          (static_cast<uint32_t>(k & 0x01) << 15) | (static_cast<uint32_t>(b) << 16) |
          (static_cast<uint32_t>(c) << 24);
 }
+
 inline constexpr Instruction MAKE_ABx(uint8_t op, uint8_t a, uint32_t bx) {
   return static_cast<uint32_t>(op) | (static_cast<uint32_t>(a) << 7) | ((bx & 0x1FFFF) << 15);
 }

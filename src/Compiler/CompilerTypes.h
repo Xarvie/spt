@@ -89,6 +89,7 @@ struct CompileError {
 // 赋值目标描述 (Compiler 计算，CodeGen 使用)
 struct LValue {
   enum Kind { LOCAL, UPVALUE, GLOBAL, INDEX, FIELD } kind;
+
   int a, b, c; // 指令操作数
 };
 

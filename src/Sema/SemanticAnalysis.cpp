@@ -27,7 +27,7 @@ void SemanticAnalyzer::analyzeStatement(Statement *stmt) {
     if (decl->initializer) {
       analyzeExpression(decl->initializer);
     }
-    
+
     break;
   }
 
@@ -208,4 +208,4 @@ void SemanticAnalyzer::error(const std::string &msg, const SourceLocation &loc) 
   }
 }
 
-} 
+} // namespace spt

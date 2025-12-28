@@ -24,7 +24,9 @@ public:
   bool analyze(AstNode *ast);
 
   void setErrorHandler(ErrorHandler handler) { errorHandler_ = std::move(handler); }
+
   bool hasError() const { return hasError_; }
+
   const std::vector<SemanticError> &errors() const { return errors_; }
 
 private:

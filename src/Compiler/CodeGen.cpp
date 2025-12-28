@@ -10,7 +10,7 @@ CodeGen::CodeGen(const std::string &moduleName) : moduleName_(moduleName) {
 }
 
 CodeGen::~CodeGen() {
-  
+
   while (current_) {
     FunctionState *enclosing = current_->enclosing;
     delete current_;
@@ -23,10 +23,6 @@ CodeGen::~CodeGen() {
   }
 }
 
-
-
-
-
 void CodeGen::beginFunction(const std::string &name, int numParams, bool isVararg) {
   auto *fs = new FunctionState();
   fs->enclosing = current_;
@@ -37,16 +33,15 @@ void CodeGen::beginFunction(const std::string &name, int numParams, bool isVarar
   fs->maxStack = numParams;
 
   current_ = fs;
-  beginScope(); 
+  beginScope();
 }
 
 Prototype CodeGen::endFunction() {
-  endScope(); 
+  endScope();
 
   current_->proto.maxStackSize = static_cast<uint8_t>(current_->maxStack);
   current_->proto.numUpvalues = static_cast<uint8_t>(current_->upvalues.size());
 
-  
   for (const auto &uv : current_->upvalues) {
     current_->proto.upvalues.push_back({uv.index, uv.isLocal});
   }
@@ -73,20 +68,15 @@ void CodeGen::endClass() {
   currentClass_ = enclosing;
 }
 
-
-
-
-
 void CodeGen::beginScope() { current_->scopeDepth++; }
 
 void CodeGen::endScope() {
   current_->scopeDepth--;
 
-  
   while (!current_->locals.empty() && current_->locals.back().scopeDepth > current_->scopeDepth) {
 
     if (current_->locals.back().isCaptured) {
-      
+
       emitABC(OpCode::OP_CLOSE_UPVALUE, current_->locals.back().slot, 0, 0);
     }
 
@@ -96,10 +86,6 @@ void CodeGen::endScope() {
 }
 
 int CodeGen::currentScopeDepth() const { return current_->scopeDepth; }
-
-
-
-
 
 void CodeGen::beginLoop(int startPc) {
   current_->loops.push_back({startPc, current_->scopeDepth, {}, {}});
@@ -127,17 +113,13 @@ void CodeGen::patchContinues(int target) {
   }
 }
 
-
-
-
-
 void CodeGen::declareLocal(const std::string &name) {
-  
+
   for (int i = static_cast<int>(current_->locals.size()) - 1; i >= 0; --i) {
     if (current_->locals[i].scopeDepth < current_->scopeDepth)
       break;
     if (current_->locals[i].name == name) {
-      
+
       throw std::runtime_error("Variable '" + name + "' already declared in this scope");
     }
   }
@@ -163,14 +145,12 @@ int CodeGen::resolveUpvalue(const std::string &name) {
   if (!current_->enclosing)
     return -1;
 
-  
   for (size_t i = 0; i < current_->upvalues.size(); ++i) {
     if (current_->upvalues[i].name == name) {
       return static_cast<int>(i);
     }
   }
 
-  
   FunctionState *enclosing = current_->enclosing;
   for (int i = static_cast<int>(enclosing->locals.size()) - 1; i >= 0; --i) {
     if (enclosing->locals[i].name == name) {
@@ -179,7 +159,6 @@ int CodeGen::resolveUpvalue(const std::string &name) {
     }
   }
 
-  
   FunctionState *saved = current_;
   current_ = enclosing;
   int upval = resolveUpvalue(name);
@@ -204,10 +183,6 @@ int CodeGen::addUpvalue(uint8_t index, bool isLocal, const std::string &name) {
   return static_cast<int>(current_->upvalues.size() - 1);
 }
 
-
-
-
-
 int CodeGen::addConstant(const ConstantValue &value) {
   auto &constants = current_->proto.constants;
   for (size_t i = 0; i < constants.size(); ++i) {
@@ -227,13 +202,7 @@ int CodeGen::allocSlots(int n) { return current_->allocSlots(n); }
 
 void CodeGen::freeSlots(int n) { current_->freeSlots(n); }
 
-void CodeGen::markInitialized() {
-  
-}
-
-
-
-
+void CodeGen::markInitialized() {}
 
 bool CodeGen::isMethod() const { return current_->isMethod; }
 
@@ -241,13 +210,9 @@ bool CodeGen::isInitializer() const { return current_->isInitializer; }
 
 int CodeGen::currentPc() const { return static_cast<int>(current_->proto.code.size()); }
 
-
-
-
-
 void CodeGen::emit(Instruction inst) {
   current_->proto.code.push_back(inst);
-  current_->proto.lineInfo.push_back(0); 
+  current_->proto.lineInfo.push_back(0);
 }
 
 void CodeGen::emitABC(OpCode op, uint8_t a, uint8_t b, uint8_t c) {
@@ -280,4 +245,4 @@ void CodeGen::patchJumpTo(int jumpInst, int target) {
 
 void CodeGen::emitCloseUpvalue(int slot) { emitABC(OpCode::OP_CLOSE_UPVALUE, slot, 0, 0); }
 
-} 
+} // namespace spt

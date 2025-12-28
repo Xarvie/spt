@@ -18,6 +18,7 @@ struct SourceLocation {
   int line = 0;         ///< 行号 (从 1 开始)
   int column = 0;       ///< 列号 (从 1 开始)
   SourceLocation() = default;
+
   SourceLocation(std::string file, int ln, int col)
       : filename(std::move(file)), line(ln), column(col) {}
 };
@@ -141,11 +142,13 @@ protected:
   // 构造函数传递 NodeType 给 AstNode
   Expression(SourceLocation loc, NodeType type);
 };
+
 class Statement : public AstNode {
 protected:
   // 构造函数传递 NodeType 给 AstNode
   Statement(SourceLocation loc, NodeType type);
 };
+
 class Declaration : public Statement {
 public:
   bool isModuleRoot = false; // 标记该声明是否定义在模块最外层
@@ -156,6 +159,7 @@ protected:
 
 // --- 具体的类型节点 ---
 enum class PrimitiveTypeKind { INT, FLOAT, NUMBER, STRING, BOOL, VOID, NULL_TYPE };
+
 class PrimitiveType : public AstType {
 public:
   PrimitiveTypeKind primitiveKind;
@@ -163,18 +167,21 @@ public:
   virtual ~PrimitiveType() override;
   virtual AstType *clone() const override;
 };
+
 class AnyType : public AstType {
 public:
   AnyType(SourceLocation loc);
   virtual ~AnyType() override;
   virtual AstType *clone() const override;
 };
+
 class AutoType : public AstType {
 public:
   AutoType(SourceLocation loc);
   virtual ~AutoType() override;
   virtual AstType *clone() const override;
 };
+
 class ListType : public AstType {
 public:
   AstType *elementType = nullptr;
@@ -182,6 +189,7 @@ public:
   virtual ~ListType() override;
   virtual AstType *clone() const override;
 };
+
 class MapType : public AstType {
 public:
   AstType *keyType = nullptr;
@@ -190,6 +198,7 @@ public:
   virtual ~MapType() override;
   virtual AstType *clone() const override;
 };
+
 class UnionType : public AstType {
 public:
   std::vector<AstType *> memberTypes;
@@ -197,6 +206,7 @@ public:
   virtual ~UnionType() override;
   virtual AstType *clone() const override;
 };
+
 class TupleType : public AstType {
 public:
   std::vector<AstType *> elementTypes;
@@ -210,6 +220,7 @@ public:
   // --- 修改：将 std::string name 替换为 vector ---
   // std::string name; // 旧的成员
   std::vector<std::string> qualifiedNameParts; ///< 存储限定名的各个部分，例如 {"Module", "Type"}
+
   // --- 结束修改 ---
 
   // --- 修改：更新构造函数以接受 vector ---
@@ -241,6 +252,7 @@ public:
   virtual ~FunctionKeywordType() override;
   virtual AstType *clone() const override;
 };
+
 class CoroutineKeywordType : public AstType {
 public:
   CoroutineKeywordType(SourceLocation loc);
@@ -251,10 +263,13 @@ public:
 class MultiReturnType : public AstType {
 public:
   MultiReturnType(SourceLocation loc) : AstType(std::move(loc)) {}
+
   virtual ~MultiReturnType() override = default; // 默认析构即可
-  virtual AstType *clone() const override {      // 实现克隆
+
+  virtual AstType *clone() const override { // 实现克隆
     return new MultiReturnType(*this);
   }
+
   // 可以根据需要添加其他成员或方法，但目前可能不需要
 };
 
@@ -302,32 +317,40 @@ enum class OperatorKind {
 class LiteralIntNode : public Expression {
 public:
   int64_t value;
+
   LiteralIntNode(int64_t val, SourceLocation loc)
       : Expression(std::move(loc), NodeType::LITERAL_INT), value(val) {} // 传递类型
+
   virtual ~LiteralIntNode() override;
 };
 
 class LiteralFloatNode : public Expression {
 public:
   double value;
+
   LiteralFloatNode(double val, SourceLocation loc)
       : Expression(std::move(loc), NodeType::LITERAL_FLOAT), value(val) {} // 传递类型
+
   virtual ~LiteralFloatNode() override;
 };
 
 class LiteralStringNode : public Expression {
 public:
   std::string value;
+
   LiteralStringNode(std::string val, SourceLocation loc)
       : Expression(std::move(loc), NodeType::LITERAL_STRING), value(std::move(val)) {} // 传递类型
+
   virtual ~LiteralStringNode() override;
 };
 
 class LiteralBoolNode : public Expression {
 public:
   bool value;
+
   LiteralBoolNode(bool val, SourceLocation loc)
       : Expression(std::move(loc), NodeType::LITERAL_BOOL), value(val) {} // 传递类型
+
   virtual ~LiteralBoolNode() override;
 };
 
@@ -335,15 +358,18 @@ class LiteralNullNode : public Expression {
 public:
   LiteralNullNode(SourceLocation loc)
       : Expression(std::move(loc), NodeType::LITERAL_NULL) {} // 传递类型
+
   virtual ~LiteralNullNode() override;
 };
 
 class LiteralListNode : public Expression {
 public:
   std::vector<Expression *> elements;
+
   LiteralListNode(std::vector<Expression *> elems, SourceLocation loc)
       : Expression(std::move(loc), NodeType::LITERAL_LIST), elements(std::move(elems)) {
   } // 传递类型
+
   virtual ~LiteralListNode() override;
 };
 
@@ -351,16 +377,20 @@ class MapEntryNode : public AstNode { // 直接继承自 AstNode
 public:
   Expression *key = nullptr;
   Expression *value = nullptr;
+
   MapEntryNode(Expression *k, Expression *v, SourceLocation loc)
       : AstNode(std::move(loc), NodeType::MAP_ENTRY), key(k), value(v) {} // 传递类型
+
   virtual ~MapEntryNode() override;
 };
 
 class LiteralMapNode : public Expression {
 public:
   std::vector<MapEntryNode *> entries;
+
   LiteralMapNode(std::vector<MapEntryNode *> ents, SourceLocation loc)
       : Expression(std::move(loc), NodeType::LITERAL_MAP), entries(std::move(ents)) {} // 传递类型
+
   virtual ~LiteralMapNode() override;
 };
 
@@ -368,8 +398,10 @@ public:
 class IdentifierNode : public Expression {
 public:
   std::string name;
+
   IdentifierNode(std::string n, SourceLocation loc)
       : Expression(std::move(loc), NodeType::IDENTIFIER), name(std::move(n)) {} // 传递类型
+
   virtual ~IdentifierNode() override;
 };
 
@@ -377,6 +409,7 @@ class ImportStatementNode : public Statement {
 protected:
   ImportStatementNode(SourceLocation loc, NodeType type) : Statement(std::move(loc), type) {}
 };
+
 class ImportSpecifierNode : public AstNode {
 public:
   std::string importedName;         // 在模块中导出的原始名称
@@ -400,9 +433,11 @@ class ImportNamespaceNode : public ImportStatementNode {
 public:
   std::string alias;
   std::string modulePath;
+
   ImportNamespaceNode(std::string aliasName, std::string path, SourceLocation loc)
       : ImportStatementNode(std::move(loc), NodeType::IMPORT_NAMESPACE),
         alias(std::move(aliasName)), modulePath(std::move(path)) {}
+
   virtual ~ImportNamespaceNode() override;
 };
 
@@ -411,9 +446,11 @@ class ImportNamedNode : public ImportStatementNode {
 public:
   std::vector<ImportSpecifierNode *> specifiers;
   std::string modulePath;
+
   ImportNamedNode(std::vector<ImportSpecifierNode *> specs, std::string path, SourceLocation loc)
       : ImportStatementNode(std::move(loc), NodeType::IMPORT_NAMED), specifiers(std::move(specs)),
         modulePath(std::move(path)) {}
+
   virtual ~ImportNamedNode() override;
 };
 
@@ -421,8 +458,10 @@ class UnaryOpNode : public Expression {
 public:
   OperatorKind op;
   Expression *operand = nullptr;
+
   UnaryOpNode(OperatorKind o, Expression *expr, SourceLocation loc)
       : Expression(std::move(loc), NodeType::UNARY_OP), op(o), operand(expr) {} // 传递类型
+
   virtual ~UnaryOpNode() override;
 };
 
@@ -431,8 +470,10 @@ public:
   OperatorKind op;
   Expression *left = nullptr;
   Expression *right = nullptr;
+
   BinaryOpNode(OperatorKind o, Expression *l, Expression *r, SourceLocation loc)
       : Expression(std::move(loc), NodeType::BINARY_OP), op(o), left(l), right(r) {} // 传递类型
+
   virtual ~BinaryOpNode() override;
 };
 
@@ -440,9 +481,11 @@ class FunctionCallNode : public Expression {
 public:
   Expression *functionExpr = nullptr;
   std::vector<Expression *> arguments;
+
   FunctionCallNode(Expression *func, std::vector<Expression *> args, SourceLocation loc)
       : Expression(std::move(loc), NodeType::FUNCTION_CALL), functionExpr(func),
         arguments(std::move(args)) {} // 传递类型
+
   virtual ~FunctionCallNode() override;
 };
 
@@ -450,9 +493,11 @@ class MemberAccessNode : public Expression {
 public:
   Expression *objectExpr = nullptr;
   std::string memberName;
+
   MemberAccessNode(Expression *obj, std::string member, SourceLocation loc)
       : Expression(std::move(loc), NodeType::MEMBER_ACCESS), objectExpr(obj),
         memberName(std::move(member)) {} // 传递类型
+
   virtual ~MemberAccessNode() override;
 };
 
@@ -460,9 +505,11 @@ class MemberLookupNode : public Expression {
 public:
   Expression *objectExpr = nullptr;
   std::string memberName;
+
   MemberLookupNode(Expression *obj, std::string member, SourceLocation loc)
       : Expression(std::move(loc), NodeType::MEMBER_LOOKUP), objectExpr(obj),
         memberName(std::move(member)) {} // 传递类型
+
   virtual ~MemberLookupNode() override;
 };
 
@@ -470,9 +517,11 @@ class IndexAccessNode : public Expression {
 public:
   Expression *arrayExpr = nullptr;
   Expression *indexExpr = nullptr;
+
   IndexAccessNode(Expression *array, Expression *index, SourceLocation loc)
       : Expression(std::move(loc), NodeType::INDEX_ACCESS), arrayExpr(array), indexExpr(index) {
   } // 传递类型
+
   virtual ~IndexAccessNode() override;
 };
 
@@ -480,9 +529,11 @@ class ParameterDeclNode : public Declaration {
 public:
   std::string name;
   AstType *typeAnnotation = nullptr;
+
   ParameterDeclNode(std::string n, AstType *type, SourceLocation loc)
       : Declaration(std::move(loc), NodeType::PARAMETER_DECL), name(std::move(n)),
         typeAnnotation(type) {} // 传递类型
+
   virtual ~ParameterDeclNode() override;
 };
 
@@ -497,6 +548,7 @@ public:
              SourceLocation loc)
       : Expression(std::move(loc), NodeType::LAMBDA), params(std::move(p)), returnType(retType),
         body(b), isVariadic(isVar) {}
+
   virtual ~LambdaNode() override;
 };
 
@@ -504,9 +556,11 @@ class NewExpressionNode : public Expression {
 public:
   UserType *classType = nullptr;
   std::vector<Expression *> arguments;
+
   NewExpressionNode(UserType *cType, std::vector<Expression *> args, SourceLocation loc)
       : Expression(std::move(loc), NodeType::NEW_EXPRESSION), classType(cType),
         arguments(std::move(args)) {} // 传递类型
+
   virtual ~NewExpressionNode() override;
 };
 
@@ -514,12 +568,14 @@ class ThisExpressionNode : public Expression {
 public:
   ThisExpressionNode(SourceLocation loc)
       : Expression(std::move(loc), NodeType::THIS_EXPRESSION) {} // 传递类型
+
   virtual ~ThisExpressionNode() override;
 };
 
 class VarArgsNode : public Expression {
 public:
   VarArgsNode(SourceLocation loc) : Expression(std::move(loc), NodeType::VAR_ARGS) {} // 传递类型
+
   virtual ~VarArgsNode() override;
 };
 
@@ -527,16 +583,20 @@ public:
 class BlockNode : public Statement {
 public:
   std::vector<Statement *> statements;
+
   BlockNode(std::vector<Statement *> stmts, SourceLocation loc)
       : Statement(std::move(loc), NodeType::BLOCK), statements(std::move(stmts)) {} // 传递类型
+
   virtual ~BlockNode() override;
 };
 
 class ExpressionStatementNode : public Statement {
 public:
   Expression *expression = nullptr;
+
   ExpressionStatementNode(Expression *expr, SourceLocation loc)
       : Statement(std::move(loc), NodeType::EXPRESSION_STATEMENT), expression(expr) {} // 传递类型
+
   virtual ~ExpressionStatementNode() override;
 };
 
@@ -557,9 +617,11 @@ public:
   OperatorKind op;
   Expression *lvalue = nullptr;
   Expression *rvalue = nullptr;
+
   UpdateAssignmentNode(OperatorKind o, Expression *lval, Expression *rval, SourceLocation loc)
       : Statement(std::move(loc), NodeType::UPDATE_ASSIGNMENT), op(o), lvalue(lval), rvalue(rval) {
   } // 传递类型
+
   virtual ~UpdateAssignmentNode() override;
 };
 
@@ -567,8 +629,10 @@ class IfClauseNode : public AstNode { // 直接继承 AstNode
 public:
   Expression *condition = nullptr;
   BlockNode *body = nullptr;
+
   IfClauseNode(Expression *cond, BlockNode *b, SourceLocation loc)
       : AstNode(std::move(loc), NodeType::IF_CLAUSE), condition(cond), body(b) {} // 传递类型
+
   virtual ~IfClauseNode() override;
 };
 
@@ -578,10 +642,12 @@ public:
   BlockNode *thenBlock = nullptr;
   std::vector<IfClauseNode *> elseIfClauses;
   BlockNode *elseBlock = nullptr;
+
   IfStatementNode(Expression *cond, BlockNode *thenB, std::vector<IfClauseNode *> elseIfs,
                   BlockNode *elseB, SourceLocation loc)
       : Statement(std::move(loc), NodeType::IF_STATEMENT), condition(cond), thenBlock(thenB),
         elseIfClauses(std::move(elseIfs)), elseBlock(elseB) {} // 传递类型
+
   virtual ~IfStatementNode() override;
 };
 
@@ -589,9 +655,11 @@ class WhileStatementNode : public Statement {
 public:
   Expression *condition = nullptr;
   BlockNode *body = nullptr;
+
   WhileStatementNode(Expression *cond, BlockNode *b, SourceLocation loc)
       : Statement(std::move(loc), NodeType::WHILE_STATEMENT), condition(cond), body(b) {
   } // 传递类型
+
   virtual ~WhileStatementNode() override;
 };
 
@@ -599,16 +667,19 @@ using ForInitializerVariant = std::variant<std::vector<Declaration *>, // 来自
                                            AssignmentNode *,
                                            std::vector<Expression *> // 来自 expressionList
                                            >;
+
 class ForCStyleStatementNode : public Statement {
 public:
   std::optional<ForInitializerVariant> initializer;
   Expression *condition = nullptr;
   std::vector<Statement *> updateActions;
   BlockNode *body = nullptr;
+
   ForCStyleStatementNode(std::optional<ForInitializerVariant> init, Expression *cond,
                          std::vector<Statement *> updateActs, BlockNode *b, SourceLocation loc)
       : Statement(std::move(loc), NodeType::FOR_CSTYLE_STATEMENT), initializer(std::move(init)),
         condition(cond), updateActions(std::move(updateActs)), body(b) {} // 传递类型
+
   virtual ~ForCStyleStatementNode() override;
 };
 
@@ -617,10 +688,12 @@ public:
   std::vector<ParameterDeclNode *> loopVariables;
   Expression *iterableExpr = nullptr;
   BlockNode *body = nullptr;
+
   ForEachStatementNode(std::vector<ParameterDeclNode *> vars, Expression *iter, BlockNode *b,
                        SourceLocation loc)
       : Statement(std::move(loc), NodeType::FOR_EACH_STATEMENT), loopVariables(std::move(vars)),
         iterableExpr(iter), body(b) {} // 传递类型
+
   virtual ~ForEachStatementNode() override;
 };
 
@@ -628,6 +701,7 @@ class BreakStatementNode : public Statement {
 public:
   BreakStatementNode(SourceLocation loc)
       : Statement(std::move(loc), NodeType::BREAK_STATEMENT) {} // 传递类型
+
   virtual ~BreakStatementNode() override;
 };
 
@@ -635,15 +709,18 @@ class ContinueStatementNode : public Statement {
 public:
   ContinueStatementNode(SourceLocation loc)
       : Statement(std::move(loc), NodeType::CONTINUE_STATEMENT) {} // 传递类型
+
   virtual ~ContinueStatementNode() override;
 };
 
 class ReturnStatementNode : public Statement {
 public:
   std::vector<Expression *> returnValue;
+
   ReturnStatementNode(std::vector<Expression *> retVals, SourceLocation loc)
       : Statement(std::move(loc), NodeType::RETURN_STATEMENT), returnValue(std::move(retVals)) {
   } // 传递类型
+
   virtual ~ReturnStatementNode() override;
 };
 
@@ -656,6 +733,7 @@ public:
   bool isGlobal;
   bool isStatic;
   bool isExported;
+
   VariableDeclNode(std::string n, AstType *type, Expression *init, bool isC, bool isG, bool isS,
                    bool isExp, SourceLocation loc)
       : Declaration(std::move(loc),
@@ -687,6 +765,7 @@ public:
   std::vector<MultiDeclVariableInfo> variables; // 存储所有声明的变量 (现在不含 location)
   Expression *initializer = nullptr;            // 存储 *单个* 初始化表达式的指针
   bool isExported;
+
   // 构造函数 - 注意基类构造函数会处理 location
   MutiVariableDeclarationNode(std::vector<MultiDeclVariableInfo> vars, Expression *init,
                               bool exported, SourceLocation loc)
@@ -715,6 +794,7 @@ public:
       : Declaration(std::move(loc), NodeType::FUNCTION_DECL), name(std::move(n)),
         params(std::move(p)), returnType(retType), body(b), isGlobalDecl(isG), isStatic(isS),
         isVariadic(isVar), isExported(isExp) {}
+
   virtual ~FunctionDeclNode() override;
 };
 
@@ -734,6 +814,7 @@ public:
       isStatic = funcDecl->isStatic;
     }
   }
+
   virtual ~ClassMemberNode() override;
 };
 
@@ -747,6 +828,7 @@ public:
                 SourceLocation loc) // <<< 添加 isExp 参数
       : Declaration(std::move(loc), NodeType::CLASS_DECL), name(std::move(n)),
         members(std::move(mems)), isExported(isExp) {} // 传递类型
+
   virtual ~ClassDeclNode() override;
 };
 

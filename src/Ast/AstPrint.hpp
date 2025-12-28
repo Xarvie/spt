@@ -1,24 +1,22 @@
 #ifndef SPT_AST_UTIL_HPP
 #define SPT_AST_UTIL_HPP
 
-#include "ast.h"    
-#include <iostream> 
-#include <optional> 
-#include <string>   
-#include <variant>  
-#include <vector>   
-
+#include "ast.h"
+#include <iostream>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
 
 inline void printIndent(std::ostream &out, int indentLevel) {
   for (int i = 0; i < indentLevel; ++i) {
-    out << "  "; 
+    out << "  ";
   }
 }
 
-
 inline std::string getOperatorName(OperatorKind op) {
   switch (op) {
-  
+
   case OperatorKind::NEGATE:
     return "- (数值负)";
   case OperatorKind::NOT:
@@ -27,7 +25,7 @@ inline std::string getOperatorName(OperatorKind op) {
     return "#";
   case OperatorKind::BW_NOT:
     return "~";
-    
+
   case OperatorKind::ADD:
     return "+";
   case OperatorKind::SUB:
@@ -66,7 +64,7 @@ inline std::string getOperatorName(OperatorKind op) {
     return "<<";
   case OperatorKind::BW_RSHIFT:
     return ">>";
-    
+
   case OperatorKind::ASSIGN_ADD:
     return "+=";
   case OperatorKind::ASSIGN_SUB:
@@ -94,9 +92,7 @@ inline std::string getOperatorName(OperatorKind op) {
   }
 }
 
-
 void printAst(std::ostream &out, const AstNode *node, int indentLevel = 0);
-
 
 inline void printAstType(std::ostream &out, const AstType *type) {
   if (!type) {
@@ -104,7 +100,6 @@ inline void printAstType(std::ostream &out, const AstType *type) {
     return;
   }
 
-  
   if (const auto *p = dynamic_cast<const PrimitiveType *>(type)) {
     switch (p->primitiveKind) {
     case PrimitiveTypeKind::INT:
@@ -138,7 +133,7 @@ inline void printAstType(std::ostream &out, const AstType *type) {
     out << "auto";
   } else if (const auto *l = dynamic_cast<const ListType *>(type)) {
     out << "list<";
-    printAstType(out, l->elementType); 
+    printAstType(out, l->elementType);
     out << ">";
   } else if (const auto *m = dynamic_cast<const MapType *>(type)) {
     out << "map<";
@@ -163,7 +158,7 @@ inline void printAstType(std::ostream &out, const AstType *type) {
     }
     out << ">";
   } else if (const auto *user = dynamic_cast<const UserType *>(type)) {
-    out << user->getFullName(); 
+    out << user->getFullName();
   } else if (dynamic_cast<const FunctionKeywordType *>(type)) {
     out << "function";
   } else if (dynamic_cast<const CoroutineKeywordType *>(type)) {
@@ -171,10 +166,7 @@ inline void printAstType(std::ostream &out, const AstType *type) {
   } else {
     out << "[未知 AstType 子类]";
   }
-  
-  
 }
-
 
 inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
   if (!node) {
@@ -183,20 +175,14 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     return;
   }
 
-  
   printIndent(out, indentLevel);
-  
-  
 
-  
-
-  
   if (const auto *n = dynamic_cast<const LiteralIntNode *>(node)) {
     out << "整数常量: " << n->value << "\n";
   } else if (const auto *n = dynamic_cast<const LiteralFloatNode *>(node)) {
     out << "浮点常量: " << n->value << "\n";
   } else if (const auto *n = dynamic_cast<const LiteralStringNode *>(node)) {
-    
+
     out << "字符串常量: \"" << n->value << "\"\n";
   } else if (const auto *n = dynamic_cast<const LiteralBoolNode *>(node)) {
     out << "布尔常量: " << (n->value ? "true" : "false") << "\n";
@@ -205,14 +191,14 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
   } else if (const auto *n = dynamic_cast<const LiteralListNode *>(node)) {
     out << "列表常量 [\n";
     for (const auto *elem : n->elements) {
-      printAst(out, elem, indentLevel + 1); 
+      printAst(out, elem, indentLevel + 1);
     }
     printIndent(out, indentLevel);
     out << "]\n";
   } else if (const auto *n = dynamic_cast<const LiteralMapNode *>(node)) {
     out << "Map常量 {\n";
     for (const auto *entry : n->entries) {
-      printAst(out, entry, indentLevel + 1); 
+      printAst(out, entry, indentLevel + 1);
     }
     printIndent(out, indentLevel);
     out << "}\n";
@@ -225,12 +211,12 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     out << "值:\n";
     printAst(out, n->value, indentLevel + 2);
   }
-  
+
   else if (const auto *n = dynamic_cast<const IdentifierNode *>(node)) {
     out << "标识符: " << n->name << "\n";
   } else if (const auto *n = dynamic_cast<const UnaryOpNode *>(node)) {
     out << "一元操作: " << getOperatorName(n->op) << "\n";
-    printAst(out, n->operand, indentLevel + 1); 
+    printAst(out, n->operand, indentLevel + 1);
   } else if (const auto *n = dynamic_cast<const BinaryOpNode *>(node)) {
     out << "二元操作: " << getOperatorName(n->op) << "\n";
     printIndent(out, indentLevel + 1);
@@ -312,11 +298,11 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
   } else if (dynamic_cast<const VarArgsNode *>(node)) {
     out << "可变参数 (...) 表达式\n";
   }
-  
+
   else if (const auto *n = dynamic_cast<const BlockNode *>(node)) {
     out << "代码块 {\n";
     for (const auto *stmt : n->statements) {
-      printAst(out, stmt, indentLevel + 1); 
+      printAst(out, stmt, indentLevel + 1);
     }
     printIndent(out, indentLevel);
     out << "}\n";
@@ -324,11 +310,7 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     out << "表达式语句:\n";
     printAst(out, n->expression, indentLevel + 1);
   } else if (const auto *n = dynamic_cast<const AssignmentNode *>(node)) {
-    
-    
-    
-    
-    
+
   } else if (const auto *n = dynamic_cast<const UpdateAssignmentNode *>(node)) {
     out << "更新赋值语句 (" << getOperatorName(n->op) << "):\n";
     printIndent(out, indentLevel + 1);
@@ -357,7 +339,7 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
       out << "Else 块:\n";
       printAst(out, n->elseBlock, indentLevel + 2);
     }
-  } else if (const auto *n = dynamic_cast<const IfClauseNode *>(node)) { 
+  } else if (const auto *n = dynamic_cast<const IfClauseNode *>(node)) {
     out << "Else If 子句:\n";
     printIndent(out, indentLevel + 1);
     out << "条件:\n";
@@ -378,7 +360,7 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     printIndent(out, indentLevel + 1);
     out << "初始化:\n";
     if (n->initializer.has_value()) {
-      
+
       std::visit(
           [&](auto &&arg) {
             using T = std::decay_t<decltype(arg)>;
@@ -392,8 +374,7 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
                   printAst(out, item, indentLevel + 2);
                 }
               }
-            } else if constexpr (std::is_same_v<T,
-                                                std::vector<AssignmentNode *>>) { 
+            } else if constexpr (std::is_same_v<T, std::vector<AssignmentNode *>>) {
               out << "(赋值语句列表):\n";
               if (arg.empty()) {
                 printIndent(out, indentLevel + 2);
@@ -422,26 +403,20 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     }
     printIndent(out, indentLevel + 1);
     out << "条件:\n";
-    printAst(out, n->condition, indentLevel + 2); 
+    printAst(out, n->condition, indentLevel + 2);
     printIndent(out, indentLevel + 1);
     out << "更新:\n";
-    if (!n->updateActions.empty()) { 
-      
+    if (!n->updateActions.empty()) {
+
       for (const Statement *actionStmt : n->updateActions) {
-        printAst(out, actionStmt, indentLevel + 2); 
+        printAst(out, actionStmt, indentLevel + 2);
       }
     }
     printIndent(out, indentLevel + 1);
     out << "循环体:\n";
     printAst(out, n->body, indentLevel + 2);
   } else if (const auto *n = dynamic_cast<const ForEachStatementNode *>(node)) {
-    
-    
-    
-    
-    
-    
-    
+
   } else if (dynamic_cast<const BreakStatementNode *>(node)) {
     out << "Break 语句\n";
   } else if (dynamic_cast<const ContinueStatementNode *>(node)) {
@@ -457,7 +432,7 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     }
 
   }
-  
+
   else if (const auto *n = dynamic_cast<const VariableDeclNode *>(node)) {
     out << "变量声明: " << n->name;
     out << " (类型: ";
@@ -486,7 +461,7 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
                                                                                            : node)
                 ? "方法"
                 : "函数")
-        << "声明: " << n->name; 
+        << "声明: " << n->name;
     out << (n->isVariadic ? " (可变参数)" : "") << " -> ";
     printAstType(out, n->returnType);
     out << "\n";
@@ -512,13 +487,13 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     out << "}\n";
   } else if (const auto *n = dynamic_cast<const ClassMemberNode *>(node)) {
     out << "类成员 " << (n->isStatic ? "[static]" : "") << ":\n";
-    
+
     printAst(out, n->memberDeclaration, indentLevel + 1);
   }
-  
+
   else {
     out << "[未知 AST 节点类型]\n";
   }
 }
 
-#endif 
+#endif

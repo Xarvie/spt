@@ -141,10 +141,12 @@ public:
     size_t hitCount;
     size_t missCount;
   };
+
   CacheStats getCacheStats() const;
 
   // === 加载器管理 ===
   void setLoader(std::unique_ptr<ModuleLoader> loader);
+
   ModuleLoader *getLoader() const { return loader_.get(); }
 
   // === 热更新 ===

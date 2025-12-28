@@ -17,8 +17,7 @@
 using namespace spt;
 namespace fs = std::filesystem;
 
-extern AstNode *loadAst(const std::string &sourceCode,
-                        const std::string &filename);
+extern AstNode *loadAst(const std::string &sourceCode, const std::string &filename);
 
 class TestRunner {
 public:
@@ -42,10 +41,8 @@ public:
   }
 
   // 添加带模块文件的测试
-  void addModuleTest(const std::string &name,
-                     const std::vector<ModuleDef> &modules,
-                     const std::string &script,
-                     const std::string &expectedOutput) {
+  void addModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
+                     const std::string &script, const std::string &expectedOutput) {
     tests_.push_back({name, script, expectedOutput, modules, false});
   }
 
@@ -64,11 +61,9 @@ public:
       fs::remove_all(testDir_);
     fs::create_directories(testDir_);
 
-    std::cout << "=================================================="
-              << std::endl;
+    std::cout << "==================================================" << std::endl;
     std::cout << "Running " << total << " tests..." << std::endl;
-    std::cout << "=================================================="
-              << std::endl;
+    std::cout << "==================================================" << std::endl;
 
     for (const auto &test : tests_) {
       if (runSingleTest(test)) {
@@ -80,14 +75,12 @@ public:
     if (fs::exists(testDir_))
       fs::remove_all(testDir_);
 
-    std::cout << "=================================================="
-              << std::endl;
+    std::cout << "==================================================" << std::endl;
     if (passed == total) {
-      std::cout << "\033[32m[  PASSED  ] All " << total
-                << " tests passed.\033[0m" << std::endl;
+      std::cout << "\033[32m[  PASSED  ] All " << total << " tests passed.\033[0m" << std::endl;
     } else {
-      std::cout << "\033[31m[  FAILED  ] " << (total - passed)
-                << " tests failed.\033[0m" << std::endl;
+      std::cout << "\033[31m[  FAILED  ] " << (total - passed) << " tests failed.\033[0m"
+                << std::endl;
     }
 
     return (passed == total) ? 0 : 1;
@@ -152,8 +145,7 @@ private:
     Compiler compiler("main");
     std::string compileErrors;
     compiler.setErrorHandler([&](const CompileError &err) {
-      compileErrors +=
-          "Line " + std::to_string(err.line) + ": " + err.message + "\n";
+      compileErrors += "Line " + std::to_string(err.line) + ": " + err.message + "\n";
     });
 
     CompiledChunk chunk = compiler.compile(ast);
@@ -178,8 +170,7 @@ private:
 
     // 计时结束
     auto end = std::chrono::high_resolution_clock::now();
-    double duration =
-        std::chrono::duration<double, std::milli>(end - start).count();
+    double duration = std::chrono::duration<double, std::milli>(end - start).count();
 
     // 4. 清理环境
     cleanupModules(test.modules);
@@ -189,21 +180,18 @@ private:
     // 情况 A: 预期运行时错误
     if (test.expectRuntimeError) {
       if (result != InterpretResult::OK) {
-        std::cout << "\033[32m[       OK ]\033[0m " << test.name
-                  << " (Expected Error Caught)" << " (" << duration << " ms)"
-                  << std::endl;
+        std::cout << "\033[32m[       OK ]\033[0m " << test.name << " (Expected Error Caught)"
+                  << " (" << duration << " ms)" << std::endl;
         return true;
       } else {
-        printFail(test.name, "Expected Runtime Error, but got OK",
-                  "Runtime Error", "OK");
+        printFail(test.name, "Expected Runtime Error, but got OK", "Runtime Error", "OK");
         return false;
       }
     }
 
     // 情况 B: 正常执行
     if (result != InterpretResult::OK) {
-      printFail(test.name, "Unexpected Runtime Error", test.expectedOutput,
-                capturedOutput.str());
+      printFail(test.name, "Unexpected Runtime Error", test.expectedOutput, capturedOutput.str());
       return false;
     }
 
@@ -211,8 +199,8 @@ private:
     std::string expected = trim(test.expectedOutput);
 
     if (actual == expected) {
-      std::cout << "\033[32m[       OK ]\033[0m " << test.name << " ("
-                << duration << " ms)" << std::endl;
+      std::cout << "\033[32m[       OK ]\033[0m " << test.name << " (" << duration << " ms)"
+                << std::endl;
       return true;
     } else {
       printFail(test.name, "Output Mismatch", expected, actual);
@@ -220,15 +208,13 @@ private:
     }
   }
 
-  void printFail(const std::string &name, const std::string &reason,
-                 const std::string &expected, const std::string &actual) {
+  void printFail(const std::string &name, const std::string &reason, const std::string &expected,
+                 const std::string &actual) {
     std::cout << "\033[31m[  FAILED  ]\033[0m " << name << std::endl;
     std::cout << "             Reason: " << reason << std::endl;
     if (!expected.empty() || !actual.empty()) {
-      std::cout << "             Expected: \"" << escapeNewlines(expected)
-                << "\"" << std::endl;
-      std::cout << "             Actual:   \"" << escapeNewlines(actual) << "\""
-                << std::endl;
+      std::cout << "             Expected: \"" << escapeNewlines(expected) << "\"" << std::endl;
+      std::cout << "             Actual:   \"" << escapeNewlines(actual) << "\"" << std::endl;
     }
   }
 };

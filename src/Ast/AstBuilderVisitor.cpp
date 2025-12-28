@@ -1436,6 +1436,7 @@ std::any AstBuilderVisitor::visitTypeAny(LangParser::TypeAnyContext *ctx) {
     throw std::runtime_error("AstBuilderVisitor::visitTypeAnynullptr");
   return std::any(static_cast<AstType *>(node));
 }
+
 std::any AstBuilderVisitor::visitPrimitiveType(LangParser::PrimitiveTypeContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitPrimitiveTypenullptr");
@@ -1486,6 +1487,7 @@ std::any AstBuilderVisitor::visitListType(LangParser::ListTypeContext *ctx) {
     throw std::runtime_error("AstBuilderVisitor::visitListTypenullptr");
   return std::any(static_cast<AstType *>(listNode));
 }
+
 std::any AstBuilderVisitor::visitMapType(LangParser::MapTypeContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitMapTypenullptr");
@@ -1547,6 +1549,7 @@ std::any AstBuilderVisitor::visitLogicalOrExpression(LangParser::LogicalOrExpres
         return ctx->OR(i);
       });
 }
+
 std::any
 AstBuilderVisitor::visitLogicalAndExpression(LangParser::LogicalAndExpressionContext *ctx) {
   if (!ctx)
@@ -1560,6 +1563,7 @@ AstBuilderVisitor::visitLogicalAndExpression(LangParser::LogicalAndExpressionCon
         return ctx->AND(i);
       });
 }
+
 std::any AstBuilderVisitor::visitBitwiseOrExpression(LangParser::BitwiseOrExpressionContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitBitwiseOrExpressionnullptr");
@@ -1572,6 +1576,7 @@ std::any AstBuilderVisitor::visitBitwiseOrExpression(LangParser::BitwiseOrExpres
         return ctx->BIT_OR(i);
       });
 }
+
 std::any
 AstBuilderVisitor::visitBitwiseXorExpression(LangParser::BitwiseXorExpressionContext *ctx) {
   if (!ctx)
@@ -1585,6 +1590,7 @@ AstBuilderVisitor::visitBitwiseXorExpression(LangParser::BitwiseXorExpressionCon
         return ctx->BIT_XOR(i);
       });
 }
+
 std::any
 AstBuilderVisitor::visitBitwiseAndExpression(LangParser::BitwiseAndExpressionContext *ctx) {
   if (!ctx)
@@ -1598,6 +1604,7 @@ AstBuilderVisitor::visitBitwiseAndExpression(LangParser::BitwiseAndExpressionCon
         return ctx->BIT_AND(i);
       });
 }
+
 std::any AstBuilderVisitor::visitEqualityExpression(LangParser::EqualityExpressionContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitEqualityExpressionnullptr");
@@ -1617,6 +1624,7 @@ std::any AstBuilderVisitor::visitEqualityExpression(LangParser::EqualityExpressi
         return termNode;
       });
 }
+
 std::any
 AstBuilderVisitor::visitComparisonExpression(LangParser::ComparisonExpressionContext *ctx) {
   if (!ctx)
@@ -1635,6 +1643,7 @@ AstBuilderVisitor::visitComparisonExpression(LangParser::ComparisonExpressionCon
         return termNode;
       });
 }
+
 std::any AstBuilderVisitor::visitShiftExpression(LangParser::ShiftExpressionContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitShiftExpressionnullptr");
@@ -1656,6 +1665,7 @@ std::any AstBuilderVisitor::visitShiftExpression(LangParser::ShiftExpressionCont
         return termNode;
       });
 }
+
 std::any AstBuilderVisitor::visitConcatExpression(LangParser::ConcatExpressionContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitConcatExpressionnullptr");
@@ -1667,6 +1677,7 @@ std::any AstBuilderVisitor::visitConcatExpression(LangParser::ConcatExpressionCo
         return ctx->CONCAT(i);
       });
 }
+
 std::any AstBuilderVisitor::visitAddSubExpression(LangParser::AddSubExpressionContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitAddSubExpressionnullptr");
@@ -1685,6 +1696,7 @@ std::any AstBuilderVisitor::visitAddSubExpression(LangParser::AddSubExpressionCo
         return termNode;
       });
 }
+
 std::any AstBuilderVisitor::visitMulDivModExpression(LangParser::MulDivModExpressionContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitMulDivModExpressionnullptr");
@@ -1879,6 +1891,7 @@ std::any AstBuilderVisitor::visitPrimaryAtom(LangParser::PrimaryAtomContext *ctx
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryAtomnullptr");
   return visit(ctx->atomexp());
 }
+
 std::any AstBuilderVisitor::visitPrimaryListLiteral(LangParser::PrimaryListLiteralContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryListLiteralnullptr");
@@ -1886,6 +1899,7 @@ std::any AstBuilderVisitor::visitPrimaryListLiteral(LangParser::PrimaryListLiter
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryListLiteralnullptr");
   return visit(ctx->listExpression());
 }
+
 std::any AstBuilderVisitor::visitPrimaryMapLiteral(LangParser::PrimaryMapLiteralContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryMapLiteralnullptr");
@@ -1915,6 +1929,7 @@ std::any AstBuilderVisitor::visitPrimaryVarArgs(LangParser::PrimaryVarArgsContex
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryVarArgsnullptr");
   return std::any(static_cast<AstNode *>(node));
 }
+
 std::any AstBuilderVisitor::visitPrimaryParenExp(LangParser::PrimaryParenExpContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryParenExpnullptr");
@@ -1922,6 +1937,7 @@ std::any AstBuilderVisitor::visitPrimaryParenExp(LangParser::PrimaryParenExpCont
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryParenExpnullptr");
   return visit(ctx->expression());
 }
+
 std::any AstBuilderVisitor::visitPrimaryNew(LangParser::PrimaryNewContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryNewnullptr");
@@ -1929,6 +1945,7 @@ std::any AstBuilderVisitor::visitPrimaryNew(LangParser::PrimaryNewContext *ctx) 
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryNewnullptr");
   return visit(ctx->newExp());
 }
+
 std::any AstBuilderVisitor::visitPrimaryLambda(LangParser::PrimaryLambdaContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryLambdanullptr");

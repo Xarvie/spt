@@ -53,6 +53,7 @@ public:
   // === 热更新 ===
   // 替换模块字节码,立即生效
   bool hotReload(const std::string &moduleName, const CompiledChunk &newChunk);
+
   ModuleManager *moduleManager() { return moduleManager_.get(); }
 
   // === 全局环境 ===
@@ -69,6 +70,7 @@ public:
 
   // === 回调设置 ===
   void setErrorHandler(ErrorHandler handler) { errorHandler_ = std::move(handler); }
+
   void setPrintHandler(PrintHandler handler) { printHandler_ = std::move(handler); }
 
   // === 调试 ===
@@ -77,6 +79,7 @@ public:
 
   // === GC 控制 ===
   GC &gc() { return gc_; }
+
   void collectGarbage();
 
   // === 对象创建 ===
@@ -88,6 +91,7 @@ public:
   MapObject *allocateMap(int capacity);
 
   Value getLastModuleResult() const { return lastModuleResult_; }
+
   InterpretResult executeModule(const CompiledChunk &chunk);
 
 private:
@@ -98,7 +102,9 @@ private:
   void registerBuiltinFunctions();
 
   inline void protect(Value value) { *stackTop_++ = value; }
+
   inline void unprotect(int count = 1) { stackTop_ -= count; }
+
   void resetStack();
 
   InterpretResult call(Closure *closure, int argCount, bool hasImplicitThis = false);

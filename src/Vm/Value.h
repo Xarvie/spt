@@ -19,6 +19,7 @@ struct GCObject {
 // tagged union （禁止使用NaN-boxing）
 struct Value {
   ValueType type;
+
   union {
     bool boolean;
     int64_t integer;

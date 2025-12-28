@@ -21,7 +21,9 @@ public:
 
   // 错误处理配置
   void setErrorHandler(ErrorHandler handler) { errorHandler_ = std::move(handler); }
+
   bool hasError() const { return hasError_; }
+
   const std::vector<CompileError> &errors() const { return errors_; }
 
 private:
