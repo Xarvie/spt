@@ -1,0 +1,1187 @@
+#include "Compiler.h"
+#include <algorithm>
+#include <cassert>
+#include <iostream>
+
+namespace spt {
+
+Compiler::Compiler(const std::string &moduleName)
+    : moduleName_(moduleName), cg_(std::make_unique<CodeGen>(moduleName)) {}
+
+Compiler::~Compiler() = default;
+
+CompiledChunk Compiler::compile(AstNode *ast) {
+  if (auto *block = dynamic_cast<BlockNode *>(ast)) {
+    return compileModule(block->statements);
+  }
+  error("Expected block node at top level");
+  return {};
+}
+
+CompiledChunk Compiler::compileModule(const std::vector<Statement *> &statements) {
+  cg_->beginFunction(moduleName_, 0, false);
+
+  int envSlot = cg_->allocSlot();
+
+  cg_->declareLocal("__env");
+  cg_->current()->locals.push_back({"__env", envSlot, cg_->currentScopeDepth(), false});
+
+  cg_->emitABC(OpCode::OP_NEWMAP, envSlot, 0, 0);
+
+  for (auto *stmt : statements) {
+    compileStatement(stmt);
+  }
+
+  cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+
+  CompiledChunk chunk;
+  chunk.moduleName = moduleName_;
+  chunk.mainProto = cg_->endFunction();
+  chunk.exports = exports_;
+  return chunk;
+}
+
+void Compiler::compileStatement(Statement *stmt) {
+  if (!stmt)
+    return;
+
+  try {
+    switch (stmt->nodeType) {
+    case NodeType::BLOCK:
+      compileBlock(static_cast<BlockNode *>(stmt));
+      break;
+    case NodeType::VARIABLE_DECL:
+      compileVariableDecl(static_cast<VariableDeclNode *>(stmt));
+      break;
+    case NodeType::MUTI_VARIABLE_DECL:
+      compileMutiVariableDecl(static_cast<MutiVariableDeclarationNode *>(stmt));
+      break;
+    case NodeType::FUNCTION_DECL:
+      compileFunctionDecl(static_cast<FunctionDeclNode *>(stmt));
+      break;
+    case NodeType::CLASS_DECL:
+      compileClassDecl(static_cast<ClassDeclNode *>(stmt));
+      break;
+    case NodeType::IF_STATEMENT:
+      compileIfStatement(static_cast<IfStatementNode *>(stmt));
+      break;
+    case NodeType::WHILE_STATEMENT:
+      compileWhileStatement(static_cast<WhileStatementNode *>(stmt));
+      break;
+    case NodeType::FOR_CSTYLE_STATEMENT:
+      compileForCStyle(static_cast<ForCStyleStatementNode *>(stmt));
+      break;
+    case NodeType::FOR_EACH_STATEMENT:
+      compileForEach(static_cast<ForEachStatementNode *>(stmt));
+      break;
+    case NodeType::RETURN_STATEMENT:
+      compileReturn(static_cast<ReturnStatementNode *>(stmt));
+      break;
+    case NodeType::BREAK_STATEMENT:
+      compileBreak(static_cast<BreakStatementNode *>(stmt));
+      break;
+    case NodeType::CONTINUE_STATEMENT:
+      compileContinue(static_cast<ContinueStatementNode *>(stmt));
+      break;
+    case NodeType::ASSIGNMENT:
+      compileAssignment(static_cast<AssignmentNode *>(stmt));
+      break;
+    case NodeType::UPDATE_ASSIGNMENT:
+      compileUpdateAssignment(static_cast<UpdateAssignmentNode *>(stmt));
+      break;
+    case NodeType::EXPRESSION_STATEMENT:
+      compileExpressionStatement(static_cast<ExpressionStatementNode *>(stmt));
+      break;
+    case NodeType::IMPORT_NAMESPACE: {
+      compileImportNamespace(static_cast<ImportNamespaceNode *>(stmt));
+      break;
+    }
+    case NodeType::IMPORT_NAMED: {
+      compileImportNamed(static_cast<ImportNamedNode *>(stmt));
+      break;
+    }
+    default:
+      error("Unknown statement type", stmt->location);
+    }
+  } catch (const std::runtime_error &e) {
+    error(e.what(), stmt->location);
+  }
+}
+
+void Compiler::compileBlock(BlockNode *block) {
+  cg_->beginScope();
+  for (auto *stmt : block->statements) {
+    compileStatement(stmt);
+  }
+  cg_->endScope();
+}
+
+void Compiler::compileVariableDecl(VariableDeclNode *decl) {
+  int slot = cg_->addLocal(decl->name);
+
+  if (decl->initializer) {
+    compileExpression(decl->initializer, slot);
+  } else {
+    cg_->emitABC(OpCode::OP_LOADNIL, slot, 0, 0);
+  }
+
+  cg_->markInitialized();
+
+  if (decl->isExported) {
+    exports_.push_back(decl->name);
+  }
+
+  if (decl->isGlobal || decl->isModuleRoot) {
+    emitStoreToEnv(decl->name, slot);
+  }
+}
+
+void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
+  if (decl->initializer) {
+    int numVars = static_cast<int>(decl->variables.size());
+    int baseSlot = cg_->allocSlots(numVars);
+
+    if (auto *callNode = dynamic_cast<FunctionCallNode *>(decl->initializer)) {
+      compileFunctionCall(callNode, baseSlot, numVars);
+    } else {
+      compileExpression(decl->initializer, baseSlot);
+      if (numVars > 1) {
+        cg_->emitABC(OpCode::OP_LOADNIL, baseSlot + 1, numVars - 1, 0);
+      }
+    }
+
+    for (size_t i = 0; i < decl->variables.size(); ++i) {
+      const auto &var = decl->variables[i];
+
+      cg_->declareLocal(var.name);
+      cg_->current()->locals.push_back(
+          {var.name, baseSlot + static_cast<int>(i), cg_->currentScopeDepth(), false});
+
+      if (decl->isExported)
+        exports_.push_back(var.name);
+
+      if (decl->isModuleRoot) {
+        int slot = baseSlot + static_cast<int>(i);
+        int nameIdx = cg_->addStringConstant(var.name);
+        if (nameIdx <= 255) {
+          cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, slot);
+        } else {
+          int keySlot = cg_->allocSlot();
+          cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+          cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, slot);
+          cg_->freeSlots(1);
+        }
+      }
+    }
+  } else {
+    for (const auto &var : decl->variables) {
+      int slot = cg_->addLocal(var.name);
+      cg_->emitABC(OpCode::OP_LOADNIL, slot, 0, 0);
+      if (decl->isExported)
+        exports_.push_back(var.name);
+      if (decl->isModuleRoot) {
+        int nameIdx = cg_->addStringConstant(var.name);
+        if (nameIdx <= 255) {
+          cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, slot);
+        } else {
+          int keySlot = cg_->allocSlot();
+          cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+          cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, slot);
+          cg_->freeSlots(1);
+        }
+      }
+    }
+  }
+}
+
+void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
+  int nameSlot = cg_->addLocal(node->name);
+  cg_->markInitialized();
+
+  cg_->beginFunction(node->name, node->params.size(), false);
+
+  int paramIndex = 0;
+
+  for (auto *param : node->params) {
+    cg_->declareLocal(param->name);
+    cg_->current()->locals.push_back({param->name, paramIndex++, cg_->currentScopeDepth(), false});
+    cg_->markInitialized();
+  }
+
+  compileBlock(node->body);
+
+  cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
+  cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+
+  Prototype childProto = cg_->endFunction();
+  int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
+  cg_->current()->proto.protos.push_back(std::move(childProto));
+
+  cg_->emitABx(OpCode::OP_CLOSURE, nameSlot, protoIdx);
+
+  if (node->isExported) {
+    exports_.push_back(node->name);
+  }
+
+  if (node->isGlobalDecl || node->isModuleRoot) {
+    emitStoreToEnv(node->name, nameSlot);
+  }
+}
+
+void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResults) {
+
+  int funcSlot = cg_->allocSlot();
+  compileExpression(node->functionExpr, funcSlot);
+
+  std::vector<int> argTempSlots;
+  for (auto *arg : node->arguments) {
+    int s = cg_->allocSlot();
+    compileExpression(arg, s);
+    argTempSlots.push_back(s);
+  }
+  int argCount = static_cast<int>(argTempSlots.size());
+
+  int base = cg_->allocSlots(1 + argCount);
+
+  cg_->emitABC(OpCode::OP_MOVE, base, funcSlot, 0);
+
+  for (int i = 0; i < argCount; ++i) {
+    cg_->emitABC(OpCode::OP_MOVE, base + 1 + i, argTempSlots[i], 0);
+  }
+
+  cg_->emitABC(OpCode::OP_CALL, base, argCount + 1, nResults + 1);
+
+  if (nResults > 0 && dest != base) {
+    for (int i = 0; i < nResults; ++i) {
+      cg_->emitABC(OpCode::OP_MOVE, dest + i, base + i, 0);
+    }
+  }
+
+  cg_->freeSlots(1 + argCount);
+  cg_->freeSlots(argCount);
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileClassDecl(ClassDeclNode *decl) {
+  int slot = cg_->addLocal(decl->name);
+
+  cg_->markInitialized();
+
+  int nameIdx = cg_->addStringConstant(decl->name);
+  cg_->emitABx(OpCode::OP_NEWCLASS, slot, nameIdx);
+
+  cg_->beginClass(decl->name);
+
+  for (auto *member : decl->members) {
+    auto *memberDecl = member->memberDeclaration;
+
+    if (auto *func = dynamic_cast<FunctionDeclNode *>(memberDecl)) {
+      int methodNameIdx = cg_->addStringConstant(func->name);
+      int tempSlot = cg_->allocSlot();
+
+      int numParams = static_cast<int>(func->params.size());
+
+      cg_->beginFunction(func->name, numParams, func->isVariadic);
+
+      int paramIndex = 0;
+      for (auto *param : func->params) {
+        cg_->declareLocal(param->name);
+        cg_->current()->locals.push_back(
+            {param->name, paramIndex++, cg_->currentScopeDepth(), false});
+      }
+      cg_->markInitialized();
+
+      if (func->body) {
+        compileBlock(func->body);
+      }
+
+      cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
+      cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+
+      Prototype childProto = cg_->endFunction();
+      int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
+      cg_->current()->proto.protos.push_back(std::move(childProto));
+
+      cg_->emitABx(OpCode::OP_CLOSURE, tempSlot, protoIdx);
+
+      if (methodNameIdx <= 255) {
+        cg_->emitABC(OpCode::OP_SETFIELD, slot, methodNameIdx, tempSlot);
+      } else {
+        int keySlot = cg_->allocSlot();
+        cg_->emitABx(OpCode::OP_LOADK, keySlot, methodNameIdx);
+        cg_->emitABC(OpCode::OP_SETINDEX, slot, keySlot, tempSlot);
+        cg_->freeSlots(1);
+      }
+      cg_->freeSlots(1);
+    }
+  }
+
+  cg_->endClass();
+
+  if (decl->isExported) {
+    exports_.push_back(decl->name);
+  }
+
+  if (decl->isModuleRoot) {
+    emitStoreToEnv(decl->name, slot);
+  }
+}
+
+void Compiler::compileIfStatement(IfStatementNode *stmt) {
+  int condSlot = cg_->allocSlot();
+  compileExpression(stmt->condition, condSlot);
+
+  cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
+  int jumpToElse = cg_->emitJump(OpCode::OP_JMP);
+
+  cg_->freeSlots(1);
+
+  compileBlock(stmt->thenBlock);
+
+  std::vector<int> endJumps;
+  endJumps.push_back(cg_->emitJump(OpCode::OP_JMP));
+
+  cg_->patchJump(jumpToElse);
+
+  for (auto *elseIf : stmt->elseIfClauses) {
+    condSlot = cg_->allocSlot();
+    compileExpression(elseIf->condition, condSlot);
+
+    cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
+    int nextJump = cg_->emitJump(OpCode::OP_JMP);
+
+    cg_->freeSlots(1);
+
+    compileBlock(elseIf->body);
+    endJumps.push_back(cg_->emitJump(OpCode::OP_JMP));
+
+    cg_->patchJump(nextJump);
+  }
+
+  if (stmt->elseBlock) {
+    compileBlock(stmt->elseBlock);
+  }
+
+  for (int jump : endJumps) {
+    cg_->patchJump(jump);
+  }
+}
+
+void Compiler::compileWhileStatement(WhileStatementNode *stmt) {
+  int loopStart = cg_->currentPc();
+  cg_->beginLoop(loopStart);
+
+  int condSlot = cg_->allocSlot();
+  compileExpression(stmt->condition, condSlot);
+
+  cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
+  int exitJump = cg_->emitJump(OpCode::OP_JMP);
+
+  cg_->freeSlots(1);
+
+  compileBlock(stmt->body);
+
+  int loopJump = cg_->currentPc() - loopStart;
+  cg_->emitAsBx(OpCode::OP_JMP, 0, -loopJump - 1);
+
+  cg_->patchJump(exitJump);
+  cg_->patchBreaks();
+  cg_->endLoop();
+}
+
+void Compiler::compileForCStyle(ForCStyleStatementNode *stmt) {
+  cg_->beginScope();
+
+  if (stmt->initializer) {
+    std::visit(
+        [this](auto &&arg) {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<T, std::vector<Declaration *>>) {
+            for (auto *decl : arg) {
+              if (auto *varDecl = dynamic_cast<VariableDeclNode *>(decl)) {
+                compileVariableDecl(varDecl);
+              }
+            }
+          } else if constexpr (std::is_same_v<T, AssignmentNode *>) {
+            compileAssignment(arg);
+          } else if constexpr (std::is_same_v<T, std::vector<Expression *>>) {
+            for (auto *expr : arg) {
+              compileExpressionForValue(expr);
+              cg_->freeSlots(1);
+            }
+          }
+        },
+        *stmt->initializer);
+  }
+
+  int loopStart = cg_->currentPc();
+  cg_->beginLoop(loopStart);
+  int exitJump = -1;
+
+  if (stmt->condition) {
+    int condSlot = cg_->allocSlot();
+    compileExpression(stmt->condition, condSlot);
+
+    cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
+    exitJump = cg_->emitJump(OpCode::OP_JMP);
+    cg_->freeSlots(1);
+  }
+
+  compileBlock(stmt->body);
+
+  int continueTarget = cg_->currentPc();
+  for (auto *update : stmt->updateActions) {
+    compileStatement(update);
+  }
+
+  int loopJump = cg_->currentPc() - loopStart;
+  cg_->emitAsBx(OpCode::OP_JMP, 0, -loopJump - 1);
+
+  if (exitJump >= 0)
+    cg_->patchJump(exitJump);
+  cg_->patchBreaks();
+  cg_->patchContinues(continueTarget);
+  cg_->endLoop();
+  cg_->endScope();
+}
+
+void Compiler::compileForEach(ForEachStatementNode *stmt) {
+  cg_->beginScope();
+
+  int iterSlot = cg_->allocSlot();
+  compileExpression(stmt->iterableExpr, iterSlot);
+
+  std::vector<int> varSlots;
+  for (auto *param : stmt->loopVariables) {
+    int slot = cg_->addLocal(param->name);
+    varSlots.push_back(slot);
+  }
+
+  int loopStart = cg_->currentPc();
+  cg_->beginLoop(loopStart);
+
+  int resultSlot = varSlots.empty() ? cg_->allocSlot() : varSlots[0];
+
+  cg_->emitABC(OpCode::OP_CALL, iterSlot, 1, static_cast<uint8_t>(varSlots.size() + 1));
+
+  cg_->emitABC(OpCode::OP_TEST, resultSlot, 0, 0);
+  int exitJump = cg_->emitJump(OpCode::OP_JMP);
+
+  compileBlock(stmt->body);
+
+  int loopJump = cg_->currentPc() - loopStart;
+  cg_->emitAsBx(OpCode::OP_JMP, 0, -loopJump - 1);
+
+  cg_->patchJump(exitJump);
+  cg_->patchBreaks();
+  cg_->endLoop();
+  cg_->endScope();
+}
+
+void Compiler::compileReturn(ReturnStatementNode *stmt) {
+  if (stmt->returnValue.empty()) {
+    cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
+  } else if (stmt->returnValue.size() == 1) {
+    int slot = cg_->allocSlot();
+    compileExpression(stmt->returnValue[0], slot);
+    cg_->emitABC(OpCode::OP_RETURN, slot, 2, 0);
+    cg_->freeSlots(1);
+  } else {
+    int base = cg_->allocSlots(static_cast<int>(stmt->returnValue.size()));
+    for (size_t i = 0; i < stmt->returnValue.size(); ++i) {
+      compileExpression(stmt->returnValue[i], base + static_cast<int>(i));
+    }
+    cg_->emitABC(OpCode::OP_RETURN, base, static_cast<uint8_t>(stmt->returnValue.size() + 1), 0);
+    cg_->freeSlots(static_cast<int>(stmt->returnValue.size()));
+  }
+}
+
+void Compiler::compileBreak(BreakStatementNode *) {
+
+  int jump = cg_->emitJump(OpCode::OP_JMP);
+
+  if (cg_->current()->loops.empty()) {
+    error("'break' outside of loop");
+    return;
+  }
+  cg_->current()->loops.back().breakJumps.push_back({jump, 0});
+}
+
+void Compiler::compileContinue(ContinueStatementNode *) {
+  if (cg_->current()->loops.empty()) {
+    error("'continue' outside of loop");
+    return;
+  }
+  int jump = cg_->emitJump(OpCode::OP_JMP);
+  cg_->current()->loops.back().continueJumps.push_back({jump, 0});
+}
+
+void Compiler::compileAssignment(AssignmentNode *stmt) {
+  std::vector<int> valueSlots;
+  for (auto *rval : stmt->rvalues) {
+    int slot = cg_->allocSlot();
+    compileExpression(rval, slot);
+    valueSlots.push_back(slot);
+  }
+
+  for (size_t i = 0; i < stmt->lvalues.size(); ++i) {
+    int srcSlot = (i < valueSlots.size()) ? valueSlots[i] : valueSlots.back();
+    LValue lv = compileLValue(stmt->lvalues[i]);
+    emitStore(lv, srcSlot);
+  }
+
+  cg_->freeSlots(static_cast<int>(valueSlots.size()));
+}
+
+void Compiler::compileUpdateAssignment(UpdateAssignmentNode *stmt) {
+  LValue lv = compileLValue(stmt->lvalue);
+
+  int leftSlot = cg_->allocSlot();
+  int rightSlot = cg_->allocSlot();
+
+  switch (lv.kind) {
+  case LValue::LOCAL:
+    cg_->emitABC(OpCode::OP_MOVE, leftSlot, lv.a, 0);
+    break;
+  case LValue::UPVALUE:
+    cg_->emitABC(OpCode::OP_GETUPVAL, leftSlot, lv.a, 0);
+    break;
+  case LValue::GLOBAL:
+    cg_->emitABx(OpCode::OP_GETFIELD, leftSlot, lv.a);
+    break;
+  case LValue::FIELD:
+    cg_->emitABC(OpCode::OP_GETFIELD, leftSlot, lv.a, lv.b);
+    break;
+  case LValue::INDEX:
+    cg_->emitABC(OpCode::OP_GETINDEX, leftSlot, lv.a, lv.b);
+    break;
+  }
+
+  compileExpression(stmt->rvalue, rightSlot);
+
+  OpCode op = binaryOpToOpcode(stmt->op);
+  cg_->emitABC(op, leftSlot, leftSlot, rightSlot);
+
+  emitStore(lv, leftSlot);
+  cg_->freeSlots(2);
+}
+
+void Compiler::compileExpressionStatement(ExpressionStatementNode *stmt) {
+  int slot = cg_->allocSlot();
+  compileExpression(stmt->expression, slot);
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileExpression(Expression *expr, int dest) {
+  if (!expr) {
+    cg_->emitABC(OpCode::OP_LOADNIL, dest, 0, 0);
+    return;
+  }
+
+  switch (expr->nodeType) {
+  case NodeType::LITERAL_INT:
+  case NodeType::LITERAL_FLOAT:
+  case NodeType::LITERAL_STRING:
+  case NodeType::LITERAL_BOOL:
+  case NodeType::LITERAL_NULL:
+    compileLiteral(expr, dest);
+    break;
+  case NodeType::LITERAL_LIST:
+    compileListLiteral(static_cast<LiteralListNode *>(expr), dest);
+    break;
+  case NodeType::LITERAL_MAP:
+    compileMapLiteral(static_cast<LiteralMapNode *>(expr), dest);
+    break;
+  case NodeType::IDENTIFIER:
+    compileIdentifier(static_cast<IdentifierNode *>(expr), dest);
+    break;
+  case NodeType::BINARY_OP:
+    compileBinaryOp(static_cast<BinaryOpNode *>(expr), dest);
+    break;
+  case NodeType::UNARY_OP:
+    compileUnaryOp(static_cast<UnaryOpNode *>(expr), dest);
+    break;
+  case NodeType::FUNCTION_CALL:
+    compileFunctionCall(static_cast<FunctionCallNode *>(expr), dest);
+    break;
+  case NodeType::MEMBER_ACCESS:
+    compileMemberAccess(static_cast<MemberAccessNode *>(expr), dest);
+    break;
+  case NodeType::MEMBER_LOOKUP:
+    compileMemberLookup(static_cast<MemberLookupNode *>(expr), dest);
+    break;
+  case NodeType::INDEX_ACCESS:
+    compileIndexAccess(static_cast<IndexAccessNode *>(expr), dest);
+    break;
+  case NodeType::LAMBDA:
+    compileLambda(static_cast<LambdaNode *>(expr), dest);
+    break;
+  case NodeType::NEW_EXPRESSION:
+    compileNewExpression(static_cast<NewExpressionNode *>(expr), dest);
+    break;
+  case NodeType::THIS_EXPRESSION:
+    compileThis(static_cast<ThisExpressionNode *>(expr), dest);
+    break;
+  default:
+    error("Unknown expression type", expr->location);
+  }
+}
+
+void Compiler::compileExpressionForValue(Expression *expr) {
+  int slot = cg_->allocSlot();
+  compileExpression(expr, slot);
+}
+
+void Compiler::compileLiteral(Expression *expr, int dest) {
+  ConstantValue val;
+  switch (expr->nodeType) {
+  case NodeType::LITERAL_INT:
+    val = static_cast<LiteralIntNode *>(expr)->value;
+    break;
+  case NodeType::LITERAL_FLOAT:
+    val = static_cast<LiteralFloatNode *>(expr)->value;
+    break;
+  case NodeType::LITERAL_STRING:
+    val = static_cast<LiteralStringNode *>(expr)->value;
+    break;
+  case NodeType::LITERAL_BOOL: {
+    bool b = static_cast<LiteralBoolNode *>(expr)->value;
+    cg_->emitABC(OpCode::OP_LOADBOOL, dest, b ? 1 : 0, 0);
+    return;
+  }
+  case NodeType::LITERAL_NULL:
+    cg_->emitABC(OpCode::OP_LOADNIL, dest, 0, 0);
+    return;
+  default:
+    return;
+  }
+  int idx = cg_->addConstant(val);
+  cg_->emitABx(OpCode::OP_LOADK, dest, idx);
+}
+
+int Compiler::emitLoadEnvironment() {
+
+  int local = cg_->resolveLocal("__env");
+  if (local >= 0) {
+    int temp = cg_->allocSlot();
+    cg_->emitABC(OpCode::OP_MOVE, temp, local, 0);
+    return temp;
+  }
+
+  int upval = cg_->resolveUpvalue("__env");
+  if (upval >= 0) {
+    int dest = cg_->allocSlot();
+    cg_->emitABC(OpCode::OP_GETUPVAL, dest, upval, 0);
+    return dest;
+  }
+
+  error("Internal Compiler Error: Global environment '__env' lost in nested "
+        "scope.");
+  return 0;
+}
+
+void Compiler::compileIdentifier(IdentifierNode *node, int dest) {
+
+  int local = cg_->resolveLocal(node->name);
+  if (local >= 0) {
+    if (local != dest)
+      cg_->emitABC(OpCode::OP_MOVE, dest, local, 0);
+    return;
+  }
+
+  int upval = cg_->resolveUpvalue(node->name);
+  if (upval >= 0) {
+    cg_->emitABC(OpCode::OP_GETUPVAL, dest, upval, 0);
+    return;
+  }
+
+  int envSlot = emitLoadEnvironment();
+
+  int nameIdx = cg_->addStringConstant(node->name);
+
+  if (nameIdx <= 255) {
+    cg_->emitABC(OpCode::OP_GETFIELD, dest, envSlot, nameIdx);
+  } else {
+    int keySlot = cg_->allocSlot();
+    cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+    cg_->emitABC(OpCode::OP_GETINDEX, dest, envSlot, keySlot);
+    cg_->freeSlots(1);
+  }
+
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
+  if (node->op == OperatorKind::AND) {
+    compileExpression(node->left, dest);
+    cg_->emitABC(OpCode::OP_TEST, dest, 0, 0);
+    int jump = cg_->emitJump(OpCode::OP_JMP);
+    compileExpression(node->right, dest);
+    cg_->patchJump(jump);
+    return;
+  }
+  if (node->op == OperatorKind::OR) {
+    compileExpression(node->left, dest);
+    cg_->emitABC(OpCode::OP_TEST, dest, 0, 1);
+    int jump = cg_->emitJump(OpCode::OP_JMP);
+    compileExpression(node->right, dest);
+    cg_->patchJump(jump);
+    return;
+  }
+
+  int leftSlot = cg_->allocSlot();
+  int rightSlot = cg_->allocSlot();
+  compileExpression(node->left, leftSlot);
+  compileExpression(node->right, rightSlot);
+
+  if (isComparisonOp(node->op)) {
+    OpCode cmpOp;
+    bool useInverseC = false;
+    switch (node->op) {
+    case OperatorKind::EQ:
+      cmpOp = OpCode::OP_EQ;
+      useInverseC = false;
+      break;
+    case OperatorKind::NE:
+      cmpOp = OpCode::OP_EQ;
+      useInverseC = true;
+      break;
+    case OperatorKind::LT:
+      cmpOp = OpCode::OP_LT;
+      useInverseC = false;
+      break;
+    case OperatorKind::LE:
+      cmpOp = OpCode::OP_LE;
+      useInverseC = false;
+      break;
+    case OperatorKind::GT:
+      cmpOp = OpCode::OP_LT;
+      std::swap(leftSlot, rightSlot);
+      useInverseC = false;
+      break;
+    case OperatorKind::GE:
+      cmpOp = OpCode::OP_LE;
+      std::swap(leftSlot, rightSlot);
+      useInverseC = false;
+      break;
+    default:
+      cmpOp = OpCode::OP_EQ;
+      break;
+    }
+    cg_->emitABC(cmpOp, leftSlot, rightSlot, useInverseC ? 1 : 0);
+    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 1);
+    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 0);
+  } else {
+    OpCode op = binaryOpToOpcode(node->op);
+    cg_->emitABC(op, dest, leftSlot, rightSlot);
+  }
+  cg_->freeSlots(2);
+}
+
+void Compiler::compileUnaryOp(UnaryOpNode *node, int dest) {
+  compileExpression(node->operand, dest);
+  switch (node->op) {
+  case OperatorKind::NEGATE:
+    cg_->emitABC(OpCode::OP_UNM, dest, dest, 0);
+    break;
+  case OperatorKind::NOT:
+    cg_->emitABC(OpCode::OP_TEST, dest, 0, 1);
+    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 1);
+    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 0);
+    break;
+  default:
+    error("Unknown unary operator", node->location);
+  }
+}
+
+void Compiler::compileMemberAccess(MemberAccessNode *node, int dest) {
+  int objSlot = cg_->allocSlot();
+  compileExpression(node->objectExpr, objSlot);
+
+  int memberIdx = cg_->addStringConstant(node->memberName);
+  if (memberIdx <= 255) {
+    cg_->emitABC(OpCode::OP_GETFIELD, dest, objSlot, memberIdx);
+  } else {
+    int keySlot = cg_->allocSlot();
+    cg_->emitABx(OpCode::OP_LOADK, keySlot, memberIdx);
+    cg_->emitABC(OpCode::OP_GETINDEX, dest, objSlot, keySlot);
+    cg_->freeSlots(1);
+  }
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileMemberLookup(MemberLookupNode *node, int dest) {
+  int objSlot = cg_->allocSlot();
+  compileExpression(node->objectExpr, objSlot);
+  int memberIdx = cg_->addStringConstant(node->memberName);
+  cg_->emitABC(OpCode::OP_GETFIELD, dest, objSlot, memberIdx);
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileIndexAccess(IndexAccessNode *node, int dest) {
+  int arrSlot = cg_->allocSlot();
+  int idxSlot = cg_->allocSlot();
+  compileExpression(node->arrayExpr, arrSlot);
+  compileExpression(node->indexExpr, idxSlot);
+  cg_->emitABC(OpCode::OP_GETINDEX, dest, arrSlot, idxSlot);
+  cg_->freeSlots(2);
+}
+
+void Compiler::compileLambda(LambdaNode *node, int dest) { compileLambdaBody(node, dest); }
+
+void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
+  std::string className = node->classType->getFullName();
+  int classSlot = cg_->allocSlot();
+
+  int local = cg_->resolveLocal(className);
+  if (local >= 0) {
+    cg_->emitABC(OpCode::OP_MOVE, classSlot, local, 0);
+  } else {
+    int upval = cg_->resolveUpvalue(className);
+    if (upval >= 0) {
+      cg_->emitABC(OpCode::OP_GETUPVAL, classSlot, upval, 0);
+    } else {
+      int nameIdx = cg_->addStringConstant(className);
+      cg_->emitABC(OpCode::OP_GETFIELD, classSlot, 0, nameIdx);
+    }
+  }
+
+  cg_->emitABC(OpCode::OP_NEWOBJ, dest, classSlot, 0);
+
+  int initIdx = cg_->addStringConstant("init");
+  int methodSlot = cg_->allocSlot();
+
+  if (initIdx <= 255) {
+    cg_->emitABC(OpCode::OP_GETFIELD, methodSlot, dest, initIdx);
+  } else {
+    int keySlot = cg_->allocSlot();
+    cg_->emitABx(OpCode::OP_LOADK, keySlot, initIdx);
+    cg_->emitABC(OpCode::OP_GETINDEX, methodSlot, dest, keySlot);
+    cg_->freeSlots(1);
+  }
+
+  cg_->emitABC(OpCode::OP_TEST, methodSlot, 0, 0);
+  int jumpIfNil = cg_->emitJump(OpCode::OP_JMP);
+
+  int argCount = static_cast<int>(node->arguments.size());
+  int callWindowSize = 1 + 1 + argCount;
+  int callBase = cg_->allocSlots(callWindowSize);
+
+  cg_->emitABC(OpCode::OP_MOVE, callBase, methodSlot, 0);
+
+  cg_->emitABC(OpCode::OP_MOVE, callBase + 1, dest, 0);
+
+  for (size_t i = 0; i < node->arguments.size(); ++i) {
+    compileExpression(node->arguments[i], callBase + 2 + i);
+  }
+
+  cg_->emitABC(OpCode::OP_CALL, callBase, 1 + argCount + 1, 1);
+
+  cg_->freeSlots(callWindowSize);
+
+  cg_->patchJump(jumpIfNil);
+
+  cg_->freeSlots(1);
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileThis(ThisExpressionNode *, int dest) {
+
+  int local = cg_->resolveLocal("this");
+  if (local >= 0) {
+    cg_->emitABC(OpCode::OP_MOVE, dest, local, 0);
+    return;
+  }
+
+  int upval = cg_->resolveUpvalue("this");
+  if (upval >= 0) {
+    cg_->emitABC(OpCode::OP_GETUPVAL, dest, upval, 0);
+    return;
+  }
+
+  error("Use of 'this' without explicit 'this' argument in function signature.");
+}
+
+void Compiler::compileListLiteral(LiteralListNode *node, int dest) {
+  int capacity = static_cast<int>(node->elements.size());
+  cg_->emitABC(OpCode::OP_NEWLIST, dest, capacity > 255 ? 255 : capacity, 0);
+
+  for (size_t i = 0; i < node->elements.size(); ++i) {
+    int elemSlot = cg_->allocSlot();
+    compileExpression(node->elements[i], elemSlot);
+
+    int idxSlot = cg_->allocSlot();
+    int idxConst = cg_->addConstant(static_cast<int64_t>(i));
+    cg_->emitABx(OpCode::OP_LOADK, idxSlot, idxConst);
+    cg_->emitABC(OpCode::OP_SETINDEX, dest, idxSlot, elemSlot);
+
+    cg_->freeSlots(2);
+  }
+}
+
+void Compiler::compileMapLiteral(LiteralMapNode *node, int dest) {
+  int capacity = static_cast<int>(node->entries.size());
+  cg_->emitABC(OpCode::OP_NEWMAP, dest, capacity > 255 ? 255 : capacity, 0);
+
+  for (auto *entry : node->entries) {
+    int keySlot = cg_->allocSlot();
+    int valSlot = cg_->allocSlot();
+
+    compileExpression(entry->key, keySlot);
+    compileExpression(entry->value, valSlot);
+
+    cg_->emitABC(OpCode::OP_SETINDEX, dest, keySlot, valSlot);
+
+    cg_->freeSlots(2);
+  }
+}
+
+void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
+  int numParams = static_cast<int>(lambda->params.size());
+  cg_->beginFunction("<lambda>", numParams, lambda->isVariadic);
+
+  int paramIndex = 0;
+  for (auto *param : lambda->params) {
+    cg_->declareLocal(param->name);
+    cg_->current()->locals.push_back({param->name, paramIndex++, cg_->currentScopeDepth(), false});
+  }
+
+  if (lambda->body) {
+    for (auto *stmt : lambda->body->statements) {
+      compileStatement(stmt);
+    }
+  }
+
+  cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
+  cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+
+  Prototype childProto = cg_->endFunction();
+  int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
+  cg_->current()->proto.protos.push_back(std::move(childProto));
+
+  cg_->emitABx(OpCode::OP_CLOSURE, dest, protoIdx);
+}
+
+void Compiler::emitStoreToEnv(const std::string &name, int srcSlot) {
+  int nameIdx = cg_->addStringConstant(name);
+
+  bool isRootFunc = (cg_->current()->enclosing == nullptr);
+
+  if (isRootFunc) {
+
+    if (nameIdx <= 255) {
+      cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, srcSlot);
+    } else {
+      int keySlot = cg_->allocSlot();
+      cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+      cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, srcSlot);
+      cg_->freeSlots(1);
+    }
+  } else {
+
+    int envSlot = emitLoadEnvironment();
+    if (nameIdx <= 255) {
+      cg_->emitABC(OpCode::OP_SETFIELD, envSlot, nameIdx, srcSlot);
+    } else {
+      int keySlot = cg_->allocSlot();
+      cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+      cg_->emitABC(OpCode::OP_SETINDEX, envSlot, keySlot, srcSlot);
+      cg_->freeSlots(1);
+    }
+    cg_->freeSlots(1);
+  }
+}
+
+LValue Compiler::compileLValue(Expression *expr) {
+  LValue lv;
+
+  if (auto *id = dynamic_cast<IdentifierNode *>(expr)) {
+
+    int local = cg_->resolveLocal(id->name);
+    if (local >= 0) {
+      lv.kind = LValue::LOCAL;
+      lv.a = local;
+      return lv;
+    }
+
+    int upval = cg_->resolveUpvalue(id->name);
+    if (upval >= 0) {
+      lv.kind = LValue::UPVALUE;
+      lv.a = upval;
+      return lv;
+    }
+
+    int nameIdx = cg_->addStringConstant(id->name);
+    bool isRootFunc = (cg_->current()->enclosing == nullptr);
+
+    if (isRootFunc && nameIdx <= 255) {
+
+      lv.kind = LValue::GLOBAL;
+      lv.a = nameIdx;
+    } else {
+
+      int envSlot = emitLoadEnvironment();
+
+      lv.kind = LValue::FIELD;
+      lv.a = emitLoadEnvironment();
+      lv.b = nameIdx;
+    }
+    return lv;
+  }
+
+  if (auto *member = dynamic_cast<MemberAccessNode *>(expr)) {
+    int nameIdx = cg_->addStringConstant(member->memberName);
+    if (nameIdx <= 255) {
+      lv.kind = LValue::FIELD;
+      lv.a = cg_->allocSlot();
+      compileExpression(member->objectExpr, lv.a);
+      lv.b = nameIdx;
+    } else {
+      lv.kind = LValue::INDEX;
+      lv.a = cg_->allocSlot();
+      compileExpression(member->objectExpr, lv.a);
+      lv.b = cg_->allocSlot();
+      cg_->emitABx(OpCode::OP_LOADK, lv.b, nameIdx);
+    }
+    return lv;
+  }
+
+  if (auto *index = dynamic_cast<IndexAccessNode *>(expr)) {
+    lv.kind = LValue::INDEX;
+    lv.a = cg_->allocSlot();
+    lv.b = cg_->allocSlot();
+    compileExpression(index->arrayExpr, lv.a);
+    compileExpression(index->indexExpr, lv.b);
+    return lv;
+  }
+
+  error("Invalid assignment target", expr->location);
+  return lv;
+}
+
+void Compiler::emitStore(const LValue &lv, int srcReg) {
+  switch (lv.kind) {
+  case LValue::LOCAL:
+    if (lv.a != srcReg)
+      cg_->emitABC(OpCode::OP_MOVE, lv.a, srcReg, 0);
+    break;
+  case LValue::UPVALUE:
+    cg_->emitABC(OpCode::OP_SETUPVAL, srcReg, lv.a, 0);
+    break;
+  case LValue::GLOBAL:
+    cg_->emitABC(OpCode::OP_SETFIELD, 0, lv.a, srcReg);
+    break;
+  case LValue::FIELD:
+    cg_->emitABC(OpCode::OP_SETFIELD, lv.a, lv.b, srcReg);
+    cg_->freeSlots(1);
+    break;
+  case LValue::INDEX:
+    cg_->emitABC(OpCode::OP_SETINDEX, lv.a, lv.b, srcReg);
+    cg_->freeSlots(2);
+    break;
+  }
+}
+
+void Compiler::error(const std::string &msg, const SourceLocation &loc) {
+  hasError_ = true;
+  CompileError err{msg, loc.filename, loc.line, loc.column};
+  errors_.push_back(err);
+  if (errorHandler_)
+    errorHandler_(err);
+}
+
+void Compiler::error(const std::string &msg) { error(msg, {}); }
+
+OpCode Compiler::binaryOpToOpcode(OperatorKind op) {
+  switch (op) {
+  case OperatorKind::ADD:
+  case OperatorKind::ASSIGN_ADD:
+    return OpCode::OP_ADD;
+  case OperatorKind::SUB:
+  case OperatorKind::ASSIGN_SUB:
+    return OpCode::OP_SUB;
+  case OperatorKind::MUL:
+  case OperatorKind::ASSIGN_MUL:
+    return OpCode::OP_MUL;
+  case OperatorKind::DIV:
+  case OperatorKind::ASSIGN_DIV:
+    return OpCode::OP_DIV;
+  case OperatorKind::MOD:
+  case OperatorKind::ASSIGN_MOD:
+    return OpCode::OP_MOD;
+  default:
+    return OpCode::OP_ADD;
+  }
+}
+
+bool Compiler::isComparisonOp(OperatorKind op) {
+  switch (op) {
+  case OperatorKind::EQ:
+  case OperatorKind::NE:
+  case OperatorKind::LT:
+  case OperatorKind::LE:
+  case OperatorKind::GT:
+  case OperatorKind::GE:
+    return true;
+  default:
+    return false;
+  }
+}
+
+void Compiler::compileImportNamespace(ImportNamespaceNode *node) {
+
+  int moduleNameIdx = cg_->addStringConstant(node->modulePath);
+
+  int destSlot = cg_->addLocal(node->alias);
+
+  cg_->emitABx(OpCode::OP_IMPORT, destSlot, moduleNameIdx);
+
+  if (cg_->currentScopeDepth() == 1) {
+    int nameIdx = cg_->addStringConstant(node->alias);
+    if (nameIdx <= 255) {
+      cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, destSlot);
+    } else {
+      int keySlot = cg_->allocSlot();
+      cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+      cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, destSlot);
+      cg_->freeSlots(1);
+    }
+  }
+
+  cg_->markInitialized();
+}
+
+void Compiler::compileImportNamed(ImportNamedNode *node) {
+
+  int moduleNameIdx = cg_->addStringConstant(node->modulePath);
+
+  for (const auto *spec : node->specifiers) {
+
+    if (spec->isTypeOnly) {
+      continue;
+    }
+
+    int symbolNameIdx = cg_->addStringConstant(spec->importedName);
+
+    std::string localName = spec->getLocalName();
+    int destSlot = cg_->addLocal(localName);
+
+    cg_->emitABC(OpCode::OP_IMPORT_FROM, destSlot, moduleNameIdx, symbolNameIdx);
+
+    if (cg_->currentScopeDepth() == 1) {
+      int nameIdx = cg_->addStringConstant(localName);
+      if (nameIdx <= 255) {
+        cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, destSlot);
+      } else {
+        int keySlot = cg_->allocSlot();
+        cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+        cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, destSlot);
+        cg_->freeSlots(1);
+      }
+    }
+
+    cg_->markInitialized();
+  }
+}
+
+} // namespace spt
