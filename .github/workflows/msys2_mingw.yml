@@ -29,7 +29,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
-          install: git base-devel mingw-w64-${{ matrix.arch }}-toolchain
+          install: git base-devel mingw-w64-${{ matrix.arch }}-toolchain mingw-w64-${{ matrix.arch }}-cmake mingw-w64-${{ matrix.arch }}-ninja
           update: true
 
       - name: Move Checkout
@@ -40,7 +40,7 @@ jobs:
         shell: msys2 {0}
         run: |
           cd /C/_
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         shell: msys2 {0}
