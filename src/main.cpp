@@ -335,5 +335,23 @@ int main() {
   // 注册新增的回归测试
   registerRegressionTests(runner);
 
+  runner.addFailTest("Debug Line Info",
+                     R"(
+              void a() {
+                print("test");
+              }
+
+              void b() {
+                a();
+              }
+
+              void c() {
+                b();
+                c();
+              }
+
+              c();
+          )");
+
   return runner.runAll();
 }

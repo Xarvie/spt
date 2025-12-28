@@ -4,6 +4,14 @@
 
 namespace spt {
 
+AutoRestoreLineGetter::AutoRestoreLineGetter(CodeGen *cg, ILineGetter *newLineGetter) {
+  cg_ = cg;
+  lastLineGetter_ = cg->getLineGetter();
+  cg->setLineGetter(newLineGetter);
+}
+
+AutoRestoreLineGetter::~AutoRestoreLineGetter() { cg_->setLineGetter(lastLineGetter_); }
+
 CodeGen::CodeGen(const std::string &moduleName) : moduleName_(moduleName) {
   current_ = nullptr;
   currentClass_ = nullptr;
@@ -23,12 +31,16 @@ CodeGen::~CodeGen() {
   }
 }
 
-void CodeGen::beginFunction(const std::string &name, int numParams, bool isVararg) {
+void CodeGen::beginFunction(const std::string &name, int numParams, bool isVararg,
+                            ILineGetter *lineGetter) {
   auto *fs = new FunctionState();
   fs->enclosing = current_;
   fs->proto.name = name;
   fs->proto.numParams = static_cast<uint8_t>(numParams);
   fs->proto.isVararg = isVararg;
+  fs->lastLine = lineGetter->getLine();
+  fs->proto.absLineInfo.push_back({0, fs->lastLine});
+  fs->lineGetter = lineGetter;
   fs->currentStackTop = numParams;
   fs->maxStack = numParams;
 
@@ -212,7 +224,24 @@ int CodeGen::currentPc() const { return static_cast<int>(current_->proto.code.si
 
 void CodeGen::emit(Instruction inst) {
   current_->proto.code.push_back(inst);
-  current_->proto.lineInfo.push_back(0);
+  if (current_->lineGetter) {
+    int line = current_->lineGetter->getLine();
+    int lineDiff = line - current_->lastLine;
+    if (lineDiff < 0) {
+      lineDiff = 0;
+      line = current_->lastLine;
+    }
+
+    if (lineDiff >= LimitLineDiff || current_->absLineCount >= MaxAbsLine) {
+      current_->proto.absLineInfo.back().pc = currentPc();
+      current_->proto.absLineInfo.push_back({-1, line});
+      lineDiff = UseAbsLine;
+      current_->absLineCount = 0;
+    }
+    current_->proto.lineInfo.push_back(lineDiff);
+    current_->lastLine = line;
+    current_->absLineCount++;
+  }
 }
 
 void CodeGen::emitABC(OpCode op, uint8_t a, uint8_t b, uint8_t c) {

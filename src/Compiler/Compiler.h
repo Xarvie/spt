@@ -17,7 +17,7 @@ public:
 
   // 编译入口
   CompiledChunk compile(AstNode *ast);
-  CompiledChunk compileModule(const std::vector<Statement *> &statements);
+  CompiledChunk compileModule(BlockNode *block);
 
   // 错误处理配置
   void setErrorHandler(ErrorHandler handler) { errorHandler_ = std::move(handler); }

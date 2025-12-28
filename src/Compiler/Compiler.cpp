@@ -12,14 +12,14 @@ Compiler::~Compiler() = default;
 
 CompiledChunk Compiler::compile(AstNode *ast) {
   if (auto *block = dynamic_cast<BlockNode *>(ast)) {
-    return compileModule(block->statements);
+    return compileModule(block);
   }
   error("Expected block node at top level");
   return {};
 }
 
-CompiledChunk Compiler::compileModule(const std::vector<Statement *> &statements) {
-  cg_->beginFunction(moduleName_, 0, false);
+CompiledChunk Compiler::compileModule(BlockNode *block) {
+  cg_->beginFunction(moduleName_, 0, false, block);
 
   int envSlot = cg_->allocSlot();
 
@@ -28,7 +28,7 @@ CompiledChunk Compiler::compileModule(const std::vector<Statement *> &statements
 
   cg_->emitABC(OpCode::OP_NEWMAP, envSlot, 0, 0);
 
-  for (auto *stmt : statements) {
+  for (auto *stmt : block->statements) {
     compileStatement(stmt);
   }
 
@@ -45,6 +45,7 @@ void Compiler::compileStatement(Statement *stmt) {
   if (!stmt)
     return;
 
+  auto last = cg_->setLineGetterAutoRestore(stmt);
   try {
     switch (stmt->nodeType) {
     case NodeType::BLOCK:
@@ -109,6 +110,7 @@ void Compiler::compileStatement(Statement *stmt) {
 }
 
 void Compiler::compileBlock(BlockNode *block) {
+  auto last = cg_->setLineGetterAutoRestore(block);
   cg_->beginScope();
   for (auto *stmt : block->statements) {
     compileStatement(stmt);
@@ -117,6 +119,7 @@ void Compiler::compileBlock(BlockNode *block) {
 }
 
 void Compiler::compileVariableDecl(VariableDeclNode *decl) {
+  auto last = cg_->setLineGetterAutoRestore(decl);
   int slot = cg_->addLocal(decl->name);
 
   if (decl->initializer) {
@@ -142,6 +145,7 @@ void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
     int baseSlot = cg_->allocSlots(numVars);
 
     if (auto *callNode = dynamic_cast<FunctionCallNode *>(decl->initializer)) {
+      auto last = cg_->setLineGetterAutoRestore(callNode);
       compileFunctionCall(callNode, baseSlot, numVars);
     } else {
       compileExpression(decl->initializer, baseSlot);
@@ -197,11 +201,11 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   int nameSlot = cg_->addLocal(node->name);
   cg_->markInitialized();
 
-  cg_->beginFunction(node->name, node->params.size(), false);
+  cg_->beginFunction(node->name, node->params.size(), false, node);
 
   int paramIndex = 0;
   for (auto *param : node->params) {
-
+    auto last = cg_->setLineGetterAutoRestore(param);
     cg_->addLocal(param->name);
     cg_->current()->locals.back().slot = paramIndex++;
 
@@ -281,7 +285,7 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
 
       int numParams = static_cast<int>(func->params.size());
 
-      cg_->beginFunction(func->name, numParams, func->isVariadic);
+      cg_->beginFunction(func->name, numParams, func->isVariadic, func);
 
       int paramIndex = 0;
       for (auto *param : func->params) {
@@ -575,6 +579,7 @@ void Compiler::compileExpressionStatement(ExpressionStatementNode *stmt) {
 }
 
 void Compiler::compileExpression(Expression *expr, int dest) {
+  auto last = cg_->setLineGetterAutoRestore(expr);
   if (!expr) {
     cg_->emitABC(OpCode::OP_LOADNIL, dest, 0, 0);
     return;
@@ -940,11 +945,11 @@ void Compiler::compileMapLiteral(LiteralMapNode *node, int dest) {
 
 void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
   int numParams = static_cast<int>(lambda->params.size());
-  cg_->beginFunction("<lambda>", numParams, lambda->isVariadic);
+  cg_->beginFunction("<lambda>", numParams, lambda->isVariadic, lambda);
 
   int paramIndex = 0;
   for (auto *param : lambda->params) {
-
+    auto last = cg_->setLineGetterAutoRestore(param);
     cg_->addLocal(param->name);
     cg_->current()->locals.back().slot = paramIndex++;
     cg_->markInitialized();
@@ -999,6 +1004,7 @@ void Compiler::emitStoreToEnv(const std::string &name, int srcSlot) {
 LValue Compiler::compileLValue(Expression *expr) {
   LValue lv;
 
+  auto last = cg_->setLineGetterAutoRestore(expr);
   if (auto *id = dynamic_cast<IdentifierNode *>(expr)) {
 
     int local = cg_->resolveLocal(id->name);

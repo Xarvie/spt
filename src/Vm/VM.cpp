@@ -1095,9 +1095,22 @@ void VM::runtimeError(const char *format, ...) {
     const Prototype *proto = frame.closure->proto;
     size_t instruction = frame.ip - proto->code.data() - 1;
 
-    int line = 0;
-    if (instruction < proto->lineInfo.size()) {
-      line = proto->lineInfo[instruction];
+    int line = proto->absLineInfo.front().line;
+    auto abs_line_info = std::lower_bound(proto->absLineInfo.begin(), proto->absLineInfo.end(), instruction, [](const auto& lhs, int pc) {
+      return lhs.pc < pc;
+    });
+    int basePC = 0;
+    if (abs_line_info != proto->absLineInfo.end()) {
+      --abs_line_info;
+      if (abs_line_info != proto->absLineInfo.end()) {
+        basePC = abs_line_info->pc;
+        line = abs_line_info->line;
+      }
+    }
+
+    while (basePC < instruction) {
+      line += proto->lineInfo[basePC];
+      basePC++;
     }
 
     message += "\n  [line " + std::to_string(line) + "] in ";

@@ -36,6 +36,22 @@ enum FunctionFlag : uint8_t {
   FUNC_VARARG = 1 << 1 // 可变参数
 };
 
+class ILineGetter {
+public:
+  virtual ~ILineGetter() = default;
+
+  virtual int getLine() = 0;
+};
+
+struct AbsLineInfo {
+  int pc;
+  int line;
+};
+
+constexpr size_t MaxAbsLine = 128;
+constexpr size_t LimitLineDiff = 128;
+constexpr uint8_t UseAbsLine = -1;
+
 // 原型信息 - 函数/闭包的编译产物
 struct Prototype {
   std::string name;         // 函数名 (调试用)
@@ -49,7 +65,8 @@ struct Prototype {
 
   std::vector<Instruction> code;        // 指令序列
   std::vector<ConstantValue> constants; // 常量表
-  std::vector<int> lineInfo;            // 行号信息 (调试用)
+  std::vector<AbsLineInfo> absLineInfo; // 绝对行信息 (调试用)
+  std::vector<uint8_t> lineInfo;        // 差分行号信息 (调试用)
   std::vector<Prototype> protos;        // 子函数原型
   uint8_t flags = FunctionFlag::FUNC_NONE;
 

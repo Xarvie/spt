@@ -8,6 +8,18 @@
 
 namespace spt {
 
+class CodeGen;
+
+class AutoRestoreLineGetter {
+public:
+  AutoRestoreLineGetter(CodeGen *cg, ILineGetter *newLineGetter);
+
+  ~AutoRestoreLineGetter();
+
+  CodeGen *cg_;
+  ILineGetter *lastLineGetter_;
+};
+
 class CodeGen {
 public:
   explicit CodeGen(const std::string &moduleName);
@@ -15,7 +27,8 @@ public:
 
   // === 模块与函数管理 ===
   // 开始编译一个新函数（或主模块）
-  void beginFunction(const std::string &name, int numParams, bool isVararg);
+  void beginFunction(const std::string &name, int numParams, bool isVararg,
+                     ILineGetter *lineGetter);
   // 结束当前函数编译，返回原型
   Prototype endFunction();
 
@@ -70,6 +83,14 @@ public:
 
   // === 特殊辅助 ===
   void emitCloseUpvalue(int slot);
+
+  ILineGetter *getLineGetter() const { return current_->lineGetter; }
+
+  void setLineGetter(ILineGetter *lineGetter) { current_->lineGetter = lineGetter; }
+
+  AutoRestoreLineGetter setLineGetterAutoRestore(ILineGetter *lineGetter) {
+    return {this, lineGetter};
+  }
 
   // 获取当前内部状态 (仅供特定高级操作使用，尽量少用)
   FunctionState *current() { return current_; }

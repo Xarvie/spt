@@ -1,6 +1,8 @@
 #ifndef SPT_AST_CPP_RAWPTR_H
 #define SPT_AST_CPP_RAWPTR_H
 
+#include "Types.h"
+
 #include <cstdint>    // 用于 int64_t
 #include <functional> // 用于 std::function
 #include <optional>   // 用于 std::optional
@@ -111,18 +113,20 @@ template <typename T> inline void deleteVectorItems(std::vector<T *> &vec) {
 }
 
 // --- AST 类型节点基类 ---
-class AstType {
+class AstType : public spt::ILineGetter {
 public:
   SourceLocation location;
   virtual ~AstType();
   virtual AstType *clone() const = 0;
+
+  int getLine() override { return location.line; }
 
 protected:
   AstType(SourceLocation loc);
 };
 
 // --- AST 节点基类 ---
-class AstNode {
+class AstNode : public spt::ILineGetter {
 public:
   SourceLocation location;
   NodeType nodeType;
@@ -130,6 +134,8 @@ public:
   // 构造函数接受 NodeType
   AstNode(SourceLocation loc, NodeType type);
   virtual ~AstNode();
+
+  int getLine() override { return location.line; }
 
 protected:
   // 保护默认构造函数（如果需要）

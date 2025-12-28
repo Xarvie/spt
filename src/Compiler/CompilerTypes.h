@@ -49,6 +49,10 @@ struct FunctionState {
   int currentStackTop = 0; // 当前栈顶位置
   int maxStack = 0;        // 最大栈深度
 
+  ILineGetter *lineGetter = nullptr;
+  int lastLine = 0;
+  int absLineCount = 0;
+
   bool isMethod = false;      // 是否为方法
   bool isInitializer = false; // 是否为构造函数
 
