@@ -1,0 +1,46 @@
+name: Compile Check MSYS2 (MingW)
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}-MSYS2_MINGW-${{ matrix.arch }}
+    runs-on: windows-latest
+
+    concurrency:
+      group: ${{ github.ref }}-${{ github.base_ref }}-${{ github.head_ref }}-MSYS2_MINGW-${{ matrix.arch }}
+      cancel-in-progress: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [
+          { msystem: MINGW64, arch: x86_64, prefix: /mingw64 },
+          { msystem: MINGW32, arch: i686, prefix: /mingw32   }
+        ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          install: git base-devel mingw-w64-${{ matrix.arch }}-toolchain
+          update: true
+
+      - name: Move Checkout
+        run: |
+          Copy-Item -Path ".\temp" -Destination "C:\_" -Recurse
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          cd /C/_
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          cd /C/_
+          cmake --build build --config Release
