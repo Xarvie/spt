@@ -518,6 +518,7 @@ void Compiler::compileContinue(ContinueStatementNode *) {
 
 void Compiler::compileAssignment(AssignmentNode *stmt) {
   std::vector<int> valueSlots;
+
   for (auto *rval : stmt->rvalues) {
     int slot = cg_->allocSlot();
     compileExpression(rval, slot);
@@ -526,7 +527,9 @@ void Compiler::compileAssignment(AssignmentNode *stmt) {
 
   for (size_t i = 0; i < stmt->lvalues.size(); ++i) {
     int srcSlot = (i < valueSlots.size()) ? valueSlots[i] : valueSlots.back();
+
     LValue lv = compileLValue(stmt->lvalues[i]);
+
     emitStore(lv, srcSlot);
   }
 
@@ -1015,15 +1018,13 @@ LValue Compiler::compileLValue(Expression *expr) {
     bool isRootFunc = (cg_->current()->enclosing == nullptr);
 
     if (isRootFunc && nameIdx <= 255) {
-
       lv.kind = LValue::GLOBAL;
       lv.a = nameIdx;
     } else {
 
       int envSlot = emitLoadEnvironment();
-
       lv.kind = LValue::FIELD;
-      lv.a = emitLoadEnvironment();
+      lv.a = envSlot;
       lv.b = nameIdx;
     }
     return lv;

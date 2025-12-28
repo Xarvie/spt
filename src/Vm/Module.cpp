@@ -282,33 +282,46 @@ bool ModuleManager::executeModule(Module *module) {
   }
 }
 
-void ModuleManager::buildExportsTable(Module *module) {
-
+void ModuleManager::buildExportsTable(Module* module) {
+  
   Value envValue = vm_->getLastModuleResult();
 
+  
   vm_->protect(envValue);
 
   if (!envValue.isMap()) {
     module->exportsTable = vm_->allocateMap(0);
-
     vm_->unprotect(1);
     return;
   }
 
-  MapObject *envMap = static_cast<MapObject *>(envValue.asGC());
+  MapObject* envMap = static_cast<MapObject*>(envValue.asGC());
 
+  
   module->exportsTable = vm_->allocateMap(static_cast<int>(module->metadata.exports.size()));
 
-  for (const auto &exportName : module->metadata.exports) {
+  for (const auto& exportName : module->metadata.exports) {
+    
+    StringObject* key = vm_->allocateString(exportName);
+    Value keyVal = Value::object(key);
 
-    StringObject *key = vm_->allocateString(exportName);
+    
+    
+    
+    
+    
+    vm_->protect(keyVal);
 
-    Value val = envMap->get(Value::object(key));
+    Value val = envMap->get(keyVal);
     if (!val.isNil()) {
-      module->exportsTable->set(Value::object(key), val);
+      module->exportsTable->set(keyVal, val);
     }
+
+    
+    vm_->unprotect(1);
   }
 
+  
   vm_->unprotect(1);
 }
 
@@ -567,4 +580,4 @@ Value ModuleManager::createError(const std::string &message) {
   return Value::object(errorObj);
 }
 
-} // namespace spt
+} 

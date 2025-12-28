@@ -175,7 +175,7 @@ RemoveParentheses: Leave
 RemoveSemicolon: false
 RequiresClausePosition: OwnLine
 RequiresExpressionIndentation: OuterScope
-SeparateDefinitionBlocks: Leave
+SeparateDefinitionBlocks: Always
 ShortNamespaceLines: 1
 SortJavaStaticImport: Before
 SortUsingDeclarations: LexicographicNumeric
