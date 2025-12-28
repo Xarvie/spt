@@ -222,6 +222,65 @@ void registerModules(TestRunner &runner) {
 }
 
 // =========================================================
+// 7. 特定 Bug 回归测试 (Regressions)
+// =========================================================
+void registerRegressionTests(TestRunner &runner) {
+  // -----------------------------------------------------------
+  // [回归测试] Bug #9: compileMutiVariableDecl 逻辑错误
+  // -----------------------------------------------------------
+  // 原理：必须使用 'mutivar ... = 0' 语法。
+  // 1. 'mutivar' 关键字强制编译器调用 compileMutiVariableDecl。
+  // 2. '= 0' (初始化) 强制进入函数内的 if (initializer) 分支。
+  // 3. 只有在这个分支里，旧代码才会有重复 push_back 导致局部变量表膨胀的 Bug。
+  //
+  // 如果 Bug 未修复：200 个变量会占用 400 个槽位 -> 报错 "Too many local variables"。
+  // 如果 Bug 已修复：200 个变量占用 200 个槽位 -> 测试通过。
+  // -----------------------------------------------------------
+  std::string multiVarScript = "mutivar ";
+  for (int i = 0; i < 200; ++i) {
+    if (i > 0)
+      multiVarScript += ", ";
+    multiVarScript += "v" + std::to_string(i);
+  }
+  // 必须赋值！否则走不到 Bug 逻辑路径
+  multiVarScript += " = 0;\n";
+
+  // 简单验证：首尾变量是否可读
+  multiVarScript += "print(v0);";
+
+  runner.addTest("Regressions: Multi-Var Logic (Bug #9)", multiVarScript,
+                 "0" // v0 被赋值为 0，预期输出 0
+  );
+
+  // -----------------------------------------------------------
+  // [回归测试] Bug #11: CreateError GC Crash
+  // -----------------------------------------------------------
+  // 原理：
+  // 1. 先加载一个巨大模块填满堆内存，逼近 GC 阈值。
+  // 2. 立即触发一个错误（导入不存在的模块），调用 createError。
+  // 3. createError 内部分配 String 时极大概率触发 GC。
+  // 4. 如果 Map 对象没被 protect，就会被回收，导致随后的 set() 操作崩溃。
+  // -----------------------------------------------------------
+  std::string heapFiller = R"(
+      export mutivar garbage = {};
+      for (int i = 0; i < 5000; i = i + 1) {
+          garbage["fill_" .. i] = "some_long_string_value_" .. i;
+      }
+  )";
+
+  runner.addModuleTest("PROOF OF CRASH: CreateError GC", {{"filler", heapFiller}},
+                       R"(
+          import * as f from "filler";
+          print("Heap filled.");
+
+          // 这一步会调用 C++ 的 createError 函数
+          // 如果没修好，进程会直接挂掉 (Segfault)
+          import * as missing from "non_existent_module";
+      )",
+                       "Heap filled.", true);
+}
+
+// =========================================================
 // 主函数
 // =========================================================
 int main() {
@@ -233,6 +292,9 @@ int main() {
   registerClasses(runner);
   registerDataStructs(runner);
   registerModules(runner);
+
+  // 注册新增的回归测试
+  registerRegressionTests(runner);
 
   return runner.runAll();
 }

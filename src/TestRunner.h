@@ -42,8 +42,9 @@ public:
 
   // 添加带模块文件的测试
   void addModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
-                     const std::string &script, const std::string &expectedOutput) {
-    tests_.push_back({name, script, expectedOutput, modules, false});
+                     const std::string &script, const std::string &expectedOutput,
+                     bool expectRuntimeError = false) {
+    tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError});
   }
 
   // 添加预期失败的测试 (Negative Test)

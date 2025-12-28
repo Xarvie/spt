@@ -153,10 +153,8 @@ void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
     for (size_t i = 0; i < decl->variables.size(); ++i) {
       const auto &var = decl->variables[i];
 
-      cg_->declareLocal(var.name);
-      cg_->current()->locals.push_back(
-          {var.name, baseSlot + static_cast<int>(i), cg_->currentScopeDepth(), false});
-
+      cg_->addLocal(var.name);
+      cg_->current()->locals.back().slot = baseSlot + static_cast<int>(i);
       if (decl->isExported)
         exports_.push_back(var.name);
 
@@ -174,6 +172,7 @@ void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
       }
     }
   } else {
+
     for (const auto &var : decl->variables) {
       int slot = cg_->addLocal(var.name);
       cg_->emitABC(OpCode::OP_LOADNIL, slot, 0, 0);
@@ -201,10 +200,11 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   cg_->beginFunction(node->name, node->params.size(), false);
 
   int paramIndex = 0;
-
   for (auto *param : node->params) {
-    cg_->declareLocal(param->name);
-    cg_->current()->locals.push_back({param->name, paramIndex++, cg_->currentScopeDepth(), false});
+
+    cg_->addLocal(param->name);
+    cg_->current()->locals.back().slot = paramIndex++;
+
     cg_->markInitialized();
   }
 
@@ -285,11 +285,10 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
 
       int paramIndex = 0;
       for (auto *param : func->params) {
-        cg_->declareLocal(param->name);
-        cg_->current()->locals.push_back(
-            {param->name, paramIndex++, cg_->currentScopeDepth(), false});
+        cg_->addLocal(param->name);
+        cg_->current()->locals.back().slot = paramIndex++;
+        cg_->markInitialized();
       }
-      cg_->markInitialized();
 
       if (func->body) {
         compileBlock(func->body);
@@ -945,8 +944,10 @@ void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
 
   int paramIndex = 0;
   for (auto *param : lambda->params) {
-    cg_->declareLocal(param->name);
-    cg_->current()->locals.push_back({param->name, paramIndex++, cg_->currentScopeDepth(), false});
+
+    cg_->addLocal(param->name);
+    cg_->current()->locals.back().slot = paramIndex++;
+    cg_->markInitialized();
   }
 
   if (lambda->body) {
