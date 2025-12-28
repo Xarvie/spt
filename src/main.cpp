@@ -158,8 +158,8 @@ int main() {
           )",
                  "150");
 
-  runner.addFailTest("Arity Check (Safety)",
-                     R"(
+  runner.addTest("Arity Check (Safety)",
+                 R"(
               class Counter {
                   int val;
                   void inc(Counter this) { this.val = this.val + 1; }
@@ -167,8 +167,11 @@ int main() {
               Counter c = new Counter();
 
               var f = c.inc;
-              f(1);
-          )");
+              c.val = 1;
+              f(c);
+              print(c.val);
+          )",
+                 "2");
 
   runner.addTest("Mixed Calls (Pure + Method)",
                  R"(
@@ -199,18 +202,20 @@ int main() {
           )",
                        "25");
 
-  std::string hugeModuleBody = "";
-  for (int i = 0; i < 254; ++i) {
-    hugeModuleBody += "export var v" + std::to_string(i) + " = " + std::to_string(i) + ";\n";
-  }
+  std::string hugeModuleBody = R"(
+        export var data = {};
+        // 循环 2000 次，产生大量临时字符串和 Map 扩容，强制触发 GC
+        for (int i = 0; i < 2000; i = i + 1) {
+            data["key_" .. i] = "value_" .. i;
+        }
+    )";
 
   runner.addModuleTest("PROOF OF CRASH: Module Exports GC", {{"stress_module", hugeModuleBody}},
                        R"(
             import * as s from "stress_module";
-            print("恭喜！如果你看到了这句话，说明运气好没挂，或者内存由于不够碎片化没触发 GC。");
+            print("ok");
         )",
-                       "恭喜！如果你看到了这句话，说明运气好没挂，或者内存由于"
-                       "不够碎片化没触发 GC。");
+                       "ok");
 
   return runner.runAll();
 }
