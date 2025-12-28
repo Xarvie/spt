@@ -57,6 +57,7 @@ enum class OpCode : uint8_t {
 
   /* --- 函数调用 --- */
   OP_CALL,   /* A B C   | R[A], ... := R[A](R[A+1], ... ,R[A+B-1])   */
+  OP_INVOKE, /* A B C   | R[A] := R[A].K[C](R[A+1], ...)             */
   OP_RETURN, /* A B     | return R[A], ... ,R[A+B-2]                 */
 
   /* --- 模块系统 --- */

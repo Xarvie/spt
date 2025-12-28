@@ -181,7 +181,8 @@ private:
     if (test.expectRuntimeError) {
       if (result != InterpretResult::OK) {
         // 成功捕获错误：移除绿色代码
-        std::cout << "[       OK ] " << test.name << " (Expected Error Caught)" << " (" << duration << " ms)" << std::endl;
+        std::cout << "[       OK ] " << test.name << " (Expected Error Caught)" << " (" << duration
+                  << " ms)" << std::endl;
         return true;
       } else {
         printFail(test.name, "Expected Runtime Error, but got OK", "Runtime Error", "OK");

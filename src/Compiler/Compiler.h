@@ -67,6 +67,13 @@ private:
   void compileLambdaBody(LambdaNode *lambda, int dest);
   void compileFunctionDecl(FunctionDeclNode *decl);
 
+  // === 方法调用编译 (OP_INVOKE 支持) ===
+  void compileMethodInvoke(Expression *receiverExpr, const std::string &methodName,
+                           const std::vector<Expression *> &arguments, int dest, int nResults = 1);
+  void compileMethodInvokeFallback(Expression *receiverExpr, const std::string &methodName,
+                                   int methodIdx, const std::vector<Expression *> &arguments,
+                                   int dest, int nResults = 1);
+
   int emitLoadEnvironment();
 
   void emitStoreToEnv(const std::string &name, int srcSlot);

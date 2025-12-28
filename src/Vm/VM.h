@@ -105,8 +105,6 @@ private:
   // === 内置函数注册 ===
   void registerBuiltinFunctions();
 
-
-
   void resetStack();
 
   InterpretResult call(Closure *closure, int argCount, bool hasImplicitThis = false);

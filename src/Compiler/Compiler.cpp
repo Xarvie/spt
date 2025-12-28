@@ -233,6 +233,19 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
 }
 
 void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResults) {
+  auto last = cg_->setLineGetterAutoRestore(node);
+
+  if (auto *memberAccess = dynamic_cast<MemberAccessNode *>(node->functionExpr)) {
+    compileMethodInvoke(memberAccess->objectExpr, memberAccess->memberName, node->arguments, dest,
+                        nResults);
+    return;
+  }
+
+  if (auto *memberLookup = dynamic_cast<MemberLookupNode *>(node->functionExpr)) {
+    compileMethodInvoke(memberLookup->objectExpr, memberLookup->memberName, node->arguments, dest,
+                        nResults);
+    return;
+  }
 
   int funcSlot = cg_->allocSlot();
   compileExpression(node->functionExpr, funcSlot);
@@ -263,6 +276,100 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
 
   cg_->freeSlots(1 + argCount);
   cg_->freeSlots(argCount);
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &methodName,
+                                   const std::vector<Expression *> &arguments, int dest,
+                                   int nResults) {
+
+  auto last = cg_->setLineGetterAutoRestore(receiverExpr);
+
+  int argCount = static_cast<int>(arguments.size());
+  int totalArgs = 1 + argCount;
+
+  int methodIdx = cg_->addStringConstant(methodName);
+
+  if (methodIdx > 255) {
+
+    compileMethodInvokeFallback(receiverExpr, methodName, methodIdx, arguments, dest, nResults);
+    return;
+  }
+
+  int receiverSlot = cg_->allocSlot();
+  compileExpression(receiverExpr, receiverSlot);
+
+  std::vector<int> argSlots;
+  for (int i = 0; i < argCount; ++i) {
+    int argSlot = cg_->allocSlot();
+    compileExpression(arguments[i], argSlot);
+    argSlots.push_back(argSlot);
+  }
+
+  int base = cg_->allocSlots(totalArgs);
+
+  cg_->emitABC(OpCode::OP_MOVE, base, receiverSlot, 0);
+
+  for (int i = 0; i < argCount; ++i) {
+    cg_->emitABC(OpCode::OP_MOVE, base + 1 + i, argSlots[i], 0);
+  }
+
+  cg_->emitABC(OpCode::OP_INVOKE, base, totalArgs, methodIdx);
+
+  if (nResults > 0 && dest != base) {
+    for (int i = 0; i < nResults; ++i) {
+      cg_->emitABC(OpCode::OP_MOVE, dest + i, base + i, 0);
+    }
+  }
+
+  cg_->freeSlots(totalArgs);
+  cg_->freeSlots(argCount);
+  cg_->freeSlots(1);
+}
+
+void Compiler::compileMethodInvokeFallback(Expression *receiverExpr, const std::string &methodName,
+                                           int methodIdx,
+                                           const std::vector<Expression *> &arguments, int dest,
+                                           int nResults) {
+
+  int argCount = static_cast<int>(arguments.size());
+
+  int receiverSlot = cg_->allocSlot();
+  compileExpression(receiverExpr, receiverSlot);
+
+  int methodSlot = cg_->allocSlot();
+  int keySlot = cg_->allocSlot();
+  cg_->emitABx(OpCode::OP_LOADK, keySlot, methodIdx);
+  cg_->emitABC(OpCode::OP_GETINDEX, methodSlot, receiverSlot, keySlot);
+  cg_->freeSlots(1);
+
+  std::vector<int> argSlots;
+  for (int i = 0; i < argCount; ++i) {
+    int argSlot = cg_->allocSlot();
+    compileExpression(arguments[i], argSlot);
+    argSlots.push_back(argSlot);
+  }
+
+  int callBase = cg_->allocSlots(2 + argCount);
+
+  cg_->emitABC(OpCode::OP_MOVE, callBase, methodSlot, 0);
+  cg_->emitABC(OpCode::OP_MOVE, callBase + 1, receiverSlot, 0);
+
+  for (int i = 0; i < argCount; ++i) {
+    cg_->emitABC(OpCode::OP_MOVE, callBase + 2 + i, argSlots[i], 0);
+  }
+
+  cg_->emitABC(OpCode::OP_CALL, callBase, argCount + 2, nResults + 1);
+
+  if (nResults > 0 && dest != callBase) {
+    for (int i = 0; i < nResults; ++i) {
+      cg_->emitABC(OpCode::OP_MOVE, dest + i, callBase + i, 0);
+    }
+  }
+
+  cg_->freeSlots(2 + argCount);
+  cg_->freeSlots(argCount);
+  cg_->freeSlots(1);
   cg_->freeSlots(1);
 }
 
@@ -792,7 +899,8 @@ void Compiler::compileUnaryOp(UnaryOpNode *node, int dest) {
     cg_->emitABC(OpCode::OP_UNM, dest, dest, 0);
     break;
   case OperatorKind::NOT:
-    cg_->emitABC(OpCode::OP_TEST, dest, 0, 1);
+
+    cg_->emitABC(OpCode::OP_TEST, dest, 0, 0);
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 1);
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 0);
     break;
@@ -837,6 +945,8 @@ void Compiler::compileIndexAccess(IndexAccessNode *node, int dest) {
 void Compiler::compileLambda(LambdaNode *node, int dest) { compileLambdaBody(node, dest); }
 
 void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
+  auto last = cg_->setLineGetterAutoRestore(node);
+
   std::string className = node->classType->getFullName();
   int classSlot = cg_->allocSlot();
 
@@ -849,47 +959,86 @@ void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
       cg_->emitABC(OpCode::OP_GETUPVAL, classSlot, upval, 0);
     } else {
       int nameIdx = cg_->addStringConstant(className);
-      cg_->emitABC(OpCode::OP_GETFIELD, classSlot, 0, nameIdx);
+      if (nameIdx <= 255) {
+        cg_->emitABC(OpCode::OP_GETFIELD, classSlot, 0, nameIdx);
+      } else {
+        int keySlot = cg_->allocSlot();
+        cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+        cg_->emitABC(OpCode::OP_GETINDEX, classSlot, 0, keySlot);
+        cg_->freeSlots(1);
+      }
     }
   }
 
   cg_->emitABC(OpCode::OP_NEWOBJ, dest, classSlot, 0);
+  cg_->freeSlots(1);
 
   int initIdx = cg_->addStringConstant("init");
-  int methodSlot = cg_->allocSlot();
+  int argCount = static_cast<int>(node->arguments.size());
 
   if (initIdx <= 255) {
-    cg_->emitABC(OpCode::OP_GETFIELD, methodSlot, dest, initIdx);
+
+    int checkSlot = cg_->allocSlot();
+    cg_->emitABC(OpCode::OP_GETFIELD, checkSlot, dest, initIdx);
+    cg_->emitABC(OpCode::OP_TEST, checkSlot, 0, 0);
+    int skipJump = cg_->emitJump(OpCode::OP_JMP);
+    cg_->freeSlots(1);
+
+    std::vector<int> argSlots;
+    for (int i = 0; i < argCount; ++i) {
+      int argSlot = cg_->allocSlot();
+      compileExpression(node->arguments[i], argSlot);
+      argSlots.push_back(argSlot);
+    }
+
+    int invokeBase = cg_->allocSlots(1 + argCount);
+
+    cg_->emitABC(OpCode::OP_MOVE, invokeBase, dest, 0);
+
+    for (int i = 0; i < argCount; ++i) {
+      cg_->emitABC(OpCode::OP_MOVE, invokeBase + 1 + i, argSlots[i], 0);
+    }
+
+    cg_->emitABC(OpCode::OP_INVOKE, invokeBase, argCount + 1, initIdx);
+
+    cg_->freeSlots(1 + argCount);
+    cg_->freeSlots(argCount);
+
+    cg_->patchJump(skipJump);
   } else {
+
+    int methodSlot = cg_->allocSlot();
     int keySlot = cg_->allocSlot();
     cg_->emitABx(OpCode::OP_LOADK, keySlot, initIdx);
     cg_->emitABC(OpCode::OP_GETINDEX, methodSlot, dest, keySlot);
     cg_->freeSlots(1);
+
+    cg_->emitABC(OpCode::OP_TEST, methodSlot, 0, 0);
+    int jumpIfNil = cg_->emitJump(OpCode::OP_JMP);
+
+    std::vector<int> argSlots;
+    for (int i = 0; i < argCount; ++i) {
+      int argSlot = cg_->allocSlot();
+      compileExpression(node->arguments[i], argSlot);
+      argSlots.push_back(argSlot);
+    }
+
+    int callBase = cg_->allocSlots(2 + argCount);
+    cg_->emitABC(OpCode::OP_MOVE, callBase, methodSlot, 0);
+    cg_->emitABC(OpCode::OP_MOVE, callBase + 1, dest, 0);
+
+    for (int i = 0; i < argCount; ++i) {
+      cg_->emitABC(OpCode::OP_MOVE, callBase + 2 + i, argSlots[i], 0);
+    }
+
+    cg_->emitABC(OpCode::OP_CALL, callBase, argCount + 2, 1);
+
+    cg_->freeSlots(2 + argCount);
+    cg_->freeSlots(argCount);
+
+    cg_->patchJump(jumpIfNil);
+    cg_->freeSlots(1);
   }
-
-  cg_->emitABC(OpCode::OP_TEST, methodSlot, 0, 0);
-  int jumpIfNil = cg_->emitJump(OpCode::OP_JMP);
-
-  int argCount = static_cast<int>(node->arguments.size());
-  int callWindowSize = 1 + 1 + argCount;
-  int callBase = cg_->allocSlots(callWindowSize);
-
-  cg_->emitABC(OpCode::OP_MOVE, callBase, methodSlot, 0);
-
-  cg_->emitABC(OpCode::OP_MOVE, callBase + 1, dest, 0);
-
-  for (size_t i = 0; i < node->arguments.size(); ++i) {
-    compileExpression(node->arguments[i], callBase + 2 + i);
-  }
-
-  cg_->emitABC(OpCode::OP_CALL, callBase, 1 + argCount + 1, 1);
-
-  cg_->freeSlots(callWindowSize);
-
-  cg_->patchJump(jumpIfNil);
-
-  cg_->freeSlots(1);
-  cg_->freeSlots(1);
 }
 
 void Compiler::compileThis(ThisExpressionNode *, int dest) {

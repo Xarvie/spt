@@ -1,7 +1,9 @@
 #include "VM.h"
 #include "SptStdlibs.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
@@ -47,14 +49,12 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "print",
-      // 参数增加了: [this](VM* vm, Value receiver, int argc, Value *args)
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         std::string outputBuffer;
         for (int i = 0; i < argc; ++i) {
           if (i > 0)
             outputBuffer += " ";
           std::string s = args[i].toString();
-          // 处理数字格式化... (保持原有逻辑)
           if (args[i].isNumber() && !args[i].isInt()) {
             size_t dotPos = s.find('.');
             if (dotPos != std::string::npos) {
@@ -77,15 +77,374 @@ void VM::registerBuiltinFunctions() {
       -1);
 
   registerNative(
-      "type",
-
+      "toInt",
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc != 1)
-          return Value::nil();
-        StringObject *str = this->allocateString(args[0].typeName());
-        return Value::object(str);
+        if (argc < 1)
+          return Value::integer(0);
+        Value v = args[0];
+
+        if (v.isInt()) {
+          return v;
+        } else if (v.isFloat()) {
+          return Value::integer(static_cast<int64_t>(v.asFloat()));
+        } else if (v.isString()) {
+          StringObject *str = static_cast<StringObject *>(v.asGC());
+          try {
+            size_t pos;
+            int64_t result = std::stoll(str->data, &pos);
+            return Value::integer(result);
+          } catch (...) {
+            return Value::integer(0);
+          }
+        } else if (v.isBool()) {
+          return Value::integer(v.asBool() ? 1 : 0);
+        }
+        return Value::integer(0);
       },
       1);
+
+  registerNative(
+      "toFloat",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::number(0.0);
+        Value v = args[0];
+
+        if (v.isFloat()) {
+          return v;
+        } else if (v.isInt()) {
+          return Value::number(static_cast<double>(v.asInt()));
+        } else if (v.isString()) {
+          StringObject *str = static_cast<StringObject *>(v.asGC());
+          try {
+            size_t pos;
+            double result = std::stod(str->data, &pos);
+            return Value::number(result);
+          } catch (...) {
+            return Value::number(0.0);
+          }
+        } else if (v.isBool()) {
+          return Value::number(v.asBool() ? 1.0 : 0.0);
+        }
+        return Value::number(0.0);
+      },
+      1);
+
+  registerNative(
+      "toString",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::object(this->allocateString(""));
+        return Value::object(this->allocateString(args[0].toString()));
+      },
+      1);
+
+  registerNative(
+      "toBool",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isTruthy());
+      },
+      1);
+
+  registerNative(
+      "typeOf",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::object(this->allocateString("nil"));
+        return Value::object(this->allocateString(args[0].typeName()));
+      },
+      1);
+
+  registerNative(
+      "isInt",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isInt());
+      },
+      1);
+
+  registerNative(
+      "isFloat",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isFloat());
+      },
+      1);
+
+  registerNative(
+      "isNumber",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isNumber());
+      },
+      1);
+
+  registerNative(
+      "isString",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isString());
+      },
+      1);
+
+  registerNative(
+      "isBool",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isBool());
+      },
+      1);
+
+  registerNative(
+      "isList",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isList());
+      },
+      1);
+
+  registerNative(
+      "isMap",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isMap());
+      },
+      1);
+
+  registerNative(
+      "isNull",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(true);
+        return Value::boolean(args[0].isNil());
+      },
+      1);
+
+  registerNative(
+      "isFunction",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::boolean(false);
+        return Value::boolean(args[0].isClosure() || args[0].isNativeFunc());
+      },
+      1);
+
+  registerNative(
+      "abs",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::integer(0);
+        Value v = args[0];
+        if (v.isInt()) {
+          int64_t val = v.asInt();
+          return Value::integer(val < 0 ? -val : val);
+        } else if (v.isFloat()) {
+          return Value::number(std::abs(v.asFloat()));
+        }
+        return Value::integer(0);
+      },
+      1);
+
+  registerNative(
+      "floor",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::integer(0);
+        Value v = args[0];
+        if (v.isInt()) {
+          return v;
+        } else if (v.isFloat()) {
+          return Value::integer(static_cast<int64_t>(std::floor(v.asFloat())));
+        }
+        return Value::integer(0);
+      },
+      1);
+
+  registerNative(
+      "ceil",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::integer(0);
+        Value v = args[0];
+        if (v.isInt()) {
+          return v;
+        } else if (v.isFloat()) {
+          return Value::integer(static_cast<int64_t>(std::ceil(v.asFloat())));
+        }
+        return Value::integer(0);
+      },
+      1);
+
+  registerNative(
+      "round",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::integer(0);
+        Value v = args[0];
+        if (v.isInt()) {
+          return v;
+        } else if (v.isFloat()) {
+          return Value::integer(static_cast<int64_t>(std::round(v.asFloat())));
+        }
+        return Value::integer(0);
+      },
+      1);
+
+  registerNative(
+      "sqrt",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::number(0.0);
+        Value v = args[0];
+        double val = v.isInt() ? static_cast<double>(v.asInt()) : v.asFloat();
+        return Value::number(std::sqrt(val));
+      },
+      1);
+
+  registerNative(
+      "pow",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 2)
+          return Value::number(0.0);
+        double base = args[0].isInt() ? static_cast<double>(args[0].asInt()) : args[0].asFloat();
+        double exp = args[1].isInt() ? static_cast<double>(args[1].asInt()) : args[1].asFloat();
+        return Value::number(std::pow(base, exp));
+      },
+      2);
+
+  registerNative(
+      "min",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 2)
+          return Value::nil();
+        Value a = args[0];
+        Value b = args[1];
+        if (a.isInt() && b.isInt()) {
+          return Value::integer(std::min(a.asInt(), b.asInt()));
+        }
+        double va = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
+        double vb = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+        return Value::number(std::min(va, vb));
+      },
+      2);
+
+  registerNative(
+      "max",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 2)
+          return Value::nil();
+        Value a = args[0];
+        Value b = args[1];
+        if (a.isInt() && b.isInt()) {
+          return Value::integer(std::max(a.asInt(), b.asInt()));
+        }
+        double va = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
+        double vb = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+        return Value::number(std::max(va, vb));
+      },
+      2);
+
+  registerNative(
+      "len",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::integer(0);
+        Value v = args[0];
+        if (v.isString()) {
+          StringObject *str = static_cast<StringObject *>(v.asGC());
+          return Value::integer(static_cast<int64_t>(str->data.size()));
+        } else if (v.isList()) {
+          ListObject *list = static_cast<ListObject *>(v.asGC());
+          return Value::integer(static_cast<int64_t>(list->elements.size()));
+        } else if (v.isMap()) {
+          MapObject *map = static_cast<MapObject *>(v.asGC());
+          return Value::integer(static_cast<int64_t>(map->entries.size()));
+        }
+        return Value::integer(0);
+      },
+      1);
+
+  registerNative(
+      "char",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1 || !args[0].isInt())
+          return Value::object(this->allocateString(""));
+        int64_t code = args[0].asInt();
+        if (code < 0 || code > 127)
+          return Value::object(this->allocateString(""));
+        char c = static_cast<char>(code);
+        return Value::object(this->allocateString(std::string(1, c)));
+      },
+      1);
+
+  registerNative(
+      "ord",
+      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1 || !args[0].isString())
+          return Value::integer(0);
+        StringObject *str = static_cast<StringObject *>(args[0].asGC());
+        if (str->data.empty())
+          return Value::integer(0);
+        return Value::integer(static_cast<int64_t>(static_cast<unsigned char>(str->data[0])));
+      },
+      1);
+
+  registerNative(
+      "range",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 2)
+          return Value::nil();
+
+        int64_t start = args[0].isInt() ? args[0].asInt() : 0;
+        int64_t end = args[1].isInt() ? args[1].asInt() : 0;
+        int64_t step = (argc >= 3 && args[2].isInt()) ? args[2].asInt() : 1;
+
+        if (step == 0)
+          return Value::nil();
+
+        ListObject *list = this->allocateList(0);
+        this->protect(Value::object(list));
+
+        if (step > 0) {
+          for (int64_t i = start; i < end; i += step) {
+            list->elements.push_back(Value::integer(i));
+          }
+        } else {
+          for (int64_t i = start; i > end; i += step) {
+            list->elements.push_back(Value::integer(i));
+          }
+        }
+
+        this->unprotect(1);
+        return Value::object(list);
+      },
+      -1);
+
+  registerNative(
+      "assert",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::nil();
+
+        if (!args[0].isTruthy()) {
+          std::string msg = "Assertion failed";
+          if (argc >= 2 && args[1].isString()) {
+            msg = static_cast<StringObject *>(args[1].asGC())->data;
+          }
+          this->runtimeError("%s", msg.c_str());
+        }
+        return Value::nil();
+      },
+      -1);
 }
 
 void VM::ensureStack(int neededSlots) {
@@ -314,24 +673,18 @@ dispatch_loop:
 
       const std::string &fieldName = std::get<std::string>(keyConst);
 
-      // ================== 【插入开始】标准库拦截 ==================
-      // 优先检查标准库方法 (List.length, Map.keys, String.slice 等)
       if (object.isList() || object.isMap() || object.isString()) {
         Value result;
-        // 调用 StdlibDispatcher 查询属性或方法
         if (StdlibDispatcher::getProperty(this, object, fieldName, result)) {
           frame->slots[A] = result;
-          break; // 成功处理，跳出 switch
+          break;
         }
 
-        // 如果是 List 或 String 但没找到属性（比如 list.wrong），直接报错。
-        // Map 则允许继续往下走，因为 map.key 可能是在访问字段。
         if (!object.isMap()) {
           runtimeError("Type '%s' has no property '%s'", object.typeName(), fieldName.c_str());
           return InterpretResult::RUNTIME_ERROR;
         }
       }
-      // ================== 【插入结束】 ==================
 
       if (object.isInstance()) {
 
@@ -339,7 +692,6 @@ dispatch_loop:
 
         Value result = instance->getField(fieldName);
 
-        // 如果字段不存在，尝试查找类方法
         if (result.isNil() && instance->klass) {
           auto it = instance->klass->methods.find(fieldName);
           if (it != instance->klass->methods.end()) {
@@ -356,13 +708,11 @@ dispatch_loop:
         if (it != klass->methods.end()) {
           frame->slots[A] = it->second;
         } else {
-          // 查找静态成员
           auto itStatic = klass->statics.find(fieldName);
           frame->slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
         }
 
       } else if (object.isMap()) {
-        // 原有的 Map 字段访问逻辑 (map.field 形式)
         auto *map = static_cast<MapObject *>(object.asGC());
 
         Value result = Value::nil();
@@ -376,7 +726,6 @@ dispatch_loop:
           }
         }
 
-        // 这里的逻辑似乎是为了支持从 Global 查找 fallback，保持原有行为
         if (result.isNil()) {
           auto it = globals_.find(fieldName);
           if (it != globals_.end()) {
@@ -591,7 +940,11 @@ dispatch_loop:
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      frame->slots[A] = Value::number(left / right);
+      if (b.isInt() && c.isInt()) {
+        frame->slots[A] = Value::integer(b.asInt() / c.asInt());
+      } else {
+        frame->slots[A] = Value::number(left / right);
+      }
       break;
     }
 
@@ -765,6 +1118,204 @@ dispatch_loop:
         runtimeError("Attempt to call a non-function value of type '%s'", callee.typeName());
         return InterpretResult::RUNTIME_ERROR;
       }
+      break;
+    }
+
+    case OpCode::OP_INVOKE: {
+
+      Value receiver = frame->slots[A];
+      int totalArgs = B;
+      int userArgCount = totalArgs - 1;
+
+      const auto &methodNameConst = frame->closure->proto->constants[C];
+      if (!std::holds_alternative<std::string>(methodNameConst)) {
+        runtimeError("OP_INVOKE: method name constant at index %d is not a string", C);
+        return InterpretResult::RUNTIME_ERROR;
+      }
+      const std::string &methodName = std::get<std::string>(methodNameConst);
+
+      if (config_.debugMode) {
+        printf("[INVOKE] %s.%s() with %d args\n", receiver.typeName(), methodName.c_str(),
+               userArgCount);
+      }
+
+      Value method = Value::nil();
+      Value *argsStart = &frame->slots[A + 1];
+
+      enum class ReceiverKind {
+        StdLib,
+        Instance,
+        Class,
+        Callable,
+        Unknown
+      } kind = ReceiverKind::Unknown;
+
+      if (receiver.isList() || receiver.isMap() || receiver.isString()) {
+        Value directResult;
+        if (StdlibDispatcher::invokeMethod(this, receiver, methodName, userArgCount, argsStart,
+                                           directResult)) {
+
+          frame->slots[A] = directResult;
+          break;
+        }
+
+        Value propertyValue;
+        if (StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue)) {
+          if (propertyValue.isNativeFunc()) {
+            method = propertyValue;
+            kind = ReceiverKind::StdLib;
+          } else {
+
+            runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
+                         methodName.c_str());
+            return InterpretResult::RUNTIME_ERROR;
+          }
+        } else if (receiver.isMap()) {
+
+          MapObject *map = static_cast<MapObject *>(receiver.asGC());
+          StringObject *key = allocateString(methodName);
+          method = map->get(Value::object(key));
+          if (!method.isNil()) {
+            kind = ReceiverKind::Callable;
+          }
+        }
+
+        if (method.isNil() && kind == ReceiverKind::Unknown) {
+          runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName.c_str());
+          return InterpretResult::RUNTIME_ERROR;
+        }
+      }
+
+      else if (receiver.isInstance()) {
+        Instance *instance = static_cast<Instance *>(receiver.asGC());
+        kind = ReceiverKind::Instance;
+
+        method = instance->getField(methodName);
+
+        if (method.isNil() && instance->klass) {
+          auto it = instance->klass->methods.find(methodName);
+          if (it != instance->klass->methods.end()) {
+            method = it->second;
+          }
+        }
+
+        if (method.isNil()) {
+          const char *klassName = instance->klass ? instance->klass->name.c_str() : "<anonymous>";
+          runtimeError("Instance of class '%s' has no method '%s'", klassName, methodName.c_str());
+          return InterpretResult::RUNTIME_ERROR;
+        }
+      }
+
+      else if (receiver.isClass()) {
+        ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
+        kind = ReceiverKind::Class;
+
+        auto itStatic = klass->statics.find(methodName);
+        if (itStatic != klass->statics.end()) {
+          method = itStatic->second;
+        }
+
+        if (method.isNil()) {
+          auto it = klass->methods.find(methodName);
+          if (it != klass->methods.end()) {
+            method = it->second;
+          }
+        }
+
+        if (method.isNil()) {
+          runtimeError("Class '%s' has no static method '%s'", klass->name.c_str(),
+                       methodName.c_str());
+          return InterpretResult::RUNTIME_ERROR;
+        }
+      }
+
+      else {
+        runtimeError("Cannot invoke method '%s' on non-object type '%s'", methodName.c_str(),
+                     receiver.typeName());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      if (method.isClosure()) {
+        Closure *closure = static_cast<Closure *>(method.asGC());
+        const Prototype *proto = closure->proto;
+
+        if (!proto->isVararg && totalArgs != proto->numParams) {
+          runtimeError("Method '%s::%s' expects %d arguments (including this), got %d",
+                       receiver.typeName(), methodName.c_str(), proto->numParams, totalArgs);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        if (frameCount_ >= 64) {
+          runtimeError("Stack overflow: maximum call depth exceeded");
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        CallFrame newFrame;
+        newFrame.closure = closure;
+        newFrame.ip = proto->code.data();
+        newFrame.expectedResults = 1;
+
+        newFrame.slots = &frame->slots[A + 1];
+
+        for (int i = totalArgs - 1; i >= 0; --i) {
+          frame->slots[A + 1 + i] = frame->slots[A + i];
+        }
+
+        newFrame.slots = &frame->slots[A + 1];
+
+        Value *targetStackTop = newFrame.slots + proto->maxStackSize;
+        if (targetStackTop > stack_.data() + config_.stackSize) {
+          runtimeError("Stack overflow: method '%s' requires %d slots", methodName.c_str(),
+                       proto->maxStackSize);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        for (Value *p = newFrame.slots + totalArgs; p < targetStackTop; ++p) {
+          *p = Value::nil();
+        }
+
+        stackTop_ = targetStackTop;
+        frames_.push_back(newFrame);
+        frameCount_++;
+        frame = &frames_[frameCount_ - 1];
+      }
+
+      else if (method.isNativeFunc()) {
+        NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
+
+        Value actualReceiver;
+        int actualArgCount;
+        Value *actualArgs;
+
+        if (kind == ReceiverKind::StdLib) {
+
+          actualReceiver = native->receiver;
+          actualArgCount = userArgCount;
+          actualArgs = argsStart;
+        } else {
+
+          actualReceiver = receiver;
+          actualArgCount = userArgCount;
+          actualArgs = argsStart;
+        }
+
+        if (native->arity != -1 && actualArgCount != native->arity) {
+          runtimeError("Native method '%s' expects %d arguments, got %d", native->name.c_str(),
+                       native->arity, actualArgCount);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        Value result = native->function(this, actualReceiver, actualArgCount, actualArgs);
+
+        frame->slots[A] = result;
+      }
+
+      else {
+        runtimeError("'%s.%s' resolved to non-callable type '%s'", receiver.typeName(),
+                     methodName.c_str(), method.typeName());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
       break;
     }
 
@@ -1024,7 +1575,7 @@ void VM::registerNative(const std::string &name, NativeFn fn, int arity, uint8_t
   native->name = name;
   native->function = fn;
   native->arity = arity;
-  native->receiver = Value::nil(); // 【新增】普通函数没有 receiver
+  native->receiver = Value::nil();
   defineGlobal(name, Value::object(native));
 }
 
@@ -1096,9 +1647,9 @@ void VM::runtimeError(const char *format, ...) {
     size_t instruction = frame.ip - proto->code.data() - 1;
 
     int line = proto->absLineInfo.front().line;
-    auto abs_line_info = std::lower_bound(proto->absLineInfo.begin(), proto->absLineInfo.end(), instruction, [](const auto& lhs, int pc) {
-      return lhs.pc < pc;
-    });
+    auto abs_line_info =
+        std::lower_bound(proto->absLineInfo.begin(), proto->absLineInfo.end(), instruction,
+                         [](const auto &lhs, int pc) { return lhs.pc < pc; });
     int basePC = 0;
     if (abs_line_info != proto->absLineInfo.end()) {
       --abs_line_info;
