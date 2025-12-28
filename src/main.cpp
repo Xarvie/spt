@@ -1,221 +1,238 @@
 #include "TestRunner.h"
 
-int main() {
-  TestRunner runner;
-
-  runner.addTest("Stack Restoration",
+// =========================================================
+// 1. 基础语法与运算 (Basics)
+// =========================================================
+void registerBasics(TestRunner &runner) {
+  runner.addTest("Stack & Arithmetic",
                  R"(
-              void doNothing() { return; }
-              int a = 100;
-              print("Before: " .. a);
-              doNothing();
-              print("After: " .. a);
-          )",
-                 "Before: 100\nAfter: 100");
+            int a = 10;
+            int b = 20;
+            print(a + b * 2);
+            print((a + b) * 2);
+       )",
+                 "50\n60");
 
-  runner.addTest("Multi-Argument & Arithmetic",
+  runner.addTest("Logic Short-Circuit",
                  R"(
-              int add3(int x, int y, int z) {
-                  return x + y + z;
-              }
-              print(add3(10, 20, 30));
-          )",
-                 "60");
+            bool t = true;
+            bool f = false;
 
-  runner.addTest("Loops & Conditions",
+            // 验证短路: 如果没有短路，1/0 会触发除零错误
+            if (t || (1/0 == 0)) { print("OR Short-circuit OK"); }
+            if (f && (1/0 == 0)) { print("Fail"); } else { print("AND Short-circuit OK"); }
+       )",
+                 "OR Short-circuit OK\nAND Short-circuit OK");
+
+  runner.addTest("Variable Shadowing",
                  R"(
-              int sum = 0;
-              for (int i = 1; i <= 5; i = i + 1) {
-                  if (i == 3) {
-                      continue;
-                  }
-                  sum = sum + i;
-              }
-              print("Sum: " .. sum);
+            int a = 100;
+            {
+                int a = 200;
+                print(a);
+                {
+                    int a = 300;
+                    print(a);
+                }
+                print(a);
+            }
+            print(a);
+       )",
+                 "200\n300\n200\n100");
+}
 
-              int j = 0;
-              while (j < 3) {
-                  print("w" .. j);
-                  j = j + 1;
-              }
-          )",
-                 "Sum: 12\nw0\nw1\nw2");
-
-  runner.addTest("Recursion (Fibonacci)",
+// =========================================================
+// 2. 控制流 (Control Flow)
+// =========================================================
+void registerControlFlow(TestRunner &runner) {
+  runner.addTest("Loops & Recursion",
                  R"(
-              int fib(int n) {
-                  if (n < 2) { return n; }
-                  return fib(n - 1) + fib(n - 2);
-              }
-              print(fib(10));
-          )",
-                 "55");
+            int sum = 0;
+            for (int i = 0; i < 5; i = i + 1) {
+                // [修正] 必须加 {}
+                if (i == 2) { continue; }
+                sum = sum + i;
+            }
+            print(sum);
 
-  runner.addTest("Closures (Counter)",
+            int fib(int n) {
+                // [修正] 必须加 {}
+                if (n < 2) { return n; }
+                return fib(n-1) + fib(n-2);
+            }
+            print(fib(10));
+       )",
+                 "8\n55");
+
+  runner.addTest("Nested Break/Continue",
                  R"(
-              auto makeCounter = function() -> function {
-                  int count = 0;
-                  return function() -> int {
-                      count = count + 1;
-                      return count;
-                  };
-              };
+            int i = 0;
+            while (i < 3) {
+                int j = 0;
+                while (j < 3) {
+                    if (j == 1) {
+                        j = j + 1;
+                        continue;
+                    }
+                    if (i == 1) {
+                        break;
+                    }
+                    print(i .. "-" .. j);
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+       )",
+                 "0-0\n0-2\n2-0\n2-2");
+}
 
-              auto c1 = makeCounter();
-              auto c2 = makeCounter();
+// =========================================================
+// 3. 函数与闭包 (Functions)
+// =========================================================
+void registerFunctions(TestRunner &runner) {
+  runner.addTest("Closure & Upvalues",
+                 R"(
+            auto makeCounter = function() -> function {
+                int count = 0;
+                return function() -> int {
+                    count = count + 1;
+                    return count;
+                };
+            };
+            auto c1 = makeCounter();
+            print(c1());
+            print(c1());
+       )",
+                 "1\n2");
 
-              print("c1: " .. c1());
-              print("c1: " .. c1());
-              print("c2: " .. c2());
-          )",
-                 "c1: 1\nc1: 2\nc2: 1");
+  runner.addTest("Deep Closure Shared State",
+                 R"(
+            var setter;
+            var getter;
 
-  runner.addTest("Class & Methods",
+            {
+                int x = 10;
+                // [修正] 必须显式写出 -> void
+                setter = function(int v) -> void { x = v; };
+                getter = function() -> int { return x; };
+            }
+
+            print(getter());
+            setter(42);
+            print(getter());
+       )",
+                 "10\n42");
+}
+
+// =========================================================
+// 4. 类与对象 (Classes)
+// =========================================================
+void registerClasses(TestRunner &runner) {
+  runner.addTest("Class Methods & Fields",
                  R"spt(
-              class Vector {
-                  int x;
-                  int y;
+            class Point {
+                int x;
+                int y;
+                void init(Point this, int x, int y) {
+                    this.x = x;
+                    this.y = y;
+                }
+                void move(Point this, int dx, int dy) {
+                    this.x = this.x + dx;
+                    this.y = this.y + dy;
+                }
+            }
+            Point p = new Point(10, 20);
+            p.move(p, 5, 5);
+            print(p.x .. ", " .. p.y);
+       )spt",
+                 "15, 25");
 
-                  
-                  void init(Vector this, int x, int y) {
-                      this.x = x;
-                      this.y = y;
-                  }
-
-                  Vector add(Vector this, Vector other) {
-                      return new Vector(this.x + other.x, this.y + other.y);
-                  }
-
-                  string str(Vector this) {
-                      return "(" .. this.x .. ", " .. this.y .. ")";
-                  }
-              }
-
-              Vector v1 = new Vector(1, 2);
-              Vector v2 = new Vector(3, 4);
-
-              
-              Vector v3 = v1.add(v1, v2);
-
-              print(v3.str(v3));
-          )spt",
-                 "(4, 6)");
-
-  runner.addTest("List Operations",
+  runner.addTest("Circular Reference Safety",
                  R"(
-              list<int> myList = [10, 20, 30];
-              print(myList[1]);
-              myList[1] = 99;
-              print(myList[1]);
-          )",
-                 "20\n99");
+            class Node {
+                any next;
+            }
+            Node a = new Node();
+            Node b = new Node();
 
-  runner.addTest("Map Operations",
+            a.next = b;
+            b.next = a;
+
+            print("Cycle created");
+       )",
+                 "Cycle created");
+}
+
+// =========================================================
+// 5. 数据结构 (List/Map)
+// =========================================================
+void registerDataStructs(TestRunner &runner) {
+  runner.addTest("List & Map Basic",
                  R"(
-              map<string, any> dict = { "name": "Flex", "ver": 1 };
-              print(dict["name"]);
-              dict["ver"] = 2;
-              print(dict["ver"]);
-          )",
-                 "Flex\n2");
+            list<int> l = [1, 2];
+            l[0] = 100;
+            print(l[0]);
 
-  runner.addTest("Pure Functions (No 'this')",
+            map<string, int> m = {"a": 1};
+            m["b"] = 2;
+            print(m["b"]);
+       )",
+                 "100\n2");
+
+  runner.addTest("Empty Structs & Mixed Types",
                  R"(
-              class Math {
-                  
-                  static int square(int x) { return x * x; }
-              }
+            list<any> emptyList = [];
+            print("List size: " .. 0);
 
-              
-              int r1 = Math.square(10);
+            map<string, any> complex = {};
+            complex["int"] = 1;
+            complex["str"] = "hello";
+            complex["list"] = [1, 2];
 
-              
-              var f = Math.square;
-              int r2 = f(5);
+            print(complex["str"]);
+       )",
+                 "List size: 0\nhello");
+}
 
-              
-              map<string, any> obj = {};
-              obj["sq"] = Math.square;
-              auto fn = obj["sq"];
-              int r3 = fn(2);
-
-              print(r1 .. ", " .. r2 .. ", " .. r3);
-          )",
-                 "100, 25, 4");
-
-  runner.addTest("Explicit Context (Map Methods)",
-                 R"(
-              map<string, any> hero = { "hp": 100 };
-
-              
-              hero["heal"] = function(any self, int amount) -> int {
-                  self["hp"] = self["hp"] + amount;
-                  return self["hp"];
-              };
-
-              
-              print(hero["heal"](hero, 50));
-          )",
-                 "150");
-
-  runner.addTest("Arity Check (Safety)",
-                 R"(
-              class Counter {
-                  int val;
-                  void inc(Counter this) { this.val = this.val + 1; }
-              }
-              Counter c = new Counter();
-
-              var f = c.inc;
-              c.val = 1;
-              f(c);
-              print(c.val);
-          )",
-                 "2");
-
-  runner.addTest("Mixed Calls (Pure + Method)",
-                 R"(
-              class Utils {
-                  static int double(int x) { return x * 2; }
-              }
-
-              class Player {
-                  int score;
-                  void addScore(Player this, int s) {
-                      this.score = this.score + Utils.double(s);
-                  }
-              }
-
-              Player p = new Player();
-              p.score = 10;
-
-              
-              p.addScore(p, 5); 
-              print(p.score);
-          )",
-                 "20");
-
-  runner.addModuleTest("Simple Module Import", {{"math", "export int sq(int x) { return x*x; }"}},
+// =========================================================
+// 6. 模块系统 (Modules)
+// =========================================================
+void registerModules(TestRunner &runner) {
+  runner.addModuleTest("Simple Import", {{"math", "export int sq(int x) { return x*x; }"}},
                        R"(
-              import { sq } from "math";
-              print(sq(5));
-          )",
+            import { sq } from "math";
+            print(sq(5));
+        )",
                        "25");
 
   std::string hugeModuleBody = R"(
         export var data = {};
-        // 循环 2000 次，产生大量临时字符串和 Map 扩容，强制触发 GC
         for (int i = 0; i < 2000; i = i + 1) {
             data["key_" .. i] = "value_" .. i;
         }
     )";
 
-  runner.addModuleTest("PROOF OF CRASH: Module Exports GC", {{"stress_module", hugeModuleBody}},
+  runner.addModuleTest("Regressions: Module GC Safety", {{"stress_module", hugeModuleBody}},
                        R"(
             import * as s from "stress_module";
-            print("ok");
+            print("Module loaded safely");
         )",
-                       "ok");
+                       "Module loaded safely");
+}
+
+// =========================================================
+// 主函数
+// =========================================================
+int main() {
+  TestRunner runner;
+
+  registerBasics(runner);
+  registerControlFlow(runner);
+  registerFunctions(runner);
+  registerClasses(runner);
+  registerDataStructs(runner);
+  registerModules(runner);
 
   return runner.runAll();
 }

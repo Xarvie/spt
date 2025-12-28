@@ -61,9 +61,7 @@ public:
       fs::remove_all(testDir_);
     fs::create_directories(testDir_);
 
-    std::cout << "==================================================" << std::endl;
     std::cout << "Running " << total << " tests..." << std::endl;
-    std::cout << "==================================================" << std::endl;
 
     for (const auto &test : tests_) {
       if (runSingleTest(test)) {
@@ -77,10 +75,11 @@ public:
 
     std::cout << "==================================================" << std::endl;
     if (passed == total) {
-      std::cout << "\033[32m[  PASSED  ] All " << total << " tests passed.\033[0m" << std::endl;
+      // 成功：移除绿色代码，使用普通文本
+      std::cout << "[  PASSED  ] All " << total << " tests passed." << std::endl;
     } else {
-      std::cout << "\033[31m[  FAILED  ] " << (total - passed) << " tests failed.\033[0m"
-                << std::endl;
+      // 失败：使用 emoji 🔴 标记
+      std::cout << "🔴 [  FAILED  ] " << (total - passed) << " tests failed." << std::endl;
     }
 
     return (passed == total) ? 0 : 1;
@@ -111,7 +110,7 @@ private:
   // 创建测试所需的辅助文件
   void setupModules(const std::vector<ModuleDef> &modules) {
     for (const auto &mod : modules) {
-      std::string path = testDir_ + "/" + mod.name + ".flx";
+      std::string path = testDir_ + "/" + mod.name + ".spt";
       std::ofstream file(path);
       file << mod.content;
       file.close();
@@ -121,7 +120,7 @@ private:
   // 清理辅助文件
   void cleanupModules(const std::vector<ModuleDef> &modules) {
     for (const auto &mod : modules) {
-      std::string path = testDir_ + "/" + mod.name + ".flx";
+      std::string path = testDir_ + "/" + mod.name + ".spt";
       if (fs::exists(path))
         fs::remove(path);
     }
@@ -180,8 +179,8 @@ private:
     // 情况 A: 预期运行时错误
     if (test.expectRuntimeError) {
       if (result != InterpretResult::OK) {
-        std::cout << "\033[32m[       OK ]\033[0m " << test.name << " (Expected Error Caught)"
-                  << " (" << duration << " ms)" << std::endl;
+        // 成功捕获错误：移除绿色代码
+        std::cout << "[       OK ] " << test.name << " (Expected Error Caught)" << " (" << duration << " ms)" << std::endl;
         return true;
       } else {
         printFail(test.name, "Expected Runtime Error, but got OK", "Runtime Error", "OK");
@@ -199,8 +198,8 @@ private:
     std::string expected = trim(test.expectedOutput);
 
     if (actual == expected) {
-      std::cout << "\033[32m[       OK ]\033[0m " << test.name << " (" << duration << " ms)"
-                << std::endl;
+      // 成功：移除绿色代码
+      std::cout << "[       OK ] " << test.name << " (" << duration << " ms)" << std::endl;
       return true;
     } else {
       printFail(test.name, "Output Mismatch", expected, actual);
@@ -210,7 +209,7 @@ private:
 
   void printFail(const std::string &name, const std::string &reason, const std::string &expected,
                  const std::string &actual) {
-    std::cout << "\033[31m[  FAILED  ]\033[0m " << name << std::endl;
+    std::cout << "🔴 [  FAILED  ] " << name << std::endl;
     std::cout << "             Reason: " << reason << std::endl;
     if (!expected.empty() || !actual.empty()) {
       std::cout << "             Expected: \"" << escapeNewlines(expected) << "\"" << std::endl;
