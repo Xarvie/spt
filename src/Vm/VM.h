@@ -30,8 +30,8 @@ struct VMConfig {
   size_t heapSize = 64 * 1024 * 1024; // 堆大小
   bool enableGC = true;
   bool debugMode = false;
-  bool enableHotReload = true;          // 新增：启用模块热更新
-  std::vector<std::string> modulePaths; // 新增：模块搜索路径
+  bool enableHotReload = true;          // 启用模块热更新
+  std::vector<std::string> modulePaths; // 模块搜索路径
 };
 
 // 虚拟机

@@ -1,4 +1,5 @@
 #include "TestRunner.h"
+#include <filesystem>
 
 // =========================================================
 // 1. 基础语法与运算 (Basics)
@@ -1702,13 +1703,8 @@ void registerBuiltinFunctions(TestRunner &runner) {
                  "5\n0,4\n5\n1,5\n5\n5,1");
 }
 
-#include <filesystem>
 
-namespace fs = std::filesystem;
 
-// =========================================================
-// 新增：脚本执行逻辑
-// =========================================================
 int runScript(const char *path) {
   // 1. 读取文件内容
   std::string source;
@@ -1726,7 +1722,7 @@ int runScript(const char *path) {
     return 74;
   }
 
-  std::string filename = fs::path(path).filename().string();
+  std::string filename = std::filesystem::path(path).filename().string();
 
   // 2. 解析 AST
   AstNode *ast = loadAst(source, filename);
@@ -1750,7 +1746,7 @@ int runScript(const char *path) {
   spt::VMConfig config;
   config.enableGC = true;
 
-  config.modulePaths.push_back(fs::path(path).parent_path().string());
+  config.modulePaths.push_back(std::filesystem::path(path).parent_path().string());
 
   spt::VM vm(config);
 

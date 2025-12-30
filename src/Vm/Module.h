@@ -111,7 +111,8 @@ public:
   ~ModuleManager();
 
   // === GC 支持 ===
-  void markRoots(); // 新增：标记所有模块中的 exportsTable
+  // 标记所有模块中的 exportsTable
+  void markRoots();
 
   // === 核心加载接口 ===
   // 加载模块（返回导出表）
