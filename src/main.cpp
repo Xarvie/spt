@@ -1728,10 +1728,10 @@ int runScript(const char *path) {
 
   std::string filename = fs::path(path).filename().string();
 
-  // 2. 解析 AST (loadAst 在 TestRunner.h/Ast.cpp 中定义)
+  // 2. 解析 AST
   AstNode *ast = loadAst(source, filename);
   if (!ast) {
-    return 65; // Data format error
+    return 65;
   }
 
   // 3. 编译
@@ -1743,25 +1743,19 @@ int runScript(const char *path) {
 
   spt::CompiledChunk chunk = compiler.compile(ast);
 
-  // 如果你有 destroyAst，记得在这里调用
-  // destroyAst(ast);
-
   if (compiler.hasError()) {
     return 65;
   }
 
-  // 4. 配置虚拟机并运行
   spt::VMConfig config;
   config.enableGC = true;
-  // 关键：将脚本所在目录加入模块搜索路径，这样脚本里 import 同级模块才能生效
+
   config.modulePaths.push_back(fs::path(path).parent_path().string());
 
   spt::VM vm(config);
 
-  // 重定向 print 输出
   vm.setPrintHandler([](const std::string &msg) { std::cout << msg; });
 
-  // 设置运行时错误输出
   vm.setErrorHandler([](const std::string &msg, int line) {
     std::cerr << "[Runtime Error] " << msg << std::endl;
   });
@@ -1775,12 +1769,11 @@ int runScript(const char *path) {
 // 主函数
 // =========================================================
 int main(int argc, char *argv[]) {
-  // 模式 1: 脚本执行模式 (如果有参数)
+  // 脚本执行模式 (如果有参数)
   if (argc > 1) {
     return runScript(argv[1]);
   }
 
-  // 模式 2: 单元测试模式 (如果没有参数)
   TestRunner runner;
 
   registerBasics(runner);
