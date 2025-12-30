@@ -1702,10 +1702,85 @@ void registerBuiltinFunctions(TestRunner &runner) {
                  "5\n0,4\n5\n1,5\n5\n5,1");
 }
 
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+// =========================================================
+// 新增：脚本执行逻辑
+// =========================================================
+int runScript(const char *path) {
+  // 1. 读取文件内容
+  std::string source;
+  try {
+    std::ifstream file(path);
+    if (!file) {
+      std::cerr << "Could not open file: " << path << std::endl;
+      return 74; // IO Error
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    source = buffer.str();
+  } catch (const std::exception &e) {
+    std::cerr << "Error reading file: " << e.what() << std::endl;
+    return 74;
+  }
+
+  std::string filename = fs::path(path).filename().string();
+
+  // 2. 解析 AST (loadAst 在 TestRunner.h/Ast.cpp 中定义)
+  AstNode *ast = loadAst(source, filename);
+  if (!ast) {
+    return 65; // Data format error
+  }
+
+  // 3. 编译
+  spt::Compiler compiler("main");
+  compiler.setErrorHandler([](const spt::CompileError &err) {
+    std::cerr << "[Compile Error] " << err.filename << ":" << err.line << " " << err.message
+              << std::endl;
+  });
+
+  spt::CompiledChunk chunk = compiler.compile(ast);
+
+  // 如果你有 destroyAst，记得在这里调用
+  // destroyAst(ast);
+
+  if (compiler.hasError()) {
+    return 65;
+  }
+
+  // 4. 配置虚拟机并运行
+  spt::VMConfig config;
+  config.enableGC = true;
+  // 关键：将脚本所在目录加入模块搜索路径，这样脚本里 import 同级模块才能生效
+  config.modulePaths.push_back(fs::path(path).parent_path().string());
+
+  spt::VM vm(config);
+
+  // 重定向 print 输出
+  vm.setPrintHandler([](const std::string &msg) { std::cout << msg; });
+
+  // 设置运行时错误输出
+  vm.setErrorHandler([](const std::string &msg, int line) {
+    std::cerr << "[Runtime Error] " << msg << std::endl;
+  });
+
+  spt::InterpretResult result = vm.interpret(chunk);
+
+  return (result == spt::InterpretResult::OK) ? 0 : 70;
+}
+
 // =========================================================
 // 主函数
 // =========================================================
-int main() {
+int main(int argc, char *argv[]) {
+  // 模式 1: 脚本执行模式 (如果有参数)
+  if (argc > 1) {
+    return runScript(argv[1]);
+  }
+
+  // 模式 2: 单元测试模式 (如果没有参数)
   TestRunner runner;
 
   registerBasics(runner);

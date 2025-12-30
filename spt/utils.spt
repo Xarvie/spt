@@ -1,0 +1,25 @@
+//utils.spt
+
+print("[utils] 正在初始化模块...");
+
+// --- 导出变量 ---
+export float PI = 3.14159;
+export string VERSION = "1.0.0";
+
+// --- 私有变量 (外部无法访问) ---
+int _internalSecret = 42;
+
+// --- 导出函数 ---
+export func add(int a, int b) {
+    return a + b;
+}
+
+export float getCircleArea(float radius) {
+    return PI * radius * radius;
+}
+
+export int getSecret() {
+    return _internalSecret;
+}
+
+print("[utils] 模块初始化完成");

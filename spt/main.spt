@@ -1,0 +1,23 @@
+// 文件名: main.spt
+import { PI, add, getCircleArea, getSecret } from "utils";
+
+print("[main] utils 模块已加载");
+
+// 1. 测试导出的变量
+print("PI 的值是: " .. PI);
+
+// 2. 测试导出的函数
+int sum = add(10, 20);
+print("10 + 20 = " .. sum);
+
+// 3. 测试依赖模块内部逻辑的函数
+float area = getCircleArea(2.0);
+print("半径为 2 的圆面积: " .. area);
+
+// 4. 测试闭包/私有性
+print("模块内部密钥: " .. getSecret());
+
+// 尝试直接访问_internalSecret为 nil
+print(_internalSecret);
+
+print("[main] 程序结束");
