@@ -378,6 +378,16 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "10\n25");
 
+  runner.addTest("mutivar Function",
+                 R"(
+            mutivar returnAB(int a, int b) {
+                return a, b;
+            }
+            mutivar a, b = returnAB(1, 2);
+            print(a, b);
+       )",
+                 "1 2");
+
   runner.addTest("Closure with Multiple Upvalues",
                  R"(
             auto makeAdder = function(int a, int b) -> function {

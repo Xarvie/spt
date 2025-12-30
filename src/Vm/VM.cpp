@@ -1320,32 +1320,43 @@ dispatch_loop:
     }
 
     case OpCode::OP_RETURN: {
+      int returnCount = (B >= 1) ? B - 1 : 0;
 
-      Value result = (B >= 2) ? frame->slots[A] : Value::nil();
+      Value *returnValues = frame->slots + A;
 
       Value *destSlot = frame->slots - 1;
 
-      closeUpvalues(frame->slots);
+      int expectedResults = frame->expectedResults;
 
+      closeUpvalues(frame->slots);
       frameCount_--;
       frames_.pop_back();
 
       if (frameCount_ == minFrameCount) {
-
-        lastModuleResult_ = result;
-
+        lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
         if (minFrameCount == 0) {
           unprotect(1);
         }
-
         return InterpretResult::OK;
       }
 
       frame = &frames_[frameCount_ - 1];
 
-      stackTop_ = frame->slots + frame->closure->proto->maxStackSize;
-
-      *destSlot = result;
+      if (expectedResults == -1) {
+        for (int i = 0; i < returnCount; ++i) {
+          destSlot[i] = returnValues[i];
+        }
+        stackTop_ = destSlot + returnCount;
+      } else {
+        for (int i = 0; i < expectedResults; ++i) {
+          if (i < returnCount) {
+            destSlot[i] = returnValues[i];
+          } else {
+            destSlot[i] = Value::nil();
+          }
+        }
+        stackTop_ = frame->slots + frame->closure->proto->maxStackSize;
+      }
 
       break;
     }
