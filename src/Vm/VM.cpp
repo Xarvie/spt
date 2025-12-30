@@ -832,6 +832,7 @@ dispatch_loop:
 
       const Prototype &proto = frame->closure->proto->protos[Bx];
       Closure *closure = allocateClosure(&proto);
+      protect(Value::object(closure));
 
       for (size_t i = 0; i < proto.numUpvalues; ++i) {
         const auto &uvDesc = proto.upvalues[i];
@@ -844,6 +845,8 @@ dispatch_loop:
           closure->upvalues.push_back(frame->closure->upvalues[uvDesc.index]);
         }
       }
+
+      unprotect(1);
 
       frame->slots[A] = Value::object(closure);
       break;
@@ -1283,6 +1286,8 @@ dispatch_loop:
       else if (method.isNativeFunc()) {
         NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
 
+        protect(method);
+
         Value actualReceiver;
         int actualArgCount;
         Value *actualArgs;
@@ -1306,6 +1311,8 @@ dispatch_loop:
         }
 
         Value result = native->function(this, actualReceiver, actualArgCount, actualArgs);
+
+        unprotect(1);
 
         frame->slots[A] = result;
       }
@@ -1621,14 +1628,55 @@ Value VM::importModule(const std::string &path) {
     return Value::nil();
   }
 
+  Value moduleEnv = lastModuleResult_;
+
+  if (!moduleEnv.isMap()) {
+    return Value::nil();
+  }
+
+  MapObject *envMap = static_cast<MapObject *>(moduleEnv.asGC());
   MapObject *exports = allocateMap(8);
+
   for (const auto &exportName : it->second.exports) {
-    Value value = getGlobal(exportName);
     StringObject *key = allocateString(exportName);
-    exports->set(Value::object(key), value);
+    Value val = envMap->get(Value::object(key));
+    exports->set(Value::object(key), val);
   }
 
   return Value::object(exports);
+}
+
+InterpretResult VM::executeModule(const CompiledChunk &chunk) {
+  Closure *mainClosure = allocateClosure(&chunk.mainProto);
+  protect(Value::object(mainClosure));
+
+  Value *frameStart = stackTop_;
+
+  CallFrame frame;
+  frame.closure = mainClosure;
+  frame.ip = mainClosure->proto->code.data();
+  frame.slots = frameStart;
+  frame.expectedResults = 0;
+
+  ensureStack(mainClosure->proto->maxStackSize);
+
+  int startFrameCount = frameCount_;
+  frames_.push_back(frame);
+  frameCount_++;
+
+  Value *frameEnd = frame.slots + mainClosure->proto->maxStackSize;
+  for (Value *slot = frame.slots; slot < frameEnd; ++slot) {
+    *slot = Value::nil();
+  }
+  stackTop_ = frameEnd;
+
+  InterpretResult result = run(startFrameCount);
+
+  stackTop_ = frameStart;
+
+  unprotect(1);
+
+  return result;
 }
 
 bool VM::valuesEqual(Value a, Value b) { return a.equals(b); }

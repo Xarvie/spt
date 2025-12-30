@@ -12,7 +12,6 @@ namespace spt {
 
 FileSystemLoader::FileSystemLoader(const std::vector<std::string> &searchPaths)
     : searchPaths_(searchPaths) {
-
   if (searchPaths_.empty()) {
     searchPaths_.push_back(".");
   }
@@ -20,12 +19,10 @@ FileSystemLoader::FileSystemLoader(const std::vector<std::string> &searchPaths)
 
 std::string FileSystemLoader::resolvePath(const std::string &moduleName,
                                           const std::string &fromPath) {
-
   if (!fromPath.empty()) {
     namespace fs = std::filesystem;
     fs::path parent = fs::path(fromPath).parent_path();
     fs::path candidate = parent / (moduleName + ".flx");
-
     if (exists(candidate.string())) {
       return fs::absolute(candidate).string();
     }
@@ -34,7 +31,6 @@ std::string FileSystemLoader::resolvePath(const std::string &moduleName,
   for (const auto &searchPath : searchPaths_) {
     namespace fs = std::filesystem;
     std::vector<std::string> extensions = {".flx", ".spt", ".flxc"};
-
     for (const auto &ext : extensions) {
       fs::path candidate = fs::path(searchPath) / (moduleName + ext);
       if (exists(candidate.string())) {
@@ -47,30 +43,23 @@ std::string FileSystemLoader::resolvePath(const std::string &moduleName,
     namespace fs = std::filesystem;
     return fs::absolute(moduleName).string();
   }
-
   return "";
 }
 
 std::string FileSystemLoader::loadSource(const std::string &path) {
   std::ifstream file(path);
-  if (!file) {
+  if (!file)
     throw std::runtime_error("Cannot open file: " + path);
-  }
-
   std::stringstream buffer;
   buffer << file.rdbuf();
   return buffer.str();
 }
 
-bool FileSystemLoader::exists(const std::string &path) {
-  namespace fs = std::filesystem;
-  return fs::exists(path);
-}
+bool FileSystemLoader::exists(const std::string &path) { return std::filesystem::exists(path); }
 
 uint64_t FileSystemLoader::getTimestamp(const std::string &path) {
-  namespace fs = std::filesystem;
   try {
-    auto ftime = fs::last_write_time(path);
+    auto ftime = std::filesystem::last_write_time(path);
     return std::chrono::duration_cast<std::chrono::milliseconds>(ftime.time_since_epoch()).count();
   } catch (...) {
     return 0;
@@ -80,45 +69,37 @@ uint64_t FileSystemLoader::getTimestamp(const std::string &path) {
 void FileSystemLoader::addSearchPath(const std::string &path) { searchPaths_.push_back(path); }
 
 std::string FileSystemLoader::normalizePath(const std::string &path) {
-  namespace fs = std::filesystem;
-  return fs::path(path).lexically_normal().string();
+  return std::filesystem::path(path).lexically_normal().string();
 }
 
 ModuleManager::ModuleManager(VM *vm, const ModuleManagerConfig &config) : vm_(vm), config_(config) {
-
   std::vector<std::string> defaultPaths = {".", "./lib", "./modules"};
   loader_ = std::make_unique<FileSystemLoader>(defaultPaths);
 }
 
 ModuleManager::~ModuleManager() {
-
   modules_.clear();
   pathToName_.clear();
 }
 
 Value ModuleManager::loadModule(const std::string &moduleName, const std::string &fromPath) {
-
   if (config_.enableCache) {
     auto it = modules_.find(moduleName);
     if (it != modules_.end()) {
-      Module *cached = it->second;
+      Module *cached = it->second.get();
 
       if (cached->state == ModuleState::LOADED) {
         cacheHits_++;
-
         if (config_.enableHotReload) {
           uint64_t currentTime = loader_->getTimestamp(cached->metadata.path);
           if (currentTime > cached->metadata.timestamp) {
-
             if (reloadModule(moduleName)) {
               return Value::object(modules_[moduleName]->exportsTable);
             }
           }
         }
-
         return Value::object(cached->exportsTable);
       }
-
       if (cached->state == ModuleState::ERROR) {
         return createError(cached->errorMessage);
       }
@@ -126,7 +107,6 @@ Value ModuleManager::loadModule(const std::string &moduleName, const std::string
   }
 
   cacheMisses_++;
-
   std::unordered_set<std::string> loadingStack;
   Module *module = loadModuleInternal(moduleName, fromPath, loadingStack);
 
@@ -143,102 +123,94 @@ Module *ModuleManager::loadModuleInternal(const std::string &moduleName,
                                           std::unordered_set<std::string> &loadingStack) {
 
   if (loadingStack.find(moduleName) != loadingStack.end()) {
-    Module *module = vm_->gc().allocate<Module>();
-    setError(module, "Circular dependency detected: " + moduleName);
-    return module;
+    auto module = std::make_unique<Module>();
+    Module *modulePtr = module.get();
+    modulePtr->metadata.name = moduleName;
+    setError(modulePtr, "Circular dependency detected: " + moduleName);
+
+    modules_[moduleName] = std::move(module);
+    return modulePtr;
   }
 
   loadingStack.insert(moduleName);
 
   std::string resolvedPath = loader_->resolvePath(moduleName, fromPath);
   if (resolvedPath.empty()) {
-    Module *module = vm_->gc().allocate<Module>();
-    setError(module, "Module not found: " + moduleName);
+    auto module = std::make_unique<Module>();
+    Module *modulePtr = module.get();
+    modulePtr->metadata.name = moduleName;
+    setError(modulePtr, "Module not found: " + moduleName);
+
+    modules_[moduleName] = std::move(module);
     loadingStack.erase(moduleName);
-    return module;
+    return modulePtr;
   }
 
-  Module *module = vm_->gc().allocate<Module>();
+  auto module = std::make_unique<Module>();
+  Module *modulePtr = module.get();
 
-  vm_->protect(Value::object(module));
+  modules_[moduleName] = std::move(module);
 
-  module->metadata.name = moduleName;
-  module->metadata.path = resolvedPath;
-  module->metadata.timestamp = loader_->getTimestamp(resolvedPath);
-  module->state = ModuleState::LOADING;
+  modulePtr->metadata.name = moduleName;
+  modulePtr->metadata.path = resolvedPath;
+  modulePtr->metadata.timestamp = loader_->getTimestamp(resolvedPath);
+  modulePtr->state = ModuleState::LOADING;
 
   std::string source;
   try {
     source = loader_->loadSource(resolvedPath);
   } catch (const std::exception &e) {
-    setError(module, "Failed to load source: " + std::string(e.what()));
+    setError(modulePtr, "Failed to load source: " + std::string(e.what()));
     loadingStack.erase(moduleName);
-
-    vm_->unprotect(1);
-    return module;
+    return modulePtr;
   }
 
-  if (!compileModule(module, source)) {
+  if (!compileModule(modulePtr, source)) {
     loadingStack.erase(moduleName);
-
-    vm_->unprotect(1);
-    return module;
+    return modulePtr;
   }
 
-  resolveDependencies(module);
+  resolveDependencies(modulePtr);
 
-  for (const auto &dep : module->metadata.dependencies) {
+  for (const auto &dep : modulePtr->metadata.dependencies) {
     Module *depModule = loadModuleInternal(dep, resolvedPath, loadingStack);
     if (!depModule || depModule->state != ModuleState::LOADED) {
-      setError(module, "Failed to load dependency: " + dep);
+      setError(modulePtr, "Failed to load dependency: " + dep);
       loadingStack.erase(moduleName);
-
-      vm_->unprotect(1);
-      return module;
+      return modulePtr;
     }
   }
 
-  if (!executeModule(module)) {
+  if (!executeModule(modulePtr)) {
     loadingStack.erase(moduleName);
-
-    vm_->unprotect(1);
-    return module;
+    return modulePtr;
   }
 
-  buildExportsTable(module);
+  buildExportsTable(modulePtr);
 
-  module->state = ModuleState::LOADED;
+  modulePtr->state = ModuleState::LOADED;
 
   if (config_.enableCache) {
-
-    modules_[moduleName] = module;
     pathToName_[resolvedPath] = moduleName;
     loadOrder_.push_back(moduleName);
-
     if (modules_.size() > config_.maxCacheSize) {
       evictCache();
     }
   }
 
   loadingStack.erase(moduleName);
-
-  vm_->unprotect(1);
-
-  return module;
+  return modulePtr;
 }
 
 bool ModuleManager::compileModule(Module *module, const std::string &source) {
   try {
-
     AstNode *ast = loadAst(source, module->metadata.path);
-
     if (!ast) {
       setError(module, "Parse failed");
       return false;
     }
 
     Compiler compiler(module->metadata.name);
-
     std::string compileError;
     compiler.setErrorHandler([&](const CompileError &err) {
       compileError += "Line " + std::to_string(err.line) + ": " + err.message + "\n";
@@ -246,7 +218,6 @@ bool ModuleManager::compileModule(Module *module, const std::string &source) {
 
     module->chunk = compiler.compile(ast);
     module->metadata.exports = module->chunk.exports;
-
     destroyAst(ast);
 
     if (compiler.hasError()) {
@@ -255,7 +226,6 @@ bool ModuleManager::compileModule(Module *module, const std::string &source) {
     }
 
     module->metadata.byteSize = module->chunk.mainProto.code.size() * sizeof(Instruction);
-
     return true;
 
   } catch (const std::exception &e) {
@@ -266,16 +236,12 @@ bool ModuleManager::compileModule(Module *module, const std::string &source) {
 
 bool ModuleManager::executeModule(Module *module) {
   try {
-
     InterpretResult result = vm_->executeModule(module->chunk);
-
     if (result != InterpretResult::OK) {
       setError(module, "Module execution failed");
       return false;
     }
-
     return true;
-
   } catch (const std::exception &e) {
     setError(module, "Execution error: " + std::string(e.what()));
     return false;
@@ -283,7 +249,6 @@ bool ModuleManager::executeModule(Module *module) {
 }
 
 void ModuleManager::buildExportsTable(Module *module) {
-
   Value envValue = vm_->getLastModuleResult();
 
   vm_->protect(envValue);
@@ -295,11 +260,9 @@ void ModuleManager::buildExportsTable(Module *module) {
   }
 
   MapObject *envMap = static_cast<MapObject *>(envValue.asGC());
-
   module->exportsTable = vm_->allocateMap(static_cast<int>(module->metadata.exports.size()));
 
   for (const auto &exportName : module->metadata.exports) {
-
     StringObject *key = vm_->allocateString(exportName);
     Value keyVal = Value::object(key);
 
@@ -316,54 +279,58 @@ void ModuleManager::buildExportsTable(Module *module) {
   vm_->unprotect(1);
 }
 
-InterpretResult VM::executeModule(const CompiledChunk &chunk) {
-
-  Closure *mainClosure = allocateClosure(&chunk.mainProto);
-  protect(Value::object(mainClosure));
-
-  CallFrame frame;
-  frame.closure = mainClosure;
-  frame.ip = mainClosure->proto->code.data();
-
-  frame.slots = stackTop_;
-
-  ensureStack(mainClosure->proto->maxStackSize);
-
-  int startFrameCount = frameCount_;
-  frames_.push_back(frame);
-  frameCount_++;
-
-  Value *frameEnd = frame.slots + mainClosure->proto->maxStackSize;
-  for (Value *slot = frame.slots; slot < frameEnd; ++slot) {
-    *slot = Value::nil();
-  }
-  stackTop_ = frameEnd;
-
-  return run(startFrameCount);
-}
-
 void ModuleManager::resolveDependencies(Module *module) {}
 
 bool ModuleManager::reloadModule(const std::string &moduleName) {
   auto it = modules_.find(moduleName);
-  if (it == modules_.end()) {
+  if (it == modules_.end())
+    return false;
+
+  Module *oldModule = it->second.get();
+
+  auto newModule = std::make_unique<Module>();
+  newModule->metadata.name = moduleName;
+
+  std::string path = oldModule->metadata.path;
+  if (path.empty()) {
+    path = loader_->resolvePath(moduleName, "");
+  }
+
+  if (path.empty())
+    return false;
+
+  newModule->metadata.path = path;
+
+  std::string source;
+  try {
+    source = loader_->loadSource(path);
+  } catch (...) {
     return false;
   }
 
-  Module *oldModule = it->second;
+  newModule->metadata.timestamp = loader_->getTimestamp(path);
 
-  std::unordered_set<std::string> loadingStack;
-  Module *newModule = loadModuleInternal(moduleName, "", loadingStack);
+  if (!compileModule(newModule.get(), source)) {
 
-  if (!newModule || newModule->state != ModuleState::LOADED) {
     return false;
   }
 
-  oldModule->exportsTable->entries.clear();
-  oldModule->exportsTable->entries = newModule->exportsTable->entries;
+  resolveDependencies(newModule.get());
+
+  if (!executeModule(newModule.get())) {
+
+    return false;
+  }
+
+  buildExportsTable(newModule.get());
+
+  oldModule->chunk = std::move(newModule->chunk);
+
+  oldModule->exportsTable = newModule->exportsTable;
 
   oldModule->metadata = newModule->metadata;
-  oldModule->chunk = newModule->chunk;
+  oldModule->state = ModuleState::LOADED;
+  oldModule->errorMessage.clear();
 
   return true;
 }
@@ -373,34 +340,27 @@ void ModuleManager::preloadModule(const std::string &moduleName) { loadModule(mo
 std::vector<std::string> ModuleManager::getDependencies(const std::string &moduleName,
                                                         bool recursive) {
   auto it = modules_.find(moduleName);
-  if (it == modules_.end()) {
+  if (it == modules_.end())
     return {};
-  }
 
   std::vector<std::string> result = it->second->metadata.dependencies;
-
   if (recursive) {
     std::unordered_set<std::string> visited;
     std::function<void(const std::string &)> collectDeps;
-
     collectDeps = [&](const std::string &name) {
-      if (visited.find(name) != visited.end())
+      if (visited.count(name))
         return;
       visited.insert(name);
-
       auto depIt = modules_.find(name);
       if (depIt == modules_.end())
         return;
-
       for (const auto &dep : depIt->second->metadata.dependencies) {
         result.push_back(dep);
         collectDeps(dep);
       }
     };
-
     collectDeps(moduleName);
   }
-
   return result;
 }
 
@@ -413,13 +373,10 @@ bool ModuleManager::hasCircularDependency(const std::string &moduleName) {
 bool ModuleManager::detectCircular(const std::string &moduleName,
                                    std::unordered_set<std::string> &visited,
                                    std::unordered_set<std::string> &stack) {
-  if (stack.find(moduleName) != stack.end()) {
+  if (stack.count(moduleName))
     return true;
-  }
-
-  if (visited.find(moduleName) != visited.end()) {
+  if (visited.count(moduleName))
     return false;
-  }
 
   visited.insert(moduleName);
   stack.insert(moduleName);
@@ -427,9 +384,8 @@ bool ModuleManager::detectCircular(const std::string &moduleName,
   auto it = modules_.find(moduleName);
   if (it != modules_.end()) {
     for (const auto &dep : it->second->metadata.dependencies) {
-      if (detectCircular(dep, visited, stack)) {
+      if (detectCircular(dep, visited, stack))
         return true;
-      }
     }
   }
 
@@ -439,21 +395,17 @@ bool ModuleManager::detectCircular(const std::string &moduleName,
 
 void ModuleManager::clearCache(const std::string &moduleName) {
   if (moduleName.empty()) {
-
     modules_.clear();
     pathToName_.clear();
     loadOrder_.clear();
   } else {
-
     auto it = modules_.find(moduleName);
     if (it != modules_.end()) {
       pathToName_.erase(it->second->metadata.path);
       modules_.erase(it);
-
       auto orderIt = std::find(loadOrder_.begin(), loadOrder_.end(), moduleName);
-      if (orderIt != loadOrder_.end()) {
+      if (orderIt != loadOrder_.end())
         loadOrder_.erase(orderIt);
-      }
     }
   }
 }
@@ -467,12 +419,10 @@ ModuleManager::CacheStats ModuleManager::getCacheStats() const {
   stats.missCount = cacheMisses_;
 
   for (const auto &[name, module] : modules_) {
-    if (module->state == ModuleState::LOADED) {
+    if (module->state == ModuleState::LOADED)
       stats.loadedModules++;
-    }
     stats.totalBytes += module->metadata.byteSize;
   }
-
   return stats;
 }
 
@@ -537,19 +487,15 @@ void ModuleManager::dumpModules() const {
 
 ModuleMetadata ModuleManager::getMetadata(const std::string &moduleName) const {
   auto it = modules_.find(moduleName);
-  if (it != modules_.end()) {
+  if (it != modules_.end())
     return it->second->metadata;
-  }
   return ModuleMetadata();
 }
 
 void ModuleManager::evictCache() {
-
   if (loadOrder_.empty())
     return;
-
-  std::string oldest = loadOrder_.front();
-  clearCache(oldest);
+  clearCache(loadOrder_.front());
 }
 
 void ModuleManager::setError(Module *module, const std::string &error) {
@@ -558,17 +504,21 @@ void ModuleManager::setError(Module *module, const std::string &error) {
 }
 
 Value ModuleManager::createError(const std::string &message) {
-
   MapObject *errorObj = vm_->allocateMap(2);
-
   StringObject *errorKey = vm_->allocateString("error");
   StringObject *messageKey = vm_->allocateString("message");
   StringObject *messageVal = vm_->allocateString(message);
-
   errorObj->set(Value::object(errorKey), Value::boolean(true));
   errorObj->set(Value::object(messageKey), Value::object(messageVal));
-
   return Value::object(errorObj);
+}
+
+void ModuleManager::markRoots() {
+  for (auto &[name, module] : modules_) {
+    if (module->exportsTable) {
+      vm_->gc().markObject(module->exportsTable);
+    }
+  }
 }
 
 } // namespace spt

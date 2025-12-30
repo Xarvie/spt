@@ -81,6 +81,10 @@ void GC::markRoots() {
 
   for (auto &visitor : roots_) {
   }
+
+  if (vm_->moduleManager()) {
+    vm_->moduleManager()->markRoots();
+  }
 }
 
 void GC::markObject(GCObject *obj) {
@@ -157,7 +161,7 @@ void GC::traceReferences() {
       break;
     }
 
-    case ValueType::NativeFunc: { // 注意这里是 NativeFunc
+    case ValueType::NativeFunc: {
       auto *native = static_cast<NativeFunction *>(obj);
       markValue(native->receiver);
       break;

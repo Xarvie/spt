@@ -56,6 +56,8 @@ public:
 
   ModuleManager *moduleManager() { return moduleManager_.get(); }
 
+  InterpretResult executeModule(const CompiledChunk &chunk);
+
   // === 全局环境 ===
   void defineGlobal(const std::string &name, Value value);
   Value getGlobal(const std::string &name);
@@ -91,8 +93,6 @@ public:
   MapObject *allocateMap(int capacity);
 
   Value getLastModuleResult() const { return lastModuleResult_; }
-
-  InterpretResult executeModule(const CompiledChunk &chunk);
 
   inline void protect(Value value) { *stackTop_++ = value; }
 

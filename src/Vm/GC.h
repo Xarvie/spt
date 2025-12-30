@@ -49,10 +49,11 @@ public:
   using RootVisitor = std::function<void(Value &)>;
   void addRoot(RootVisitor visitor);
   void removeRoot(RootVisitor visitor);
+  void markObject(GCObject *obj);
 
 private:
   void markRoots();
-  void markObject(GCObject *obj);
+
   void markValue(Value &value);
   void traceReferences();
   void sweep();

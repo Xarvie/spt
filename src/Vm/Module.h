@@ -42,16 +42,14 @@ struct ModuleMetadata {
 // ============================================================================
 // 模块实例
 // ============================================================================
-struct Module : GCObject {
+struct Module {
   ModuleMetadata metadata;  // 模块元数据
   ModuleState state;        // 加载状态
   CompiledChunk chunk;      // 编译后的字节码
   MapObject *exportsTable;  // 导出表（Map 对象）
   std::string errorMessage; // 错误信息
 
-  Module() : state(ModuleState::UNLOADED), exportsTable(nullptr) {
-    type = ValueType::Object; // 模块作为特殊对象存储
-  }
+  Module() : state(ModuleState::UNLOADED), exportsTable(nullptr) {}
 };
 
 // ============================================================================
@@ -105,12 +103,15 @@ struct ModuleManagerConfig {
 };
 
 // ============================================================================
-// 模块管理器 - 商业级实现
+// 模块管理器
 // ============================================================================
 class ModuleManager {
 public:
   explicit ModuleManager(VM *vm, const ModuleManagerConfig &config = {});
   ~ModuleManager();
+
+  // === GC 支持 ===
+  void markRoots(); // 新增：标记所有模块中的 exportsTable
 
   // === 核心加载接口 ===
   // 加载模块（返回导出表）
@@ -194,8 +195,7 @@ private:
   std::unique_ptr<ModuleLoader> loader_;
 
   // 模块缓存：名称 -> 模块实例
-  std::unordered_map<std::string, Module *> modules_;
-
+  std::unordered_map<std::string, std::unique_ptr<Module>> modules_;
   // 路径映射：绝对路径 -> 模块名
   std::unordered_map<std::string, std::string> pathToName_;
 
