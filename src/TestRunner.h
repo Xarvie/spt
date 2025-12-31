@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Ast/ast.h"
+#include "BytecodeSerializer.h"
 #include "Compiler/Compiler.h"
 #include "Vm/VM.h"
 
@@ -165,7 +166,7 @@ private:
 
     std::stringstream capturedOutput;
     vm.setPrintHandler([&](const std::string &msg) { capturedOutput << msg; });
-
+    spt::BytecodeDumper::dump(chunk);
     InterpretResult result = vm.interpret(chunk);
 
     // 计时结束

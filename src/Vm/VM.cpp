@@ -1,4 +1,5 @@
 #include "VM.h"
+#include "VMDispatch.h"
 #include "SptStdlibs.h"
 #include <algorithm>
 #include <cmath>
@@ -459,12 +460,9 @@ void VM::registerBuiltinFunctions() {
         if (argc >= 1) {
           errorVal = args[0];
         } else {
-
           errorVal = Value::object(this->allocateString("error called without message"));
         }
-
         this->throwError(errorVal);
-
         return Value::nil();
       },
       -1);
@@ -473,7 +471,6 @@ void VM::registerBuiltinFunctions() {
       "pcall",
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc < 1) {
-
           this->setNativeMultiReturn(
               {Value::boolean(false), Value::object(this->allocateString(
                                           "pcall: expected a function as first argument"))});
@@ -533,7 +530,6 @@ void VM::registerBuiltinFunctions() {
             this->errorValue_ = Value::object(this->allocateString("Stack overflow"));
             result = InterpretResult::RUNTIME_ERROR;
           } else {
-
             CallFrame newFrame;
             newFrame.closure = closure;
             newFrame.ip = proto->code.data();
@@ -546,7 +542,6 @@ void VM::registerBuiltinFunctions() {
               this->errorValue_ = Value::object(this->allocateString("Stack overflow"));
               result = InterpretResult::RUNTIME_ERROR;
             } else {
-
               for (Value *p = newFrame.slots + funcArgCount; p < targetStackTop; ++p) {
                 *p = Value::nil();
               }
@@ -558,13 +553,11 @@ void VM::registerBuiltinFunctions() {
               result = this->run(savedFrameCount);
 
               if (result == InterpretResult::OK && !this->hasError_) {
-
                 if (this->hasNativeMultiReturn_) {
                   returnValues = std::move(this->nativeMultiReturn_);
                   this->hasNativeMultiReturn_ = false;
                   this->nativeMultiReturn_.clear();
                 } else {
-
                   if (!this->lastModuleResult_.isNil()) {
                     returnValues.push_back(this->lastModuleResult_);
                   }
@@ -583,14 +576,12 @@ void VM::registerBuiltinFunctions() {
             this->errorValue_ = Value::object(this->allocateString(errMsg));
             result = InterpretResult::RUNTIME_ERROR;
           } else {
-
             this->hasNativeMultiReturn_ = false;
             this->nativeMultiReturn_.clear();
 
             Value nativeResult = native->function(this, native->receiver, funcArgCount, funcArgs);
 
             if (!this->hasError_) {
-
               if (this->hasNativeMultiReturn_) {
                 returnValues = std::move(this->nativeMultiReturn_);
                 this->hasNativeMultiReturn_ = false;
@@ -604,25 +595,19 @@ void VM::registerBuiltinFunctions() {
         }
 
         this->pcallStack_.pop_back();
-
         this->stackTop_ = savedStackTop;
 
         if (result == InterpretResult::OK && !this->hasError_) {
-
           std::vector<Value> multiResult;
           multiResult.push_back(Value::boolean(true));
           for (const auto &v : returnValues) {
             multiResult.push_back(v);
           }
-
           this->setNativeMultiReturn(multiResult);
-
           this->hasError_ = savedHasError;
           this->errorValue_ = savedErrorValue;
-
           return Value::nil();
         } else {
-
           this->closeUpvalues(savedStackTop);
 
           while (this->frameCount_ > savedFrameCount) {
@@ -647,7 +632,6 @@ void VM::registerBuiltinFunctions() {
 }
 
 void VM::ensureStack(int neededSlots) {
-
   if (stackTop_ + neededSlots > stack_.data() + config_.stackSize) {
     runtimeError("Stack overflow: needed %d slots", neededSlots);
     return;
@@ -661,7 +645,6 @@ void VM::ensureStack(int neededSlots) {
 }
 
 InterpretResult VM::interpret(const CompiledChunk &chunk) {
-
   resetStack();
   frames_.clear();
 
@@ -682,7 +665,6 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
 }
 
 InterpretResult VM::call(Closure *closure, int argCount) {
-
   if (!closure->proto->isVararg && argCount != closure->proto->numParams) {
     runtimeError("Function '%s' expects %d arguments, got %d", closure->proto->name.c_str(),
                  closure->proto->numParams, argCount);
@@ -715,1046 +697,1008 @@ InterpretResult VM::call(Closure *closure, int argCount) {
 }
 
 InterpretResult VM::run(int minFrameCount) {
-
   CallFrame *frame = &frames_[frameCount_ - 1];
+  uint32_t instruction;
 
-#define READ_INSTRUCTION() (*reinterpret_cast<const uint32_t *>(frame->ip++))
-#define READ_BYTE() (*(frame->ip++))
-#define DISPATCH() goto dispatch_loop
+#if SPT_USE_COMPUTED_GOTO
+  SPT_DEFINE_DISPATCH_TABLE()
+#endif
 
-dispatch_loop:
-  for (;;) {
+  SPT_DISPATCH_LOOP_BEGIN()
 
-    if (hasError_ && !pcallStack_.empty()) {
-      return InterpretResult::RUNTIME_ERROR;
-    }
+  SPT_OPCODE(OP_MOVE) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    frame->slots[A] = frame->slots[B];
+    SPT_DISPATCH();
+  }
 
-    uint32_t instruction = READ_INSTRUCTION();
-    OpCode opcode = GET_OPCODE(instruction);
+  SPT_OPCODE(OP_LOADK) {
+    uint8_t A = GETARG_A(instruction);
+    uint32_t Bx = GETARG_Bx(instruction);
+    const auto &constant = frame->closure->proto->constants[Bx];
+    Value value;
+    std::visit(
+        [&](auto &&arg) {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<T, std::nullptr_t>) {
+            value = Value::nil();
+          } else if constexpr (std::is_same_v<T, bool>) {
+            value = Value::boolean(arg);
+          } else if constexpr (std::is_same_v<T, int64_t>) {
+            value = Value::integer(arg);
+          } else if constexpr (std::is_same_v<T, double>) {
+            value = Value::number(arg);
+          } else if constexpr (std::is_same_v<T, std::string>) {
+            value = Value::object(allocateString(arg));
+          }
+        },
+        constant);
+    frame->slots[A] = value;
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_LOADBOOL) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
+    frame->slots[A] = Value::boolean(B != 0);
+    if (C != 0)
+      frame->ip++;
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_LOADNIL) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    for (int i = 0; i <= B; ++i) {
+      frame->slots[A + i] = Value::nil();
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_NEWLIST) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    ListObject *list = allocateList(B);
+    frame->slots[A] = Value::object(list);
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_NEWMAP) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    MapObject *map = allocateMap(B);
+    frame->slots[A] = Value::object(map);
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_GETINDEX) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value container = frame->slots[B];
+    Value index = frame->slots[C];
+
+    if (container.isList()) {
+      auto *list = static_cast<ListObject *>(container.asGC());
+      if (!index.isInt()) {
+        runtimeError("List index must be integer");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+      int64_t idx = index.asInt();
+      if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
+        runtimeError("List index %lld out of range [0, %zu)", idx, list->elements.size());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+      frame->slots[A] = list->elements[idx];
+    } else if (container.isMap()) {
+      auto *map = static_cast<MapObject *>(container.asGC());
+      frame->slots[A] = map->get(index);
+    } else {
+      runtimeError("Cannot index type: %s", container.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_SETINDEX) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value container = frame->slots[A];
+    Value index = frame->slots[B];
+    Value value = frame->slots[C];
+
+    if (container.isList()) {
+      auto *list = static_cast<ListObject *>(container.asGC());
+      if (!index.isInt()) {
+        runtimeError("List index must be integer");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+      int64_t idx = index.asInt();
+      if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
+        runtimeError("List index %lld out of range [0, %zu)", idx, list->elements.size());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+      list->elements[idx] = value;
+    } else if (container.isMap()) {
+      auto *map = static_cast<MapObject *>(container.asGC());
+      map->set(index, value);
+    } else {
+      runtimeError("Cannot index-assign to type: %s", container.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_GETFIELD) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value object = frame->slots[B];
+    const auto &keyConst = frame->closure->proto->constants[C];
+
+    if (!std::holds_alternative<std::string>(keyConst)) {
+      runtimeError("GETFIELD requires string key constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    const std::string &fieldName = std::get<std::string>(keyConst);
+
+    if (object.isList() || object.isMap() || object.isString()) {
+      Value result;
+      if (StdlibDispatcher::getProperty(this, object, fieldName, result)) {
+        frame->slots[A] = result;
+        SPT_DISPATCH();
+      }
+      if (!object.isMap()) {
+        runtimeError("Type '%s' has no property '%s'", object.typeName(), fieldName.c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+    }
+
+    if (object.isInstance()) {
+      auto *instance = static_cast<Instance *>(object.asGC());
+      Value result = instance->getField(fieldName);
+      if (result.isNil() && instance->klass) {
+        auto it = instance->klass->methods.find(fieldName);
+        if (it != instance->klass->methods.end()) {
+          result = it->second;
+        }
+      }
+      frame->slots[A] = result;
+    } else if (object.isClass()) {
+      auto *klass = static_cast<ClassObject *>(object.asGC());
+      auto it = klass->methods.find(fieldName);
+      if (it != klass->methods.end()) {
+        frame->slots[A] = it->second;
+      } else {
+        auto itStatic = klass->statics.find(fieldName);
+        frame->slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
+      }
+    } else if (object.isMap()) {
+      auto *map = static_cast<MapObject *>(object.asGC());
+      Value result = Value::nil();
+      for (const auto &pair : map->entries) {
+        if (pair.first.isString()) {
+          StringObject *keyStr = static_cast<StringObject *>(pair.first.asGC());
+          if (keyStr->data == fieldName) {
+            result = pair.second;
+            break;
+          }
+        }
+      }
+      if (result.isNil()) {
+        auto it = globals_.find(fieldName);
+        if (it != globals_.end()) {
+          result = it->second;
+        }
+      }
+      frame->slots[A] = result;
+    } else {
+      runtimeError("Cannot get field '%s' from type: %s", fieldName.c_str(), object.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_SETFIELD) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value object = frame->slots[A];
+    const auto &keyConst = frame->closure->proto->constants[B];
+    Value value = frame->slots[C];
+
+    if (!std::holds_alternative<std::string>(keyConst)) {
+      runtimeError("SETFIELD requires string key constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    const std::string &fieldName = std::get<std::string>(keyConst);
+
+    if (object.isInstance()) {
+      auto *instance = static_cast<Instance *>(object.asGC());
+      instance->setField(fieldName, value);
+    } else if (object.isClass()) {
+      auto *klass = static_cast<ClassObject *>(object.asGC());
+      klass->methods[fieldName] = value;
+    } else if (object.isMap()) {
+      auto *map = static_cast<MapObject *>(object.asGC());
+      StringObject *key = allocateString(fieldName);
+      map->set(Value::object(key), value);
+    } else {
+      runtimeError("Cannot set field '%s' on type: %s", fieldName.c_str(), object.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_NEWCLASS) {
+    uint8_t A = GETARG_A(instruction);
     uint32_t Bx = GETARG_Bx(instruction);
-    int32_t sBx = GETARG_sBx(instruction);
+    const auto &nameConst = frame->closure->proto->constants[Bx];
+    if (!std::holds_alternative<std::string>(nameConst)) {
+      runtimeError("Class name must be string constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    const std::string &className = std::get<std::string>(nameConst);
+    ClassObject *klass = allocateClass(className);
+    frame->slots[A] = Value::object(klass);
+    SPT_DISPATCH();
+  }
 
-    if (config_.debugMode) {
-      size_t pc = frame->ip - frame->closure->proto->code.data() - 1;
-      printf("[%04zd] OP=%2d A=%3d B=%3d C=%3d\n", pc, static_cast<int>(opcode), A, B, C);
+  SPT_OPCODE(OP_NEWOBJ) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    Value classValue = frame->slots[B];
+
+    if (!classValue.isClass()) {
+      runtimeError("Cannot instantiate non-class type");
+      return InterpretResult::RUNTIME_ERROR;
     }
 
-    switch (opcode) {
+    auto *klass = static_cast<ClassObject *>(classValue.asGC());
+    Instance *instance = allocateInstance(klass);
+    frame->slots[A] = Value::object(instance);
+    SPT_DISPATCH();
+  }
 
-    case OpCode::OP_MOVE: {
-
-      frame->slots[A] = frame->slots[B];
-      break;
+  SPT_OPCODE(OP_GETUPVAL) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    if (B >= frame->closure->upvalues.size()) {
+      runtimeError("Invalid upvalue index: %d", B);
+      return InterpretResult::RUNTIME_ERROR;
     }
+    UpValue *upval = frame->closure->upvalues[B];
+    frame->slots[A] = *upval->location;
+    SPT_DISPATCH();
+  }
 
-    case OpCode::OP_LOADK: {
-
-      const auto &constant = frame->closure->proto->constants[Bx];
-
-      Value value;
-      std::visit(
-          [&](auto &&arg) {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, std::nullptr_t>) {
-              value = Value::nil();
-            } else if constexpr (std::is_same_v<T, bool>) {
-              value = Value::boolean(arg);
-            } else if constexpr (std::is_same_v<T, int64_t>) {
-              value = Value::integer(arg);
-            } else if constexpr (std::is_same_v<T, double>) {
-              value = Value::number(arg);
-            } else if constexpr (std::is_same_v<T, std::string>) {
-              value = Value::object(allocateString(arg));
-            }
-          },
-          constant);
-
-      frame->slots[A] = value;
-      break;
+  SPT_OPCODE(OP_SETUPVAL) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    if (B >= frame->closure->upvalues.size()) {
+      runtimeError("Invalid upvalue index: %d", B);
+      return InterpretResult::RUNTIME_ERROR;
     }
+    UpValue *upval = frame->closure->upvalues[B];
+    *upval->location = frame->slots[A];
+    SPT_DISPATCH();
+  }
 
-    case OpCode::OP_LOADBOOL: {
+  SPT_OPCODE(OP_CLOSURE) {
+    uint8_t A = GETARG_A(instruction);
+    uint32_t Bx = GETARG_Bx(instruction);
+    const Prototype &proto = frame->closure->proto->protos[Bx];
+    Closure *closure = allocateClosure(&proto);
+    protect(Value::object(closure));
 
-      frame->slots[A] = Value::boolean(B != 0);
-      if (C != 0)
-        frame->ip++;
-      break;
-    }
-
-    case OpCode::OP_LOADNIL: {
-
-      for (int i = 0; i <= B; ++i) {
-        frame->slots[A + i] = Value::nil();
-      }
-      break;
-    }
-
-    case OpCode::OP_NEWLIST: {
-
-      ListObject *list = allocateList(B);
-      frame->slots[A] = Value::object(list);
-      break;
-    }
-
-    case OpCode::OP_NEWMAP: {
-
-      MapObject *map = allocateMap(B);
-      frame->slots[A] = Value::object(map);
-      break;
-    }
-
-    case OpCode::OP_GETINDEX: {
-
-      Value container = frame->slots[B];
-      Value index = frame->slots[C];
-
-      if (container.isList()) {
-        auto *list = static_cast<ListObject *>(container.asGC());
-        if (!index.isInt()) {
-          runtimeError("List index must be integer");
-          return InterpretResult::RUNTIME_ERROR;
-        }
-        int64_t idx = index.asInt();
-        if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
-          runtimeError("List index %lld out of range [0, %zu)", idx, list->elements.size());
-          return InterpretResult::RUNTIME_ERROR;
-        }
-        frame->slots[A] = list->elements[idx];
-
-      } else if (container.isMap()) {
-        auto *map = static_cast<MapObject *>(container.asGC());
-        frame->slots[A] = map->get(index);
-
+    for (size_t i = 0; i < proto.numUpvalues; ++i) {
+      const auto &uvDesc = proto.upvalues[i];
+      if (uvDesc.isLocal) {
+        closure->upvalues.push_back(captureUpvalue(&frame->slots[uvDesc.index]));
       } else {
-        runtimeError("Cannot index type: %s", container.typeName());
-        return InterpretResult::RUNTIME_ERROR;
+        closure->upvalues.push_back(frame->closure->upvalues[uvDesc.index]);
       }
-      break;
     }
 
-    case OpCode::OP_SETINDEX: {
-
-      Value container = frame->slots[A];
-      Value index = frame->slots[B];
-      Value value = frame->slots[C];
-
-      if (container.isList()) {
-        auto *list = static_cast<ListObject *>(container.asGC());
-        if (!index.isInt()) {
-          runtimeError("List index must be integer");
-          return InterpretResult::RUNTIME_ERROR;
-        }
-        int64_t idx = index.asInt();
-        if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
-          runtimeError("List index %lld out of range [0, %zu)", idx, list->elements.size());
-          return InterpretResult::RUNTIME_ERROR;
-        }
-        list->elements[idx] = value;
-
-      } else if (container.isMap()) {
-        auto *map = static_cast<MapObject *>(container.asGC());
-        map->set(index, value);
-
-      } else {
-        runtimeError("Cannot index-assign to type: %s", container.typeName());
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      break;
-    }
-
-    case OpCode::OP_GETFIELD: {
-      Value object = frame->slots[B];
-      const auto &keyConst = frame->closure->proto->constants[C];
-
-      if (!std::holds_alternative<std::string>(keyConst)) {
-        runtimeError("GETFIELD requires string key constant");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      const std::string &fieldName = std::get<std::string>(keyConst);
-
-      if (object.isList() || object.isMap() || object.isString()) {
-        Value result;
-        if (StdlibDispatcher::getProperty(this, object, fieldName, result)) {
-          frame->slots[A] = result;
-          break;
-        }
-
-        if (!object.isMap()) {
-          runtimeError("Type '%s' has no property '%s'", object.typeName(), fieldName.c_str());
-          return InterpretResult::RUNTIME_ERROR;
-        }
-      }
-
-      if (object.isInstance()) {
-
-        auto *instance = static_cast<Instance *>(object.asGC());
-
-        Value result = instance->getField(fieldName);
-
-        if (result.isNil() && instance->klass) {
-          auto it = instance->klass->methods.find(fieldName);
-          if (it != instance->klass->methods.end()) {
-            result = it->second;
-          }
-        }
-
-        frame->slots[A] = result;
-
-      } else if (object.isClass()) {
-
-        auto *klass = static_cast<ClassObject *>(object.asGC());
-        auto it = klass->methods.find(fieldName);
-        if (it != klass->methods.end()) {
-          frame->slots[A] = it->second;
-        } else {
-          auto itStatic = klass->statics.find(fieldName);
-          frame->slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
-        }
-
-      } else if (object.isMap()) {
-        auto *map = static_cast<MapObject *>(object.asGC());
-
-        Value result = Value::nil();
-        for (const auto &pair : map->entries) {
-          if (pair.first.isString()) {
-            StringObject *keyStr = static_cast<StringObject *>(pair.first.asGC());
-            if (keyStr->data == fieldName) {
-              result = pair.second;
-              break;
-            }
-          }
-        }
-
-        if (result.isNil()) {
-          auto it = globals_.find(fieldName);
-          if (it != globals_.end()) {
-            result = it->second;
-          }
-        }
-
-        frame->slots[A] = result;
-
-      } else {
-        runtimeError("Cannot get field '%s' from type: %s", fieldName.c_str(), object.typeName());
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      break;
-    }
-
-    case OpCode::OP_SETFIELD: {
-
-      Value object = frame->slots[A];
-      const auto &keyConst = frame->closure->proto->constants[B];
-      Value value = frame->slots[C];
-
-      if (!std::holds_alternative<std::string>(keyConst)) {
-        runtimeError("SETFIELD requires string key constant");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      const std::string &fieldName = std::get<std::string>(keyConst);
-
-      if (object.isInstance()) {
-        auto *instance = static_cast<Instance *>(object.asGC());
-        instance->setField(fieldName, value);
-
-      } else if (object.isClass()) {
-
-        auto *klass = static_cast<ClassObject *>(object.asGC());
-        klass->methods[fieldName] = value;
-
-      } else if (object.isMap()) {
-        auto *map = static_cast<MapObject *>(object.asGC());
-        StringObject *key = allocateString(fieldName);
-        map->set(Value::object(key), value);
-
-      } else {
-        runtimeError("Cannot set field '%s' on type: %s", fieldName.c_str(), object.typeName());
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      break;
-    }
-
-    case OpCode::OP_NEWCLASS: {
-
-      const auto &nameConst = frame->closure->proto->constants[Bx];
-      if (!std::holds_alternative<std::string>(nameConst)) {
-        runtimeError("Class name must be string constant");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      const std::string &className = std::get<std::string>(nameConst);
-      ClassObject *klass = allocateClass(className);
-      frame->slots[A] = Value::object(klass);
-      break;
-    }
-
-    case OpCode::OP_NEWOBJ: {
-
-      Value classValue = frame->slots[B];
-
-      if (!classValue.isClass()) {
-        runtimeError("Cannot instantiate non-class type");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      auto *klass = static_cast<ClassObject *>(classValue.asGC());
-      Instance *instance = allocateInstance(klass);
-      frame->slots[A] = Value::object(instance);
-
-      break;
-    }
-
-    case OpCode::OP_GETUPVAL: {
-
-      if (B >= frame->closure->upvalues.size()) {
-        runtimeError("Invalid upvalue index: %d", B);
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      UpValue *upval = frame->closure->upvalues[B];
-      frame->slots[A] = *upval->location;
-      break;
-    }
-
-    case OpCode::OP_SETUPVAL: {
-
-      if (B >= frame->closure->upvalues.size()) {
-        runtimeError("Invalid upvalue index: %d", B);
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      UpValue *upval = frame->closure->upvalues[B];
-      *upval->location = frame->slots[A];
-      break;
-    }
-
-    case OpCode::OP_CLOSURE: {
-
-      const Prototype &proto = frame->closure->proto->protos[Bx];
-      Closure *closure = allocateClosure(&proto);
-      protect(Value::object(closure));
-
-      for (size_t i = 0; i < proto.numUpvalues; ++i) {
-        const auto &uvDesc = proto.upvalues[i];
-
-        if (uvDesc.isLocal) {
-
-          closure->upvalues.push_back(captureUpvalue(&frame->slots[uvDesc.index]));
-        } else {
-
-          closure->upvalues.push_back(frame->closure->upvalues[uvDesc.index]);
-        }
-      }
-
-      unprotect(1);
-
-      frame->slots[A] = Value::object(closure);
-      break;
-    }
-
-    case OpCode::OP_CLOSE_UPVALUE: {
-
-      closeUpvalues(&frame->slots[A]);
-      break;
-    }
-
-    case OpCode::OP_ADD: {
-
-      Value b = frame->slots[B];
-      Value c = frame->slots[C];
-
-      if (b.isInt() && c.isInt()) {
-
-        frame->slots[A] = Value::integer(b.asInt() + c.asInt());
-      } else if (b.isNumber() && c.isNumber()) {
-
-        double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-        double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-        frame->slots[A] = Value::number(left + right);
-      }
-
-      else if (b.isString() || c.isString()) {
-        std::string s1 = b.toString();
-        std::string s2 = c.toString();
-        StringObject *result = allocateString(s1 + s2);
-        frame->slots[A] = Value::object(result);
-      } else {
-        runtimeError("Operands must be numbers or strings");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      break;
-    }
-
-    case OpCode::OP_SUB: {
-
-      Value b = frame->slots[B];
-      Value c = frame->slots[C];
-
-      if (b.isInt() && c.isInt()) {
-
-        frame->slots[A] = Value::integer(b.asInt() - c.asInt());
-      } else if (b.isNumber() && c.isNumber()) {
-
-        double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-        double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-        frame->slots[A] = Value::number(left - right);
-      } else {
-        runtimeError("Operands must be numbers");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      break;
-    }
-
-    case OpCode::OP_MUL: {
-
-      Value b = frame->slots[B];
-      Value c = frame->slots[C];
-
-      if (b.isInt() && c.isInt()) {
-
-        frame->slots[A] = Value::integer(b.asInt() * c.asInt());
-      } else if (b.isNumber() && c.isNumber()) {
-
-        double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-        double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-        frame->slots[A] = Value::number(left * right);
-      } else {
-        runtimeError("Operands must be numbers");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      break;
-    }
-
-    case OpCode::OP_DIV: {
-
-      Value b = frame->slots[B];
-      Value c = frame->slots[C];
-
-      if (!b.isNumber() || !c.isNumber()) {
-        runtimeError("Operands must be numbers");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
+    unprotect(1);
+    frame->slots[A] = Value::object(closure);
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_CLOSE_UPVALUE) {
+    uint8_t A = GETARG_A(instruction);
+    closeUpvalues(&frame->slots[A]);
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_ADD) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = frame->slots[B];
+    Value c = frame->slots[C];
+
+    if (b.isInt() && c.isInt()) {
+      frame->slots[A] = Value::integer(b.asInt() + c.asInt());
+    } else if (b.isNumber() && c.isNumber()) {
       double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
+      frame->slots[A] = Value::number(left + right);
+    } else if (b.isString() || c.isString()) {
+      std::string s1 = b.toString();
+      std::string s2 = c.toString();
+      StringObject *result = allocateString(s1 + s2);
+      frame->slots[A] = Value::object(result);
+    } else {
+      runtimeError("Operands must be numbers or strings");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
 
-      if (right == 0.0) {
-        runtimeError("Division by zero");
+  SPT_OPCODE(OP_SUB) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = frame->slots[B];
+    Value c = frame->slots[C];
+
+    if (b.isInt() && c.isInt()) {
+      frame->slots[A] = Value::integer(b.asInt() - c.asInt());
+    } else if (b.isNumber() && c.isNumber()) {
+      double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+      double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
+      frame->slots[A] = Value::number(left - right);
+    } else {
+      runtimeError("Operands must be numbers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_MUL) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = frame->slots[B];
+    Value c = frame->slots[C];
+
+    if (b.isInt() && c.isInt()) {
+      frame->slots[A] = Value::integer(b.asInt() * c.asInt());
+    } else if (b.isNumber() && c.isNumber()) {
+      double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+      double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
+      frame->slots[A] = Value::number(left * right);
+    } else {
+      runtimeError("Operands must be numbers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_DIV) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = frame->slots[B];
+    Value c = frame->slots[C];
+
+    if (!b.isNumber() || !c.isNumber()) {
+      runtimeError("Operands must be numbers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+    double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
+
+    if (right == 0.0) {
+      runtimeError("Division by zero");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    if (b.isInt() && c.isInt()) {
+      frame->slots[A] = Value::integer(b.asInt() / c.asInt());
+    } else {
+      frame->slots[A] = Value::number(left / right);
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_MOD) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = frame->slots[B];
+    Value c = frame->slots[C];
+
+    if (!b.isInt() || !c.isInt()) {
+      runtimeError("Modulo requires integer operands");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    int64_t right = c.asInt();
+    if (right == 0) {
+      runtimeError("Modulo by zero");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    frame->slots[A] = Value::integer(b.asInt() % right);
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_UNM) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    Value b = frame->slots[B];
+
+    if (b.isInt()) {
+      frame->slots[A] = Value::integer(-b.asInt());
+    } else if (b.isFloat()) {
+      frame->slots[A] = Value::number(-b.asFloat());
+    } else {
+      runtimeError("Operand must be a number");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_JMP) {
+    int32_t sBx = GETARG_sBx(instruction);
+    frame->ip += sBx;
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_EQ) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    bool equal = valuesEqual(frame->slots[A], frame->slots[B]);
+    if (equal != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_LT) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value a = frame->slots[A];
+    Value b = frame->slots[B];
+
+    bool result = false;
+    if (a.isInt() && b.isInt()) {
+      result = a.asInt() < b.asInt();
+    } else if (a.isNumber() && b.isNumber()) {
+      double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
+      double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+      result = left < right;
+    } else {
+      runtimeError("Cannot compare non-numeric types");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    if (result != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_LE) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value a = frame->slots[A];
+    Value b = frame->slots[B];
+
+    bool result = false;
+    if (a.isInt() && b.isInt()) {
+      result = a.asInt() <= b.asInt();
+    } else if (a.isNumber() && b.isNumber()) {
+      // VM.cpp Part 3 - 续接 OP_LE 以及后续所有内容
+
+      double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
+      double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+      result = left <= right;
+    } else {
+      runtimeError("Cannot compare non-numeric types");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    if (result != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_TEST) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t C = GETARG_C(instruction);
+    bool isTruthy = frame->slots[A].isTruthy();
+    if (isTruthy != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_CALL) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    int argCount = B - 1;
+    int expectedResults = C - 1;
+
+    Value callee = frame->slots[A];
+    Value *argsStart = &frame->slots[A + 1];
+
+    if (callee.isClosure()) {
+      Closure *closure = static_cast<Closure *>(callee.asGC());
+      const Prototype *proto = closure->proto;
+
+      if (!proto->isVararg && argCount != proto->numParams) {
+        runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
+                     proto->numParams, argCount);
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      if (b.isInt() && c.isInt()) {
-        frame->slots[A] = Value::integer(b.asInt() / c.asInt());
-      } else {
-        frame->slots[A] = Value::number(left / right);
-      }
-      break;
-    }
-
-    case OpCode::OP_MOD: {
-
-      Value b = frame->slots[B];
-      Value c = frame->slots[C];
-
-      if (!b.isInt() || !c.isInt()) {
-        runtimeError("Modulo requires integer operands");
+      if (frameCount_ == 64) {
+        runtimeError("Stack overflow");
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      int64_t right = c.asInt();
-      if (right == 0) {
-        runtimeError("Modulo by zero");
+      CallFrame newFrame;
+      newFrame.closure = closure;
+      newFrame.ip = proto->code.data();
+      newFrame.expectedResults = expectedResults;
+      newFrame.slots = argsStart;
+
+      Value *targetStackTop = newFrame.slots + proto->maxStackSize;
+      if (targetStackTop > stack_.data() + config_.stackSize) {
+        runtimeError("Stack overflow");
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      frame->slots[A] = Value::integer(b.asInt() % right);
-      break;
-    }
-
-    case OpCode::OP_UNM: {
-
-      Value b = frame->slots[B];
-
-      if (b.isInt()) {
-        frame->slots[A] = Value::integer(-b.asInt());
-      } else if (b.isFloat()) {
-        frame->slots[A] = Value::number(-b.asFloat());
-      } else {
-        runtimeError("Operand must be a number");
-        return InterpretResult::RUNTIME_ERROR;
+      for (Value *p = newFrame.slots + argCount; p < targetStackTop; ++p) {
+        *p = Value::nil();
       }
-      break;
-    }
 
-    case OpCode::OP_JMP: {
+      stackTop_ = targetStackTop;
+      frames_.push_back(newFrame);
+      frameCount_++;
 
-      frame->ip += sBx;
-      break;
-    }
+      frame = &frames_[frameCount_ - 1];
 
-    case OpCode::OP_EQ: {
+    } else if (callee.isNativeFunc()) {
+      NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
 
-      bool equal = valuesEqual(frame->slots[A], frame->slots[B]);
-      if (equal != (C != 0)) {
-        frame->ip++;
-      }
-      break;
-    }
-
-    case OpCode::OP_LT: {
-
-      Value a = frame->slots[A];
-      Value b = frame->slots[B];
-
-      bool result = false;
-      if (a.isInt() && b.isInt()) {
-        result = a.asInt() < b.asInt();
-      } else if (a.isNumber() && b.isNumber()) {
-        double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
-        double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-        result = left < right;
-      } else {
-        runtimeError("Cannot compare non-numeric types");
+      if (native->arity != -1 && argCount != native->arity) {
+        runtimeError("Native function '%s' expects %d arguments, got %d", native->name.c_str(),
+                     native->arity, argCount);
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      if (result != (C != 0)) {
-        frame->ip++;
-      }
-      break;
-    }
+      hasNativeMultiReturn_ = false;
+      nativeMultiReturn_.clear();
 
-    case OpCode::OP_LE: {
+      Value result = native->function(this, native->receiver, argCount, argsStart);
 
-      Value a = frame->slots[A];
-      Value b = frame->slots[B];
-
-      bool result = false;
-      if (a.isInt() && b.isInt()) {
-        result = a.asInt() <= b.asInt();
-      } else if (a.isNumber() && b.isNumber()) {
-        double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
-        double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-        result = left <= right;
-      } else {
-        runtimeError("Cannot compare non-numeric types");
+      if (hasError_ && !pcallStack_.empty()) {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      if (result != (C != 0)) {
-        frame->ip++;
-      }
-      break;
-    }
+      if (hasNativeMultiReturn_) {
+        int returnCount = static_cast<int>(nativeMultiReturn_.size());
 
-    case OpCode::OP_TEST: {
-
-      bool isTruthy = frame->slots[A].isTruthy();
-      if (isTruthy != (C != 0)) {
-        frame->ip++;
-      }
-      break;
-    }
-
-    case OpCode::OP_CALL: {
-
-      int argCount = B - 1;
-      int expectedResults = C - 1;
-
-      Value callee = frame->slots[A];
-
-      Value *argsStart = &frame->slots[A + 1];
-
-      if (callee.isClosure()) {
-        Closure *closure = static_cast<Closure *>(callee.asGC());
-        const Prototype *proto = closure->proto;
-
-        if (!proto->isVararg && argCount != proto->numParams) {
-          runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
-                       proto->numParams, argCount);
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        if (frameCount_ == 64) {
-          runtimeError("Stack overflow");
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        CallFrame newFrame;
-        newFrame.closure = closure;
-        newFrame.ip = proto->code.data();
-        newFrame.expectedResults = expectedResults;
-
-        newFrame.slots = argsStart;
-
-        Value *targetStackTop = newFrame.slots + proto->maxStackSize;
-        if (targetStackTop > stack_.data() + config_.stackSize) {
-          runtimeError("Stack overflow");
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        for (Value *p = newFrame.slots + argCount; p < targetStackTop; ++p) {
-          *p = Value::nil();
-        }
-
-        stackTop_ = targetStackTop;
-        frames_.push_back(newFrame);
-        frameCount_++;
-
-        frame = &frames_[frameCount_ - 1];
-
-      } else if (callee.isNativeFunc()) {
-        NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
-
-        if (native->arity != -1 && argCount != native->arity) {
-          runtimeError("Native function '%s' expects %d arguments, got %d", native->name.c_str(),
-                       native->arity, argCount);
-          return InterpretResult::RUNTIME_ERROR;
+        if (expectedResults == -1) {
+          for (int i = 0; i < returnCount; ++i) {
+            frame->slots[A + i] = nativeMultiReturn_[i];
+          }
+        } else if (expectedResults > 0) {
+          for (int i = 0; i < returnCount && i < expectedResults; ++i) {
+            frame->slots[A + i] = nativeMultiReturn_[i];
+          }
+          for (int i = returnCount; i < expectedResults; ++i) {
+            frame->slots[A + i] = Value::nil();
+          }
+        } else {
+          if (returnCount > 0) {
+            frame->slots[A] = nativeMultiReturn_[0];
+          }
         }
 
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
-
-        Value result = native->function(this, native->receiver, argCount, argsStart);
-
-        if (hasError_ && !pcallStack_.empty()) {
-
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        if (hasNativeMultiReturn_) {
-
-          int returnCount = static_cast<int>(nativeMultiReturn_.size());
-
-          if (expectedResults == -1) {
-
-            for (int i = 0; i < returnCount; ++i) {
-              frame->slots[A + i] = nativeMultiReturn_[i];
-            }
-          } else if (expectedResults > 0) {
-
-            for (int i = 0; i < returnCount && i < expectedResults; ++i) {
-              frame->slots[A + i] = nativeMultiReturn_[i];
-            }
-
-            for (int i = returnCount; i < expectedResults; ++i) {
-              frame->slots[A + i] = Value::nil();
-            }
-          } else {
-
-            if (returnCount > 0) {
-              frame->slots[A] = nativeMultiReturn_[0];
-            }
-          }
-
-          hasNativeMultiReturn_ = false;
-          nativeMultiReturn_.clear();
-        } else {
-
-          frame->slots[A] = result;
-        }
-
       } else {
-
-        runtimeError("Attempt to call a non-function value of type '%s'", callee.typeName());
-        return InterpretResult::RUNTIME_ERROR;
+        frame->slots[A] = result;
       }
-      break;
+
+    } else {
+      runtimeError("Attempt to call a non-function value of type '%s'", callee.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_INVOKE) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value receiver = frame->slots[A];
+    int totalArgs = B;
+    int userArgCount = totalArgs - 1;
+
+    const auto &methodNameConst = frame->closure->proto->constants[C];
+    if (!std::holds_alternative<std::string>(methodNameConst)) {
+      runtimeError("OP_INVOKE: method name constant at index %d is not a string", C);
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    const std::string &methodName = std::get<std::string>(methodNameConst);
+
+    if (config_.debugMode) {
+      printf("[INVOKE] %s.%s() with %d args\n", receiver.typeName(), methodName.c_str(),
+             userArgCount);
     }
 
-    case OpCode::OP_INVOKE: {
+    Value method = Value::nil();
+    Value *argsStart = &frame->slots[A + 1];
 
-      Value receiver = frame->slots[A];
-      int totalArgs = B;
-      int userArgCount = totalArgs - 1;
+    enum class ReceiverKind {
+      StdLib,
+      Instance,
+      Class,
+      Callable,
+      Unknown
+    } kind = ReceiverKind::Unknown;
 
-      const auto &methodNameConst = frame->closure->proto->constants[C];
-      if (!std::holds_alternative<std::string>(methodNameConst)) {
-        runtimeError("OP_INVOKE: method name constant at index %d is not a string", C);
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      const std::string &methodName = std::get<std::string>(methodNameConst);
-
-      if (config_.debugMode) {
-        printf("[INVOKE] %s.%s() with %d args\n", receiver.typeName(), methodName.c_str(),
-               userArgCount);
-      }
-
-      Value method = Value::nil();
-      Value *argsStart = &frame->slots[A + 1];
-
-      enum class ReceiverKind {
-        StdLib,
-        Instance,
-        Class,
-        Callable,
-        Unknown
-      } kind = ReceiverKind::Unknown;
-
-      if (receiver.isList() || receiver.isMap() || receiver.isString()) {
-        Value directResult;
-        if (StdlibDispatcher::invokeMethod(this, receiver, methodName, userArgCount, argsStart,
-                                           directResult)) {
-
-          frame->slots[A] = directResult;
-          break;
-        }
-
-        Value propertyValue;
-        if (StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue)) {
-          if (propertyValue.isNativeFunc()) {
-            method = propertyValue;
-            kind = ReceiverKind::StdLib;
-          } else {
-
-            runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
-                         methodName.c_str());
-            return InterpretResult::RUNTIME_ERROR;
-          }
-        } else if (receiver.isMap()) {
-
-          MapObject *map = static_cast<MapObject *>(receiver.asGC());
-          StringObject *key = allocateString(methodName);
-          method = map->get(Value::object(key));
-          if (!method.isNil()) {
-            kind = ReceiverKind::Callable;
-          }
-        }
-
-        if (method.isNil() && kind == ReceiverKind::Unknown) {
-          runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName.c_str());
-          return InterpretResult::RUNTIME_ERROR;
-        }
+    if (receiver.isList() || receiver.isMap() || receiver.isString()) {
+      Value directResult;
+      if (StdlibDispatcher::invokeMethod(this, receiver, methodName, userArgCount, argsStart,
+                                         directResult)) {
+        frame->slots[A] = directResult;
+        SPT_DISPATCH();
       }
 
-      else if (receiver.isInstance()) {
-        Instance *instance = static_cast<Instance *>(receiver.asGC());
-        kind = ReceiverKind::Instance;
-
-        method = instance->getField(methodName);
-
-        if (method.isNil() && instance->klass) {
-          auto it = instance->klass->methods.find(methodName);
-          if (it != instance->klass->methods.end()) {
-            method = it->second;
-          }
-        }
-
-        if (method.isNil()) {
-          const char *klassName = instance->klass ? instance->klass->name.c_str() : "<anonymous>";
-          runtimeError("Instance of class '%s' has no method '%s'", klassName, methodName.c_str());
-          return InterpretResult::RUNTIME_ERROR;
-        }
-      }
-
-      else if (receiver.isClass()) {
-        ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
-        kind = ReceiverKind::Class;
-
-        auto itStatic = klass->statics.find(methodName);
-        if (itStatic != klass->statics.end()) {
-          method = itStatic->second;
-        }
-
-        if (method.isNil()) {
-          auto it = klass->methods.find(methodName);
-          if (it != klass->methods.end()) {
-            method = it->second;
-          }
-        }
-
-        if (method.isNil()) {
-          runtimeError("Class '%s' has no static method '%s'", klass->name.c_str(),
+      Value propertyValue;
+      if (StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue)) {
+        if (propertyValue.isNativeFunc()) {
+          method = propertyValue;
+          kind = ReceiverKind::StdLib;
+        } else {
+          runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
                        methodName.c_str());
           return InterpretResult::RUNTIME_ERROR;
         }
+      } else if (receiver.isMap()) {
+        MapObject *map = static_cast<MapObject *>(receiver.asGC());
+        StringObject *key = allocateString(methodName);
+        method = map->get(Value::object(key));
+        if (!method.isNil()) {
+          kind = ReceiverKind::Callable;
+        }
       }
 
-      else {
-        runtimeError("Cannot invoke method '%s' on non-object type '%s'", methodName.c_str(),
-                     receiver.typeName());
+      if (method.isNil() && kind == ReceiverKind::Unknown) {
+        runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-
-      if (method.isClosure()) {
-        Closure *closure = static_cast<Closure *>(method.asGC());
-        const Prototype *proto = closure->proto;
-
-        if (!proto->isVararg && totalArgs != proto->numParams) {
-          runtimeError("Method '%s::%s' expects %d arguments (including this), got %d",
-                       receiver.typeName(), methodName.c_str(), proto->numParams, totalArgs);
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        if (frameCount_ >= 64) {
-          runtimeError("Stack overflow: maximum call depth exceeded");
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        CallFrame newFrame;
-        newFrame.closure = closure;
-        newFrame.ip = proto->code.data();
-        newFrame.expectedResults = 1;
-
-        newFrame.slots = &frame->slots[A + 1];
-
-        for (int i = totalArgs - 1; i >= 0; --i) {
-          frame->slots[A + 1 + i] = frame->slots[A + i];
-        }
-
-        newFrame.slots = &frame->slots[A + 1];
-
-        Value *targetStackTop = newFrame.slots + proto->maxStackSize;
-        if (targetStackTop > stack_.data() + config_.stackSize) {
-          runtimeError("Stack overflow: method '%s' requires %d slots", methodName.c_str(),
-                       proto->maxStackSize);
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        for (Value *p = newFrame.slots + totalArgs; p < targetStackTop; ++p) {
-          *p = Value::nil();
-        }
-
-        stackTop_ = targetStackTop;
-        frames_.push_back(newFrame);
-        frameCount_++;
-        frame = &frames_[frameCount_ - 1];
-      }
-
-      else if (method.isNativeFunc()) {
-        NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
-
-        protect(method);
-
-        Value actualReceiver;
-        int actualArgCount;
-        Value *actualArgs;
-
-        if (kind == ReceiverKind::StdLib) {
-
-          actualReceiver = native->receiver;
-          actualArgCount = userArgCount;
-          actualArgs = argsStart;
-        } else {
-
-          actualReceiver = receiver;
-          actualArgCount = userArgCount;
-          actualArgs = argsStart;
-        }
-
-        if (native->arity != -1 && actualArgCount != native->arity) {
-          runtimeError("Native method '%s' expects %d arguments, got %d", native->name.c_str(),
-                       native->arity, actualArgCount);
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        hasNativeMultiReturn_ = false;
-        nativeMultiReturn_.clear();
-
-        Value result = native->function(this, actualReceiver, actualArgCount, actualArgs);
-
-        unprotect(1);
-
-        if (hasError_ && !pcallStack_.empty()) {
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        if (hasNativeMultiReturn_) {
-
-          frame->slots[A] = nativeMultiReturn_.empty() ? Value::nil() : nativeMultiReturn_[0];
-
-          hasNativeMultiReturn_ = false;
-          nativeMultiReturn_.clear();
-        } else {
-          frame->slots[A] = result;
-        }
-      }
-
-      else {
-        runtimeError("'%s.%s' resolved to non-callable type '%s'", receiver.typeName(),
-                     methodName.c_str(), method.typeName());
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      break;
     }
 
-    case OpCode::OP_RETURN: {
-      int returnCount = (B >= 1) ? B - 1 : 0;
+    else if (receiver.isInstance()) {
+      Instance *instance = static_cast<Instance *>(receiver.asGC());
+      kind = ReceiverKind::Instance;
 
-      Value *returnValues = frame->slots + A;
+      method = instance->getField(methodName);
 
-      Value *destSlot = frame->slots - 1;
-
-      int expectedResults = frame->expectedResults;
-
-      closeUpvalues(frame->slots);
-      frameCount_--;
-      frames_.pop_back();
-
-      if (frameCount_ == minFrameCount) {
-
-        lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
-
-        if (!pcallStack_.empty()) {
-          nativeMultiReturn_.clear();
-          for (int i = 0; i < returnCount; ++i) {
-            nativeMultiReturn_.push_back(returnValues[i]);
-          }
-          hasNativeMultiReturn_ = true;
+      if (method.isNil() && instance->klass) {
+        auto it = instance->klass->methods.find(methodName);
+        if (it != instance->klass->methods.end()) {
+          method = it->second;
         }
-
-        if (minFrameCount == 0) {
-          unprotect(1);
-        }
-        return InterpretResult::OK;
       }
 
-      frame = &frames_[frameCount_ - 1];
-
-      if (expectedResults == -1) {
-        for (int i = 0; i < returnCount; ++i) {
-          destSlot[i] = returnValues[i];
-        }
-        stackTop_ = destSlot + returnCount;
-      } else {
-        for (int i = 0; i < expectedResults; ++i) {
-          if (i < returnCount) {
-            destSlot[i] = returnValues[i];
-          } else {
-            destSlot[i] = Value::nil();
-          }
-        }
-        stackTop_ = frame->slots + frame->closure->proto->maxStackSize;
-      }
-
-      break;
-    }
-
-    case OpCode::OP_IMPORT: {
-
-      const auto &moduleNameConst = frame->closure->proto->constants[Bx];
-
-      if (!std::holds_alternative<std::string>(moduleNameConst)) {
-        runtimeError("Module name must be a string constant");
+      if (method.isNil()) {
+        const char *klassName = instance->klass ? instance->klass->name.c_str() : "<anonymous>";
+        runtimeError("Instance of class '%s' has no method '%s'", klassName, methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
+    }
 
-      const std::string &moduleName = std::get<std::string>(moduleNameConst);
+    else if (receiver.isClass()) {
+      ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
+      kind = ReceiverKind::Class;
 
-      std::string currentPath = frame->closure->proto->source;
+      auto itStatic = klass->statics.find(methodName);
+      if (itStatic != klass->statics.end()) {
+        method = itStatic->second;
+      }
 
-      Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
-
-      if (exportsTable.isMap()) {
-        MapObject *errorCheck = static_cast<MapObject *>(exportsTable.asGC());
-
-        StringObject *errorKey = allocateString("error");
-        Value errorFlag = errorCheck->get(Value::object(errorKey));
-
-        if (errorFlag.isBool() && errorFlag.asBool()) {
-          StringObject *msgKey = allocateString("message");
-          Value msgVal = errorCheck->get(Value::object(msgKey));
-
-          std::string errorMsg = "Module load failed";
-          if (msgVal.isString()) {
-            errorMsg = static_cast<StringObject *>(msgVal.asGC())->data;
-          }
-
-          runtimeError("Import error: %s", errorMsg.c_str());
-          return InterpretResult::RUNTIME_ERROR;
+      if (method.isNil()) {
+        auto it = klass->methods.find(methodName);
+        if (it != klass->methods.end()) {
+          method = it->second;
         }
       }
 
-      frame->slots[A] = exportsTable;
-      frame = &frames_[frameCount_ - 1];
-      break;
-    }
-
-    case OpCode::OP_IMPORT_FROM: {
-
-      const auto &moduleNameConst = frame->closure->proto->constants[B];
-      const auto &symbolNameConst = frame->closure->proto->constants[C];
-
-      if (!std::holds_alternative<std::string>(moduleNameConst)) {
-        runtimeError("Module name must be a string constant");
+      if (method.isNil()) {
+        runtimeError("Class '%s' has no static method '%s'", klass->name.c_str(),
+                     methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-
-      if (!std::holds_alternative<std::string>(symbolNameConst)) {
-        runtimeError("Symbol name must be a string constant");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      const std::string &moduleName = std::get<std::string>(moduleNameConst);
-      const std::string &symbolName = std::get<std::string>(symbolNameConst);
-
-      std::string currentPath = frame->closure->proto->source;
-      Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
-
-      if (exportsTable.isMap()) {
-        MapObject *exports = static_cast<MapObject *>(exportsTable.asGC());
-
-        StringObject *errorKey = allocateString("error");
-        Value errorFlag = exports->get(Value::object(errorKey));
-
-        if (errorFlag.isBool() && errorFlag.asBool()) {
-          StringObject *msgKey = allocateString("message");
-          Value msgVal = exports->get(Value::object(msgKey));
-
-          std::string errorMsg = "Module load failed";
-          if (msgVal.isString()) {
-            errorMsg = static_cast<StringObject *>(msgVal.asGC())->data;
-          }
-
-          runtimeError("Import error: %s", errorMsg.c_str());
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        StringObject *symbolKey = allocateString(symbolName);
-        Value symbolValue = exports->get(Value::object(symbolKey));
-
-        if (symbolValue.isNil()) {
-          runtimeError("Module '%s' does not export '%s'", moduleName.c_str(), symbolName.c_str());
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        frame->slots[A] = symbolValue;
-        frame = &frames_[frameCount_ - 1];
-      } else {
-        runtimeError("Import failed: expected module exports table");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      break;
     }
 
-    case OpCode::OP_EXPORT: {
-
-      if (config_.debugMode) {
-        Value exportedValue = frame->slots[A];
-        printf("[EXPORT] Exported value: %s\n", exportedValue.toString().c_str());
-      }
-
-      break;
-    }
-
-    default:
-      runtimeError("Unknown opcode: %d", static_cast<int>(opcode));
+    else {
+      runtimeError("Cannot invoke method '%s' on non-object type '%s'", methodName.c_str(),
+                   receiver.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
+
+    if (method.isClosure()) {
+      Closure *closure = static_cast<Closure *>(method.asGC());
+      const Prototype *proto = closure->proto;
+
+      if (!proto->isVararg && totalArgs != proto->numParams) {
+        runtimeError("Method '%s::%s' expects %d arguments (including this), got %d",
+                     receiver.typeName(), methodName.c_str(), proto->numParams, totalArgs);
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      if (frameCount_ >= 64) {
+        runtimeError("Stack overflow: maximum call depth exceeded");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      CallFrame newFrame;
+      newFrame.closure = closure;
+      newFrame.ip = proto->code.data();
+      newFrame.expectedResults = 1;
+
+      newFrame.slots = &frame->slots[A + 1];
+
+      for (int i = totalArgs - 1; i >= 0; --i) {
+        frame->slots[A + 1 + i] = frame->slots[A + i];
+      }
+
+      newFrame.slots = &frame->slots[A + 1];
+
+      Value *targetStackTop = newFrame.slots + proto->maxStackSize;
+      if (targetStackTop > stack_.data() + config_.stackSize) {
+        runtimeError("Stack overflow: method '%s' requires %d slots", methodName.c_str(),
+                     proto->maxStackSize);
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      for (Value *p = newFrame.slots + totalArgs; p < targetStackTop; ++p) {
+        *p = Value::nil();
+      }
+
+      stackTop_ = targetStackTop;
+      frames_.push_back(newFrame);
+      frameCount_++;
+      frame = &frames_[frameCount_ - 1];
+    }
+
+    else if (method.isNativeFunc()) {
+      NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
+
+      protect(method);
+
+      Value actualReceiver;
+      int actualArgCount;
+      Value *actualArgs;
+
+      if (kind == ReceiverKind::StdLib) {
+        actualReceiver = native->receiver;
+        actualArgCount = userArgCount;
+        actualArgs = argsStart;
+      } else {
+        actualReceiver = receiver;
+        actualArgCount = userArgCount;
+        actualArgs = argsStart;
+      }
+
+      if (native->arity != -1 && actualArgCount != native->arity) {
+        runtimeError("Native method '%s' expects %d arguments, got %d", native->name.c_str(),
+                     native->arity, actualArgCount);
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      hasNativeMultiReturn_ = false;
+      nativeMultiReturn_.clear();
+
+      Value result = native->function(this, actualReceiver, actualArgCount, actualArgs);
+
+      unprotect(1);
+
+      if (hasError_ && !pcallStack_.empty()) {
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      if (hasNativeMultiReturn_) {
+        frame->slots[A] = nativeMultiReturn_.empty() ? Value::nil() : nativeMultiReturn_[0];
+        hasNativeMultiReturn_ = false;
+        nativeMultiReturn_.clear();
+      } else {
+        frame->slots[A] = result;
+      }
+    }
+
+    else {
+      runtimeError("'%s.%s' resolved to non-callable type '%s'", receiver.typeName(),
+                   methodName.c_str(), method.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    SPT_DISPATCH();
   }
 
-#undef READ_INSTRUCTION
-#undef READ_BYTE
-#undef DISPATCH
+  SPT_OPCODE(OP_RETURN) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    int returnCount = (B >= 1) ? B - 1 : 0;
+
+    Value *returnValues = frame->slots + A;
+    Value *destSlot = frame->slots - 1;
+    int expectedResults = frame->expectedResults;
+
+    closeUpvalues(frame->slots);
+    frameCount_--;
+    frames_.pop_back();
+
+    if (frameCount_ == minFrameCount) {
+      lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
+
+      if (!pcallStack_.empty()) {
+        nativeMultiReturn_.clear();
+        for (int i = 0; i < returnCount; ++i) {
+          nativeMultiReturn_.push_back(returnValues[i]);
+        }
+        hasNativeMultiReturn_ = true;
+      }
+
+      if (minFrameCount == 0) {
+        unprotect(1);
+      }
+      return InterpretResult::OK;
+    }
+
+    frame = &frames_[frameCount_ - 1];
+
+    if (expectedResults == -1) {
+      for (int i = 0; i < returnCount; ++i) {
+        destSlot[i] = returnValues[i];
+      }
+      stackTop_ = destSlot + returnCount;
+    } else {
+      for (int i = 0; i < expectedResults; ++i) {
+        if (i < returnCount) {
+          destSlot[i] = returnValues[i];
+        } else {
+          destSlot[i] = Value::nil();
+        }
+      }
+      stackTop_ = frame->slots + frame->closure->proto->maxStackSize;
+    }
+
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_IMPORT) {
+    uint8_t A = GETARG_A(instruction);
+    uint32_t Bx = GETARG_Bx(instruction);
+    const auto &moduleNameConst = frame->closure->proto->constants[Bx];
+
+    if (!std::holds_alternative<std::string>(moduleNameConst)) {
+      runtimeError("Module name must be a string constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    const std::string &moduleName = std::get<std::string>(moduleNameConst);
+    const char *currentPath = frame->closure->proto->source.c_str();
+
+    Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
+
+    if (exportsTable.isMap()) {
+      MapObject *errorCheck = static_cast<MapObject *>(exportsTable.asGC());
+      StringObject *errorKey = allocateString("error");
+      Value errorFlag = errorCheck->get(Value::object(errorKey));
+
+      if (errorFlag.isBool() && errorFlag.asBool()) {
+        StringObject *msgKey = allocateString("message");
+        Value msgVal = errorCheck->get(Value::object(msgKey));
+
+        const char *errorMsg = "Module load failed";
+        if (msgVal.isString()) {
+          errorMsg = static_cast<StringObject *>(msgVal.asGC())->data.c_str();
+        }
+
+        runtimeError("Import error: %s", errorMsg);
+        return InterpretResult::RUNTIME_ERROR;
+      }
+    }
+
+    frame->slots[A] = exportsTable;
+    frame = &frames_[frameCount_ - 1];
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_IMPORT_FROM) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    const auto &moduleNameConst = frame->closure->proto->constants[B];
+    const auto &symbolNameConst = frame->closure->proto->constants[C];
+
+    if (!std::holds_alternative<std::string>(moduleNameConst)) {
+      runtimeError("Module name must be a string constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    if (!std::holds_alternative<std::string>(symbolNameConst)) {
+      runtimeError("Symbol name must be a string constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    const std::string &moduleName = std::get<std::string>(moduleNameConst);
+    const std::string &symbolName = std::get<std::string>(symbolNameConst);
+    const char *currentPath = frame->closure->proto->source.c_str();
+
+    Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
+
+    if (exportsTable.isMap()) {
+      MapObject *exports = static_cast<MapObject *>(exportsTable.asGC());
+
+      StringObject *errorKey = allocateString("error");
+      Value errorFlag = exports->get(Value::object(errorKey));
+
+      if (errorFlag.isBool() && errorFlag.asBool()) {
+        StringObject *msgKey = allocateString("message");
+        Value msgVal = exports->get(Value::object(msgKey));
+
+        const char *errorMsg = "Module load failed";
+        if (msgVal.isString()) {
+          errorMsg = static_cast<StringObject *>(msgVal.asGC())->data.c_str();
+        }
+
+        runtimeError("Import error: %s", errorMsg);
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      StringObject *symbolKey = allocateString(symbolName);
+      Value symbolValue = exports->get(Value::object(symbolKey));
+
+      if (symbolValue.isNil()) {
+        runtimeError("Module '%s' does not export '%s'", moduleName.c_str(), symbolName.c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      frame->slots[A] = symbolValue;
+      frame = &frames_[frameCount_ - 1];
+    } else {
+      runtimeError("Import failed: expected module exports table");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_EXPORT) {
+    if (config_.debugMode) {
+      uint8_t A = GETARG_A(instruction);
+      Value exportedValue = frame->slots[A];
+      printf("[EXPORT] Exported value: %s\n", exportedValue.toString().c_str());
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_DISPATCH_LOOP_END()
 }
 
 UpValue *VM::captureUpvalue(Value *local) {
-
   UpValue *prevUpvalue = nullptr;
   UpValue *upvalue = openUpvalues_;
 
@@ -1782,7 +1726,6 @@ UpValue *VM::captureUpvalue(Value *local) {
 }
 
 void VM::closeUpvalues(Value *last) {
-
   while (openUpvalues_ != nullptr && openUpvalues_->location >= last) {
     UpValue *upvalue = openUpvalues_;
     upvalue->closed = *upvalue->location;
@@ -1792,7 +1735,6 @@ void VM::closeUpvalues(Value *last) {
 }
 
 StringObject *VM::allocateString(const std::string &str) {
-
   auto it = strings_.find(str);
   if (it != strings_.end()) {
     return it->second;
@@ -1828,7 +1770,6 @@ Instance *VM::allocateInstance(ClassObject *klass) {
 ListObject *VM::allocateList(int capacity) {
   ListObject *list = gc_.allocate<ListObject>();
   if (capacity > 0) {
-
     list->elements.resize(capacity, Value::nil());
   }
   return list;
@@ -1864,13 +1805,11 @@ void VM::registerNative(const std::string &name, NativeFn fn, int arity, uint8_t
 }
 
 bool VM::hotReload(const std::string &moduleName, const CompiledChunk &newChunk) {
-
   modules_[moduleName] = newChunk;
 
   for (auto &[name, value] : globals_) {
     if (value.isClass()) {
       auto *klass = static_cast<ClassObject *>(value.asGC());
-
       klass->methods.clear();
     }
   }
@@ -2029,13 +1968,10 @@ void VM::dumpGlobals() const {
 }
 
 void VM::throwError(Value errorValue) {
-
   if (!pcallStack_.empty()) {
-
     hasError_ = true;
     errorValue_ = errorValue;
   } else {
-
     std::string errorMsg;
     if (errorValue.isString()) {
       errorMsg = static_cast<StringObject *>(errorValue.asGC())->data;
@@ -2094,7 +2030,6 @@ void VM::setNativeMultiReturn(std::initializer_list<Value> values) {
 
 InterpretResult VM::protectedCall(Value callee, int argCount, Value *resultSlot,
                                   int expectedResults) {
-
   return InterpretResult::OK;
 }
 
