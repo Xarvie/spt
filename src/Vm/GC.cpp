@@ -82,6 +82,16 @@ void GC::markRoots() {
   for (auto &visitor : roots_) {
   }
 
+  if (vm_->hasError_) {
+    markValue(vm_->errorValue_);
+  }
+
+  if (vm_->hasNativeMultiReturn_) {
+    for (auto &val : vm_->nativeMultiReturn_) {
+      markValue(val);
+    }
+  }
+
   if (vm_->moduleManager()) {
     vm_->moduleManager()->markRoots();
   }

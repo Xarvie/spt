@@ -24,6 +24,18 @@ struct CallFrame {
 // 执行结果
 enum class InterpretResult { OK, COMPILE_ERROR, RUNTIME_ERROR };
 
+// ============================================================================
+// Protected call 上下文 - 用于 pcall 的错误恢复
+// ============================================================================
+struct ProtectedCallContext {
+  int frameCount;           // 进入pcall时的帧数
+  Value *stackTop;          // 进入pcall时的栈顶
+  Value *resultSlot;        // 存放结果的槽位
+  int expectedResults;      // 期望的返回值数量
+  UpValue *openUpvalues;    // 进入pcall时的开放upvalue链表
+  bool active = false;      // 是否处于受保护调用中
+};
+
 // 虚拟机配置
 struct VMConfig {
   size_t stackSize = 256 * 1024;      // 栈大小
@@ -107,18 +119,28 @@ private:
 
   void resetStack();
 
-  InterpretResult call(Closure *closure, int argCount, bool hasImplicitThis = false);
-
   // === UpValue 管理 ===
   UpValue *captureUpvalue(Value *local);
   void closeUpvalues(Value *last);
 
   // === 运算 ===
-  void binaryOp(OpCode op);
   bool valuesEqual(Value a, Value b);
 
   // === 错误处理 ===
   void runtimeError(const char *format, ...);
+
+  // === pcall 支持 ===
+  // 用于 error() 函数抛出错误值
+  void throwError(Value errorValue);
+  // 获取当前的调用栈信息作为字符串
+  std::string getStackTrace();
+  // 内部受保护调用实现
+  InterpretResult protectedCall(Value callee, int argCount, Value *resultSlot, int expectedResults);
+
+  // === 原生函数多返回值支持 ===
+  // 设置原生函数的多个返回值，这些值会被 OP_CALL 正确处理
+  void setNativeMultiReturn(const std::vector<Value> &values);
+  void setNativeMultiReturn(std::initializer_list<Value> values);
 
   std::unique_ptr<ModuleManager> moduleManager_;
 
@@ -145,6 +167,16 @@ private:
   // 模块缓存
   std::unordered_map<std::string, CompiledChunk> modules_;
   Value lastModuleResult_; // 用于暂存模块执行后的返回值 (__env map)
+
+  // === pcall 错误状态 ===
+  std::vector<ProtectedCallContext> pcallStack_;  // 嵌套pcall的上下文栈
+  bool hasError_ = false;                          // 是否有未处理的错误
+  Value errorValue_;                               // 错误值 (error函数抛出的值)
+
+  // === 原生函数多返回值支持 ===
+  std::vector<Value> nativeMultiReturn_;           // 原生函数的多返回值
+  bool hasNativeMultiReturn_ = false;              // 是否有多返回值
+
   // GC
   GC gc_;
 

@@ -16,7 +16,8 @@ set(CMAKE_C_STANDARD  99)
 
 if(MSVC)
     add_compile_options(/utf-8)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+#    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 endif()
 
 PickSourceFiles(
@@ -35,3 +36,8 @@ target_include_directories(sptscript PUBLIC ${includeDirs}
 )
 
 target_link_libraries(sptscript PUBLIC antlr4_static)
+#if(MSVC)
+#    target_compile_options(sptscript PRIVATE /O2 /Zi)
+#    target_link_options(sptscript PRIVATE /DEBUG)
+#    SET_TARGET_PROPERTIES(sptscript PROPERTIES LINK_FLAGS "/PROFILE")
+#endif()

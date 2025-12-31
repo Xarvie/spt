@@ -43,6 +43,12 @@ VM::~VM() {
   modules_.clear();
 
   openUpvalues_ = nullptr;
+
+  pcallStack_.clear();
+  hasError_ = false;
+  errorValue_ = Value::nil();
+  nativeMultiReturn_.clear();
+  hasNativeMultiReturn_ = false;
 }
 
 void VM::registerBuiltinFunctions() {
@@ -445,6 +451,199 @@ void VM::registerBuiltinFunctions() {
         return Value::nil();
       },
       -1);
+
+  registerNative(
+      "error",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        Value errorVal;
+        if (argc >= 1) {
+          errorVal = args[0];
+        } else {
+
+          errorVal = Value::object(this->allocateString("error called without message"));
+        }
+
+        this->throwError(errorVal);
+
+        return Value::nil();
+      },
+      -1);
+
+  registerNative(
+      "pcall",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1) {
+
+          this->setNativeMultiReturn(
+              {Value::boolean(false), Value::object(this->allocateString(
+                                          "pcall: expected a function as first argument"))});
+          return Value::nil();
+        }
+
+        Value func = args[0];
+
+        if (!func.isClosure() && !func.isNativeFunc()) {
+          this->setNativeMultiReturn(
+              {Value::boolean(false),
+               Value::object(this->allocateString("pcall: first argument must be a function"))});
+          return Value::nil();
+        }
+
+        int savedFrameCount = this->frameCount_;
+        Value *savedStackTop = this->stackTop_;
+        UpValue *savedOpenUpvalues = this->openUpvalues_;
+        bool savedHasError = this->hasError_;
+        Value savedErrorValue = this->errorValue_;
+
+        this->hasError_ = false;
+        this->errorValue_ = Value::nil();
+
+        ProtectedCallContext ctx;
+        ctx.frameCount = savedFrameCount;
+        ctx.stackTop = savedStackTop;
+        ctx.openUpvalues = savedOpenUpvalues;
+        ctx.active = true;
+        this->pcallStack_.push_back(ctx);
+
+        int funcArgCount = argc - 1;
+        Value *funcArgs = args + 1;
+
+        Value *callBase = this->stackTop_;
+        *this->stackTop_++ = func;
+        for (int i = 0; i < funcArgCount; ++i) {
+          *this->stackTop_++ = funcArgs[i];
+        }
+
+        InterpretResult result = InterpretResult::OK;
+        std::vector<Value> returnValues;
+
+        if (func.isClosure()) {
+          Closure *closure = static_cast<Closure *>(func.asGC());
+          const Prototype *proto = closure->proto;
+
+          if (!proto->isVararg && funcArgCount != proto->numParams) {
+            std::string errMsg = "Function '" + proto->name + "' expects " +
+                                 std::to_string(proto->numParams) + " arguments, got " +
+                                 std::to_string(funcArgCount);
+            this->hasError_ = true;
+            this->errorValue_ = Value::object(this->allocateString(errMsg));
+            result = InterpretResult::RUNTIME_ERROR;
+          } else if (this->frameCount_ >= 64) {
+            this->hasError_ = true;
+            this->errorValue_ = Value::object(this->allocateString("Stack overflow"));
+            result = InterpretResult::RUNTIME_ERROR;
+          } else {
+
+            CallFrame newFrame;
+            newFrame.closure = closure;
+            newFrame.ip = proto->code.data();
+            newFrame.expectedResults = -1;
+            newFrame.slots = callBase + 1;
+
+            Value *targetStackTop = newFrame.slots + proto->maxStackSize;
+            if (targetStackTop > this->stack_.data() + this->config_.stackSize) {
+              this->hasError_ = true;
+              this->errorValue_ = Value::object(this->allocateString("Stack overflow"));
+              result = InterpretResult::RUNTIME_ERROR;
+            } else {
+
+              for (Value *p = newFrame.slots + funcArgCount; p < targetStackTop; ++p) {
+                *p = Value::nil();
+              }
+
+              this->stackTop_ = targetStackTop;
+              this->frames_.push_back(newFrame);
+              this->frameCount_++;
+
+              result = this->run(savedFrameCount);
+
+              if (result == InterpretResult::OK && !this->hasError_) {
+
+                if (this->hasNativeMultiReturn_) {
+                  returnValues = std::move(this->nativeMultiReturn_);
+                  this->hasNativeMultiReturn_ = false;
+                  this->nativeMultiReturn_.clear();
+                } else {
+
+                  if (!this->lastModuleResult_.isNil()) {
+                    returnValues.push_back(this->lastModuleResult_);
+                  }
+                }
+              }
+            }
+          }
+        } else if (func.isNativeFunc()) {
+          NativeFunction *native = static_cast<NativeFunction *>(func.asGC());
+
+          if (native->arity != -1 && funcArgCount != native->arity) {
+            std::string errMsg = "Native function '" + native->name + "' expects " +
+                                 std::to_string(native->arity) + " arguments, got " +
+                                 std::to_string(funcArgCount);
+            this->hasError_ = true;
+            this->errorValue_ = Value::object(this->allocateString(errMsg));
+            result = InterpretResult::RUNTIME_ERROR;
+          } else {
+
+            this->hasNativeMultiReturn_ = false;
+            this->nativeMultiReturn_.clear();
+
+            Value nativeResult = native->function(this, native->receiver, funcArgCount, funcArgs);
+
+            if (!this->hasError_) {
+
+              if (this->hasNativeMultiReturn_) {
+                returnValues = std::move(this->nativeMultiReturn_);
+                this->hasNativeMultiReturn_ = false;
+              } else {
+                returnValues.push_back(nativeResult);
+              }
+            } else {
+              result = InterpretResult::RUNTIME_ERROR;
+            }
+          }
+        }
+
+        this->pcallStack_.pop_back();
+
+        this->stackTop_ = savedStackTop;
+
+        if (result == InterpretResult::OK && !this->hasError_) {
+
+          std::vector<Value> multiResult;
+          multiResult.push_back(Value::boolean(true));
+          for (const auto &v : returnValues) {
+            multiResult.push_back(v);
+          }
+
+          this->setNativeMultiReturn(multiResult);
+
+          this->hasError_ = savedHasError;
+          this->errorValue_ = savedErrorValue;
+
+          return Value::nil();
+        } else {
+
+          this->closeUpvalues(savedStackTop);
+
+          while (this->frameCount_ > savedFrameCount) {
+            this->frames_.pop_back();
+            this->frameCount_--;
+          }
+
+          this->openUpvalues_ = savedOpenUpvalues;
+
+          Value errVal = this->hasError_ ? this->errorValue_
+                                         : Value::object(this->allocateString("unknown error"));
+
+          this->setNativeMultiReturn({Value::boolean(false), errVal});
+
+          this->hasError_ = savedHasError;
+          this->errorValue_ = savedErrorValue;
+
+          return Value::nil();
+        }
+      },
+      -1);
 }
 
 void VM::ensureStack(int neededSlots) {
@@ -525,6 +724,10 @@ InterpretResult VM::run(int minFrameCount) {
 
 dispatch_loop:
   for (;;) {
+
+    if (hasError_ && !pcallStack_.empty()) {
+      return InterpretResult::RUNTIME_ERROR;
+    }
 
     uint32_t instruction = READ_INSTRUCTION();
     OpCode opcode = GET_OPCODE(instruction);
@@ -1112,9 +1315,47 @@ dispatch_loop:
           return InterpretResult::RUNTIME_ERROR;
         }
 
+        hasNativeMultiReturn_ = false;
+        nativeMultiReturn_.clear();
+
         Value result = native->function(this, native->receiver, argCount, argsStart);
 
-        frame->slots[A] = result;
+        if (hasError_ && !pcallStack_.empty()) {
+
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        if (hasNativeMultiReturn_) {
+
+          int returnCount = static_cast<int>(nativeMultiReturn_.size());
+
+          if (expectedResults == -1) {
+
+            for (int i = 0; i < returnCount; ++i) {
+              frame->slots[A + i] = nativeMultiReturn_[i];
+            }
+          } else if (expectedResults > 0) {
+
+            for (int i = 0; i < returnCount && i < expectedResults; ++i) {
+              frame->slots[A + i] = nativeMultiReturn_[i];
+            }
+
+            for (int i = returnCount; i < expectedResults; ++i) {
+              frame->slots[A + i] = Value::nil();
+            }
+          } else {
+
+            if (returnCount > 0) {
+              frame->slots[A] = nativeMultiReturn_[0];
+            }
+          }
+
+          hasNativeMultiReturn_ = false;
+          nativeMultiReturn_.clear();
+        } else {
+
+          frame->slots[A] = result;
+        }
 
       } else {
 
@@ -1310,11 +1551,26 @@ dispatch_loop:
           return InterpretResult::RUNTIME_ERROR;
         }
 
+        hasNativeMultiReturn_ = false;
+        nativeMultiReturn_.clear();
+
         Value result = native->function(this, actualReceiver, actualArgCount, actualArgs);
 
         unprotect(1);
 
-        frame->slots[A] = result;
+        if (hasError_ && !pcallStack_.empty()) {
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        if (hasNativeMultiReturn_) {
+
+          frame->slots[A] = nativeMultiReturn_.empty() ? Value::nil() : nativeMultiReturn_[0];
+
+          hasNativeMultiReturn_ = false;
+          nativeMultiReturn_.clear();
+        } else {
+          frame->slots[A] = result;
+        }
       }
 
       else {
@@ -1340,7 +1596,17 @@ dispatch_loop:
       frames_.pop_back();
 
       if (frameCount_ == minFrameCount) {
+
         lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
+
+        if (!pcallStack_.empty()) {
+          nativeMultiReturn_.clear();
+          for (int i = 0; i < returnCount; ++i) {
+            nativeMultiReturn_.push_back(returnValues[i]);
+          }
+          hasNativeMultiReturn_ = true;
+        }
+
         if (minFrameCount == 0) {
           unprotect(1);
         }
@@ -1685,6 +1951,12 @@ void VM::resetStack() {
   stackTop_ = stack_.data();
   frameCount_ = 0;
   openUpvalues_ = nullptr;
+
+  pcallStack_.clear();
+  hasError_ = false;
+  errorValue_ = Value::nil();
+  nativeMultiReturn_.clear();
+  hasNativeMultiReturn_ = false;
 }
 
 void VM::collectGarbage() { gc_.collect(); }
@@ -1754,6 +2026,76 @@ void VM::dumpGlobals() const {
     printf("  %-20s = %s\n", name.c_str(), value.toString().c_str());
   }
   printf("===============\n\n");
+}
+
+void VM::throwError(Value errorValue) {
+
+  if (!pcallStack_.empty()) {
+
+    hasError_ = true;
+    errorValue_ = errorValue;
+  } else {
+
+    std::string errorMsg;
+    if (errorValue.isString()) {
+      errorMsg = static_cast<StringObject *>(errorValue.asGC())->data;
+    } else {
+      errorMsg = "error: " + errorValue.toString();
+    }
+    runtimeError("%s", errorMsg.c_str());
+  }
+}
+
+std::string VM::getStackTrace() {
+  std::string trace = "Call stack:";
+
+  for (int i = frameCount_ - 1; i >= 0; --i) {
+    CallFrame &frame = frames_[i];
+    const Prototype *proto = frame.closure->proto;
+    size_t instruction = frame.ip - proto->code.data() - 1;
+
+    int line = proto->absLineInfo.empty() ? 0 : proto->absLineInfo.front().line;
+
+    if (!proto->absLineInfo.empty()) {
+      auto abs_line_info =
+          std::lower_bound(proto->absLineInfo.begin(), proto->absLineInfo.end(), instruction,
+                           [](const auto &lhs, size_t pc) { return lhs.pc < pc; });
+      int basePC = 0;
+      if (abs_line_info != proto->absLineInfo.begin()) {
+        --abs_line_info;
+        basePC = abs_line_info->pc;
+        line = abs_line_info->line;
+      }
+
+      while (static_cast<size_t>(basePC) < instruction &&
+             basePC < static_cast<int>(proto->lineInfo.size())) {
+        line += proto->lineInfo[basePC];
+        basePC++;
+      }
+    }
+
+    trace += "\n  [line " + std::to_string(line) + "] in ";
+    trace += proto->name.empty() ? "<script>" : proto->name + "()";
+  }
+
+  return trace;
+}
+
+void VM::setNativeMultiReturn(const std::vector<Value> &values) {
+  hasNativeMultiReturn_ = true;
+  nativeMultiReturn_ = values;
+}
+
+void VM::setNativeMultiReturn(std::initializer_list<Value> values) {
+  hasNativeMultiReturn_ = true;
+  nativeMultiReturn_.clear();
+  nativeMultiReturn_.insert(nativeMultiReturn_.end(), values.begin(), values.end());
+}
+
+InterpretResult VM::protectedCall(Value callee, int argCount, Value *resultSlot,
+                                  int expectedResults) {
+
+  return InterpretResult::OK;
 }
 
 } // namespace spt

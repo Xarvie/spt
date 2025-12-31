@@ -1,6 +1,18 @@
 #include "TestRunner.h"
 #include <filesystem>
 
+void registerBench(TestRunner &runner) {
+  runner.addTest("Recursion - Fibonacci",
+                 R"(
+            int fib(int n) {
+                if (n < 2) { return n; }
+                return fib(n-1) + fib(n-2);
+            }
+            print(fib(38));
+       )",
+                 "39088169");
+}
+
 // =========================================================
 // 1. 基础语法与运算 (Basics)
 // =========================================================
@@ -1701,9 +1713,21 @@ void registerBuiltinFunctions(TestRunner &runner) {
             print(r3[0] .. "," .. r3[4]);
        )",
                  "5\n0,4\n5\n1,5\n5\n5,1");
+
+  runner.addTest("Builtin - pcall",
+                 R"(
+            int divide(int a, int b){
+              if(b == 0){ error("division by zero"); }
+              return a/b;
+            }
+
+            mutivar ok2, result2 = pcall(divide, 10, 0);
+            print(ok2, result2);
+            mutivar ok, result = pcall(divide, 10, 1);
+            print(ok, result);
+       )",
+                 "false division by zero\ntrue 10");
 }
-
-
 
 int runScript(const char *path) {
   // 1. 读取文件内容
@@ -1770,20 +1794,25 @@ int main(int argc, char *argv[]) {
     return runScript(argv[1]);
   }
 
+  // TestRunner runner;
+
+  // registerBasics(runner);
+  // registerControlFlow(runner);
+  // registerFunctions(runner);
+  // registerClasses(runner);
+  // registerLists(runner);
+  // registerMaps(runner);
+  // registerStrings(runner);
+  // registerModules(runner);
+  // registerInvokeTests(runner);
+  // registerEdgeCases(runner);
+  // registerIntegrationTests(runner);
+  // registerBuiltinFunctions(runner);
+
+  // runner.runAll();
+
   TestRunner runner;
-
-  registerBasics(runner);
-  registerControlFlow(runner);
-  registerFunctions(runner);
-  registerClasses(runner);
-  registerLists(runner);
-  registerMaps(runner);
-  registerStrings(runner);
-  registerModules(runner);
-  registerInvokeTests(runner);
-  registerEdgeCases(runner);
-  registerIntegrationTests(runner);
-  registerBuiltinFunctions(runner);
-
-  return runner.runAll();
+  registerBench(runner);
+  runner.runAll();
+  return 0;
 }
