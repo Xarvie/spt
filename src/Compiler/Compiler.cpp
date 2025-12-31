@@ -240,7 +240,6 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
                         nResults);
     return;
   }
-
   if (auto *memberLookup = dynamic_cast<MemberLookupNode *>(node->functionExpr)) {
     compileMethodInvoke(memberLookup->objectExpr, memberLookup->memberName, node->arguments, dest,
                         nResults);
@@ -250,33 +249,22 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
   int funcSlot = cg_->allocSlot();
   compileExpression(node->functionExpr, funcSlot);
 
-  std::vector<int> argTempSlots;
   for (auto *arg : node->arguments) {
-    int s = cg_->allocSlot();
-    compileExpression(arg, s);
-    argTempSlots.push_back(s);
-  }
-  int argCount = static_cast<int>(argTempSlots.size());
-
-  int base = cg_->allocSlots(1 + argCount);
-
-  cg_->emitABC(OpCode::OP_MOVE, base, funcSlot, 0);
-
-  for (int i = 0; i < argCount; ++i) {
-    cg_->emitABC(OpCode::OP_MOVE, base + 1 + i, argTempSlots[i], 0);
+    int argSlot = cg_->allocSlot();
+    compileExpression(arg, argSlot);
   }
 
-  cg_->emitABC(OpCode::OP_CALL, base, argCount + 1, nResults + 1);
+  int argCount = static_cast<int>(node->arguments.size());
 
-  if (nResults > 0 && dest != base) {
+  cg_->emitABC(OpCode::OP_CALL, funcSlot, argCount + 1, nResults + 1);
+
+  if (nResults > 0 && dest != funcSlot) {
     for (int i = 0; i < nResults; ++i) {
-      cg_->emitABC(OpCode::OP_MOVE, dest + i, base + i, 0);
+      cg_->emitABC(OpCode::OP_MOVE, dest + i, funcSlot + i, 0);
     }
   }
 
-  cg_->freeSlots(1 + argCount);
-  cg_->freeSlots(argCount);
-  cg_->freeSlots(1);
+  cg_->freeSlots(argCount + 1);
 }
 
 void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &methodName,
