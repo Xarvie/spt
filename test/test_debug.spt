@@ -1,0 +1,24 @@
+void a() {
+  any info = debug.getStack(1, "Sl");
+  assert(info.source); // TODO info.source 用的绝对路径暂时不加断言
+  assert(info.shortSrc == "test_debug.spt", info.source);
+  assert(info.lineDefined == 17, "" + info.lineDefined);
+  assert(info.lastLineDefined == 19, "" + info.lastLineDefined);
+  assert(info.currentLine == 18, "" + info.currentLine);
+
+  info = debug.getStack(2, "Sl");
+  assert(info.source); // TODO info.source 用的绝对路径暂时不加断言
+  assert(info.shortSrc == "test_debug.spt", info.source);
+  assert(info.lineDefined == 21, "" + info.lineDefined);
+  assert(info.lastLineDefined == 24, "" + info.lastLineDefined);
+  assert(info.currentLine == 22, "" + info.currentLine);
+}
+
+void b() {
+  a();
+}
+
+export void start_test() {
+  b();
+  print("debug test success");
+}

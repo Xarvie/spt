@@ -420,12 +420,6 @@ static Value stringReplace(VM *vm, Value receiver, int argc, Value *argv) {
   return Value::object(vm->allocateString(result));
 }
 
-struct MethodEntry {
-  const char *name;
-  NativeFn fn;
-  int arity;
-};
-
 static const MethodEntry listMethods[] = {
     {"push", listPush, 1},         {"pop", listPop, 0},           {"insert", listInsert, 2},
     {"clear", listClear, 0},       {"removeAt", listRemoveAt, 1}, {"indexOf", listIndexOf, 1},

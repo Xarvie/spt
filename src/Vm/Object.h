@@ -82,4 +82,10 @@ struct NativeFunction : public GCObject {
   }
 };
 
+struct MethodEntry {
+  const char *name;
+  NativeFn fn;
+  int arity;
+};
+
 } // namespace spt

@@ -12,7 +12,7 @@ class Compiler {
 public:
   using ErrorHandler = std::function<void(const CompileError &)>;
 
-  explicit Compiler(const std::string &moduleName = "main");
+  explicit Compiler(const std::string &moduleName = "main", const std::string &source = "<none>");
   ~Compiler();
 
   // 编译入口
@@ -96,6 +96,7 @@ private:
 
 private:
   std::string moduleName_;
+  std::string source_;
   std::unique_ptr<CodeGen> cg_; // 核心委托对象
 
   std::vector<std::string> exports_; // 模块导出符号

@@ -589,11 +589,16 @@ public:
 class BlockNode : public Statement {
 public:
   std::vector<Statement *> statements;
+  SourceLocation endLocation;
+  bool useEnd = false;
 
-  BlockNode(std::vector<Statement *> stmts, SourceLocation loc)
-      : Statement(std::move(loc), NodeType::BLOCK), statements(std::move(stmts)) {} // 传递类型
+  BlockNode(std::vector<Statement *> stmts, SourceLocation loc, SourceLocation endLoc)
+      : Statement(std::move(loc), NodeType::BLOCK), statements(std::move(stmts)),
+        endLocation(std::move(endLoc)) {} // 传递类型
 
   virtual ~BlockNode() override;
+
+  int getLine() override { return (useEnd ? endLocation : location).line; }
 };
 
 class ExpressionStatementNode : public Statement {

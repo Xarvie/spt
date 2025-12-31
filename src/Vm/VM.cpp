@@ -1,4 +1,6 @@
 #include "VM.h"
+
+#include "SptDebug.hpp"
 #include "SptStdlibs.h"
 #include "VMDispatch.h"
 #include <algorithm>
@@ -6,6 +8,7 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 
 namespace spt {
@@ -29,6 +32,7 @@ VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
   }
 
   registerBuiltinFunctions();
+  SptDebug::load(this);
 }
 
 VM::~VM() {
@@ -2032,25 +2036,7 @@ void VM::runtimeError(const char *format, ...) {
     CallFrame &frame = frames_[i];
     const Prototype *proto = frame.closure->proto;
     size_t instruction = frame.ip - proto->code.data() - 1;
-
-    int line = proto->absLineInfo.front().line;
-    auto abs_line_info =
-        std::lower_bound(proto->absLineInfo.begin(), proto->absLineInfo.end(), instruction,
-                         [](const auto &lhs, int pc) { return lhs.pc < pc; });
-    int basePC = 0;
-    if (abs_line_info != proto->absLineInfo.end()) {
-      --abs_line_info;
-      if (abs_line_info != proto->absLineInfo.end()) {
-        basePC = abs_line_info->pc;
-        line = abs_line_info->line;
-      }
-    }
-
-    while (basePC < instruction) {
-      line += proto->lineInfo[basePC];
-      basePC++;
-    }
-
+    int line = getLine(proto, instruction);
     message += "\n  [line " + std::to_string(line) + "] in ";
     message += proto->name.empty() ? "<script>" : proto->name + "()";
   }
@@ -2062,6 +2048,30 @@ void VM::runtimeError(const char *format, ...) {
   }
 
   resetStack();
+}
+
+int VM::getLine(const Prototype *proto, size_t instruction) {
+  int line = proto->absLineInfo.empty() ? 0 : proto->absLineInfo.front().line;
+
+  if (!proto->absLineInfo.empty()) {
+    auto abs_line_info =
+        std::upper_bound(proto->absLineInfo.begin(), proto->absLineInfo.end(), instruction,
+                         [](size_t pc, const auto &rhs) { return pc < rhs.pc; });
+    int basePC = 0;
+    if (abs_line_info != proto->absLineInfo.begin()) {
+      --abs_line_info;
+      basePC = abs_line_info->pc;
+      line = abs_line_info->line;
+    }
+
+    while (static_cast<size_t>(basePC) < instruction &&
+           basePC < static_cast<int>(proto->lineInfo.size())) {
+      line += proto->lineInfo[basePC];
+      basePC++;
+    }
+  }
+
+  return line;
 }
 
 void VM::dumpStack() const {
@@ -2082,6 +2092,60 @@ void VM::dumpGlobals() const {
     printf("  %-20s = %s\n", name.c_str(), value.toString().c_str());
   }
   printf("===============\n\n");
+}
+
+int VM::getInfo(Value *f, const char *what, DebugInfo *out_info) {
+  if (!f || !what || !out_info) {
+    return 0;
+  }
+  if (f->isClosure()) {
+    const Closure *closure = dynamic_cast<const Closure *>(f->asGC());
+    const Prototype *proto = closure->proto;
+    while (*what) {
+      char c = *what++;
+      switch (c) {
+      case 'S': {
+        out_info->source = proto->source;
+        out_info->shortSrc = proto->short_src;
+        out_info->lineDefined = proto->lineDefined;
+        out_info->lastLineDefined = proto->lastLineDefined;
+      } break;
+      }
+    }
+    return 1;
+  } else if (f->isNativeFunc()) {
+    return 0;
+  } else {
+    return 0;
+  }
+}
+
+int VM::getStack(int f, const char *what, DebugInfo *out_info) {
+  if (!what || !out_info) {
+    return 0;
+  }
+  if (f < 0 || f >= frameCount_) {
+    return 0;
+  }
+  CallFrame &frame = frames_[frames_.size() - 1 - f];
+  const Prototype *proto = frame.closure->proto;
+
+  while (*what) {
+    char c = *what++;
+    switch (c) {
+    case 'S': {
+      out_info->source = proto->source;
+      out_info->shortSrc = proto->short_src;
+      out_info->lineDefined = proto->lineDefined;
+      out_info->lastLineDefined = proto->lastLineDefined;
+    } break;
+    case 'l': {
+      size_t instruction = frame.ip - proto->code.data() - 1;
+      out_info->currentLine = getLine(proto, instruction);
+    } break;
+    }
+  }
+  return 1;
 }
 
 void VM::throwError(Value errorValue) {
@@ -2106,27 +2170,7 @@ std::string VM::getStackTrace() {
     CallFrame &frame = frames_[i];
     const Prototype *proto = frame.closure->proto;
     size_t instruction = frame.ip - proto->code.data() - 1;
-
-    int line = proto->absLineInfo.empty() ? 0 : proto->absLineInfo.front().line;
-
-    if (!proto->absLineInfo.empty()) {
-      auto abs_line_info =
-          std::lower_bound(proto->absLineInfo.begin(), proto->absLineInfo.end(), instruction,
-                           [](const auto &lhs, size_t pc) { return lhs.pc < pc; });
-      int basePC = 0;
-      if (abs_line_info != proto->absLineInfo.begin()) {
-        --abs_line_info;
-        basePC = abs_line_info->pc;
-        line = abs_line_info->line;
-      }
-
-      while (static_cast<size_t>(basePC) < instruction &&
-             basePC < static_cast<int>(proto->lineInfo.size())) {
-        line += proto->lineInfo[basePC];
-        basePC++;
-      }
-    }
-
+    int line = getLine(proto, instruction);
     trace += "\n  [line " + std::to_string(line) + "] in ";
     trace += proto->name.empty() ? "<script>" : proto->name + "()";
   }

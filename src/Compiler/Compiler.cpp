@@ -5,8 +5,8 @@
 
 namespace spt {
 
-Compiler::Compiler(const std::string &moduleName)
-    : moduleName_(moduleName), cg_(std::make_unique<CodeGen>(moduleName)) {}
+Compiler::Compiler(const std::string &moduleName, const std::string &source)
+    : moduleName_(moduleName), source_(source), cg_(std::make_unique<CodeGen>(moduleName)) {}
 
 Compiler::~Compiler() = default;
 
@@ -19,7 +19,7 @@ CompiledChunk Compiler::compile(AstNode *ast) {
 }
 
 CompiledChunk Compiler::compileModule(BlockNode *block) {
-  cg_->beginFunction(moduleName_, 0, false, block);
+  cg_->beginFunction(source_, moduleName_, 0, false, block);
 
   int envSlot = cg_->allocSlot();
 
@@ -45,7 +45,7 @@ void Compiler::compileStatement(Statement *stmt) {
   if (!stmt)
     return;
 
-  auto last = cg_->setLineGetterAutoRestore(stmt);
+  cg_->setLineGetter(stmt);
   try {
     switch (stmt->nodeType) {
     case NodeType::BLOCK:
@@ -110,16 +110,19 @@ void Compiler::compileStatement(Statement *stmt) {
 }
 
 void Compiler::compileBlock(BlockNode *block) {
-  auto last = cg_->setLineGetterAutoRestore(block);
+  block->useEnd = false;
+  cg_->setLineGetter(block);
   cg_->beginScope();
   for (auto *stmt : block->statements) {
     compileStatement(stmt);
   }
   cg_->endScope();
+  cg_->setLineGetter(block);
+  block->useEnd = true;
 }
 
 void Compiler::compileVariableDecl(VariableDeclNode *decl) {
-  auto last = cg_->setLineGetterAutoRestore(decl);
+  cg_->setLineGetter(decl);
   int slot = cg_->addLocal(decl->name);
 
   if (decl->initializer) {
@@ -145,7 +148,7 @@ void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
     int baseSlot = cg_->allocSlots(numVars);
 
     if (auto *callNode = dynamic_cast<FunctionCallNode *>(decl->initializer)) {
-      auto last = cg_->setLineGetterAutoRestore(callNode);
+      cg_->setLineGetter(callNode);
       compileFunctionCall(callNode, baseSlot, numVars);
     } else {
       compileExpression(decl->initializer, baseSlot);
@@ -201,11 +204,11 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   int nameSlot = cg_->addLocal(node->name);
   cg_->markInitialized();
 
-  cg_->beginFunction(node->name, node->params.size(), false, node);
+  cg_->beginFunction(source_, node->name, node->params.size(), false, node);
 
   int paramIndex = 0;
   for (auto *param : node->params) {
-    auto last = cg_->setLineGetterAutoRestore(param);
+    cg_->setLineGetter(param);
     cg_->addLocal(param->name);
     cg_->current()->locals.back().slot = paramIndex++;
 
@@ -233,7 +236,7 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
 }
 
 void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResults) {
-  auto last = cg_->setLineGetterAutoRestore(node);
+  cg_->setLineGetter(node);
 
   if (auto *memberAccess = dynamic_cast<MemberAccessNode *>(node->functionExpr)) {
     compileMethodInvoke(memberAccess->objectExpr, memberAccess->memberName, node->arguments, dest,
@@ -271,7 +274,7 @@ void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &
                                    const std::vector<Expression *> &arguments, int dest,
                                    int nResults) {
 
-  auto last = cg_->setLineGetterAutoRestore(receiverExpr);
+  cg_->setLineGetter(receiverExpr);
 
   int argCount = static_cast<int>(arguments.size());
   int totalArgs = 1 + argCount;
@@ -380,7 +383,7 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
 
       int numParams = static_cast<int>(func->params.size());
 
-      cg_->beginFunction(func->name, numParams, func->isVariadic, func);
+      cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
 
       int paramIndex = 0;
       for (auto *param : func->params) {
@@ -785,7 +788,7 @@ void Compiler::compileExpressionStatement(ExpressionStatementNode *stmt) {
 }
 
 void Compiler::compileExpression(Expression *expr, int dest) {
-  auto last = cg_->setLineGetterAutoRestore(expr);
+  cg_->setLineGetter(expr);
   if (!expr) {
     cg_->emitABC(OpCode::OP_LOADNIL, dest, 0, 0);
     return;
@@ -1146,7 +1149,7 @@ void Compiler::compileIndexAccess(IndexAccessNode *node, int dest) {
 void Compiler::compileLambda(LambdaNode *node, int dest) { compileLambdaBody(node, dest); }
 
 void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
-  auto last = cg_->setLineGetterAutoRestore(node);
+  cg_->setLineGetter(node);
 
   std::string className = node->classType->getFullName();
   int classSlot = cg_->allocSlot();
@@ -1295,11 +1298,11 @@ void Compiler::compileMapLiteral(LiteralMapNode *node, int dest) {
 
 void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
   int numParams = static_cast<int>(lambda->params.size());
-  cg_->beginFunction("<lambda>", numParams, lambda->isVariadic, lambda);
+  cg_->beginFunction(source_, "<lambda>", numParams, lambda->isVariadic, lambda);
 
   int paramIndex = 0;
   for (auto *param : lambda->params) {
-    auto last = cg_->setLineGetterAutoRestore(param);
+    cg_->setLineGetter(param);
     cg_->addLocal(param->name);
     cg_->current()->locals.back().slot = paramIndex++;
     cg_->markInitialized();
@@ -1354,7 +1357,7 @@ void Compiler::emitStoreToEnv(const std::string &name, int srcSlot) {
 LValue Compiler::compileLValue(Expression *expr) {
   LValue lv;
 
-  auto last = cg_->setLineGetterAutoRestore(expr);
+  cg_->setLineGetter(expr);
   if (auto *id = dynamic_cast<IdentifierNode *>(expr)) {
 
     int local = cg_->resolveLocal(id->name);

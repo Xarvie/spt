@@ -140,6 +140,7 @@ ConstantValue BytecodeSerializer::readConstant(Reader &r) {
 void BytecodeSerializer::writePrototype(Writer &w, const Prototype &proto) {
   w.writeString(proto.name);
   w.writeString(proto.source);
+  w.writeString(proto.short_src);
   w.writeU32(static_cast<uint32_t>(proto.lineDefined));
   w.writeU32(static_cast<uint32_t>(proto.lastLineDefined));
   w.writeU8(proto.numParams);
@@ -174,6 +175,7 @@ Prototype BytecodeSerializer::readPrototype(Reader &r) {
   Prototype proto;
   proto.name = r.readString();
   proto.source = r.readString();
+  proto.short_src = r.readString();
   proto.lineDefined = static_cast<int>(r.readU32());
   proto.lastLineDefined = static_cast<int>(r.readU32());
   proto.numParams = r.readU8();

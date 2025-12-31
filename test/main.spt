@@ -1,5 +1,6 @@
 // 文件名: main.spt
 import { PI, add, getCircleArea, getSecret } from "utils";
+import { start_test } from "test_debug";
 
 print("[main] utils 模块已加载");
 
@@ -19,5 +20,7 @@ print("模块内部密钥: " .. getSecret());
 
 // 尝试直接访问_internalSecret为 nil
 print(_internalSecret);
+
+start_test();
 
 print("[main] 程序结束");

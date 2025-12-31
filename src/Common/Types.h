@@ -56,6 +56,7 @@ constexpr uint8_t UseAbsLine = -1;
 struct Prototype {
   std::string name;         // 函数名 (调试用)
   std::string source;       // 源文件名
+  std::string short_src;    // 短源文件名
   int lineDefined = 0;      // 起始行号
   int lastLineDefined = 0;  // 结束行号
   uint8_t numParams = 0;    // 参数数量
@@ -85,6 +86,15 @@ struct CompiledChunk {
   Prototype mainProto;              // 主函数原型
   std::vector<std::string> exports; // 导出符号列表
   uint32_t version = 1;             // 字节码版本
+};
+
+struct DebugInfo {
+  std::string name;      // 函数名
+  std::string source;    // 源文件名
+  std::string shortSrc; // 短源文件名
+  int lineDefined;       // 起始行号
+  int lastLineDefined;   // 结束行号
+  int currentLine;
 };
 
 // 指令构建宏

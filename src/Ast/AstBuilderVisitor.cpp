@@ -290,7 +290,8 @@ std::any AstBuilderVisitor::visitCompilationUnit(LangParser::CompilationUnitCont
     }
   }
 
-  BlockNode *blockNode = new BlockNode(std::move(statements), loc);
+  SourceLocation endLoc = getSourceLocation(ctx->EOF());
+  BlockNode *blockNode = new BlockNode(std::move(statements), loc, endLoc);
   if (!blockNode)
     throw std::runtime_error("AstBuilderVisitor::visitCompilationUnitnullptr");
   return std::any(static_cast<AstNode *>(blockNode));
@@ -339,7 +340,8 @@ std::any AstBuilderVisitor::visitBlockStatement(LangParser::BlockStatementContex
     }
   }
 
-  BlockNode *blockNode = new BlockNode(std::move(statements), loc);
+  SourceLocation endLoc = getSourceLocation(ctx->CCB());
+  BlockNode *blockNode = new BlockNode(std::move(statements), loc, endLoc);
   if (!blockNode)
     throw std::runtime_error("AstBuilderVisitor::visitBlockStatementnullptr");
   scope_depth--;

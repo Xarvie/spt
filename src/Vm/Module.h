@@ -13,6 +13,7 @@ namespace spt {
 
 // 前置声明
 class VM;
+class MethodEntry;
 
 // ============================================================================
 // 模块加载状态
@@ -123,6 +124,9 @@ public:
 
   // 预加载模块（异步准备）
   void preloadModule(const std::string &moduleName);
+
+  Value loadCModule(const std::string &moduleName, const std::string &resolvedPath,
+                    const MethodEntry *modulEntry);
 
   // === 依赖管理 ===
   // 获取模块依赖树

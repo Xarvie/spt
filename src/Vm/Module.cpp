@@ -210,7 +210,7 @@ bool ModuleManager::compileModule(Module *module, const std::string &source) {
       return false;
     }
 
-    Compiler compiler(module->metadata.name);
+    Compiler compiler(module->metadata.name, module->metadata.path);
     std::string compileError;
     compiler.setErrorHandler([&](const CompileError &err) {
       compileError += "Line " + std::to_string(err.line) + ": " + err.message + "\n";
@@ -336,6 +336,61 @@ bool ModuleManager::reloadModule(const std::string &moduleName) {
 }
 
 void ModuleManager::preloadModule(const std::string &moduleName) { loadModule(moduleName); }
+
+Value ModuleManager::loadCModule(const std::string &moduleName, const std::string &resolvedPath,
+                                 const MethodEntry *modulEntry) {
+  if (modulEntry == nullptr) {
+    printf("error loadCModule modulEntry is nullptr\n");
+    return Value::nil();
+  }
+
+  Module *modulePtr = nullptr;
+  {
+    auto module = std::make_unique<Module>();
+    modulePtr = module.get();
+
+    modules_[moduleName] = std::move(module);
+  }
+
+  modulePtr->metadata.name = moduleName;
+  modulePtr->metadata.path = resolvedPath;
+  modulePtr->metadata.timestamp = 0; // TODO
+  modulePtr->state = ModuleState::LOADING;
+
+  modulePtr->exportsTable = vm_->allocateMap(static_cast<int>(modulePtr->metadata.exports.size()));
+
+  while (modulEntry->name && modulEntry->fn) {
+    modulePtr->metadata.exports.push_back(modulEntry->name);
+    StringObject *key = vm_->allocateString(modulEntry->name);
+
+    NativeFunction *native = vm_->gc().allocate<NativeFunction>();
+    native->name = modulEntry->name;
+    native->function = modulEntry->fn;
+    native->arity = modulEntry->arity;
+
+    Value keyVal = Value::object(key);
+    Value valueVal = Value::object(native);
+    modulePtr->exportsTable->set(keyVal, valueVal);
+    modulEntry++;
+  }
+
+  modulePtr->state = ModuleState::LOADED;
+
+  if (config_.enableCache) {
+    pathToName_[resolvedPath] = moduleName;
+    loadOrder_.push_back(moduleName);
+    if (modules_.size() > config_.maxCacheSize) {
+      evictCache();
+    }
+  }
+
+  if (!modulePtr || modulePtr->state != ModuleState::LOADED) {
+    std::string error = modulePtr ? modulePtr->errorMessage : "Module load failed";
+    return createError(error);
+  }
+
+  return Value::object(modulePtr->exportsTable);
+}
 
 std::vector<std::string> ModuleManager::getDependencies(const std::string &moduleName,
                                                         bool recursive) {

@@ -1,16 +1,9 @@
 #include "CodeGen.h"
 #include <cassert>
+#include <filesystem>
 #include <stdexcept>
 
 namespace spt {
-
-AutoRestoreLineGetter::AutoRestoreLineGetter(CodeGen *cg, ILineGetter *newLineGetter) {
-  cg_ = cg;
-  lastLineGetter_ = cg->getLineGetter();
-  cg->setLineGetter(newLineGetter);
-}
-
-AutoRestoreLineGetter::~AutoRestoreLineGetter() { cg_->setLineGetter(lastLineGetter_); }
 
 CodeGen::CodeGen(const std::string &moduleName) : moduleName_(moduleName) {
   current_ = nullptr;
@@ -31,14 +24,16 @@ CodeGen::~CodeGen() {
   }
 }
 
-void CodeGen::beginFunction(const std::string &name, int numParams, bool isVararg,
-                            ILineGetter *lineGetter) {
+void CodeGen::beginFunction(const std::string &source, const std::string &name, int numParams,
+                            bool isVararg, ILineGetter *lineGetter) {
   auto *fs = new FunctionState();
   fs->enclosing = current_;
   fs->proto.name = name;
+  fs->proto.source = source;
+  fs->proto.short_src = std::filesystem::path(source).filename().string();
   fs->proto.numParams = static_cast<uint8_t>(numParams);
   fs->proto.isVararg = isVararg;
-  fs->lastLine = lineGetter->getLine();
+  fs->lastLine = fs->proto.lineDefined = lineGetter->getLine();
   fs->proto.absLineInfo.push_back({0, fs->lastLine});
   fs->lineGetter = lineGetter;
   fs->currentStackTop = numParams;
@@ -51,6 +46,7 @@ void CodeGen::beginFunction(const std::string &name, int numParams, bool isVarar
 Prototype CodeGen::endFunction() {
   endScope();
 
+  current_->proto.lastLineDefined = current_->lineGetter->getLine();
   current_->proto.maxStackSize = static_cast<uint8_t>(current_->maxStack);
   current_->proto.numUpvalues = static_cast<uint8_t>(current_->upvalues.size());
 
