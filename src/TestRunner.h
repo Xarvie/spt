@@ -80,7 +80,6 @@ public:
       // 成功：移除绿色代码，使用普通文本
       std::cout << "[  PASSED  ] All " << total << " tests passed." << std::endl;
     } else {
-      // 失败：使用 emoji 🔴 标记
       std::cout << "🔴 [  FAILED  ] " << (total - passed) << " tests failed." << std::endl;
     }
 
@@ -166,7 +165,7 @@ private:
 
     std::stringstream capturedOutput;
     vm.setPrintHandler([&](const std::string &msg) { capturedOutput << msg; });
-    spt::BytecodeDumper::dump(chunk);
+//    spt::BytecodeDumper::dump(chunk);
     InterpretResult result = vm.interpret(chunk);
 
     // 计时结束

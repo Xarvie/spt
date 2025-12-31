@@ -1,6 +1,6 @@
 #include "VM.h"
-#include "VMDispatch.h"
 #include "SptStdlibs.h"
+#include "VMDispatch.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
@@ -1200,7 +1200,6 @@ InterpretResult VM::run(int minFrameCount) {
     if (a.isInt() && b.isInt()) {
       result = a.asInt() <= b.asInt();
     } else if (a.isNumber() && b.isNumber()) {
-      // VM.cpp Part 3 - 续接 OP_LE 以及后续所有内容
 
       double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
       double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
@@ -1695,6 +1694,124 @@ InterpretResult VM::run(int minFrameCount) {
     SPT_DISPATCH();
   }
 
+  SPT_OPCODE(OP_ADDI) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+
+    int8_t imm = static_cast<int8_t>(GETARG_C(instruction));
+
+    Value bVal = frame->slots[B];
+
+    if (bVal.isInt()) {
+      frame->slots[A] = Value::integer(bVal.asInt() + imm);
+    }
+
+    else if (bVal.isFloat()) {
+      frame->slots[A] = Value::number(bVal.asFloat() + imm);
+    }
+
+    else {
+      runtimeError("Attempt to perform arithmetic on non-number value");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_EQK) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+
+    Value kVal = std::visit(
+        [](auto &&arg) -> Value {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<T, std::nullptr_t>)
+            return Value::nil();
+          else if constexpr (std::is_same_v<T, bool>)
+            return Value::boolean(arg);
+          else if constexpr (std::is_same_v<T, int64_t>)
+            return Value::integer(arg);
+          else if constexpr (std::is_same_v<T, double>)
+            return Value::number(arg);
+          else if constexpr (std::is_same_v<T, std::string>)
+            return Value::nil();
+          return Value::nil();
+        },
+        frame->closure->proto->constants[B]);
+
+    bool equal = valuesEqual(frame->slots[A], kVal);
+
+    if (equal != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_EQI) {
+    uint8_t A = GETARG_A(instruction);
+    int8_t imm = static_cast<int8_t>(GETARG_B(instruction));
+    uint8_t C = GETARG_C(instruction);
+
+    Value val = frame->slots[A];
+    bool equal = false;
+
+    if (val.isInt()) {
+      equal = (val.asInt() == imm);
+    } else if (val.isFloat()) {
+      equal = (val.asFloat() == imm);
+    }
+
+    if (equal != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_LTI) {
+    uint8_t A = GETARG_A(instruction);
+    int8_t imm = static_cast<int8_t>(GETARG_B(instruction));
+    uint8_t C = GETARG_C(instruction);
+
+    Value val = frame->slots[A];
+    bool result = false;
+
+    if (val.isInt()) {
+      result = (val.asInt() < imm);
+    } else if (val.isFloat()) {
+      result = (val.asFloat() < imm);
+    } else {
+      runtimeError("Attempt to compare non-number value");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    if (result != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_LEI) {
+    uint8_t A = GETARG_A(instruction);
+    int8_t imm = static_cast<int8_t>(GETARG_B(instruction));
+    uint8_t C = GETARG_C(instruction);
+
+    Value val = frame->slots[A];
+    bool result = false;
+
+    if (val.isInt()) {
+      result = (val.asInt() <= imm);
+    } else if (val.isFloat()) {
+      result = (val.asFloat() <= imm);
+    } else {
+      runtimeError("Attempt to compare non-number value");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    if (result != (C != 0)) {
+      frame->ip++;
+    }
+    SPT_DISPATCH();
+  }
   SPT_DISPATCH_LOOP_END()
 }
 

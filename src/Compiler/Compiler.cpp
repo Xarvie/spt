@@ -825,7 +825,58 @@ void Compiler::compileIdentifier(IdentifierNode *node, int dest) {
   cg_->freeSlots(1);
 }
 
+
+
+
+
+
+static bool isSmallInt(Expression *expr, int8_t &outVal) {
+  if (auto *intNode = dynamic_cast<LiteralIntNode *>(expr)) {
+    int64_t v = intNode->value;
+    
+    if (v >= -128 && v <= 127) {
+      outVal = static_cast<int8_t>(v);
+      return true;
+    }
+  }
+  return false;
+}
+
+
+
+static int tryAddConstantForEQK(CodeGen *cg, Expression *expr) {
+  ConstantValue val;
+  bool isValid = false;
+
+  if (dynamic_cast<LiteralNullNode *>(expr)) {
+    val = nullptr;
+    isValid = true;
+  } else if (auto *b = dynamic_cast<LiteralBoolNode *>(expr)) {
+    val = b->value;
+    isValid = true;
+  } else if (auto *i = dynamic_cast<LiteralIntNode *>(expr)) {
+    val = i->value;
+    isValid = true;
+  } else if (auto *f = dynamic_cast<LiteralFloatNode *>(expr)) {
+    val = f->value;
+    isValid = true;
+  }
+  
+
+  if (isValid) {
+    int idx = cg->addConstant(val);
+    
+    if (idx <= 255) return idx;
+  }
+  return -1;
+}
+
+
+
+
+
 void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
+  
   if (node->op == OperatorKind::AND) {
     compileExpression(node->left, dest);
     cg_->emitABC(OpCode::OP_TEST, dest, 0, 0);
@@ -843,52 +894,117 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
     return;
   }
 
+  
+  if (node->op == OperatorKind::ADD || node->op == OperatorKind::SUB) {
+    int8_t imm = 0;
+    bool canOptimize = false;
+
+    if (node->op == OperatorKind::ADD) {
+      canOptimize = isSmallInt(node->right, imm);
+    } else { 
+      if (isSmallInt(node->right, imm)) {
+        
+        
+        if (imm != -128) {
+          imm = -imm;
+          canOptimize = true;
+        }
+      }
+    }
+
+    if (canOptimize) {
+      int leftSlot = cg_->allocSlot();
+      compileExpression(node->left, leftSlot);
+      
+      cg_->emitABC(OpCode::OP_ADDI, dest, leftSlot, static_cast<uint8_t>(imm));
+      cg_->freeSlots(1);
+      return;
+    }
+  }
+
+  
+  if (isComparisonOp(node->op)) {
+    int leftSlot = cg_->allocSlot();
+    compileExpression(node->left, leftSlot);
+
+    int8_t imm = 0;
+    int constIdx = -1;
+    bool optimized = false;
+
+    
+    
+    
+    int k = 0;
+    OpCode op = OpCode::OP_EQ; 
+
+    bool isEqNe = (node->op == OperatorKind::EQ || node->op == OperatorKind::NE);
+    bool isLtGe = (node->op == OperatorKind::LT || node->op == OperatorKind::GE);
+    bool isLeGt = (node->op == OperatorKind::LE || node->op == OperatorKind::GT);
+
+    if (node->op == OperatorKind::NE || node->op == OperatorKind::GE || node->op == OperatorKind::GT) {
+      k = 1;
+    }
+
+    
+    if (isEqNe) {
+      if (isSmallInt(node->right, imm)) {
+        op = OpCode::OP_EQI;
+        optimized = true;
+      } else if ((constIdx = tryAddConstantForEQK(cg_.get(), node->right)) != -1) {
+        op = OpCode::OP_EQK;
+        optimized = true;
+      }
+    } else if (isLtGe) {
+      if (isSmallInt(node->right, imm)) {
+        op = OpCode::OP_LTI;
+        optimized = true;
+      }
+    } else if (isLeGt) {
+      if (isSmallInt(node->right, imm)) {
+        op = OpCode::OP_LEI;
+        optimized = true;
+      }
+    }
+
+    if (optimized) {
+      uint8_t bVal = 0;
+      if (op == OpCode::OP_EQK) bVal = static_cast<uint8_t>(constIdx);
+      else bVal = static_cast<uint8_t>(imm);
+
+      cg_->emitABC(op, leftSlot, bVal, k);
+    } else {
+      
+      int rightSlot = cg_->allocSlot();
+      compileExpression(node->right, rightSlot);
+
+      
+      
+      OpCode stdOp = OpCode::OP_EQ;
+      if (isEqNe) stdOp = OpCode::OP_EQ;
+      else if (isLtGe) stdOp = OpCode::OP_LT;
+      else if (isLeGt) stdOp = OpCode::OP_LE;
+
+      cg_->emitABC(stdOp, leftSlot, rightSlot, k);
+      cg_->freeSlots(1);
+    }
+
+    
+    
+    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 1); 
+    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 0); 
+
+    cg_->freeSlots(1); 
+    return;
+  }
+
+  
   int leftSlot = cg_->allocSlot();
   int rightSlot = cg_->allocSlot();
   compileExpression(node->left, leftSlot);
   compileExpression(node->right, rightSlot);
 
-  if (isComparisonOp(node->op)) {
-    OpCode cmpOp;
-    bool useInverseC = false;
-    switch (node->op) {
-    case OperatorKind::EQ:
-      cmpOp = OpCode::OP_EQ;
-      useInverseC = false;
-      break;
-    case OperatorKind::NE:
-      cmpOp = OpCode::OP_EQ;
-      useInverseC = true;
-      break;
-    case OperatorKind::LT:
-      cmpOp = OpCode::OP_LT;
-      useInverseC = false;
-      break;
-    case OperatorKind::LE:
-      cmpOp = OpCode::OP_LE;
-      useInverseC = false;
-      break;
-    case OperatorKind::GT:
-      cmpOp = OpCode::OP_LT;
-      std::swap(leftSlot, rightSlot);
-      useInverseC = false;
-      break;
-    case OperatorKind::GE:
-      cmpOp = OpCode::OP_LE;
-      std::swap(leftSlot, rightSlot);
-      useInverseC = false;
-      break;
-    default:
-      cmpOp = OpCode::OP_EQ;
-      break;
-    }
-    cg_->emitABC(cmpOp, leftSlot, rightSlot, useInverseC ? 1 : 0);
-    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 1);
-    cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 0);
-  } else {
-    OpCode op = binaryOpToOpcode(node->op);
-    cg_->emitABC(op, dest, leftSlot, rightSlot);
-  }
+  OpCode op = binaryOpToOpcode(node->op);
+  cg_->emitABC(op, dest, leftSlot, rightSlot);
   cg_->freeSlots(2);
 }
 
@@ -1341,4 +1457,4 @@ void Compiler::compileImportNamed(ImportNamedNode *node) {
   }
 }
 
-} // namespace spt
+} 
