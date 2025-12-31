@@ -68,24 +68,24 @@ private:
 class BytecodeDumper {
 public:
   // 对外入口：打印整个 Chunk
-  static void dump(const CompiledChunk& chunk);
+  static void dump(const CompiledChunk &chunk);
 
 private:
   // 递归打印原型及其子原型
-  static void dumpPrototype(const Prototype& proto, const std::string& prefix = "");
+  static void dumpPrototype(const Prototype &proto, const std::string &prefix = "");
 
   // 辅助函数：操作码转字符串
   static std::string opCodeToString(OpCode op);
 
   // 辅助函数：常量转字符串
-  static std::string constantToString(const ConstantValue& val);
+  static std::string constantToString(const ConstantValue &val);
 
   // 辅助函数：获取指令格式 (用于决定如何打印操作数)
   enum class OpMode { iABC, iABx, iAsBx };
   static OpMode getOpMode(OpCode op);
 
   // 辅助函数：计算行号 (复用 VM 中的逻辑)
-  static int getLine(const Prototype& proto, int pc);
+  static int getLine(const Prototype &proto, int pc);
 };
 
 } // namespace spt

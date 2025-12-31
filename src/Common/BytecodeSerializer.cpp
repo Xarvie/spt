@@ -1,12 +1,12 @@
 #include "BytecodeSerializer.h"
+#include "OpCode.h"
+#include <algorithm>
 #include <cstring>
 #include <fstream>
-#include <stdexcept>
-#include "OpCode.h"
-#include <iostream>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
-#include <algorithm>
+#include <stdexcept>
 #include <string>
 
 namespace spt {
@@ -246,7 +246,6 @@ CompiledChunk BytecodeSerializer::deserialize(const std::vector<uint8_t> &data) 
   return chunk;
 }
 
-
 bool BytecodeSerializer::saveToFile(const CompiledChunk &chunk, const std::string &path) {
   auto data = serialize(chunk);
   std::ofstream out(path, std::ios::binary);
@@ -269,23 +268,21 @@ CompiledChunk BytecodeSerializer::loadFromFile(const std::string &path) {
   return deserialize(data);
 }
 
-
-
-void BytecodeDumper::dump(const CompiledChunk& chunk) {
+void BytecodeDumper::dump(const CompiledChunk &chunk) {
   std::cout << "== Dump Module: " << chunk.moduleName << " ==\n";
   dumpPrototype(chunk.mainProto);
 }
 
-void BytecodeDumper::dumpPrototype(const Prototype& proto, const std::string& prefix) {
+void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &prefix) {
   std::string funcName = proto.name.empty() ? "<anonymous>" : proto.name;
   std::string source = proto.source.empty() ? "=?" : proto.source;
 
-  std::cout << "\n" << prefix << "function " << funcName
-            << " (" << source << ":" << proto.lineDefined << "-" << proto.lastLineDefined << ")\n";
+  std::cout << "\n"
+            << prefix << "function " << funcName << " (" << source << ":" << proto.lineDefined
+            << "-" << proto.lastLineDefined << ")\n";
 
   std::cout << prefix << "params: " << (int)proto.numParams
-            << ", upvalues: " << (int)proto.numUpvalues
-            << ", slots: " << (int)proto.maxStackSize
+            << ", upvalues: " << (int)proto.numUpvalues << ", slots: " << (int)proto.maxStackSize
             << ", vararg: " << (proto.isVararg ? "yes" : "no") << "\n";
 
   for (size_t i = 0; i < proto.code.size(); ++i) {
@@ -296,8 +293,8 @@ void BytecodeDumper::dumpPrototype(const Prototype& proto, const std::string& pr
     // 1. 打印 PC 和 行号
     std::cout << prefix << "\t"
               << "[" << std::setw(3) << i << "] "
-              << "[" << std::setw(3) << line << "] "
-              << std::setw(14) << std::left << opCodeToString(op) << " ";
+              << "[" << std::setw(3) << line << "] " << std::setw(14) << std::left
+              << opCodeToString(op) << " ";
 
     // 2. 打印操作数
     OpMode mode = getOpMode(op);
@@ -311,9 +308,7 @@ void BytecodeDumper::dumpPrototype(const Prototype& proto, const std::string& pr
 
     switch (mode) {
     case OpMode::iABC:
-      std::cout << std::setw(4) << a << " "
-                << std::setw(4) << b << " "
-                << std::setw(4) << c;
+      std::cout << std::setw(4) << a << " " << std::setw(4) << b << " " << std::setw(4) << c;
 
       // 特殊指令注释优化
       if (op == OpCode::OP_GETFIELD || op == OpCode::OP_SETFIELD) {
@@ -330,8 +325,7 @@ void BytecodeDumper::dumpPrototype(const Prototype& proto, const std::string& pr
       break;
 
     case OpMode::iABx:
-      std::cout << std::setw(4) << a << " "
-                << std::setw(9) << bx;
+      std::cout << std::setw(4) << a << " " << std::setw(9) << bx;
 
       // 特殊指令注释优化
       if (op == OpCode::OP_LOADK) {
@@ -345,15 +339,14 @@ void BytecodeDumper::dumpPrototype(const Prototype& proto, const std::string& pr
       } else if (op == OpCode::OP_CLOSURE) {
         if (bx < proto.protos.size()) {
           // 这里的 bx 是子函数的索引
-          const auto& sub = proto.protos[bx];
+          const auto &sub = proto.protos[bx];
           comment << "; " << (sub.name.empty() ? "<anonymous>" : sub.name);
         }
       }
       break;
 
     case OpMode::iAsBx:
-      std::cout << std::setw(4) << a << " "
-                << std::setw(9) << sbx;
+      std::cout << std::setw(4) << a << " " << std::setw(9) << sbx;
 
       if (op == OpCode::OP_JMP) {
         int dest = static_cast<int>(i) + sbx + 1;
@@ -379,37 +372,39 @@ void BytecodeDumper::dumpPrototype(const Prototype& proto, const std::string& pr
   }
 
   // 5. 递归打印子函数
-  for (const auto& subProto : proto.protos) {
+  for (const auto &subProto : proto.protos) {
     dumpPrototype(subProto, prefix + "  ");
   }
 }
 
-std::string BytecodeDumper::constantToString(const ConstantValue& val) {
-  return std::visit([](auto&& arg) -> std::string {
-    using T = std::decay_t<decltype(arg)>;
-    if constexpr (std::is_same_v<T, std::nullptr_t>) {
-      return "nil";
-    } else if constexpr (std::is_same_v<T, bool>) {
-      return arg ? "true" : "false";
-    } else if constexpr (std::is_same_v<T, int64_t>) {
-      return std::to_string(arg);
-    } else if constexpr (std::is_same_v<T, double>) {
-      return std::to_string(arg);
-    } else if constexpr (std::is_same_v<T, std::string>) {
-      return "\"" + arg + "\"";
-    }
-    return "?";
-  }, val);
+std::string BytecodeDumper::constantToString(const ConstantValue &val) {
+  return std::visit(
+      [](auto &&arg) -> std::string {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, std::nullptr_t>) {
+          return "nil";
+        } else if constexpr (std::is_same_v<T, bool>) {
+          return arg ? "true" : "false";
+        } else if constexpr (std::is_same_v<T, int64_t>) {
+          return std::to_string(arg);
+        } else if constexpr (std::is_same_v<T, double>) {
+          return std::to_string(arg);
+        } else if constexpr (std::is_same_v<T, std::string>) {
+          return "\"" + arg + "\"";
+        }
+        return "?";
+      },
+      val);
 }
 
-int BytecodeDumper::getLine(const Prototype& proto, int pc) {
-  if (proto.lineInfo.empty()) return 0;
+int BytecodeDumper::getLine(const Prototype &proto, int pc) {
+  if (proto.lineInfo.empty())
+    return 0;
 
   // 参考 VM.cpp 中的逻辑，利用 absLineInfo 加速定位
   int line = proto.absLineInfo.front().line;
-  auto abs_line_info = std::lower_bound(
-      proto.absLineInfo.begin(), proto.absLineInfo.end(), pc,
-      [](const auto &lhs, int p) { return lhs.pc < p; });
+  auto abs_line_info = std::lower_bound(proto.absLineInfo.begin(), proto.absLineInfo.end(), pc,
+                                        [](const auto &lhs, int p) { return lhs.pc < p; });
 
   int basePC = 0;
   if (abs_line_info != proto.absLineInfo.end()) {
@@ -446,42 +441,75 @@ BytecodeDumper::OpMode BytecodeDumper::getOpMode(OpCode op) {
 
 std::string BytecodeDumper::opCodeToString(OpCode op) {
   switch (op) {
-  case OpCode::OP_MOVE: return "MOVE";
-  case OpCode::OP_LOADK: return "LOADK";
-  case OpCode::OP_LOADBOOL: return "LOADBOOL";
-  case OpCode::OP_LOADNIL: return "LOADNIL";
-  case OpCode::OP_NEWLIST: return "NEWLIST";
-  case OpCode::OP_NEWMAP: return "NEWMAP";
-  case OpCode::OP_GETINDEX: return "GETINDEX";
-  case OpCode::OP_SETINDEX: return "SETINDEX";
-  case OpCode::OP_GETFIELD: return "GETFIELD";
-  case OpCode::OP_SETFIELD: return "SETFIELD";
-  case OpCode::OP_NEWCLASS: return "NEWCLASS";
-  case OpCode::OP_NEWOBJ: return "NEWOBJ";
-  case OpCode::OP_GETUPVAL: return "GETUPVAL";
-  case OpCode::OP_SETUPVAL: return "SETUPVAL";
-  case OpCode::OP_CLOSURE: return "CLOSURE";
-  case OpCode::OP_CLOSE_UPVALUE: return "CLOSE_UPVAL";
-  case OpCode::OP_ADD: return "ADD";
-  case OpCode::OP_SUB: return "SUB";
-  case OpCode::OP_MUL: return "MUL";
-  case OpCode::OP_DIV: return "DIV";
-  case OpCode::OP_MOD: return "MOD";
-  case OpCode::OP_UNM: return "UNM";
-  case OpCode::OP_JMP: return "JMP";
-  case OpCode::OP_EQ: return "EQ";
-  case OpCode::OP_LT: return "LT";
-  case OpCode::OP_LE: return "LE";
-  case OpCode::OP_TEST: return "TEST";
-  case OpCode::OP_CALL: return "CALL";
-  case OpCode::OP_INVOKE: return "INVOKE";
-  case OpCode::OP_RETURN: return "RETURN";
-  case OpCode::OP_IMPORT: return "IMPORT";
-  case OpCode::OP_IMPORT_FROM: return "IMPORT_FROM";
-  case OpCode::OP_EXPORT: return "EXPORT";
-  default: return "UNKNOWN";
+  case OpCode::OP_MOVE:
+    return "MOVE";
+  case OpCode::OP_LOADK:
+    return "LOADK";
+  case OpCode::OP_LOADBOOL:
+    return "LOADBOOL";
+  case OpCode::OP_LOADNIL:
+    return "LOADNIL";
+  case OpCode::OP_NEWLIST:
+    return "NEWLIST";
+  case OpCode::OP_NEWMAP:
+    return "NEWMAP";
+  case OpCode::OP_GETINDEX:
+    return "GETINDEX";
+  case OpCode::OP_SETINDEX:
+    return "SETINDEX";
+  case OpCode::OP_GETFIELD:
+    return "GETFIELD";
+  case OpCode::OP_SETFIELD:
+    return "SETFIELD";
+  case OpCode::OP_NEWCLASS:
+    return "NEWCLASS";
+  case OpCode::OP_NEWOBJ:
+    return "NEWOBJ";
+  case OpCode::OP_GETUPVAL:
+    return "GETUPVAL";
+  case OpCode::OP_SETUPVAL:
+    return "SETUPVAL";
+  case OpCode::OP_CLOSURE:
+    return "CLOSURE";
+  case OpCode::OP_CLOSE_UPVALUE:
+    return "CLOSE_UPVAL";
+  case OpCode::OP_ADD:
+    return "ADD";
+  case OpCode::OP_SUB:
+    return "SUB";
+  case OpCode::OP_MUL:
+    return "MUL";
+  case OpCode::OP_DIV:
+    return "DIV";
+  case OpCode::OP_MOD:
+    return "MOD";
+  case OpCode::OP_UNM:
+    return "UNM";
+  case OpCode::OP_JMP:
+    return "JMP";
+  case OpCode::OP_EQ:
+    return "EQ";
+  case OpCode::OP_LT:
+    return "LT";
+  case OpCode::OP_LE:
+    return "LE";
+  case OpCode::OP_TEST:
+    return "TEST";
+  case OpCode::OP_CALL:
+    return "CALL";
+  case OpCode::OP_INVOKE:
+    return "INVOKE";
+  case OpCode::OP_RETURN:
+    return "RETURN";
+  case OpCode::OP_IMPORT:
+    return "IMPORT";
+  case OpCode::OP_IMPORT_FROM:
+    return "IMPORT_FROM";
+  case OpCode::OP_EXPORT:
+    return "EXPORT";
+  default:
+    return "UNKNOWN";
   }
 }
-
 
 } // namespace spt

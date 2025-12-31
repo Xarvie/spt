@@ -28,12 +28,12 @@ enum class InterpretResult { OK, COMPILE_ERROR, RUNTIME_ERROR };
 // Protected call 上下文 - 用于 pcall 的错误恢复
 // ============================================================================
 struct ProtectedCallContext {
-  int frameCount;           // 进入pcall时的帧数
-  Value *stackTop;          // 进入pcall时的栈顶
-  Value *resultSlot;        // 存放结果的槽位
-  int expectedResults;      // 期望的返回值数量
-  UpValue *openUpvalues;    // 进入pcall时的开放upvalue链表
-  bool active = false;      // 是否处于受保护调用中
+  int frameCount;        // 进入pcall时的帧数
+  Value *stackTop;       // 进入pcall时的栈顶
+  Value *resultSlot;     // 存放结果的槽位
+  int expectedResults;   // 期望的返回值数量
+  UpValue *openUpvalues; // 进入pcall时的开放upvalue链表
+  bool active = false;   // 是否处于受保护调用中
 };
 
 // 虚拟机配置
@@ -169,13 +169,13 @@ private:
   Value lastModuleResult_; // 用于暂存模块执行后的返回值 (__env map)
 
   // === pcall 错误状态 ===
-  std::vector<ProtectedCallContext> pcallStack_;  // 嵌套pcall的上下文栈
-  bool hasError_ = false;                          // 是否有未处理的错误
-  Value errorValue_;                               // 错误值 (error函数抛出的值)
+  std::vector<ProtectedCallContext> pcallStack_; // 嵌套pcall的上下文栈
+  bool hasError_ = false;                        // 是否有未处理的错误
+  Value errorValue_;                             // 错误值 (error函数抛出的值)
 
   // === 原生函数多返回值支持 ===
-  std::vector<Value> nativeMultiReturn_;           // 原生函数的多返回值
-  bool hasNativeMultiReturn_ = false;              // 是否有多返回值
+  std::vector<Value> nativeMultiReturn_; // 原生函数的多返回值
+  bool hasNativeMultiReturn_ = false;    // 是否有多返回值
 
   // GC
   GC gc_;
