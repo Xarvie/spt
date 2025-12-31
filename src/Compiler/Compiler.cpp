@@ -936,6 +936,17 @@ void Compiler::compileIdentifier(IdentifierNode *node, int dest) {
   cg_->freeSlots(1);
 }
 
+static int tryResolveLocalSlot(CodeGen *cg, Expression *expr) {
+  if (auto *id = dynamic_cast<IdentifierNode *>(expr)) {
+    int local = cg->resolveLocal(id->name);
+
+    if (local >= 0 && local <= 255) {
+      return local;
+    }
+  }
+  return -1;
+}
+
 void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
 
   if (node->op == OperatorKind::AND) {
@@ -963,7 +974,6 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
       canOptimize = isSmallInt(node->right, imm);
     } else {
       if (isSmallInt(node->right, imm)) {
-
         if (imm != -128) {
           imm = -imm;
           canOptimize = true;
@@ -972,23 +982,39 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
     }
 
     if (canOptimize) {
-      int leftSlot = cg_->allocSlot();
-      compileExpression(node->left, leftSlot);
+
+      int leftSlot = tryResolveLocalSlot(cg_.get(), node->left);
+      bool isTemp = false;
+
+      if (leftSlot == -1) {
+
+        leftSlot = cg_->allocSlot();
+        compileExpression(node->left, leftSlot);
+        isTemp = true;
+      }
 
       cg_->emitABC(OpCode::OP_ADDI, dest, leftSlot, static_cast<uint8_t>(imm));
-      cg_->freeSlots(1);
+
+      if (isTemp)
+        cg_->freeSlots(1);
       return;
     }
   }
 
   if (isComparisonOp(node->op)) {
-    int leftSlot = cg_->allocSlot();
-    compileExpression(node->left, leftSlot);
+
+    int leftSlot = tryResolveLocalSlot(cg_.get(), node->left);
+    bool isTemp = false;
+
+    if (leftSlot == -1) {
+      leftSlot = cg_->allocSlot();
+      compileExpression(node->left, leftSlot);
+      isTemp = true;
+    }
 
     int8_t imm = 0;
     int constIdx = -1;
     bool optimized = false;
-
     int k = 0;
     OpCode op = OpCode::OP_EQ;
 
@@ -1022,45 +1048,61 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
     }
 
     if (optimized) {
-      uint8_t bVal = 0;
-      if (op == OpCode::OP_EQK)
-        bVal = static_cast<uint8_t>(constIdx);
-      else
-        bVal = static_cast<uint8_t>(imm);
-
+      uint8_t bVal =
+          (op == OpCode::OP_EQK) ? static_cast<uint8_t>(constIdx) : static_cast<uint8_t>(imm);
       cg_->emitABC(op, leftSlot, bVal, k);
     } else {
 
-      int rightSlot = cg_->allocSlot();
-      compileExpression(node->right, rightSlot);
+      int rightSlot = tryResolveLocalSlot(cg_.get(), node->right);
+      bool rightTemp = false;
+      if (rightSlot == -1) {
+        rightSlot = cg_->allocSlot();
+        compileExpression(node->right, rightSlot);
+        rightTemp = true;
+      }
 
       OpCode stdOp = OpCode::OP_EQ;
-      if (isEqNe)
-        stdOp = OpCode::OP_EQ;
-      else if (isLtGe)
+      if (isLtGe)
         stdOp = OpCode::OP_LT;
       else if (isLeGt)
         stdOp = OpCode::OP_LE;
 
       cg_->emitABC(stdOp, leftSlot, rightSlot, k);
-      cg_->freeSlots(1);
+      if (rightTemp)
+        cg_->freeSlots(1);
     }
 
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 1);
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 0);
 
-    cg_->freeSlots(1);
+    if (isTemp)
+      cg_->freeSlots(1);
     return;
   }
 
-  int leftSlot = cg_->allocSlot();
-  int rightSlot = cg_->allocSlot();
-  compileExpression(node->left, leftSlot);
-  compileExpression(node->right, rightSlot);
+  int leftSlot = tryResolveLocalSlot(cg_.get(), node->left);
+  bool leftTemp = false;
+  if (leftSlot == -1) {
+    leftSlot = cg_->allocSlot();
+    compileExpression(node->left, leftSlot);
+    leftTemp = true;
+  }
+
+  int rightSlot = tryResolveLocalSlot(cg_.get(), node->right);
+  bool rightTemp = false;
+  if (rightSlot == -1) {
+    rightSlot = cg_->allocSlot();
+    compileExpression(node->right, rightSlot);
+    rightTemp = true;
+  }
 
   OpCode op = binaryOpToOpcode(node->op);
   cg_->emitABC(op, dest, leftSlot, rightSlot);
-  cg_->freeSlots(2);
+
+  if (rightTemp)
+    cg_->freeSlots(1);
+  if (leftTemp)
+    cg_->freeSlots(1);
 }
 
 void Compiler::compileUnaryOp(UnaryOpNode *node, int dest) {
