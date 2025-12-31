@@ -34,6 +34,7 @@ private:
   void compileMutiVariableDecl(MutiVariableDeclarationNode *decl);
 
   void compileClassDecl(ClassDeclNode *decl);
+  int compileCondition(Expression *expr);
   void compileIfStatement(IfStatementNode *stmt);
   void compileWhileStatement(WhileStatementNode *stmt);
   void compileForCStyle(ForCStyleStatementNode *stmt);

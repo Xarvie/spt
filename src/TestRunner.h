@@ -77,7 +77,6 @@ public:
 
     std::cout << "==================================================" << std::endl;
     if (passed == total) {
-      // 成功：移除绿色代码，使用普通文本
       std::cout << "[  PASSED  ] All " << total << " tests passed." << std::endl;
     } else {
       std::cout << "🔴 [  FAILED  ] " << (total - passed) << " tests failed." << std::endl;

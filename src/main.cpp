@@ -1794,25 +1794,25 @@ int main(int argc, char *argv[]) {
     return runScript(argv[1]);
   }
 
-  //   TestRunner runner;
-  //
-  //   registerBasics(runner);
-  //   registerControlFlow(runner);
-  //   registerFunctions(runner);
-  //   registerClasses(runner);
-  //   registerLists(runner);
-  //   registerMaps(runner);
-  //   registerStrings(runner);
-  //   registerModules(runner);
-  //   registerInvokeTests(runner);
-  //   registerEdgeCases(runner);
-  //   registerIntegrationTests(runner);
-  //   registerBuiltinFunctions(runner);
-  //
-  //   runner.runAll();
-
   TestRunner runner;
-  registerBench(runner);
+
+  registerBasics(runner);
+  registerControlFlow(runner);
+  registerFunctions(runner);
+  registerClasses(runner);
+  registerLists(runner);
+  registerMaps(runner);
+  registerStrings(runner);
+  registerModules(runner);
+  registerInvokeTests(runner);
+  registerEdgeCases(runner);
+  registerIntegrationTests(runner);
+  registerBuiltinFunctions(runner);
+
   runner.runAll();
+
+  //  TestRunner runner;
+  //  registerBench(runner);
+  //  runner.runAll();
   return 0;
 }

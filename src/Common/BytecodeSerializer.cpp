@@ -507,6 +507,18 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "IMPORT_FROM";
   case OpCode::OP_EXPORT:
     return "EXPORT";
+
+  case OpCode::OP_ADDI:
+    return "ADDI";
+  case OpCode::OP_EQK:
+    return "EQK";
+  case OpCode::OP_EQI:
+    return "EQI";
+  case OpCode::OP_LTI:
+    return "LTI";
+  case OpCode::OP_LEI:
+    return "LEI";
+
   default:
     return "UNKNOWN";
   }

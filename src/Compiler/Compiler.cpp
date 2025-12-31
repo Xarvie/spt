@@ -437,35 +437,146 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
   }
 }
 
-void Compiler::compileIfStatement(IfStatementNode *stmt) {
-  int condSlot = cg_->allocSlot();
-  compileExpression(stmt->condition, condSlot);
+static bool isSmallInt(Expression *expr, int8_t &outVal) {
+  if (auto *intNode = dynamic_cast<LiteralIntNode *>(expr)) {
+    int64_t v = intNode->value;
+    if (v >= -128 && v <= 127) {
+      outVal = static_cast<int8_t>(v);
+      return true;
+    }
+  }
+  return false;
+}
 
-  cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
-  int jumpToElse = cg_->emitJump(OpCode::OP_JMP);
+static int tryAddConstantForEQK(CodeGen *cg, Expression *expr) {
+  ConstantValue val;
+  bool isValid = false;
+
+  if (dynamic_cast<LiteralNullNode *>(expr)) {
+    val = nullptr;
+    isValid = true;
+  } else if (auto *b = dynamic_cast<LiteralBoolNode *>(expr)) {
+    val = b->value;
+    isValid = true;
+  } else if (auto *i = dynamic_cast<LiteralIntNode *>(expr)) {
+    val = i->value;
+    isValid = true;
+  } else if (auto *f = dynamic_cast<LiteralFloatNode *>(expr)) {
+    val = f->value;
+    isValid = true;
+  }
+
+  if (isValid) {
+    int idx = cg->addConstant(val);
+
+    if (idx <= 255)
+      return idx;
+  }
+  return -1;
+}
+
+int Compiler::compileCondition(Expression *expr) {
+
+  if (auto *bin = dynamic_cast<BinaryOpNode *>(expr)) {
+    if (isComparisonOp(bin->op)) {
+      int leftSlot = cg_->allocSlot();
+      compileExpression(bin->left, leftSlot);
+
+      int8_t imm = 0;
+      int constIdx = -1;
+      OpCode op = OpCode::OP_EQ;
+      bool optimized = false;
+
+      int k = 0;
+
+      bool isEqNe = (bin->op == OperatorKind::EQ || bin->op == OperatorKind::NE);
+      bool isLtGe = (bin->op == OperatorKind::LT || bin->op == OperatorKind::GE);
+      bool isLeGt = (bin->op == OperatorKind::LE || bin->op == OperatorKind::GT);
+
+      if (bin->op == OperatorKind::NE || bin->op == OperatorKind::GE ||
+          bin->op == OperatorKind::GT) {
+        k = 1;
+      }
+
+      if (isEqNe) {
+        if (isSmallInt(bin->right, imm)) {
+          op = OpCode::OP_EQI;
+          optimized = true;
+        } else if ((constIdx = tryAddConstantForEQK(cg_.get(), bin->right)) != -1) {
+          op = OpCode::OP_EQK;
+          optimized = true;
+        }
+      } else if (isLtGe) {
+        if (isSmallInt(bin->right, imm)) {
+          op = OpCode::OP_LTI;
+          optimized = true;
+        }
+      } else if (isLeGt) {
+        if (isSmallInt(bin->right, imm)) {
+          op = OpCode::OP_LEI;
+          optimized = true;
+        }
+      }
+
+      if (optimized) {
+
+        uint8_t bVal =
+            (op == OpCode::OP_EQK) ? static_cast<uint8_t>(constIdx) : static_cast<uint8_t>(imm);
+        cg_->emitABC(op, leftSlot, bVal, k);
+      } else {
+
+        int rightSlot = cg_->allocSlot();
+        compileExpression(bin->right, rightSlot);
+
+        OpCode stdOp = OpCode::OP_EQ;
+        if (isLtGe)
+          stdOp = OpCode::OP_LT;
+        else if (isLeGt)
+          stdOp = OpCode::OP_LE;
+
+        cg_->emitABC(stdOp, leftSlot, rightSlot, k);
+        cg_->freeSlots(1);
+      }
+      cg_->freeSlots(1);
+
+      return cg_->emitJump(OpCode::OP_JMP);
+    }
+  }
+
+  int slot = cg_->allocSlot();
+  compileExpression(expr, slot);
+
+  cg_->emitABC(OpCode::OP_TEST, slot, 0, 0);
 
   cg_->freeSlots(1);
+
+  return cg_->emitJump(OpCode::OP_JMP);
+}
+
+void Compiler::compileIfStatement(IfStatementNode *stmt) {
+
+  int jumpToElse = compileCondition(stmt->condition);
 
   compileBlock(stmt->thenBlock);
 
   std::vector<int> endJumps;
-  endJumps.push_back(cg_->emitJump(OpCode::OP_JMP));
+
+  if (!stmt->elseIfClauses.empty() || stmt->elseBlock) {
+
+    int jumpToEnd = cg_->emitJump(OpCode::OP_JMP);
+    endJumps.push_back(jumpToEnd);
+  }
 
   cg_->patchJump(jumpToElse);
 
   for (auto *elseIf : stmt->elseIfClauses) {
-    condSlot = cg_->allocSlot();
-    compileExpression(elseIf->condition, condSlot);
-
-    cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
-    int nextJump = cg_->emitJump(OpCode::OP_JMP);
-
-    cg_->freeSlots(1);
+    int jumpToNext = compileCondition(elseIf->condition);
 
     compileBlock(elseIf->body);
+
     endJumps.push_back(cg_->emitJump(OpCode::OP_JMP));
 
-    cg_->patchJump(nextJump);
+    cg_->patchJump(jumpToNext);
   }
 
   if (stmt->elseBlock) {
@@ -823,45 +934,6 @@ void Compiler::compileIdentifier(IdentifierNode *node, int dest) {
   }
 
   cg_->freeSlots(1);
-}
-
-static bool isSmallInt(Expression *expr, int8_t &outVal) {
-  if (auto *intNode = dynamic_cast<LiteralIntNode *>(expr)) {
-    int64_t v = intNode->value;
-
-    if (v >= -128 && v <= 127) {
-      outVal = static_cast<int8_t>(v);
-      return true;
-    }
-  }
-  return false;
-}
-
-static int tryAddConstantForEQK(CodeGen *cg, Expression *expr) {
-  ConstantValue val;
-  bool isValid = false;
-
-  if (dynamic_cast<LiteralNullNode *>(expr)) {
-    val = nullptr;
-    isValid = true;
-  } else if (auto *b = dynamic_cast<LiteralBoolNode *>(expr)) {
-    val = b->value;
-    isValid = true;
-  } else if (auto *i = dynamic_cast<LiteralIntNode *>(expr)) {
-    val = i->value;
-    isValid = true;
-  } else if (auto *f = dynamic_cast<LiteralFloatNode *>(expr)) {
-    val = f->value;
-    isValid = true;
-  }
-
-  if (isValid) {
-    int idx = cg->addConstant(val);
-
-    if (idx <= 255)
-      return idx;
-  }
-  return -1;
 }
 
 void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
