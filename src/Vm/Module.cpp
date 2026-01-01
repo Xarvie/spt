@@ -46,24 +46,28 @@ std::string FileSystemLoader::resolvePath(const std::string &moduleName,
   return "";
 }
 
-std::string FileSystemLoader::loadSource(const std::string &path) {
+bool FileSystemLoader::loadSource(const std::string &path, std::string &outContent,
+                                  std::string &outError) {
   std::ifstream file(path);
-  if (!file)
-    throw std::runtime_error("Cannot open file: " + path);
+  if (!file) {
+    outError = "Cannot open file: " + path;
+    return false;
+  }
   std::stringstream buffer;
   buffer << file.rdbuf();
-  return buffer.str();
+  outContent = buffer.str();
+  return true;
 }
 
 bool FileSystemLoader::exists(const std::string &path) { return std::filesystem::exists(path); }
 
 uint64_t FileSystemLoader::getTimestamp(const std::string &path) {
-  try {
-    auto ftime = std::filesystem::last_write_time(path);
-    return std::chrono::duration_cast<std::chrono::milliseconds>(ftime.time_since_epoch()).count();
-  } catch (...) {
+  std::error_code ec;
+  auto ftime = std::filesystem::last_write_time(path, ec);
+  if (ec) {
     return 0;
   }
+  return std::chrono::duration_cast<std::chrono::milliseconds>(ftime.time_since_epoch()).count();
 }
 
 void FileSystemLoader::addSearchPath(const std::string &path) { searchPaths_.push_back(path); }
@@ -157,10 +161,9 @@ Module *ModuleManager::loadModuleInternal(const std::string &moduleName,
   modulePtr->state = ModuleState::LOADING;
 
   std::string source;
-  try {
-    source = loader_->loadSource(resolvedPath);
-  } catch (const std::exception &e) {
-    setError(modulePtr, "Failed to load source: " + std::string(e.what()));
+  std::string loadError;
+  if (!loader_->loadSource(resolvedPath, source, loadError)) {
+    setError(modulePtr, "Failed to load source: " + loadError);
     loadingStack.erase(moduleName);
     return modulePtr;
   }
@@ -203,49 +206,38 @@ Module *ModuleManager::loadModuleInternal(const std::string &moduleName,
 }
 
 bool ModuleManager::compileModule(Module *module, const std::string &source) {
-  try {
-    AstNode *ast = loadAst(source, module->metadata.path);
-    if (!ast) {
-      setError(module, "Parse failed");
-      return false;
-    }
-
-    Compiler compiler(module->metadata.name, module->metadata.path);
-    std::string compileError;
-    compiler.setErrorHandler([&](const CompileError &err) {
-      compileError += "Line " + std::to_string(err.line) + ": " + err.message + "\n";
-    });
-
-    module->chunk = compiler.compile(ast);
-    module->metadata.exports = module->chunk.exports;
-    destroyAst(ast);
-
-    if (compiler.hasError()) {
-      setError(module, "Compilation failed:\n" + compileError);
-      return false;
-    }
-
-    module->metadata.byteSize = module->chunk.mainProto.code.size() * sizeof(Instruction);
-    return true;
-
-  } catch (const std::exception &e) {
-    setError(module, "Compilation error: " + std::string(e.what()));
+  AstNode *ast = loadAst(source, module->metadata.path);
+  if (!ast) {
+    setError(module, "Parse failed");
     return false;
   }
+
+  Compiler compiler(module->metadata.name, module->metadata.path);
+  std::string compileError;
+  compiler.setErrorHandler([&](const CompileError &err) {
+    compileError += "Line " + std::to_string(err.line) + ": " + err.message + "\n";
+  });
+
+  module->chunk = compiler.compile(ast);
+  module->metadata.exports = module->chunk.exports;
+  destroyAst(ast);
+
+  if (compiler.hasError()) {
+    setError(module, "Compilation failed:\n" + compileError);
+    return false;
+  }
+
+  module->metadata.byteSize = module->chunk.mainProto.code.size() * sizeof(Instruction);
+  return true;
 }
 
 bool ModuleManager::executeModule(Module *module) {
-  try {
-    InterpretResult result = vm_->executeModule(module->chunk);
-    if (result != InterpretResult::OK) {
-      setError(module, "Module execution failed");
-      return false;
-    }
-    return true;
-  } catch (const std::exception &e) {
-    setError(module, "Execution error: " + std::string(e.what()));
+  InterpretResult result = vm_->executeModule(module->chunk);
+  if (result != InterpretResult::OK) {
+    setError(module, "Module execution failed");
     return false;
   }
+  return true;
 }
 
 void ModuleManager::buildExportsTable(Module *module) {
@@ -302,9 +294,8 @@ bool ModuleManager::reloadModule(const std::string &moduleName) {
   newModule->metadata.path = path;
 
   std::string source;
-  try {
-    source = loader_->loadSource(path);
-  } catch (...) {
+  std::string loadError;
+  if (!loader_->loadSource(path, source, loadError)) {
     return false;
   }
 

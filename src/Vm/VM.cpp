@@ -4,12 +4,12 @@
 #include "SptStdlibs.h"
 #include "VMDispatch.h"
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <stdexcept>
 
 namespace spt {
 
@@ -100,13 +100,14 @@ void VM::registerBuiltinFunctions() {
           return Value::integer(static_cast<int64_t>(v.asFloat()));
         } else if (v.isString()) {
           StringObject *str = static_cast<StringObject *>(v.asGC());
-          try {
-            size_t pos;
-            int64_t result = std::stoll(str->data, &pos);
-            return Value::integer(result);
-          } catch (...) {
+          const char *ptr = str->data.c_str();
+          char *endptr = nullptr;
+          errno = 0;
+          long long result = std::strtoll(ptr, &endptr, 10);
+          if (ptr == endptr || errno == ERANGE) {
             return Value::integer(0);
           }
+          return Value::integer(static_cast<int64_t>(result));
         } else if (v.isBool()) {
           return Value::integer(v.asBool() ? 1 : 0);
         }
@@ -127,13 +128,14 @@ void VM::registerBuiltinFunctions() {
           return Value::number(static_cast<double>(v.asInt()));
         } else if (v.isString()) {
           StringObject *str = static_cast<StringObject *>(v.asGC());
-          try {
-            size_t pos;
-            double result = std::stod(str->data, &pos);
-            return Value::number(result);
-          } catch (...) {
+          const char *ptr = str->data.c_str();
+          char *endptr = nullptr;
+          errno = 0;
+          double result = std::strtod(ptr, &endptr);
+          if (ptr == endptr || errno == ERANGE) {
             return Value::number(0.0);
           }
+          return Value::number(result);
         } else if (v.isBool()) {
           return Value::number(v.asBool() ? 1.0 : 0.0);
         }

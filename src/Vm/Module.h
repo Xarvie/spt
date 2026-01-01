@@ -63,8 +63,9 @@ public:
   // 根据模块名解析文件路径
   virtual std::string resolvePath(const std::string &moduleName, const std::string &fromPath) = 0;
 
-  // 加载源代码或字节码
-  virtual std::string loadSource(const std::string &path) = 0;
+  // 加载源代码或字节码（返回是否成功，通过out参数返回内容或错误信息）
+  virtual bool loadSource(const std::string &path, std::string &outContent,
+                          std::string &outError) = 0;
 
   // 检查文件是否存在
   virtual bool exists(const std::string &path) = 0;
@@ -81,7 +82,7 @@ public:
   explicit FileSystemLoader(const std::vector<std::string> &searchPaths);
 
   std::string resolvePath(const std::string &moduleName, const std::string &fromPath) override;
-  std::string loadSource(const std::string &path) override;
+  bool loadSource(const std::string &path, std::string &outContent, std::string &outError) override;
   bool exists(const std::string &path) override;
   uint64_t getTimestamp(const std::string &path) override;
 
