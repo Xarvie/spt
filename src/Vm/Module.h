@@ -54,44 +54,65 @@ struct Module {
 };
 
 // ============================================================================
-// 模块加载器接口
+// 模块加载器 - 使用函数指针代替虚函数
 // ============================================================================
-class ModuleLoader {
-public:
-  virtual ~ModuleLoader() = default;
 
-  // 根据模块名解析文件路径
-  virtual std::string resolvePath(const std::string &moduleName, const std::string &fromPath) = 0;
+// 前置声明
+struct ModuleLoader;
 
-  // 加载源代码或字节码（返回是否成功，通过out参数返回内容或错误信息）
-  virtual bool loadSource(const std::string &path, std::string &outContent,
-                          std::string &outError) = 0;
+// 函数指针类型
+typedef std::string (*LoaderResolvePathFn)(ModuleLoader *self, const std::string &moduleName,
+                                           const std::string &fromPath);
+typedef bool (*LoaderLoadSourceFn)(ModuleLoader *self, const std::string &path,
+                                   std::string &outContent, std::string &outError);
+typedef bool (*LoaderExistsFn)(ModuleLoader *self, const std::string &path);
+typedef uint64_t (*LoaderGetTimestampFn)(ModuleLoader *self, const std::string &path);
+typedef void (*LoaderDestroyFn)(ModuleLoader *self);
 
-  // 检查文件是否存在
-  virtual bool exists(const std::string &path) = 0;
+// 函数表
+struct ModuleLoaderVTable {
+  LoaderResolvePathFn resolvePath;
+  LoaderLoadSourceFn loadSource;
+  LoaderExistsFn exists;
+  LoaderGetTimestampFn getTimestamp;
+  LoaderDestroyFn destroy;
+};
 
-  // 获取文件修改时间（用于热更新）
-  virtual uint64_t getTimestamp(const std::string &path) = 0;
+// 加载器基类
+struct ModuleLoader {
+  const ModuleLoaderVTable *vtable;
+
+  // 便捷调用方法
+  std::string resolvePath(const std::string &moduleName, const std::string &fromPath) {
+    return vtable->resolvePath(this, moduleName, fromPath);
+  }
+
+  bool loadSource(const std::string &path, std::string &outContent, std::string &outError) {
+    return vtable->loadSource(this, path, outContent, outError);
+  }
+
+  bool exists(const std::string &path) { return vtable->exists(this, path); }
+
+  uint64_t getTimestamp(const std::string &path) { return vtable->getTimestamp(this, path); }
 };
 
 // ============================================================================
 // 默认文件系统加载器
 // ============================================================================
-class FileSystemLoader : public ModuleLoader {
-public:
-  explicit FileSystemLoader(const std::vector<std::string> &searchPaths);
-
-  std::string resolvePath(const std::string &moduleName, const std::string &fromPath) override;
-  bool loadSource(const std::string &path, std::string &outContent, std::string &outError) override;
-  bool exists(const std::string &path) override;
-  uint64_t getTimestamp(const std::string &path) override;
-
-  void addSearchPath(const std::string &path);
-
-private:
-  std::vector<std::string> searchPaths_;
-  std::string normalizePath(const std::string &path);
+struct FileSystemLoader {
+  ModuleLoader base; // 必须是第一个成员，用于类型转换
+  std::vector<std::string> searchPaths;
 };
+
+// 创建和销毁
+FileSystemLoader *FileSystemLoader_create(const std::vector<std::string> &searchPaths);
+void FileSystemLoader_destroy(FileSystemLoader *loader);
+
+// 添加搜索路径
+void FileSystemLoader_addSearchPath(FileSystemLoader *loader, const std::string &path);
+
+// 转换为 ModuleLoader*
+inline ModuleLoader *FileSystemLoader_toLoader(FileSystemLoader *loader) { return &loader->base; }
 
 // ============================================================================
 // 模块管理器配置
@@ -152,9 +173,9 @@ public:
   CacheStats getCacheStats() const;
 
   // === 加载器管理 ===
-  void setLoader(std::unique_ptr<ModuleLoader> loader);
+  void setLoader(ModuleLoader *loader);
 
-  ModuleLoader *getLoader() const { return loader_.get(); }
+  ModuleLoader *getLoader() const { return loader_; }
 
   // === 热更新 ===
   // 检查并重载已修改的模块
@@ -198,7 +219,7 @@ private:
 private:
   VM *vm_;
   ModuleManagerConfig config_;
-  std::unique_ptr<ModuleLoader> loader_;
+  ModuleLoader *loader_; // 由外部管理生命周期或通过vtable->destroy释放
 
   // 模块缓存：名称 -> 模块实例
   std::unordered_map<std::string, std::unique_ptr<Module>> modules_;

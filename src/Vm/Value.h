@@ -8,12 +8,11 @@
 namespace spt {
 
 // GC 对象基类 - 在这里定义以避免循环依赖
+// 注意：不使用虚析构函数，GC通过type字段手动分发释放
 struct GCObject {
   GCObject *next = nullptr; // GC 链表
   ValueType type;           // 对象类型
   bool marked = false;      // GC 标记
-
-  virtual ~GCObject() = default;
 };
 
 // tagged union （禁止使用NaN-boxing）

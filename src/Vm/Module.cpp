@@ -10,44 +10,39 @@
 
 namespace spt {
 
-FileSystemLoader::FileSystemLoader(const std::vector<std::string> &searchPaths)
-    : searchPaths_(searchPaths) {
-  if (searchPaths_.empty()) {
-    searchPaths_.push_back(".");
-  }
-}
+static std::string FSLoader_resolvePath(ModuleLoader *self, const std::string &moduleName,
+                                        const std::string &fromPath) {
+  FileSystemLoader *loader = reinterpret_cast<FileSystemLoader *>(self);
 
-std::string FileSystemLoader::resolvePath(const std::string &moduleName,
-                                          const std::string &fromPath) {
   if (!fromPath.empty()) {
     namespace fs = std::filesystem;
     fs::path parent = fs::path(fromPath).parent_path();
     fs::path candidate = parent / (moduleName + ".flx");
-    if (exists(candidate.string())) {
+    if (loader->base.exists(candidate.string())) {
       return fs::absolute(candidate).string();
     }
   }
 
-  for (const auto &searchPath : searchPaths_) {
+  for (const auto &searchPath : loader->searchPaths) {
     namespace fs = std::filesystem;
     std::vector<std::string> extensions = {".flx", ".spt", ".flxc"};
     for (const auto &ext : extensions) {
       fs::path candidate = fs::path(searchPath) / (moduleName + ext);
-      if (exists(candidate.string())) {
+      if (loader->base.exists(candidate.string())) {
         return fs::absolute(candidate).string();
       }
     }
   }
 
-  if (exists(moduleName)) {
+  if (loader->base.exists(moduleName)) {
     namespace fs = std::filesystem;
     return fs::absolute(moduleName).string();
   }
   return "";
 }
 
-bool FileSystemLoader::loadSource(const std::string &path, std::string &outContent,
-                                  std::string &outError) {
+static bool FSLoader_loadSource(ModuleLoader *self, const std::string &path,
+                                std::string &outContent, std::string &outError) {
   std::ifstream file(path);
   if (!file) {
     outError = "Cannot open file: " + path;
@@ -59,9 +54,11 @@ bool FileSystemLoader::loadSource(const std::string &path, std::string &outConte
   return true;
 }
 
-bool FileSystemLoader::exists(const std::string &path) { return std::filesystem::exists(path); }
+static bool FSLoader_exists(ModuleLoader *self, const std::string &path) {
+  return std::filesystem::exists(path);
+}
 
-uint64_t FileSystemLoader::getTimestamp(const std::string &path) {
+static uint64_t FSLoader_getTimestamp(ModuleLoader *self, const std::string &path) {
   std::error_code ec;
   auto ftime = std::filesystem::last_write_time(path, ec);
   if (ec) {
@@ -70,20 +67,43 @@ uint64_t FileSystemLoader::getTimestamp(const std::string &path) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(ftime.time_since_epoch()).count();
 }
 
-void FileSystemLoader::addSearchPath(const std::string &path) { searchPaths_.push_back(path); }
+static void FSLoader_destroy(ModuleLoader *self) {
+  FileSystemLoader *loader = reinterpret_cast<FileSystemLoader *>(self);
+  delete loader;
+}
 
-std::string FileSystemLoader::normalizePath(const std::string &path) {
-  return std::filesystem::path(path).lexically_normal().string();
+static const ModuleLoaderVTable FileSystemLoader_vtable = {FSLoader_resolvePath,
+                                                           FSLoader_loadSource, FSLoader_exists,
+                                                           FSLoader_getTimestamp, FSLoader_destroy};
+
+FileSystemLoader *FileSystemLoader_create(const std::vector<std::string> &searchPaths) {
+  FileSystemLoader *loader = new FileSystemLoader();
+  loader->base.vtable = &FileSystemLoader_vtable;
+  loader->searchPaths = searchPaths;
+  if (loader->searchPaths.empty()) {
+    loader->searchPaths.push_back(".");
+  }
+  return loader;
+}
+
+void FileSystemLoader_destroy(FileSystemLoader *loader) { delete loader; }
+
+void FileSystemLoader_addSearchPath(FileSystemLoader *loader, const std::string &path) {
+  loader->searchPaths.push_back(path);
 }
 
 ModuleManager::ModuleManager(VM *vm, const ModuleManagerConfig &config) : vm_(vm), config_(config) {
   std::vector<std::string> defaultPaths = {".", "./lib", "./modules"};
-  loader_ = std::make_unique<FileSystemLoader>(defaultPaths);
+  loader_ = FileSystemLoader_toLoader(FileSystemLoader_create(defaultPaths));
 }
 
 ModuleManager::~ModuleManager() {
   modules_.clear();
   pathToName_.clear();
+  if (loader_ && loader_->vtable && loader_->vtable->destroy) {
+    loader_->vtable->destroy(loader_);
+    loader_ = nullptr;
+  }
 }
 
 Value ModuleManager::loadModule(const std::string &moduleName, const std::string &fromPath) {
@@ -345,7 +365,7 @@ Value ModuleManager::loadCModule(const std::string &moduleName, const std::strin
 
   modulePtr->metadata.name = moduleName;
   modulePtr->metadata.path = resolvedPath;
-  modulePtr->metadata.timestamp = 0; // TODO
+  modulePtr->metadata.timestamp = 0;
   modulePtr->state = ModuleState::LOADING;
 
   modulePtr->exportsTable = vm_->allocateMap(static_cast<int>(modulePtr->metadata.exports.size()));
@@ -472,7 +492,12 @@ ModuleManager::CacheStats ModuleManager::getCacheStats() const {
   return stats;
 }
 
-void ModuleManager::setLoader(std::unique_ptr<ModuleLoader> loader) { loader_ = std::move(loader); }
+void ModuleManager::setLoader(ModuleLoader *loader) {
+  if (loader_ && loader_->vtable && loader_->vtable->destroy) {
+    loader_->vtable->destroy(loader_);
+  }
+  loader_ = loader;
+}
 
 std::vector<std::string> ModuleManager::checkForUpdates() {
   std::vector<std::string> updated;

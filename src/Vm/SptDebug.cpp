@@ -40,7 +40,7 @@ static Value debugGetInfo(VM *vm, Value receiver, int argc, Value *argv) {
     vm->throwError(Value::object(vm->allocateString("error arg 2 need string")));
     return Value::nil();
   }
-  StringObject *str = dynamic_cast<StringObject *>(argv[1].asGC());
+  StringObject *str = static_cast<StringObject *>(argv[1].asGC());
   DebugInfo info;
   if (!vm->getInfo(&argv[0], str->data.c_str(), &info)) {
     vm->throwError(Value::object(vm->allocateString("error vm error")));
@@ -59,7 +59,7 @@ static Value debugGetStack(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::nil();
   }
   int f = static_cast<int>(argv[0].asNumber());
-  StringObject *str = dynamic_cast<StringObject *>(argv[1].asGC());
+  StringObject *str = static_cast<StringObject *>(argv[1].asGC());
   DebugInfo info;
   if (!vm->getStack(f, str->data.c_str(), &info)) {
     vm->throwError(Value::object(vm->allocateString("error vm error")));

@@ -132,12 +132,13 @@ private:
   // === 错误处理 ===
   void runtimeError(const char *format, ...);
 
-  int getLine(const Prototype *proto , size_t instruction);
+  int getLine(const Prototype *proto, size_t instruction);
 
 public:
   // === pcall 支持 ===
   // 用于 error() 函数抛出错误值
   void throwError(Value errorValue);
+
 private:
   // 获取当前的调用栈信息作为字符串
   std::string getStackTrace();

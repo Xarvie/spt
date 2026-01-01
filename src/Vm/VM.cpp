@@ -26,9 +26,8 @@ VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
   moduleConfig.enableHotReload = config.enableHotReload;
   moduleManager_ = std::make_unique<ModuleManager>(this, moduleConfig);
   if (!config.modulePaths.empty()) {
-
-    auto loader = std::make_unique<FileSystemLoader>(config.modulePaths);
-    moduleManager_->setLoader(std::move(loader));
+    FileSystemLoader *loader = FileSystemLoader_create(config.modulePaths);
+    moduleManager_->setLoader(FileSystemLoader_toLoader(loader));
   }
 
   registerBuiltinFunctions();
@@ -2101,7 +2100,7 @@ int VM::getInfo(Value *f, const char *what, DebugInfo *out_info) {
     return 0;
   }
   if (f->isClosure()) {
-    const Closure *closure = dynamic_cast<const Closure *>(f->asGC());
+    const Closure *closure = static_cast<const Closure *>(f->asGC());
     const Prototype *proto = closure->proto;
     while (*what) {
       char c = *what++;
