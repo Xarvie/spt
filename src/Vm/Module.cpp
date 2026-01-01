@@ -25,7 +25,7 @@ static std::string FSLoader_resolvePath(ModuleLoader *self, const std::string &m
 
   for (const auto &searchPath : loader->searchPaths) {
     namespace fs = std::filesystem;
-    std::vector<std::string> extensions = {".flx", ".spt", ".flxc"};
+    std::vector<std::string> extensions = {".spt", ".sptc"};
     for (const auto &ext : extensions) {
       fs::path candidate = fs::path(searchPath) / (moduleName + ext);
       if (loader->base.exists(candidate.string())) {
