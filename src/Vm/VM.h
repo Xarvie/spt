@@ -16,9 +16,10 @@ namespace spt {
 // 调用帧
 struct CallFrame {
   Closure *closure;
-  const Instruction *ip;   // 指令指针
-  Value *slots;            // 栈帧基址
-  int expectedResults = 1; // 期望返回值数量 (-1 表示全部)
+  const Instruction *ip;     // 指令指针
+  Value *slots;              // 栈帧基址
+  int expectedResults = 1;   // 期望返回值数量 (-1 表示全部)
+  std::vector<Value> defers; // 存储当前帧所有 defer 的闭包 (LIFO 队列)
 };
 
 // 执行结果
@@ -133,6 +134,9 @@ private:
   void runtimeError(const char *format, ...);
 
   int getLine(const Prototype *proto, size_t instruction);
+
+  // 执行指定帧的所有 defer
+  void invokeDefers(CallFrame *frame);
 
 public:
   // === pcall 支持 ===

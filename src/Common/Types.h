@@ -89,11 +89,11 @@ struct CompiledChunk {
 };
 
 struct DebugInfo {
-  std::string name;      // 函数名
-  std::string source;    // 源文件名
+  std::string name;     // 函数名
+  std::string source;   // 源文件名
   std::string shortSrc; // 短源文件名
-  int lineDefined;       // 起始行号
-  int lastLineDefined;   // 结束行号
+  int lineDefined;      // 起始行号
+  int lastLineDefined;  // 结束行号
   int currentLine;
 };
 

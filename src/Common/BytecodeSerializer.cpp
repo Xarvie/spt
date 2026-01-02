@@ -292,13 +292,9 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
     OpCode op = GET_OPCODE(inst);
     int line = getLine(proto, static_cast<int>(i));
 
-    // 1. 打印 PC 和 行号
-    std::cout << prefix << "\t"
-              << "[" << std::setw(3) << i << "] "
-              << "[" << std::setw(3) << line << "] " << std::setw(14) << std::left
-              << opCodeToString(op) << " ";
+    std::cout << prefix << "\t" << "[" << std::setw(3) << i << "] " << "[" << std::setw(3) << line
+              << "] " << std::setw(14) << std::left << opCodeToString(op) << " ";
 
-    // 2. 打印操作数
     OpMode mode = getOpMode(op);
     int a = GETARG_A(inst);
     int b = GETARG_B(inst);
@@ -306,20 +302,19 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
     int bx = GETARG_Bx(inst);
     int sbx = GETARG_sBx(inst);
 
-    std::stringstream comment; // 用于存储尾部注释（如常量值）
+    std::stringstream comment;
 
     switch (mode) {
     case OpMode::iABC:
       std::cout << std::setw(4) << a << " " << std::setw(4) << b << " " << std::setw(4) << c;
 
-      // 特殊指令注释优化
       if (op == OpCode::OP_GETFIELD || op == OpCode::OP_SETFIELD) {
-        // C 是常量表索引
+
         if (c < proto.constants.size()) {
           comment << "; key=" << constantToString(proto.constants[c]);
         }
       } else if (op == OpCode::OP_INVOKE) {
-        // C 是常量表索引 (方法名)
+
         if (c < proto.constants.size()) {
           comment << "; method=" << constantToString(proto.constants[c]);
         }
@@ -329,7 +324,6 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
     case OpMode::iABx:
       std::cout << std::setw(4) << a << " " << std::setw(9) << bx;
 
-      // 特殊指令注释优化
       if (op == OpCode::OP_LOADK) {
         if (bx < proto.constants.size()) {
           comment << "; " << constantToString(proto.constants[bx]);
@@ -340,7 +334,7 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
         }
       } else if (op == OpCode::OP_CLOSURE) {
         if (bx < proto.protos.size()) {
-          // 这里的 bx 是子函数的索引
+
           const auto &sub = proto.protos[bx];
           comment << "; " << (sub.name.empty() ? "<anonymous>" : sub.name);
         }
@@ -357,7 +351,6 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
       break;
     }
 
-    // 3. 打印注释
     std::string commentStr = comment.str();
     if (!commentStr.empty()) {
       std::cout << "\t" << commentStr;
@@ -365,7 +358,6 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
     std::cout << "\n";
   }
 
-  // 4. 打印常量表概要
   if (!proto.constants.empty()) {
     std::cout << prefix << "  Constants (" << proto.constants.size() << "):\n";
     for (size_t i = 0; i < proto.constants.size(); ++i) {
@@ -373,7 +365,6 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
     }
   }
 
-  // 5. 递归打印子函数
   for (const auto &subProto : proto.protos) {
     dumpPrototype(subProto, prefix + "  ");
   }
@@ -403,7 +394,6 @@ int BytecodeDumper::getLine(const Prototype &proto, int pc) {
   if (proto.lineInfo.empty())
     return 0;
 
-  // 参考 VM.cpp 中的逻辑，利用 absLineInfo 加速定位
   int line = proto.absLineInfo.front().line;
   auto abs_line_info = std::lower_bound(proto.absLineInfo.begin(), proto.absLineInfo.end(), pc,
                                         [](const auto &lhs, int p) { return lhs.pc < p; });
@@ -411,13 +401,12 @@ int BytecodeDumper::getLine(const Prototype &proto, int pc) {
   int basePC = 0;
   if (abs_line_info != proto.absLineInfo.end()) {
     if (abs_line_info != proto.absLineInfo.begin()) {
-      --abs_line_info; // 回退到上一个 checkpoint
+      --abs_line_info;
     }
     basePC = abs_line_info->pc;
     line = abs_line_info->line;
   }
 
-  // 线性扫描剩余部分
   while (basePC < pc && basePC < (int)proto.lineInfo.size()) {
     line += proto.lineInfo[basePC];
     basePC++;
@@ -509,6 +498,8 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "IMPORT_FROM";
   case OpCode::OP_EXPORT:
     return "EXPORT";
+  case OpCode::OP_DEFER:
+    return "OP_DEFER";
 
   case OpCode::OP_ADDI:
     return "ADDI";

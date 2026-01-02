@@ -15,38 +15,39 @@ public:
     INT = 1, FLOAT = 2, NUMBER = 3, STRING = 4, BOOL = 5, ANY = 6, VOID = 7, 
     NULL_ = 8, LIST = 9, MAP = 10, FUNCTION = 11, COROUTINE = 12, MUTIVAR = 13, 
     IF = 14, ELSE = 15, WHILE = 16, FOR = 17, BREAK = 18, CONTINUE = 19, 
-    RETURN = 20, TRUE = 21, FALSE = 22, CONST = 23, AUTO = 24, GLOBAL = 25, 
-    STATIC = 26, IMPORT = 27, AS = 28, TYPE = 29, FROM = 30, PRIVATE = 31, 
-    EXPORT = 32, CLASS = 33, NEW = 34, ADD = 35, SUB = 36, MUL = 37, DIV = 38, 
-    MOD = 39, ASSIGN = 40, ADD_ASSIGN = 41, SUB_ASSIGN = 42, MUL_ASSIGN = 43, 
-    DIV_ASSIGN = 44, MOD_ASSIGN = 45, CONCAT_ASSIGN = 46, EQ = 47, NEQ = 48, 
-    LT = 49, GT = 50, LTE = 51, GTE = 52, AND = 53, OR = 54, NOT = 55, CONCAT = 56, 
-    LEN = 57, BIT_AND = 58, BIT_OR = 59, BIT_XOR = 60, BIT_NOT = 61, LSHIFT = 62, 
-    ARROW = 63, OP = 64, CP = 65, OSB = 66, CSB = 67, OCB = 68, CCB = 69, 
-    COMMA = 70, DOT = 71, COL = 72, SEMICOLON = 73, DDD = 74, INTEGER = 75, 
-    FLOAT_LITERAL = 76, STRING_LITERAL = 77, IDENTIFIER = 78, WS = 79, LINE_COMMENT = 80, 
-    BLOCK_COMMENT = 81
+    RETURN = 20, DEFER = 21, TRUE = 22, FALSE = 23, CONST = 24, AUTO = 25, 
+    GLOBAL = 26, STATIC = 27, IMPORT = 28, AS = 29, TYPE = 30, FROM = 31, 
+    PRIVATE = 32, EXPORT = 33, CLASS = 34, NEW = 35, ADD = 36, SUB = 37, 
+    MUL = 38, DIV = 39, MOD = 40, ASSIGN = 41, ADD_ASSIGN = 42, SUB_ASSIGN = 43, 
+    MUL_ASSIGN = 44, DIV_ASSIGN = 45, MOD_ASSIGN = 46, CONCAT_ASSIGN = 47, 
+    EQ = 48, NEQ = 49, LT = 50, GT = 51, LTE = 52, GTE = 53, AND = 54, OR = 55, 
+    NOT = 56, CONCAT = 57, LEN = 58, BIT_AND = 59, BIT_OR = 60, BIT_XOR = 61, 
+    BIT_NOT = 62, LSHIFT = 63, ARROW = 64, OP = 65, CP = 66, OSB = 67, CSB = 68, 
+    OCB = 69, CCB = 70, COMMA = 71, DOT = 72, COL = 73, SEMICOLON = 74, 
+    DDD = 75, INTEGER = 76, FLOAT_LITERAL = 77, STRING_LITERAL = 78, IDENTIFIER = 79, 
+    WS = 80, LINE_COMMENT = 81, BLOCK_COMMENT = 82
   };
 
   enum {
     RuleCompilationUnit = 0, RuleBlockStatement = 1, RuleStatement = 2, 
-    RuleImportStatement = 3, RuleImportSpecifier = 4, RuleUpdateStatement = 5, 
-    RuleAssignStatement = 6, RuleLvalue = 7, RuleLvalueSuffix = 8, RuleDeclaration = 9, 
-    RuleVariableDeclaration = 10, RuleDeclaration_item = 11, RuleFunctionDeclaration = 12, 
-    RuleClassDeclaration = 13, RuleClassMember = 14, RuleType = 15, RuleQualifiedIdentifier = 16, 
-    RulePrimitiveType = 17, RuleListType = 18, RuleMapType = 19, RuleExpression = 20, 
-    RuleExpressionList = 21, RuleLogicalOrExp = 22, RuleLogicalAndExp = 23, 
-    RuleBitwiseOrExp = 24, RuleBitwiseXorExp = 25, RuleBitwiseAndExp = 26, 
-    RuleEqualityExp = 27, RuleEqualityExpOp = 28, RuleComparisonExp = 29, 
-    RuleComparisonExpOp = 30, RuleShiftExp = 31, RuleShiftExpOp = 32, RuleConcatExp = 33, 
-    RuleAddSubExp = 34, RuleAddSubExpOp = 35, RuleMulDivModExp = 36, RuleMulDivModExpOp = 37, 
-    RuleUnaryExp = 38, RulePostfixExp = 39, RulePostfixSuffix = 40, RulePrimaryExp = 41, 
-    RuleAtomexp = 42, RuleLambdaExpression = 43, RuleListExpression = 44, 
-    RuleMapExpression = 45, RuleMapEntryList = 46, RuleMapEntry = 47, RuleNewExp = 48, 
-    RuleIfStatement = 49, RuleWhileStatement = 50, RuleForStatement = 51, 
-    RuleForControl = 52, RuleForUpdate = 53, RuleForUpdateSingle = 54, RuleForInitStatement = 55, 
-    RuleMultiDeclaration = 56, RuleParameterList = 57, RuleParameter = 58, 
-    RuleArguments = 59
+    RuleImportStatement = 3, RuleImportSpecifier = 4, RuleDeferStatement = 5, 
+    RuleUpdateStatement = 6, RuleAssignStatement = 7, RuleLvalue = 8, RuleLvalueSuffix = 9, 
+    RuleDeclaration = 10, RuleVariableDeclaration = 11, RuleDeclaration_item = 12, 
+    RuleFunctionDeclaration = 13, RuleClassDeclaration = 14, RuleClassMember = 15, 
+    RuleType = 16, RuleQualifiedIdentifier = 17, RulePrimitiveType = 18, 
+    RuleListType = 19, RuleMapType = 20, RuleExpression = 21, RuleExpressionList = 22, 
+    RuleLogicalOrExp = 23, RuleLogicalAndExp = 24, RuleBitwiseOrExp = 25, 
+    RuleBitwiseXorExp = 26, RuleBitwiseAndExp = 27, RuleEqualityExp = 28, 
+    RuleEqualityExpOp = 29, RuleComparisonExp = 30, RuleComparisonExpOp = 31, 
+    RuleShiftExp = 32, RuleShiftExpOp = 33, RuleConcatExp = 34, RuleAddSubExp = 35, 
+    RuleAddSubExpOp = 36, RuleMulDivModExp = 37, RuleMulDivModExpOp = 38, 
+    RuleUnaryExp = 39, RulePostfixExp = 40, RulePostfixSuffix = 41, RulePrimaryExp = 42, 
+    RuleAtomexp = 43, RuleLambdaExpression = 44, RuleListExpression = 45, 
+    RuleMapExpression = 46, RuleMapEntryList = 47, RuleMapEntry = 48, RuleNewExp = 49, 
+    RuleIfStatement = 50, RuleWhileStatement = 51, RuleForStatement = 52, 
+    RuleForControl = 53, RuleForUpdate = 54, RuleForUpdateSingle = 55, RuleForInitStatement = 56, 
+    RuleMultiDeclaration = 57, RuleParameterList = 58, RuleParameter = 59, 
+    RuleArguments = 60
   };
 
   explicit LangParser(antlr4::TokenStream *input);
@@ -71,6 +72,7 @@ public:
   class StatementContext;
   class ImportStatementContext;
   class ImportSpecifierContext;
+  class DeferStatementContext;
   class UpdateStatementContext;
   class AssignStatementContext;
   class LvalueContext;
@@ -240,6 +242,15 @@ public:
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
   };
 
+  class  DeferStmtContext : public StatementContext {
+  public:
+    DeferStmtContext(StatementContext *ctx);
+
+    DeferStatementContext *deferStatement();
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+  };
+
   class  DeclarationStmtContext : public StatementContext {
   public:
     DeclarationStmtContext(StatementContext *ctx);
@@ -359,6 +370,31 @@ public:
   };
 
   ImportSpecifierContext* importSpecifier();
+
+  class  DeferStatementContext : public antlr4::ParserRuleContext {
+  public:
+    DeferStatementContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+   
+    DeferStatementContext() = default;
+    void copyFrom(DeferStatementContext *context);
+    using antlr4::ParserRuleContext::copyFrom;
+
+    virtual size_t getRuleIndex() const override;
+
+   
+  };
+
+  class  DeferBlockStmtContext : public DeferStatementContext {
+  public:
+    DeferBlockStmtContext(DeferStatementContext *ctx);
+
+    antlr4::tree::TerminalNode *DEFER();
+    BlockStatementContext *blockStatement();
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+  };
+
+  DeferStatementContext* deferStatement();
 
   class  UpdateStatementContext : public antlr4::ParserRuleContext {
   public:

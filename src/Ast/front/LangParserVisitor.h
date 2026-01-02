@@ -49,11 +49,15 @@ public:
 
     virtual std::any visitImportStmt(LangParser::ImportStmtContext *context) = 0;
 
+    virtual std::any visitDeferStmt(LangParser::DeferStmtContext *context) = 0;
+
     virtual std::any visitImportNamespaceStmt(LangParser::ImportNamespaceStmtContext *context) = 0;
 
     virtual std::any visitImportNamedStmt(LangParser::ImportNamedStmtContext *context) = 0;
 
     virtual std::any visitImportSpecifier(LangParser::ImportSpecifierContext *context) = 0;
+
+    virtual std::any visitDeferBlockStmt(LangParser::DeferBlockStmtContext *context) = 0;
 
     virtual std::any visitUpdateAssignStmt(LangParser::UpdateAssignStmtContext *context) = 0;
 

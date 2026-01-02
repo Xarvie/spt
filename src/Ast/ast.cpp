@@ -2,11 +2,10 @@
 #include <algorithm>
 #include <optional>
 #include <stdexcept>
-#include <type_traits> // for std::decay_t in ForCStyleStatementNode destructor
+#include <type_traits>
 #include <variant>
 #include <vector>
 
-// --- 辅助函数实现 ---
 static std::vector<AstType *> cloneAstTypeList(const std::vector<AstType *> &source) {
   std::vector<AstType *> clonedList;
   clonedList.reserve(source.size());
@@ -21,30 +20,20 @@ static std::vector<AstType *> cloneAstTypeList(const std::vector<AstType *> &sou
   return clonedList;
 }
 
-// --- 基类构造/析构函数实现 ---
 AstType::AstType(SourceLocation loc) : location(std::move(loc)) {}
 
 AstType::~AstType() = default;
 
-// AstNode 构造函数现在初始化 nodeType
-AstNode::AstNode(SourceLocation loc, NodeType type)
-    : location(std::move(loc)), nodeType(type) {} // <--- 实现修改
+AstNode::AstNode(SourceLocation loc, NodeType type) : location(std::move(loc)), nodeType(type) {}
 
 AstNode::~AstNode() = default;
 
-// Expression 构造函数传递 type 给 AstNode
-Expression::Expression(SourceLocation loc, NodeType type)
-    : AstNode(std::move(loc), type) {} // <--- 实现修改
+Expression::Expression(SourceLocation loc, NodeType type) : AstNode(std::move(loc), type) {}
 
-// Statement 构造函数传递 type 给 AstNode
-Statement::Statement(SourceLocation loc, NodeType type)
-    : AstNode(std::move(loc), type) {} // <--- 实现修改
+Statement::Statement(SourceLocation loc, NodeType type) : AstNode(std::move(loc), type) {}
 
-// Declaration 构造函数传递 type 给 Statement -> AstNode
-Declaration::Declaration(SourceLocation loc, NodeType type)
-    : Statement(std::move(loc), type) {} // <--- 实现修改
+Declaration::Declaration(SourceLocation loc, NodeType type) : Statement(std::move(loc), type) {}
 
-// --- 具体类型节点构造函数和析构函数 ---
 PrimitiveType::PrimitiveType(PrimitiveTypeKind kind, SourceLocation loc)
     : AstType(std::move(loc)), primitiveKind(kind) {}
 
@@ -91,7 +80,6 @@ CoroutineKeywordType::CoroutineKeywordType(SourceLocation loc) : AstType(std::mo
 
 CoroutineKeywordType::~CoroutineKeywordType() = default;
 
-// --- 具体类型节点 CLONE 方法实现 ---
 AstType *PrimitiveType::clone() const { return new PrimitiveType(*this); }
 
 AstType *AnyType::clone() const { return new AnyType(*this); }
@@ -102,8 +90,7 @@ AstType *ListType::clone() const {
   AstType *clonedElementType = nullptr;
   try {
     clonedElementType = elementType ? elementType->clone() : nullptr;
-    // 注意：这里假设 ListType 的构造函数没有因为移动了 NodeType
-    // 初始化而改变其他参数
+
     return new ListType(clonedElementType, location);
   } catch (...) {
     delete clonedElementType;
@@ -137,11 +124,6 @@ AstType *FunctionKeywordType::clone() const { return new FunctionKeywordType(*th
 
 AstType *CoroutineKeywordType::clone() const { return new CoroutineKeywordType(*this); }
 
-// --- 具体 AST 节点构造函数和析构函数 ---
-// *** 构造函数定义已移至 ast.h (内联) ***
-// 只保留析构函数定义
-
-// 字面量
 LiteralIntNode::~LiteralIntNode() = default;
 LiteralFloatNode::~LiteralFloatNode() = default;
 LiteralStringNode::~LiteralStringNode() = default;
@@ -157,7 +139,6 @@ MapEntryNode::~MapEntryNode() {
 
 LiteralMapNode::~LiteralMapNode() { deleteVectorItems(entries); }
 
-// 表达式
 IdentifierNode::~IdentifierNode() = default;
 
 UnaryOpNode::~UnaryOpNode() { delete operand; }
@@ -197,14 +178,13 @@ NewExpressionNode::~NewExpressionNode() {
 ThisExpressionNode::~ThisExpressionNode() = default;
 VarArgsNode::~VarArgsNode() = default;
 
-// 语句
 BlockNode::~BlockNode() { deleteVectorItems(statements); }
 
 ExpressionStatementNode::~ExpressionStatementNode() { delete expression; }
 
 AssignmentNode::~AssignmentNode() {
-  deleteVectorItems(lvalues); // 清理左值 vector
-  deleteVectorItems(rvalues); // 清理右值 vector
+  deleteVectorItems(lvalues);
+  deleteVectorItems(rvalues);
 }
 
 UpdateAssignmentNode::~UpdateAssignmentNode() {
@@ -232,31 +212,30 @@ WhileStatementNode::~WhileStatementNode() {
 ForCStyleStatementNode::~ForCStyleStatementNode() {
   if (initializer.has_value()) {
     std::visit(
-        [](auto &&arg) {                         // 使用 std::visit 访问 variant
-          using T = std::decay_t<decltype(arg)>; // 获取 arg 的实际类型
+        [](auto &&arg) {
+          using T = std::decay_t<decltype(arg)>;
 
           if constexpr (std::is_same_v<T, std::vector<Declaration *>> ||
                         std::is_same_v<T, std::vector<Expression *>>) {
-            // 如果是 vector<...> 指针类型，调用 deleteVectorItems
+
             deleteVectorItems(arg);
-          } else if constexpr (std::is_same_v<T, AssignmentNode *>) // <<< 修改：检查是否为
-                                                                    // AssignmentNode*
+          } else if constexpr (std::is_same_v<T, AssignmentNode *>)
+
           {
-            // 如果是 AssignmentNode* 类型，直接 delete 指针
+
             delete arg;
           }
-
         },
-        initializer.value()); // 对 optional 中的 variant 值进行操作
+        initializer.value());
   }
-  // 清理其他成员保持不变
+
   delete condition;
   deleteVectorItems(updateActions);
   delete body;
 }
 
 ForEachStatementNode::~ForEachStatementNode() {
-  deleteVectorItems(loopVariables); // 清理 vector 中的所有指针
+  deleteVectorItems(loopVariables);
   delete iterableExpr;
   delete body;
 }
@@ -266,7 +245,6 @@ ContinueStatementNode::~ContinueStatementNode() = default;
 
 ReturnStatementNode::~ReturnStatementNode() { deleteVectorItems(returnValue); }
 
-// 声明
 VariableDeclNode::~VariableDeclNode() {
   delete typeAnnotation;
   delete initializer;
@@ -284,15 +262,12 @@ ClassMemberNode::~ClassMemberNode() { delete memberDeclaration; }
 
 ClassDeclNode::~ClassDeclNode() { deleteVectorItems(members); }
 
-ImportSpecifierNode::~ImportSpecifierNode() = default; // std::optional<std::string> 会自动管理
+ImportSpecifierNode::~ImportSpecifierNode() = default;
 ImportNamespaceNode::~ImportNamespaceNode() = default;
 
 ImportNamedNode::~ImportNamedNode() { deleteVectorItems(specifiers); }
 
-// --- 顶级删除函数 ---
-void destroyAst(AstNode *node) {
-  delete node; // 触发根节点的析构函数，从而递归删除整个树
-}
+void destroyAst(AstNode *node) { delete node; }
 
 #include <any>
 #include <fstream>
@@ -300,7 +275,6 @@ void destroyAst(AstNode *node) {
 #include <memory>
 #include <sstream>
 
-// --- ANTLR4 ---
 #include "../Ast/AstBuilderVisitor.h"
 #include "../Ast/front/LangLexer.h"
 #include "../Ast/front/LangParser.h"
@@ -312,7 +286,6 @@ AstNode *loadAst(const std::string &sourceCode, const std::string &filename) {
   std::string codeToParse;
   std::string displayFileName = filename.empty() ? "<unknown>" : filename;
 
-  // 1. 确定输入源
   if (sourceCode.empty()) {
     if (filename.empty()) {
       std::cerr << "[Ast Error] Both sourceCode and filename are empty." << std::endl;
@@ -330,7 +303,6 @@ AstNode *loadAst(const std::string &sourceCode, const std::string &filename) {
     codeToParse = sourceCode;
   }
 
-  // 2. 词法与语法分析
   ANTLRInputStream input(codeToParse);
   LangLexer lexer(&input);
   CommonTokenStream tokens(&lexer);
@@ -345,7 +317,6 @@ AstNode *loadAst(const std::string &sourceCode, const std::string &filename) {
     return nullptr;
   }
 
-  // 3. 构建 AST
   AstBuilderVisitor builder(displayFileName);
   std::any astAny;
 
@@ -364,4 +335,9 @@ AstNode *loadAst(const std::string &sourceCode, const std::string &filename) {
   } catch (const std::bad_any_cast &) {
     return nullptr;
   }
+}
+
+DeferStatementNode::~DeferStatementNode() {
+  if (body)
+    delete body;
 }

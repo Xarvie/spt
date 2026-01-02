@@ -61,6 +61,9 @@ public:
   std::any visitContinueStmt(LangParser::ContinueStmtContext *ctx) override;
   std::any visitReturnStmt(LangParser::ReturnStmtContext *ctx) override;
   std::any visitBlockStmt(LangParser::BlockStmtContext *ctx) override;
+  // --- 新增 Defer 支持 ---
+  std::any visitDeferStmt(LangParser::DeferStmtContext *ctx) override;
+  std::any visitDeferBlockStmt(LangParser::DeferBlockStmtContext *ctx) override;
 
   std::any visitUpdateAssignStmt(LangParser::UpdateAssignStmtContext *ctx) override;
   std::any visitNormalAssignStmt(LangParser::NormalAssignStmtContext *ctx) override;

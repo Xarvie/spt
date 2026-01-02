@@ -65,12 +65,14 @@ enum class OpCode : uint8_t {
   OP_IMPORT_FROM, /* A B C   | R[A] := import(K[B])[K[C]]  导入特定符号      */
   OP_EXPORT,      /* A       | export R[A]  标记导出                        */
 
+  OP_DEFER, /* A Bx | 将栈槽 R[A] 处的闭包压入当前函数的 defer 栈 */
+
   /* --- 优化指令 --- */
   OP_ADDI, /* iABC R[A] = R[B] + sC (C视为有符号8位整数) */
-  OP_EQK,  /* iABC if (R[A] == K[B]) != C then pc++ B: 常量表索引(0-255), C:期望结果(0或1) */
-  OP_EQI,  /* iABC if (R[A] == sB) != C then pc++  */
-  OP_LTI,  /* iABC if (R[A] < sB) != C then pc++   */
-  OP_LEI,  /* iABC: if (R[A] <= sB) != C then pc++ A: 寄存器, B: 有符号8位立即数, C: 期望结果*/
+  OP_EQK, /* iABC if (R[A] == K[B]) != C then pc++ B: 常量表索引(0-255), C:期望结果(0或1) */
+  OP_EQI, /* iABC if (R[A] == sB) != C then pc++  */
+  OP_LTI, /* iABC if (R[A] < sB) != C then pc++   */
+  OP_LEI, /* iABC: if (R[A] <= sB) != C then pc++ A: 寄存器, B: 有符号8位立即数, C: 期望结果*/
 };
 
 /* --- 指令解码宏 (完全兼容 Lua 5.4 布局) --- */

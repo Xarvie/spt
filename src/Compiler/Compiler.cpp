@@ -101,12 +101,40 @@ void Compiler::compileStatement(Statement *stmt) {
       compileImportNamed(static_cast<ImportNamedNode *>(stmt));
       break;
     }
+    case NodeType::DEFER_STATEMENT:
+      compileDefer(static_cast<DeferStatementNode *>(stmt));
+      break;
+
     default:
       error("Unknown statement type", stmt->location);
     }
   } catch (const std::runtime_error &e) {
     error(e.what(), stmt->location);
   }
+}
+
+void Compiler::compileDefer(DeferStatementNode *node) {
+
+  cg_->beginFunction(source_, "<defer>", 0, false, node);
+
+  if (node->body) {
+
+    compileBlock(node->body);
+  }
+
+  cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
+  cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
+
+  Prototype childProto = cg_->endFunction();
+  int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
+  cg_->current()->proto.protos.push_back(std::move(childProto));
+
+  int closureSlot = cg_->allocSlot();
+  cg_->emitABx(OpCode::OP_CLOSURE, closureSlot, protoIdx);
+
+  cg_->emitABx(OpCode::OP_DEFER, closureSlot, 0);
+
+  cg_->freeSlots(1);
 }
 
 void Compiler::compileBlock(BlockNode *block) {

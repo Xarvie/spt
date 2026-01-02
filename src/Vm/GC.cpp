@@ -71,6 +71,10 @@ void GC::markRoots() {
     if (vm_->frames_[i].closure) {
       markObject(vm_->frames_[i].closure);
     }
+
+    for (Value &val : vm_->frames_[i].defers) {
+      markValue(val);
+    }
   }
 
   UpValue *upvalue = vm_->openUpvalues_;

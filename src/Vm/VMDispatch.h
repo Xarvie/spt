@@ -113,6 +113,7 @@ namespace spt {
   SPT_DISPATCH_TABLE_ENTRY(OP_IMPORT)                                                              \
   SPT_DISPATCH_TABLE_ENTRY(OP_IMPORT_FROM)                                                         \
   SPT_DISPATCH_TABLE_ENTRY(OP_EXPORT)                                                              \
+  SPT_DISPATCH_TABLE_ENTRY(OP_DEFER)                                                               \
   SPT_DISPATCH_TABLE_ENTRY(OP_ADDI)                                                                \
   SPT_DISPATCH_TABLE_ENTRY(OP_EQK)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_EQI)                                                                 \

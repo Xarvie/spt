@@ -75,6 +75,10 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitDeferStmt(LangParser::DeferStmtContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitImportNamespaceStmt(LangParser::ImportNamespaceStmtContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -84,6 +88,10 @@ public:
   }
 
   virtual std::any visitImportSpecifier(LangParser::ImportSpecifierContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitDeferBlockStmt(LangParser::DeferBlockStmtContext *ctx) override {
     return visitChildren(ctx);
   }
 

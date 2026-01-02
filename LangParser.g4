@@ -29,6 +29,7 @@ statement
     | RETURN expressionList? SEMICOLON       #returnStmt        // Return 语句
     | blockStatement                     #blockStmt         // 显式代码块 {...}
     | importStatement SEMICOLON #importStmt
+    | deferStatement                       #deferStmt
     ;
 
 //-- 导入语句 --
@@ -39,6 +40,10 @@ importStatement
 
 importSpecifier
     : TYPE? IDENTIFIER (AS IDENTIFIER)?
+    ;
+
+deferStatement
+    : DEFER blockStatement #deferBlockStmt
     ;
 
 // --- 赋值语句 ---

@@ -616,6 +616,10 @@ void VM::registerBuiltinFunctions() {
           this->closeUpvalues(savedStackTop);
 
           while (this->frameCount_ > savedFrameCount) {
+            CallFrame *currentFrame = &this->frames_.back();
+
+            this->invokeDefers(currentFrame);
+
             this->frames_.pop_back();
             this->frameCount_--;
           }
@@ -676,12 +680,15 @@ InterpretResult VM::call(Closure *closure, int argCount) {
     return InterpretResult::RUNTIME_ERROR;
   }
 
-  if (frameCount_ == 64) {
+  if (frameCount_ >= 64) {
     runtimeError("Stack overflow");
     return InterpretResult::RUNTIME_ERROR;
   }
 
-  CallFrame *frame = &frames_[frameCount_++];
+  frames_.emplace_back();
+  CallFrame *frame = &frames_.back();
+  frameCount_++;
+
   frame->closure = closure;
   frame->ip = closure->proto->code.data();
   frame->expectedResults = 1;
@@ -1250,7 +1257,7 @@ InterpretResult VM::run(int minFrameCount) {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      if (frameCount_ == 64) {
+      if (frameCount_ >= 64) {
         runtimeError("Stack overflow");
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1545,15 +1552,35 @@ InterpretResult VM::run(int minFrameCount) {
     uint8_t B = GETARG_B(instruction);
     int returnCount = (B >= 1) ? B - 1 : 0;
 
+    if (!frame->defers.empty()) {
+
+      invokeDefers(frame);
+
+      if (hasError_) {
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      frame = &frames_[frameCount_ - 1];
+    }
+
     Value *returnValues = frame->slots + A;
-    Value *destSlot = frame->slots - 1;
     int expectedResults = frame->expectedResults;
 
+    bool isRootFrame = (frameCount_ == minFrameCount + 1);
+
+    Value *destSlot = nullptr;
+    if (!isRootFrame) {
+
+      destSlot = frame->slots - 1;
+    }
+
     closeUpvalues(frame->slots);
+
     frameCount_--;
     frames_.pop_back();
 
-    if (frameCount_ == minFrameCount) {
+    if (isRootFrame) {
+
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
 
       if (!pcallStack_.empty()) {
@@ -1573,11 +1600,14 @@ InterpretResult VM::run(int minFrameCount) {
     frame = &frames_[frameCount_ - 1];
 
     if (expectedResults == -1) {
+
       for (int i = 0; i < returnCount; ++i) {
         destSlot[i] = returnValues[i];
       }
+
       stackTop_ = destSlot + returnCount;
     } else {
+
       for (int i = 0; i < expectedResults; ++i) {
         if (i < returnCount) {
           destSlot[i] = returnValues[i];
@@ -1585,6 +1615,7 @@ InterpretResult VM::run(int minFrameCount) {
           destSlot[i] = Value::nil();
         }
       }
+
       stackTop_ = frame->slots + frame->closure->proto->maxStackSize;
     }
 
@@ -1695,6 +1726,18 @@ InterpretResult VM::run(int minFrameCount) {
       uint8_t A = GETARG_A(instruction);
       Value exportedValue = frame->slots[A];
       printf("[EXPORT] Exported value: %s\n", exportedValue.toString().c_str());
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_DEFER) {
+    uint8_t A = GETARG_A(instruction);
+    Value closureVal = frame->slots[A];
+    if (closureVal.isClosure()) {
+      frame->defers.push_back(closureVal);
+    } else {
+      runtimeError("OP_DEFER expects a closure");
+      return InterpretResult::RUNTIME_ERROR;
     }
     SPT_DISPATCH();
   }
@@ -2073,6 +2116,36 @@ int VM::getLine(const Prototype *proto, size_t instruction) {
   }
 
   return line;
+}
+
+void VM::invokeDefers(CallFrame *framePtr) {
+  if (framePtr->defers.empty())
+    return;
+
+  size_t frameIndex = framePtr - frames_.data();
+
+  while (!frames_[frameIndex].defers.empty()) {
+    Value deferVal = frames_[frameIndex].defers.back();
+
+    frames_[frameIndex].defers.pop_back();
+
+    if (deferVal.isClosure()) {
+      Closure *closure = static_cast<Closure *>(deferVal.asGC());
+
+      if (stackTop_ >= stack_.data() + config_.stackSize) {
+        runtimeError("Stack overflow during defer");
+        return;
+      }
+
+      *stackTop_ = deferVal;
+      stackTop_++;
+
+      call(closure, 0);
+    }
+
+    if (hasError_)
+      return;
+  }
 }
 
 void VM::dumpStack() const {

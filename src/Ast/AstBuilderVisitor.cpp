@@ -555,6 +555,45 @@ std::any AstBuilderVisitor::visitContinueStmt(LangParser::ContinueStmtContext *c
   return std::any(static_cast<AstNode *>(node));
 }
 
+std::any AstBuilderVisitor::visitDeferStmt(LangParser::DeferStmtContext *ctx) {
+  if (!ctx)
+    throw std::runtime_error("AstBuilderVisitor::visitDeferStmt nullptr");
+
+  if (!ctx->deferStatement())
+    throw std::runtime_error("AstBuilderVisitor::visitDeferStmt missing child");
+
+  return visit(ctx->deferStatement());
+}
+
+std::any AstBuilderVisitor::visitDeferBlockStmt(LangParser::DeferBlockStmtContext *ctx) {
+  if (!ctx)
+    throw std::runtime_error("AstBuilderVisitor::visitDeferBlockStmt nullptr");
+
+  SourceLocation loc = getSourceLocation(ctx);
+
+  if (!ctx->blockStatement())
+    throw std::runtime_error("defer 语句缺少代码块");
+
+  std::any bodyResult = visit(ctx->blockStatement());
+
+  AstNode *bodyRaw = safeAnyCastRawPtr<AstNode>(bodyResult, "visitDeferBlockStmt > body");
+  BlockNode *body = dynamic_cast<BlockNode *>(bodyRaw);
+
+  if (!body && bodyResult.has_value()) {
+    delete bodyRaw;
+    throw std::runtime_error("defer 的主体必须是一个代码块");
+  }
+  if (!body) {
+    throw std::runtime_error("defer 主体访问失败");
+  }
+
+  DeferStatementNode *node = new DeferStatementNode(body, loc);
+  if (!node)
+    throw std::runtime_error("创建 DeferStatementNode 失败");
+
+  return std::any(static_cast<AstNode *>(node));
+}
+
 std::any AstBuilderVisitor::visitReturnStmt(LangParser::ReturnStmtContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitReturnStmtnullptr");

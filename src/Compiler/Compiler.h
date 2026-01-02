@@ -45,6 +45,7 @@ private:
   void compileAssignment(AssignmentNode *stmt);
   void compileUpdateAssignment(UpdateAssignmentNode *stmt);
   void compileExpressionStatement(ExpressionStatementNode *stmt);
+  void compileDefer(DeferStatementNode *stmt);
 
   // === 表达式编译 ===
   void compileExpression(Expression *expr, int dest);

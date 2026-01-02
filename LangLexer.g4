@@ -24,6 +24,7 @@ FOR: 'for';
 BREAK: 'break';
 CONTINUE: 'continue';
 RETURN: 'return';
+DEFER: 'defer';
 
 // 字面量与常量
 TRUE: 'true';

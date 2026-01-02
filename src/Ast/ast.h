@@ -69,6 +69,8 @@ enum class NodeType {
   IMPORT_NAMESPACE, // Namespace Import 子类型
   IMPORT_NAMED,     // Named Import 子类型
   IMPORT_SPECIFIER, // Import Specifier 节点类型
+  DEFER_STATEMENT,
+
   // 声明节点 (同时也是语句)
   VARIABLE_DECL,
   MUTI_VARIABLE_DECL,
@@ -161,6 +163,16 @@ public:
 protected:
   // 构造函数传递 NodeType 给 Statement -> AstNode
   Declaration(SourceLocation loc, NodeType type);
+};
+
+class DeferStatementNode : public Statement {
+public:
+  BlockNode *body = nullptr;
+
+  DeferStatementNode(BlockNode *b, SourceLocation loc)
+      : Statement(std::move(loc), NodeType::DEFER_STATEMENT), body(b) {}
+
+  virtual ~DeferStatementNode() override;
 };
 
 // --- 具体的类型节点 ---

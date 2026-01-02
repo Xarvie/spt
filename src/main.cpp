@@ -1729,21 +1729,116 @@ void registerBuiltinFunctions(TestRunner &runner) {
                  "false division by zero\ntrue 10");
 }
 
+// =========================================================
+// 13. Defer语句测试 (Defer Statement)
+// =========================================================
+void registerDeferTests(TestRunner &runner) {
+  runner.addTest("Defer - Basic Execution Order",
+                 R"(
+            list<string> logs = [];
+            void run() {
+                defer { logs.push("first"); }
+                defer { logs.push("second"); }
+                logs.push("start");
+            }
+            run();
+            print(logs.join(","));
+       )",
+                 "start,second,first");
+
+  runner.addTest("Defer - With Return Statement",
+                 R"(
+            int testReturn() {
+                defer { print("deferred"); }
+                print("returning");
+                return 42;
+            }
+            print(testReturn());
+       )",
+                 "returning\ndeferred\n42");
+
+  runner.addTest("Defer - Modifying Side Effects",
+                 R"(
+            int global1 = 0;
+            void sideEffect() {
+                defer { global1 = 100; }
+                global1 = 50;
+            }
+            print(global1);
+            sideEffect();
+            print(global1);
+       )",
+                 "0\n100");
+
+  runner.addTest("Defer - Closure Capture",
+                 R"(
+            void captureTest() {
+                int x = 10;
+                defer {
+                    // 应该捕获最终的 x 值 (20)
+                    print(x);
+                }
+                x = 20;
+            }
+            captureTest();
+       )",
+                 "20");
+
+  runner.addTest("Defer - Inside Control Flow (Function Scope)",
+                 R"(
+            void scopeTest() {
+                if (true) {
+                    defer { print("deferred"); }
+                    print("inside block");
+                }
+                print("outside block");
+            }
+            // defer 通常绑定在函数作用域，所以会在 "outside block" 之后执行
+            scopeTest();
+       )",
+                 "inside block\noutside block\ndeferred");
+
+  runner.addTest("Defer - Argument Evaluation",
+                 R"(
+             // 测试 defer 内部的代码是在最后执行的，而不是定义时执行
+            void evalTime() {
+                int a = 1;
+                defer {
+                    if (a == 2) { print("correct"); } else { print("wrong"); }
+                }
+                a = 2;
+            }
+            evalTime();
+       )",
+                 "correct");
+
+  runner.addTest("Defer - Nested Defers",
+                 R"(
+            void nested() {
+                defer {
+                    print("outer");
+                }
+                print("start");
+            }
+            nested();
+       )",
+                 "start\nouter");
+}
+
 int runScript(const char *path) {
-  // 1. 读取文件内容
   std::string source;
   try {
     std::ifstream file(path);
     if (!file) {
       std::cerr << "Could not open file: " << path << std::endl;
-      return 74; // IO Error
+      return -1;
     }
     std::stringstream buffer;
     buffer << file.rdbuf();
     source = buffer.str();
   } catch (const std::exception &e) {
     std::cerr << "Error reading file: " << e.what() << std::endl;
-    return 74;
+    return -1;
   }
 
   std::string filename = std::filesystem::path(path).filename().string();
@@ -1751,7 +1846,7 @@ int runScript(const char *path) {
   // 2. 解析 AST
   AstNode *ast = loadAst(source, filename);
   if (!ast) {
-    return 65;
+    return -1;
   }
 
   // 3. 编译
@@ -1764,7 +1859,7 @@ int runScript(const char *path) {
   spt::CompiledChunk chunk = compiler.compile(ast);
 
   if (compiler.hasError()) {
-    return 65;
+    return -1;
   }
 
   spt::VMConfig config;
@@ -1782,7 +1877,7 @@ int runScript(const char *path) {
 
   spt::InterpretResult result = vm.interpret(chunk);
 
-  return (result == spt::InterpretResult::OK) ? 0 : 70;
+  return (result == spt::InterpretResult::OK) ? 0 : -1;
 }
 
 // =========================================================
@@ -1808,7 +1903,7 @@ int main(int argc, char *argv[]) {
   registerEdgeCases(runner);
   registerIntegrationTests(runner);
   registerBuiltinFunctions(runner);
-
+  registerDeferTests(runner);
   runner.runAll();
 
   //  TestRunner runner;

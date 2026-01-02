@@ -6,8 +6,7 @@ if(APPLE)
   find_library(COREFOUNDATION_LIBRARY CoreFoundation)
 endif()
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} -O3")
+
 set (ANTLR_VERSION "4.13.1")
 #set(BUILD_SHARED_LIBS OFF)
 
@@ -17,7 +16,9 @@ set(CMAKE_C_STANDARD  99)
 if(MSVC)
     add_compile_options(/utf-8)
 #    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-
+else ()
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} -O3")
 endif()
 
 PickSourceFiles(
