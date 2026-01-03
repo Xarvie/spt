@@ -303,7 +303,7 @@ whileStatement
     : WHILE OP expression CP blockStatement // while 块必须用 {} 包裹
     ;
 
-// --- For 循环 (保持不变) ---
+// --- For 循环 ---
 /** For 语句 (包含 C 风格和 For-Each 风格) */
 forStatement
     : FOR OP forControl CP blockStatement // for 块必须用 {} 包裹

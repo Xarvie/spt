@@ -446,7 +446,6 @@ public:
   virtual ~ImportSpecifierNode() override;
 };
 
-// ImportNamespaceNode 保持不变，它已经有 alias 字段
 class ImportNamespaceNode : public ImportStatementNode {
 public:
   std::string alias;
@@ -796,7 +795,6 @@ public:
                     NodeType::MUTI_VARIABLE_DECL), // 将 loc 传递给基类
         variables(std::move(vars)), initializer(init), isExported(exported) {}
 
-  // 虚析构函数 (声明) - 保持不变
   virtual ~MutiVariableDeclarationNode() override;
 };
 
