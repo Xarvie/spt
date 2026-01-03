@@ -3,7 +3,6 @@
 #include "../Compiler/Compiler.h"
 #include "VM.h"
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -13,31 +12,43 @@ namespace spt {
 static std::string FSLoader_resolvePath(ModuleLoader *self, const std::string &moduleName,
                                         const std::string &fromPath) {
   FileSystemLoader *loader = reinterpret_cast<FileSystemLoader *>(self);
+  namespace fs = std::filesystem;
 
-  if (!fromPath.empty()) {
-    namespace fs = std::filesystem;
-    fs::path parent = fs::path(fromPath).parent_path();
-    fs::path candidate = parent / (moduleName + ".flx");
-    if (loader->base.exists(candidate.string())) {
-      return fs::absolute(candidate).string();
-    }
+  std::string baseName = moduleName;
+  if (baseName.size() > 4 && (baseName.substr(baseName.size() - 4) == ".spt")) {
+    baseName = baseName.substr(0, baseName.size() - 4);
+  } else if (baseName.size() > 5 && (baseName.substr(baseName.size() - 5) == ".sptc")) {
+    baseName = baseName.substr(0, baseName.size() - 5);
   }
 
-  for (const auto &searchPath : loader->searchPaths) {
-    namespace fs = std::filesystem;
-    std::vector<std::string> extensions = {".spt", ".sptc"};
+  std::vector<std::string> extensions = {".spt", ".sptc"};
+
+  if (!fromPath.empty()) {
+    fs::path parent = fs::path(fromPath).parent_path();
     for (const auto &ext : extensions) {
-      fs::path candidate = fs::path(searchPath) / (moduleName + ext);
-      if (loader->base.exists(candidate.string())) {
+      fs::path candidate = parent / (baseName + ext);
+      std::error_code ec;
+      if (fs::exists(candidate, ec)) {
         return fs::absolute(candidate).string();
       }
     }
   }
 
-  if (loader->base.exists(moduleName)) {
-    namespace fs = std::filesystem;
+  for (const auto &searchPath : loader->searchPaths) {
+    for (const auto &ext : extensions) {
+      fs::path candidate = fs::path(searchPath) / (baseName + ext);
+      std::error_code ec;
+      if (fs::exists(candidate, ec)) {
+        return fs::absolute(candidate).string();
+      }
+    }
+  }
+
+  std::error_code ec;
+  if (fs::exists(moduleName, ec)) {
     return fs::absolute(moduleName).string();
   }
+
   return "";
 }
 
