@@ -1,4 +1,5 @@
 #include "GC.h"
+#include "Fiber.h"
 #include "Object.h"
 #include "VM.h"
 
@@ -59,28 +60,16 @@ void GC::removeRoot(RootVisitor) {}
 
 void GC::markRoots() {
 
-  for (Value *slot = vm_->stack_.data(); slot < vm_->stackTop_; ++slot) {
-    markValue(*slot);
+  if (vm_->mainFiber()) {
+    markObject(vm_->mainFiber());
+  }
+
+  if (vm_->currentFiber() && vm_->currentFiber() != vm_->mainFiber()) {
+    markObject(vm_->currentFiber());
   }
 
   for (auto &[name, val] : vm_->globals_) {
     markValue(val);
-  }
-
-  for (int i = 0; i < vm_->frameCount_; ++i) {
-    if (vm_->frames_[i].closure) {
-      markObject(vm_->frames_[i].closure);
-    }
-
-    for (Value &val : vm_->frames_[i].defers) {
-      markValue(val);
-    }
-  }
-
-  UpValue *upvalue = vm_->openUpvalues_;
-  while (upvalue != nullptr) {
-    markObject(upvalue);
-    upvalue = upvalue->nextOpen;
   }
 
   for (auto &visitor : roots_) {
@@ -180,6 +169,45 @@ void GC::traceReferences() {
       markValue(native->receiver);
       break;
     }
+
+    case ValueType::Fiber: {
+      auto *fiber = static_cast<FiberObject *>(obj);
+
+      if (fiber->closure) {
+        markObject(fiber->closure);
+      }
+
+      for (Value *slot = fiber->stack.data(); slot < fiber->stackTop; ++slot) {
+        markValue(*slot);
+      }
+
+      for (int i = 0; i < fiber->frameCount; ++i) {
+        CallFrame &frame = fiber->frames[i];
+        if (frame.closure) {
+          markObject(frame.closure);
+        }
+        for (Value &deferVal : frame.defers) {
+          markValue(deferVal);
+        }
+      }
+
+      UpValue *upvalue = fiber->openUpvalues;
+      while (upvalue != nullptr) {
+        markObject(upvalue);
+        upvalue = upvalue->nextOpen;
+      }
+
+      if (fiber->caller) {
+        markObject(fiber->caller);
+      }
+
+      if (fiber->hasError) {
+        markValue(fiber->error);
+      }
+
+      break;
+    }
+
     default:
       break;
     }
@@ -258,6 +286,15 @@ void GC::freeObject(GCObject *obj) {
     bytesAllocated_ -= sizeof(UpValue);
     delete static_cast<UpValue *>(obj);
     break;
+
+  case ValueType::Fiber: {
+    FiberObject *fiber = static_cast<FiberObject *>(obj);
+    bytesAllocated_ -= sizeof(FiberObject) + (fiber->stack.capacity() * sizeof(Value)) +
+                       (fiber->frames.capacity() * sizeof(CallFrame));
+    delete fiber;
+    break;
+  }
+
   default:
     delete obj;
     break;

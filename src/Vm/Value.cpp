@@ -54,8 +54,6 @@ bool Value::isList() const { return type == ValueType::List; }
 
 bool Value::isMap() const { return type == ValueType::Map; }
 
-bool Value::isObject() const { return type == ValueType::Object; }
-
 bool Value::isInstance() const { return type == ValueType::Object; }
 
 bool Value::isClosure() const { return type == ValueType::Closure; }
@@ -63,6 +61,8 @@ bool Value::isClosure() const { return type == ValueType::Closure; }
 bool Value::isClass() const { return type == ValueType::Class; }
 
 bool Value::isNativeFunc() const { return type == ValueType::NativeFunc; }
+
+bool Value::isFiber() const { return type == ValueType::Fiber; }
 
 bool Value::asBool() const { return as.boolean; }
 
@@ -100,6 +100,8 @@ std::string Value::toString() const {
     return "<class>";
   case ValueType::NativeFunc:
     return "<native function>";
+  case ValueType::Fiber:
+    return "<fiber>";
   default:
     return "<unknown>";
   }
@@ -146,6 +148,8 @@ const char *Value::typeName() const {
     return "class";
   case ValueType::NativeFunc:
     return "native";
+  case ValueType::Fiber:
+    return "fiber";
   default:
     return "unknown";
   }

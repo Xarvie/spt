@@ -21,7 +21,8 @@ enum class ValueType : uint8_t {
   Closure,
   NativeFunc,
   Class,
-  Upvalue
+  Upvalue,
+  Fiber
 };
 
 // 常量值 - 编译期使用

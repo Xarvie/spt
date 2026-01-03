@@ -1,5 +1,6 @@
 #include "VM.h"
 
+#include "Fiber.h"
 #include "SptDebug.hpp"
 #include "SptStdlibs.h"
 #include "VMDispatch.h"
@@ -14,12 +15,12 @@
 namespace spt {
 
 VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
-
-  stack_.resize(config.stackSize);
-  stackTop_ = stack_.data();
-  frames_.reserve(64);
-
   globals_.reserve(256);
+
+  mainFiber_ = gc_.allocate<FiberObject>();
+  mainFiber_->stack.resize(config.stackSize);
+  mainFiber_->stackTop = mainFiber_->stack.data();
+  currentFiber_ = mainFiber_;
 
   ModuleManagerConfig moduleConfig;
   moduleConfig.enableCache = true;
@@ -32,21 +33,16 @@ VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
 
   registerBuiltinFunctions();
   SptDebug::load(this);
+  SptFiber::load(this);
 }
 
 VM::~VM() {
-
-  frames_.clear();
-  frameCount_ = 0;
-  stackTop_ = stack_.data();
+  currentFiber_ = nullptr;
+  mainFiber_ = nullptr;
 
   globals_.clear();
-
   strings_.clear();
-
   modules_.clear();
-
-  openUpvalues_ = nullptr;
 
   pcallStack_.clear();
   hasError_ = false;
@@ -55,8 +51,11 @@ VM::~VM() {
   hasNativeMultiReturn_ = false;
 }
 
-void VM::registerBuiltinFunctions() {
+void VM::protect(Value value) { currentFiber_->push(value); }
 
+void VM::unprotect(int count) { currentFiber_->stackTop -= count; }
+
+void VM::registerBuiltinFunctions() {
   registerNative(
       "print",
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
@@ -92,18 +91,16 @@ void VM::registerBuiltinFunctions() {
         if (argc < 1)
           return Value::integer(0);
         Value v = args[0];
-
         if (v.isInt()) {
           return v;
         } else if (v.isFloat()) {
           return Value::integer(static_cast<int64_t>(v.asFloat()));
         } else if (v.isString()) {
           StringObject *str = static_cast<StringObject *>(v.asGC());
-          const char *ptr = str->data.c_str();
           char *endptr = nullptr;
           errno = 0;
-          long long result = std::strtoll(ptr, &endptr, 10);
-          if (ptr == endptr || errno == ERANGE) {
+          long long result = std::strtoll(str->data.c_str(), &endptr, 10);
+          if (endptr == str->data.c_str() || errno == ERANGE) {
             return Value::integer(0);
           }
           return Value::integer(static_cast<int64_t>(result));
@@ -120,18 +117,16 @@ void VM::registerBuiltinFunctions() {
         if (argc < 1)
           return Value::number(0.0);
         Value v = args[0];
-
         if (v.isFloat()) {
           return v;
         } else if (v.isInt()) {
           return Value::number(static_cast<double>(v.asInt()));
         } else if (v.isString()) {
           StringObject *str = static_cast<StringObject *>(v.asGC());
-          const char *ptr = str->data.c_str();
           char *endptr = nullptr;
           errno = 0;
-          double result = std::strtod(ptr, &endptr);
-          if (ptr == endptr || errno == ERANGE) {
+          double result = std::strtod(str->data.c_str(), &endptr);
+          if (endptr == str->data.c_str() || errno == ERANGE) {
             return Value::number(0.0);
           }
           return Value::number(result);
@@ -170,83 +165,22 @@ void VM::registerBuiltinFunctions() {
       1);
 
   registerNative(
-      "isInt",
+      "len",
       [](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isInt());
-      },
-      1);
-
-  registerNative(
-      "isFloat",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isFloat());
-      },
-      1);
-
-  registerNative(
-      "isNumber",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isNumber());
-      },
-      1);
-
-  registerNative(
-      "isString",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isString());
-      },
-      1);
-
-  registerNative(
-      "isBool",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isBool());
-      },
-      1);
-
-  registerNative(
-      "isList",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isList());
-      },
-      1);
-
-  registerNative(
-      "isMap",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isMap());
-      },
-      1);
-
-  registerNative(
-      "isNull",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(true);
-        return Value::boolean(args[0].isNil());
-      },
-      1);
-
-  registerNative(
-      "isFunction",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isClosure() || args[0].isNativeFunc());
+          return Value::integer(0);
+        Value v = args[0];
+        if (v.isString()) {
+          StringObject *str = static_cast<StringObject *>(v.asGC());
+          return Value::integer(static_cast<int64_t>(str->data.size()));
+        } else if (v.isList()) {
+          ListObject *list = static_cast<ListObject *>(v.asGC());
+          return Value::integer(static_cast<int64_t>(list->elements.size()));
+        } else if (v.isMap()) {
+          MapObject *map = static_cast<MapObject *>(v.asGC());
+          return Value::integer(static_cast<int64_t>(map->entries.size()));
+        }
+        return Value::integer(0);
       },
       1);
 
@@ -366,26 +300,6 @@ void VM::registerBuiltinFunctions() {
       2);
 
   registerNative(
-      "len",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::integer(0);
-        Value v = args[0];
-        if (v.isString()) {
-          StringObject *str = static_cast<StringObject *>(v.asGC());
-          return Value::integer(static_cast<int64_t>(str->data.size()));
-        } else if (v.isList()) {
-          ListObject *list = static_cast<ListObject *>(v.asGC());
-          return Value::integer(static_cast<int64_t>(list->elements.size()));
-        } else if (v.isMap()) {
-          MapObject *map = static_cast<MapObject *>(v.asGC());
-          return Value::integer(static_cast<int64_t>(map->entries.size()));
-        }
-        return Value::integer(0);
-      },
-      1);
-
-  registerNative(
       "char",
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc < 1 || !args[0].isInt())
@@ -415,11 +329,9 @@ void VM::registerBuiltinFunctions() {
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::nil();
-
         int64_t start = args[0].isInt() ? args[0].asInt() : 0;
         int64_t end = args[1].isInt() ? args[1].asInt() : 0;
         int64_t step = (argc >= 3 && args[2].isInt()) ? args[2].asInt() : 1;
-
         if (step == 0)
           return Value::nil();
 
@@ -446,7 +358,6 @@ void VM::registerBuiltinFunctions() {
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::nil();
-
         if (!args[0].isTruthy()) {
           std::string msg = "Assertion failed";
           if (argc >= 2 && args[1].isString()) {
@@ -476,14 +387,12 @@ void VM::registerBuiltinFunctions() {
       "pcall",
       [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc < 1) {
-          this->setNativeMultiReturn(
-              {Value::boolean(false), Value::object(this->allocateString(
-                                          "pcall: expected a function as first argument"))});
+          this->setNativeMultiReturn({Value::boolean(false), Value::object(this->allocateString(
+                                                                 "pcall: expected a function"))});
           return Value::nil();
         }
 
         Value func = args[0];
-
         if (!func.isClosure() && !func.isNativeFunc()) {
           this->setNativeMultiReturn(
               {Value::boolean(false),
@@ -491,9 +400,10 @@ void VM::registerBuiltinFunctions() {
           return Value::nil();
         }
 
-        int savedFrameCount = this->frameCount_;
-        Value *savedStackTop = this->stackTop_;
-        UpValue *savedOpenUpvalues = this->openUpvalues_;
+        FiberObject *fiber = currentFiber_;
+        int savedFrameCount = fiber->frameCount;
+        Value *savedStackTop = fiber->stackTop;
+        UpValue *savedOpenUpvalues = fiber->openUpvalues;
         bool savedHasError = this->hasError_;
         Value savedErrorValue = this->errorValue_;
 
@@ -501,6 +411,7 @@ void VM::registerBuiltinFunctions() {
         this->errorValue_ = Value::nil();
 
         ProtectedCallContext ctx;
+        ctx.fiber = fiber;
         ctx.frameCount = savedFrameCount;
         ctx.stackTop = savedStackTop;
         ctx.openUpvalues = savedOpenUpvalues;
@@ -510,10 +421,10 @@ void VM::registerBuiltinFunctions() {
         int funcArgCount = argc - 1;
         Value *funcArgs = args + 1;
 
-        Value *callBase = this->stackTop_;
-        *this->stackTop_++ = func;
+        Value *callBase = fiber->stackTop;
+        *fiber->stackTop++ = func;
         for (int i = 0; i < funcArgCount; ++i) {
-          *this->stackTop_++ = funcArgs[i];
+          *fiber->stackTop++ = funcArgs[i];
         }
 
         InterpretResult result = InterpretResult::OK;
@@ -524,49 +435,49 @@ void VM::registerBuiltinFunctions() {
           const Prototype *proto = closure->proto;
 
           if (!proto->isVararg && funcArgCount != proto->numParams) {
-            std::string errMsg = "Function '" + proto->name + "' expects " +
-                                 std::to_string(proto->numParams) + " arguments, got " +
-                                 std::to_string(funcArgCount);
             this->hasError_ = true;
-            this->errorValue_ = Value::object(this->allocateString(errMsg));
+            this->errorValue_ = Value::object(this->allocateString(
+                "Function expects " + std::to_string(proto->numParams) + " arguments"));
             result = InterpretResult::RUNTIME_ERROR;
-          } else if (this->frameCount_ >= 64) {
+          } else if (fiber->frameCount >= FiberObject::MAX_FRAMES) {
             this->hasError_ = true;
             this->errorValue_ = Value::object(this->allocateString("Stack overflow"));
             result = InterpretResult::RUNTIME_ERROR;
           } else {
+
+            size_t slotsOffset = (callBase + 1) - fiber->stack.data();
+
+            fiber->ensureStack(proto->maxStackSize);
+
+            Value *newSlots = fiber->stack.data() + slotsOffset;
+
             CallFrame newFrame;
             newFrame.closure = closure;
             newFrame.ip = proto->code.data();
             newFrame.expectedResults = -1;
-            newFrame.slots = callBase + 1;
+            newFrame.slots = newSlots;
 
-            Value *targetStackTop = newFrame.slots + proto->maxStackSize;
-            if (targetStackTop > this->stack_.data() + this->config_.stackSize) {
-              this->hasError_ = true;
-              this->errorValue_ = Value::object(this->allocateString("Stack overflow"));
-              result = InterpretResult::RUNTIME_ERROR;
-            } else {
-              for (Value *p = newFrame.slots + funcArgCount; p < targetStackTop; ++p) {
-                *p = Value::nil();
-              }
+            for (Value *p = fiber->stackTop; p < newFrame.slots + proto->maxStackSize; ++p) {
+              *p = Value::nil();
+            }
+            fiber->stackTop = newFrame.slots + proto->maxStackSize;
 
-              this->stackTop_ = targetStackTop;
-              this->frames_.push_back(newFrame);
-              this->frameCount_++;
+            fiber->frames.push_back(newFrame);
+            fiber->frameCount++;
 
-              result = this->run(savedFrameCount);
+            int savedExitFrameCount = this->exitFrameCount_;
+            this->exitFrameCount_ = fiber->frameCount;
 
-              if (result == InterpretResult::OK && !this->hasError_) {
-                if (this->hasNativeMultiReturn_) {
-                  returnValues = std::move(this->nativeMultiReturn_);
-                  this->hasNativeMultiReturn_ = false;
-                  this->nativeMultiReturn_.clear();
-                } else {
-                  if (!this->lastModuleResult_.isNil()) {
-                    returnValues.push_back(this->lastModuleResult_);
-                  }
-                }
+            result = this->run();
+
+            this->exitFrameCount_ = savedExitFrameCount;
+
+            if (result == InterpretResult::OK && !this->hasError_) {
+              if (this->hasNativeMultiReturn_) {
+                returnValues = std::move(this->nativeMultiReturn_);
+                this->hasNativeMultiReturn_ = false;
+              } else if (!this->lastModuleResult_.isNil()) {
+                returnValues.push_back(this->lastModuleResult_);
               }
             }
           }
@@ -574,16 +485,12 @@ void VM::registerBuiltinFunctions() {
           NativeFunction *native = static_cast<NativeFunction *>(func.asGC());
 
           if (native->arity != -1 && funcArgCount != native->arity) {
-            std::string errMsg = "Native function '" + native->name + "' expects " +
-                                 std::to_string(native->arity) + " arguments, got " +
-                                 std::to_string(funcArgCount);
             this->hasError_ = true;
-            this->errorValue_ = Value::object(this->allocateString(errMsg));
+            this->errorValue_ = Value::object(this->allocateString(
+                "Native function expects " + std::to_string(native->arity) + " arguments"));
             result = InterpretResult::RUNTIME_ERROR;
           } else {
             this->hasNativeMultiReturn_ = false;
-            this->nativeMultiReturn_.clear();
-
             Value nativeResult = native->function(this, native->receiver, funcArgCount, funcArgs);
 
             if (!this->hasError_) {
@@ -600,7 +507,7 @@ void VM::registerBuiltinFunctions() {
         }
 
         this->pcallStack_.pop_back();
-        this->stackTop_ = savedStackTop;
+        fiber->stackTop = savedStackTop;
 
         if (result == InterpretResult::OK && !this->hasError_) {
           std::vector<Value> multiResult;
@@ -615,106 +522,186 @@ void VM::registerBuiltinFunctions() {
         } else {
           this->closeUpvalues(savedStackTop);
 
-          while (this->frameCount_ > savedFrameCount) {
-            CallFrame *currentFrame = &this->frames_.back();
-
+          while (fiber->frameCount > savedFrameCount) {
+            CallFrame *currentFrame = &fiber->frames.back();
             this->invokeDefers(currentFrame);
-
-            this->frames_.pop_back();
-            this->frameCount_--;
+            fiber->frames.pop_back();
+            fiber->frameCount--;
           }
 
-          this->openUpvalues_ = savedOpenUpvalues;
+          fiber->openUpvalues = savedOpenUpvalues;
 
           Value errVal = this->hasError_ ? this->errorValue_
                                          : Value::object(this->allocateString("unknown error"));
-
           this->setNativeMultiReturn({Value::boolean(false), errVal});
-
           this->hasError_ = savedHasError;
           this->errorValue_ = savedErrorValue;
-
           return Value::nil();
         }
       },
       -1);
-}
 
-void VM::ensureStack(int neededSlots) {
-  if (stackTop_ + neededSlots > stack_.data() + config_.stackSize) {
-    runtimeError("Stack overflow: needed %d slots", neededSlots);
-    return;
-  }
-
-  for (int i = 0; i < neededSlots; ++i) {
-    stackTop_[i] = Value::nil();
-  }
-
-  stackTop_ += neededSlots;
+  registerNative(
+      "isInt",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isInt()); }, 1);
+  registerNative(
+      "isFloat",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isFloat()); }, 1);
+  registerNative(
+      "isNumber",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isNumber()); }, 1);
+  registerNative(
+      "isString",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isString()); }, 1);
+  registerNative(
+      "isBool",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isBool()); }, 1);
+  registerNative(
+      "isList",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isList()); }, 1);
+  registerNative(
+      "isMap",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isMap()); }, 1);
+  registerNative(
+      "isNull",
+      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c < 1 || a[0].isNil()); }, 1);
+  registerNative(
+      "isFunction",
+      [](VM *vm, Value r, int c, Value *a) {
+        return Value::boolean(c > 0 && (a[0].isClosure() || a[0].isNativeFunc()));
+      },
+      1);
 }
 
 InterpretResult VM::interpret(const CompiledChunk &chunk) {
-  resetStack();
-  frames_.clear();
+
+  mainFiber_->reset();
+  currentFiber_ = mainFiber_;
 
   Closure *mainClosure = allocateClosure(&chunk.mainProto);
   protect(Value::object(mainClosure));
 
+  currentFiber_->ensureStack(mainClosure->proto->maxStackSize);
+
   CallFrame frame;
   frame.closure = mainClosure;
   frame.ip = mainClosure->proto->code.data();
-  frame.slots = stackTop_;
+  frame.slots = currentFiber_->stackTop;
 
-  ensureStack(mainClosure->proto->maxStackSize);
+  for (int i = 0; i < mainClosure->proto->maxStackSize; ++i) {
+    currentFiber_->stackTop[i] = Value::nil();
+  }
+  currentFiber_->stackTop += mainClosure->proto->maxStackSize;
 
-  frames_.push_back(frame);
-  frameCount_ = 1;
+  currentFiber_->frames.push_back(frame);
+  currentFiber_->frameCount = 1;
 
-  return run(0);
+  return run();
 }
 
 InterpretResult VM::call(Closure *closure, int argCount) {
+  FiberObject *fiber = currentFiber_;
+
   if (!closure->proto->isVararg && argCount != closure->proto->numParams) {
     runtimeError("Function '%s' expects %d arguments, got %d", closure->proto->name.c_str(),
                  closure->proto->numParams, argCount);
     return InterpretResult::RUNTIME_ERROR;
   }
 
-  if (frameCount_ >= 64) {
+  if (fiber->frameCount >= FiberObject::MAX_FRAMES) {
     runtimeError("Stack overflow");
     return InterpretResult::RUNTIME_ERROR;
   }
 
-  frames_.emplace_back();
-  CallFrame *frame = &frames_.back();
-  frameCount_++;
+  size_t argsOffset = (fiber->stackTop - argCount) - fiber->stack.data();
 
-  frame->closure = closure;
-  frame->ip = closure->proto->code.data();
-  frame->expectedResults = 1;
+  fiber->ensureStack(closure->proto->maxStackSize);
 
-  Value *argsStart = stackTop_ - argCount;
-  frame->slots = argsStart;
+  Value *argsStart = fiber->stack.data() + argsOffset;
 
-  ensureStack(closure->proto->maxStackSize);
+  CallFrame newFrame;
+  newFrame.closure = closure;
+  newFrame.ip = closure->proto->code.data();
+  newFrame.expectedResults = 1;
+  newFrame.slots = argsStart;
 
-  Value *frameEnd = frame->slots + closure->proto->maxStackSize;
-  for (Value *slot = frame->slots + argCount; slot < frameEnd; ++slot) {
+  Value *frameEnd = newFrame.slots + closure->proto->maxStackSize;
+  for (Value *slot = newFrame.slots + argCount; slot < frameEnd; ++slot) {
     *slot = Value::nil();
   }
+  fiber->stackTop = frameEnd;
 
-  stackTop_ = frameEnd;
+  fiber->frames.push_back(newFrame);
+  fiber->frameCount++;
 
-  return run(frameCount_ - 1);
+  int savedExitFrameCount = exitFrameCount_;
+  exitFrameCount_ = fiber->frameCount;
+
+  InterpretResult result = run();
+
+  exitFrameCount_ = savedExitFrameCount;
+
+  return result;
 }
 
-InterpretResult VM::run(int minFrameCount) {
-  CallFrame *frame = &frames_[frameCount_ - 1];
+InterpretResult VM::executeModule(const CompiledChunk &chunk) {
+  FiberObject *fiber = currentFiber_;
+
+  Closure *mainClosure = allocateClosure(&chunk.mainProto);
+  protect(Value::object(mainClosure));
+
+  size_t frameStartOffset = fiber->stackTop - fiber->stack.data();
+
+  fiber->ensureStack(mainClosure->proto->maxStackSize);
+
+  Value *frameStart = fiber->stack.data() + frameStartOffset;
+
+  CallFrame frame;
+  frame.closure = mainClosure;
+  frame.ip = mainClosure->proto->code.data();
+  frame.slots = frameStart;
+  frame.expectedResults = 0;
+
+  fiber->frames.push_back(frame);
+  fiber->frameCount++;
+
+  Value *frameEnd = frame.slots + mainClosure->proto->maxStackSize;
+  for (Value *slot = frame.slots; slot < frameEnd; ++slot) {
+    *slot = Value::nil();
+  }
+  fiber->stackTop = frameEnd;
+
+  int savedExitFrameCount = exitFrameCount_;
+  exitFrameCount_ = fiber->frameCount;
+
+  InterpretResult result = run();
+
+  exitFrameCount_ = savedExitFrameCount;
+
+  fiber = currentFiber_;
+
+  if (result == InterpretResult::OK && fiber->frameCount >= 0) {
+    fiber->stackTop = fiber->stack.data() + frameStartOffset;
+  }
+
+  unprotect(1);
+
+  return result;
+}
+
+InterpretResult VM::run() {
+  FiberObject *fiber = currentFiber_;
+  CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
   uint32_t instruction;
 
 #if SPT_USE_COMPUTED_GOTO
   SPT_DEFINE_DISPATCH_TABLE()
 #endif
+
+#define FIBER fiber
+#define STACK_TOP fiber->stackTop
+#define FRAMES fiber->frames
+#define FRAME_COUNT fiber->frameCount
 
   SPT_DISPATCH_LOOP_BEGIN()
 
@@ -800,7 +787,7 @@ InterpretResult VM::run(int minFrameCount) {
       }
       int64_t idx = index.asInt();
       if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
-        runtimeError("List index %lld out of range [0, %zu)", idx, list->elements.size());
+        runtimeError("List index out of range");
         return InterpretResult::RUNTIME_ERROR;
       }
       frame->slots[A] = list->elements[idx];
@@ -830,7 +817,7 @@ InterpretResult VM::run(int minFrameCount) {
       }
       int64_t idx = index.asInt();
       if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
-        runtimeError("List index %lld out of range [0, %zu)", idx, list->elements.size());
+        runtimeError("List index out of range");
         return InterpretResult::RUNTIME_ERROR;
       }
       list->elements[idx] = value;
@@ -858,7 +845,7 @@ InterpretResult VM::run(int minFrameCount) {
 
     const std::string &fieldName = std::get<std::string>(keyConst);
 
-    if (object.isList() || object.isMap() || object.isString()) {
+    if (object.isList() || object.isMap() || object.isString() || object.isFiber()) {
       Value result;
       if (StdlibDispatcher::getProperty(this, object, fieldName, result)) {
         frame->slots[A] = result;
@@ -882,6 +869,12 @@ InterpretResult VM::run(int minFrameCount) {
       frame->slots[A] = result;
     } else if (object.isClass()) {
       auto *klass = static_cast<ClassObject *>(object.asGC());
+
+      if (klass->name == "Fiber" && fieldName == "current") {
+        frame->slots[A] = Value::object(currentFiber_);
+        SPT_DISPATCH();
+      }
+
       auto it = klass->methods.find(fieldName);
       if (it != klass->methods.end()) {
         frame->slots[A] = it->second;
@@ -1212,7 +1205,6 @@ InterpretResult VM::run(int minFrameCount) {
     if (a.isInt() && b.isInt()) {
       result = a.asInt() <= b.asInt();
     } else if (a.isNumber() && b.isNumber()) {
-
       double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
       double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
       result = left <= right;
@@ -1245,7 +1237,6 @@ InterpretResult VM::run(int minFrameCount) {
     int expectedResults = C - 1;
 
     Value callee = frame->slots[A];
-    Value *argsStart = &frame->slots[A + 1];
 
     if (callee.isClosure()) {
       Closure *closure = static_cast<Closure *>(callee.asGC());
@@ -1257,10 +1248,16 @@ InterpretResult VM::run(int minFrameCount) {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      if (frameCount_ >= 64) {
+      if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
         runtimeError("Stack overflow");
         return InterpretResult::RUNTIME_ERROR;
       }
+
+      size_t argsOffset = (frame->slots + A + 1) - fiber->stack.data();
+
+      fiber->ensureStack(proto->maxStackSize);
+
+      Value *argsStart = fiber->stack.data() + argsOffset;
 
       CallFrame newFrame;
       newFrame.closure = closure;
@@ -1269,20 +1266,16 @@ InterpretResult VM::run(int minFrameCount) {
       newFrame.slots = argsStart;
 
       Value *targetStackTop = newFrame.slots + proto->maxStackSize;
-      if (targetStackTop > stack_.data() + config_.stackSize) {
-        runtimeError("Stack overflow");
-        return InterpretResult::RUNTIME_ERROR;
-      }
 
       for (Value *p = newFrame.slots + argCount; p < targetStackTop; ++p) {
         *p = Value::nil();
       }
 
-      stackTop_ = targetStackTop;
-      frames_.push_back(newFrame);
-      frameCount_++;
+      STACK_TOP = targetStackTop;
+      FRAMES.push_back(newFrame);
+      FRAME_COUNT++;
 
-      frame = &frames_[frameCount_ - 1];
+      frame = &FRAMES[FRAME_COUNT - 1];
 
     } else if (callee.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
@@ -1296,7 +1289,20 @@ InterpretResult VM::run(int minFrameCount) {
       hasNativeMultiReturn_ = false;
       nativeMultiReturn_.clear();
 
+      Value *argsStart = &frame->slots[A + 1];
       Value result = native->function(this, native->receiver, argCount, argsStart);
+
+      if (yieldPending_) {
+        yieldPending_ = false;
+        return InterpretResult::OK;
+      }
+
+      if (fiber != currentFiber_) {
+
+        fiber = currentFiber_;
+        frame = &fiber->frames[fiber->frameCount - 1];
+        SPT_DISPATCH();
+      }
 
       if (hasError_ && !pcallStack_.empty()) {
         return InterpretResult::RUNTIME_ERROR;
@@ -1345,31 +1351,29 @@ InterpretResult VM::run(int minFrameCount) {
 
     const auto &methodNameConst = frame->closure->proto->constants[C];
     if (!std::holds_alternative<std::string>(methodNameConst)) {
-      runtimeError("OP_INVOKE: method name constant at index %d is not a string", C);
+      runtimeError("OP_INVOKE: method name constant must be string");
       return InterpretResult::RUNTIME_ERROR;
     }
     const std::string &methodName = std::get<std::string>(methodNameConst);
 
-    if (config_.debugMode) {
-      printf("[INVOKE] %s.%s() with %d args\n", receiver.typeName(), methodName.c_str(),
-             userArgCount);
-    }
-
     Value method = Value::nil();
     Value *argsStart = &frame->slots[A + 1];
 
-    enum class ReceiverKind {
-      StdLib,
-      Instance,
-      Class,
-      Callable,
-      Unknown
-    } kind = ReceiverKind::Unknown;
-
-    if (receiver.isList() || receiver.isMap() || receiver.isString()) {
+    if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
       Value directResult;
       if (StdlibDispatcher::invokeMethod(this, receiver, methodName, userArgCount, argsStart,
                                          directResult)) {
+
+        if (yieldPending_) {
+          yieldPending_ = false;
+          return InterpretResult::OK;
+        }
+
+        if (fiber != currentFiber_) {
+          fiber = currentFiber_;
+          frame = &fiber->frames[fiber->frameCount - 1];
+          SPT_DISPATCH();
+        }
         frame->slots[A] = directResult;
         SPT_DISPATCH();
       }
@@ -1378,7 +1382,6 @@ InterpretResult VM::run(int minFrameCount) {
       if (StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue)) {
         if (propertyValue.isNativeFunc()) {
           method = propertyValue;
-          kind = ReceiverKind::StdLib;
         } else {
           runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
                        methodName.c_str());
@@ -1388,21 +1391,14 @@ InterpretResult VM::run(int minFrameCount) {
         MapObject *map = static_cast<MapObject *>(receiver.asGC());
         StringObject *key = allocateString(methodName);
         method = map->get(Value::object(key));
-        if (!method.isNil()) {
-          kind = ReceiverKind::Callable;
-        }
       }
 
-      if (method.isNil() && kind == ReceiverKind::Unknown) {
+      if (method.isNil()) {
         runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-    }
-
-    else if (receiver.isInstance()) {
+    } else if (receiver.isInstance()) {
       Instance *instance = static_cast<Instance *>(receiver.asGC());
-      kind = ReceiverKind::Instance;
-
       method = instance->getField(methodName);
 
       if (method.isNil() && instance->klass) {
@@ -1413,15 +1409,11 @@ InterpretResult VM::run(int minFrameCount) {
       }
 
       if (method.isNil()) {
-        const char *klassName = instance->klass ? instance->klass->name.c_str() : "<anonymous>";
-        runtimeError("Instance of class '%s' has no method '%s'", klassName, methodName.c_str());
+        runtimeError("Instance has no method '%s'", methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-    }
-
-    else if (receiver.isClass()) {
+    } else if (receiver.isClass()) {
       ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
-      kind = ReceiverKind::Class;
 
       auto itStatic = klass->statics.find(methodName);
       if (itStatic != klass->statics.end()) {
@@ -1436,14 +1428,11 @@ InterpretResult VM::run(int minFrameCount) {
       }
 
       if (method.isNil()) {
-        runtimeError("Class '%s' has no static method '%s'", klass->name.c_str(),
-                     methodName.c_str());
+        runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-    }
-
-    else {
-      runtimeError("Cannot invoke method '%s' on non-object type '%s'", methodName.c_str(),
+    } else {
+      runtimeError("Cannot invoke method '%s' on type '%s'", methodName.c_str(),
                    receiver.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1453,77 +1442,70 @@ InterpretResult VM::run(int minFrameCount) {
       const Prototype *proto = closure->proto;
 
       if (!proto->isVararg && totalArgs != proto->numParams) {
-        runtimeError("Method '%s::%s' expects %d arguments (including this), got %d",
-                     receiver.typeName(), methodName.c_str(), proto->numParams, totalArgs);
+        runtimeError("Method '%s' expects %d arguments, got %d", methodName.c_str(),
+                     proto->numParams, totalArgs);
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      if (frameCount_ >= 64) {
-        runtimeError("Stack overflow: maximum call depth exceeded");
+      if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+        runtimeError("Stack overflow");
         return InterpretResult::RUNTIME_ERROR;
       }
-
-      CallFrame newFrame;
-      newFrame.closure = closure;
-      newFrame.ip = proto->code.data();
-      newFrame.expectedResults = 1;
-
-      newFrame.slots = &frame->slots[A + 1];
 
       for (int i = totalArgs - 1; i >= 0; --i) {
         frame->slots[A + 1 + i] = frame->slots[A + i];
       }
 
-      newFrame.slots = &frame->slots[A + 1];
+      size_t slotsOffset = (frame->slots + A + 1) - fiber->stack.data();
+
+      fiber->ensureStack(proto->maxStackSize);
+
+      Value *newSlots = fiber->stack.data() + slotsOffset;
+
+      CallFrame newFrame;
+      newFrame.closure = closure;
+      newFrame.ip = proto->code.data();
+      newFrame.expectedResults = 1;
+      newFrame.slots = newSlots;
 
       Value *targetStackTop = newFrame.slots + proto->maxStackSize;
-      if (targetStackTop > stack_.data() + config_.stackSize) {
-        runtimeError("Stack overflow: method '%s' requires %d slots", methodName.c_str(),
-                     proto->maxStackSize);
-        return InterpretResult::RUNTIME_ERROR;
-      }
 
       for (Value *p = newFrame.slots + totalArgs; p < targetStackTop; ++p) {
         *p = Value::nil();
       }
 
-      stackTop_ = targetStackTop;
-      frames_.push_back(newFrame);
-      frameCount_++;
-      frame = &frames_[frameCount_ - 1];
-    }
-
-    else if (method.isNativeFunc()) {
+      STACK_TOP = targetStackTop;
+      FRAMES.push_back(newFrame);
+      FRAME_COUNT++;
+      frame = &FRAMES[FRAME_COUNT - 1];
+    } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
 
       protect(method);
 
-      Value actualReceiver;
-      int actualArgCount;
-      Value *actualArgs;
-
-      if (kind == ReceiverKind::StdLib) {
-        actualReceiver = native->receiver;
-        actualArgCount = userArgCount;
-        actualArgs = argsStart;
-      } else {
-        actualReceiver = receiver;
-        actualArgCount = userArgCount;
-        actualArgs = argsStart;
-      }
-
-      if (native->arity != -1 && actualArgCount != native->arity) {
+      if (native->arity != -1 && userArgCount != native->arity) {
         runtimeError("Native method '%s' expects %d arguments, got %d", native->name.c_str(),
-                     native->arity, actualArgCount);
+                     native->arity, userArgCount);
         return InterpretResult::RUNTIME_ERROR;
       }
 
       hasNativeMultiReturn_ = false;
       nativeMultiReturn_.clear();
 
-      Value result = native->function(this, actualReceiver, actualArgCount, actualArgs);
+      Value result = native->function(this, receiver, userArgCount, argsStart);
 
       unprotect(1);
+
+      if (yieldPending_) {
+        yieldPending_ = false;
+        return InterpretResult::OK;
+      }
+
+      if (fiber != currentFiber_) {
+        fiber = currentFiber_;
+        frame = &fiber->frames[fiber->frameCount - 1];
+        SPT_DISPATCH();
+      }
 
       if (hasError_ && !pcallStack_.empty()) {
         return InterpretResult::RUNTIME_ERROR;
@@ -1536,11 +1518,8 @@ InterpretResult VM::run(int minFrameCount) {
       } else {
         frame->slots[A] = result;
       }
-    }
-
-    else {
-      runtimeError("'%s.%s' resolved to non-callable type '%s'", receiver.typeName(),
-                   methodName.c_str(), method.typeName());
+    } else {
+      runtimeError("'%s.%s' is not callable", receiver.typeName(), methodName.c_str());
       return InterpretResult::RUNTIME_ERROR;
     }
 
@@ -1553,34 +1532,31 @@ InterpretResult VM::run(int minFrameCount) {
     int returnCount = (B >= 1) ? B - 1 : 0;
 
     if (!frame->defers.empty()) {
-
       invokeDefers(frame);
-
       if (hasError_) {
         return InterpretResult::RUNTIME_ERROR;
       }
-
-      frame = &frames_[frameCount_ - 1];
+      frame = &FRAMES[FRAME_COUNT - 1];
     }
 
     Value *returnValues = frame->slots + A;
     int expectedResults = frame->expectedResults;
 
-    bool isRootFrame = (frameCount_ == minFrameCount + 1);
+    bool isRootFrame = (FRAME_COUNT == 1);
+
+    bool isModuleExit = (exitFrameCount_ > 0 && FRAME_COUNT == exitFrameCount_);
 
     Value *destSlot = nullptr;
-    if (!isRootFrame) {
-
+    if (!isRootFrame && !isModuleExit) {
       destSlot = frame->slots - 1;
     }
 
     closeUpvalues(frame->slots);
 
-    frameCount_--;
-    frames_.pop_back();
+    FRAME_COUNT--;
+    FRAMES.pop_back();
 
     if (isRootFrame) {
-
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
 
       if (!pcallStack_.empty()) {
@@ -1591,23 +1567,37 @@ InterpretResult VM::run(int minFrameCount) {
         hasNativeMultiReturn_ = true;
       }
 
-      if (minFrameCount == 0) {
-        unprotect(1);
+      fiber->state = FiberState::DONE;
+
+      fiber->yieldValue = (returnCount > 0) ? returnValues[0] : Value::nil();
+      lastModuleResult_ = fiber->yieldValue;
+
+      if (fiber->caller) {
+        FiberObject *caller = fiber->caller;
+        fiber->caller = nullptr;
+        currentFiber_ = caller;
+        caller->state = FiberState::RUNNING;
+
+        return InterpretResult::OK;
       }
+
+      unprotect(1);
       return InterpretResult::OK;
     }
 
-    frame = &frames_[frameCount_ - 1];
+    if (isModuleExit) {
+      lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
+      return InterpretResult::OK;
+    }
+
+    frame = &FRAMES[FRAME_COUNT - 1];
 
     if (expectedResults == -1) {
-
       for (int i = 0; i < returnCount; ++i) {
         destSlot[i] = returnValues[i];
       }
-
-      stackTop_ = destSlot + returnCount;
+      STACK_TOP = destSlot + returnCount;
     } else {
-
       for (int i = 0; i < expectedResults; ++i) {
         if (i < returnCount) {
           destSlot[i] = returnValues[i];
@@ -1615,8 +1605,7 @@ InterpretResult VM::run(int minFrameCount) {
           destSlot[i] = Value::nil();
         }
       }
-
-      stackTop_ = frame->slots + frame->closure->proto->maxStackSize;
+      STACK_TOP = frame->slots + frame->closure->proto->maxStackSize;
     }
 
     SPT_DISPATCH();
@@ -1637,6 +1626,12 @@ InterpretResult VM::run(int minFrameCount) {
 
     Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
 
+    if (FRAME_COUNT == 0 || hasError_) {
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    frame = &FRAMES[FRAME_COUNT - 1];
+
     if (exportsTable.isMap()) {
       MapObject *errorCheck = static_cast<MapObject *>(exportsTable.asGC());
       StringObject *errorKey = allocateString("error");
@@ -1645,19 +1640,15 @@ InterpretResult VM::run(int minFrameCount) {
       if (errorFlag.isBool() && errorFlag.asBool()) {
         StringObject *msgKey = allocateString("message");
         Value msgVal = errorCheck->get(Value::object(msgKey));
-
-        const char *errorMsg = "Module load failed";
-        if (msgVal.isString()) {
-          errorMsg = static_cast<StringObject *>(msgVal.asGC())->data.c_str();
-        }
-
+        const char *errorMsg = msgVal.isString()
+                                   ? static_cast<StringObject *>(msgVal.asGC())->data.c_str()
+                                   : "Module load failed";
         runtimeError("Import error: %s", errorMsg);
         return InterpretResult::RUNTIME_ERROR;
       }
     }
 
     frame->slots[A] = exportsTable;
-    frame = &frames_[frameCount_ - 1];
     SPT_DISPATCH();
   }
 
@@ -1668,13 +1659,9 @@ InterpretResult VM::run(int minFrameCount) {
     const auto &moduleNameConst = frame->closure->proto->constants[B];
     const auto &symbolNameConst = frame->closure->proto->constants[C];
 
-    if (!std::holds_alternative<std::string>(moduleNameConst)) {
-      runtimeError("Module name must be a string constant");
-      return InterpretResult::RUNTIME_ERROR;
-    }
-
-    if (!std::holds_alternative<std::string>(symbolNameConst)) {
-      runtimeError("Symbol name must be a string constant");
+    if (!std::holds_alternative<std::string>(moduleNameConst) ||
+        !std::holds_alternative<std::string>(symbolNameConst)) {
+      runtimeError("Module and symbol names must be string constants");
       return InterpretResult::RUNTIME_ERROR;
     }
 
@@ -1683,6 +1670,12 @@ InterpretResult VM::run(int minFrameCount) {
     const char *currentPath = frame->closure->proto->source.c_str();
 
     Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
+
+    if (FRAME_COUNT == 0 || hasError_) {
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    frame = &FRAMES[FRAME_COUNT - 1];
 
     if (exportsTable.isMap()) {
       MapObject *exports = static_cast<MapObject *>(exportsTable.asGC());
@@ -1693,73 +1686,44 @@ InterpretResult VM::run(int minFrameCount) {
       if (errorFlag.isBool() && errorFlag.asBool()) {
         StringObject *msgKey = allocateString("message");
         Value msgVal = exports->get(Value::object(msgKey));
-
-        const char *errorMsg = "Module load failed";
-        if (msgVal.isString()) {
-          errorMsg = static_cast<StringObject *>(msgVal.asGC())->data.c_str();
-        }
-
+        const char *errorMsg = msgVal.isString()
+                                   ? static_cast<StringObject *>(msgVal.asGC())->data.c_str()
+                                   : "Module load failed";
         runtimeError("Import error: %s", errorMsg);
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      StringObject *symbolKey = allocateString(symbolName);
-      Value symbolValue = exports->get(Value::object(symbolKey));
-
-      if (symbolValue.isNil()) {
-        runtimeError("Module '%s' does not export '%s'", moduleName.c_str(), symbolName.c_str());
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
+      StringObject *symKey = allocateString(symbolName);
+      Value symbolValue = exports->get(Value::object(symKey));
       frame->slots[A] = symbolValue;
-      frame = &frames_[frameCount_ - 1];
     } else {
-      runtimeError("Import failed: expected module exports table");
-      return InterpretResult::RUNTIME_ERROR;
+      frame->slots[A] = Value::nil();
     }
 
     SPT_DISPATCH();
   }
 
-  SPT_OPCODE(OP_EXPORT) {
-    if (config_.debugMode) {
-      uint8_t A = GETARG_A(instruction);
-      Value exportedValue = frame->slots[A];
-      printf("[EXPORT] Exported value: %s\n", exportedValue.toString().c_str());
-    }
-    SPT_DISPATCH();
-  }
+  SPT_OPCODE(OP_EXPORT) { SPT_DISPATCH(); }
 
   SPT_OPCODE(OP_DEFER) {
     uint8_t A = GETARG_A(instruction);
-    Value closureVal = frame->slots[A];
-    if (closureVal.isClosure()) {
-      frame->defers.push_back(closureVal);
-    } else {
-      runtimeError("OP_DEFER expects a closure");
-      return InterpretResult::RUNTIME_ERROR;
-    }
+    Value deferClosure = frame->slots[A];
+    frame->defers.push_back(deferClosure);
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_ADDI) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
+    int8_t sC = static_cast<int8_t>(GETARG_C(instruction));
+    Value b = frame->slots[B];
 
-    int8_t imm = static_cast<int8_t>(GETARG_C(instruction));
-
-    Value bVal = frame->slots[B];
-
-    if (bVal.isInt()) {
-      frame->slots[A] = Value::integer(bVal.asInt() + imm);
-    }
-
-    else if (bVal.isFloat()) {
-      frame->slots[A] = Value::number(bVal.asFloat() + imm);
-    }
-
-    else {
-      runtimeError("Attempt to perform arithmetic on non-number value");
+    if (b.isInt()) {
+      frame->slots[A] = Value::integer(b.asInt() + sC);
+    } else if (b.isFloat()) {
+      frame->slots[A] = Value::number(b.asFloat() + sC);
+    } else {
+      runtimeError("ADDI requires numeric operand");
       return InterpretResult::RUNTIME_ERROR;
     }
     SPT_DISPATCH();
@@ -1769,26 +1733,26 @@ InterpretResult VM::run(int minFrameCount) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-
-    Value kVal = std::visit(
-        [](auto &&arg) -> Value {
+    const auto &constant = frame->closure->proto->constants[B];
+    Value kVal;
+    std::visit(
+        [&](auto &&arg) {
           using T = std::decay_t<decltype(arg)>;
-          if constexpr (std::is_same_v<T, std::nullptr_t>)
-            return Value::nil();
-          else if constexpr (std::is_same_v<T, bool>)
-            return Value::boolean(arg);
-          else if constexpr (std::is_same_v<T, int64_t>)
-            return Value::integer(arg);
-          else if constexpr (std::is_same_v<T, double>)
-            return Value::number(arg);
-          else if constexpr (std::is_same_v<T, std::string>)
-            return Value::nil();
-          return Value::nil();
+          if constexpr (std::is_same_v<T, std::nullptr_t>) {
+            kVal = Value::nil();
+          } else if constexpr (std::is_same_v<T, bool>) {
+            kVal = Value::boolean(arg);
+          } else if constexpr (std::is_same_v<T, int64_t>) {
+            kVal = Value::integer(arg);
+          } else if constexpr (std::is_same_v<T, double>) {
+            kVal = Value::number(arg);
+          } else if constexpr (std::is_same_v<T, std::string>) {
+            kVal = Value::object(allocateString(arg));
+          }
         },
-        frame->closure->proto->constants[B]);
+        constant);
 
     bool equal = valuesEqual(frame->slots[A], kVal);
-
     if (equal != (C != 0)) {
       frame->ip++;
     }
@@ -1797,18 +1761,15 @@ InterpretResult VM::run(int minFrameCount) {
 
   SPT_OPCODE(OP_EQI) {
     uint8_t A = GETARG_A(instruction);
-    int8_t imm = static_cast<int8_t>(GETARG_B(instruction));
+    int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
     uint8_t C = GETARG_C(instruction);
-
-    Value val = frame->slots[A];
+    Value a = frame->slots[A];
     bool equal = false;
-
-    if (val.isInt()) {
-      equal = (val.asInt() == imm);
-    } else if (val.isFloat()) {
-      equal = (val.asFloat() == imm);
+    if (a.isInt()) {
+      equal = (a.asInt() == sB);
+    } else if (a.isFloat()) {
+      equal = (a.asFloat() == static_cast<double>(sB));
     }
-
     if (equal != (C != 0)) {
       frame->ip++;
     }
@@ -1817,21 +1778,15 @@ InterpretResult VM::run(int minFrameCount) {
 
   SPT_OPCODE(OP_LTI) {
     uint8_t A = GETARG_A(instruction);
-    int8_t imm = static_cast<int8_t>(GETARG_B(instruction));
+    int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
     uint8_t C = GETARG_C(instruction);
-
-    Value val = frame->slots[A];
+    Value a = frame->slots[A];
     bool result = false;
-
-    if (val.isInt()) {
-      result = (val.asInt() < imm);
-    } else if (val.isFloat()) {
-      result = (val.asFloat() < imm);
-    } else {
-      runtimeError("Attempt to compare non-number value");
-      return InterpretResult::RUNTIME_ERROR;
+    if (a.isInt()) {
+      result = (a.asInt() < sB);
+    } else if (a.isFloat()) {
+      result = (a.asFloat() < static_cast<double>(sB));
     }
-
     if (result != (C != 0)) {
       frame->ip++;
     }
@@ -1840,32 +1795,203 @@ InterpretResult VM::run(int minFrameCount) {
 
   SPT_OPCODE(OP_LEI) {
     uint8_t A = GETARG_A(instruction);
-    int8_t imm = static_cast<int8_t>(GETARG_B(instruction));
+    int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
     uint8_t C = GETARG_C(instruction);
-
-    Value val = frame->slots[A];
+    Value a = frame->slots[A];
     bool result = false;
-
-    if (val.isInt()) {
-      result = (val.asInt() <= imm);
-    } else if (val.isFloat()) {
-      result = (val.asFloat() <= imm);
-    } else {
-      runtimeError("Attempt to compare non-number value");
-      return InterpretResult::RUNTIME_ERROR;
+    if (a.isInt()) {
+      result = (a.asInt() <= sB);
+    } else if (a.isFloat()) {
+      result = (a.asFloat() <= static_cast<double>(sB));
     }
-
     if (result != (C != 0)) {
       frame->ip++;
     }
     SPT_DISPATCH();
   }
+
   SPT_DISPATCH_LOOP_END()
+
+#undef FIBER
+#undef STACK_TOP
+#undef FRAMES
+#undef FRAME_COUNT
+}
+
+FiberObject *VM::allocateFiber(Closure *closure) {
+  FiberObject *fiber = gc_.allocate<FiberObject>();
+  fiber->closure = closure;
+  fiber->state = FiberState::NEW;
+  return fiber;
+}
+
+void VM::initFiberForCall(FiberObject *fiber, Value arg) {
+  fiber->stackTop = fiber->stack.data();
+  fiber->frames.clear();
+  fiber->frameCount = 0;
+  fiber->openUpvalues = nullptr;
+
+  const Prototype *proto = fiber->closure->proto;
+
+  fiber->ensureStack(proto->maxStackSize);
+
+  *fiber->stackTop++ = arg;
+
+  CallFrame frame;
+  frame.closure = fiber->closure;
+  frame.ip = proto->code.data();
+  frame.slots = fiber->stack.data();
+  frame.expectedResults = 1;
+
+  Value *frameEnd = frame.slots + proto->maxStackSize;
+  for (Value *p = fiber->stackTop; p < frameEnd; ++p) {
+    *p = Value::nil();
+  }
+  fiber->stackTop = frameEnd;
+
+  fiber->frames.push_back(frame);
+  fiber->frameCount = 1;
+  fiber->state = FiberState::RUNNING;
+}
+
+Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
+  if (!fiber) {
+    throwError(Value::object(allocateString("Cannot call nil fiber")));
+    return Value::nil();
+  }
+
+  if (!fiber->canResume()) {
+    const char *state = "unknown";
+    switch (fiber->state) {
+    case FiberState::RUNNING:
+      state = "running";
+      break;
+    case FiberState::DONE:
+      state = "finished";
+      break;
+    case FiberState::ERROR:
+      state = "aborted";
+      break;
+    default:
+      break;
+    }
+
+    if (isTry) {
+
+      fiber->state = FiberState::ERROR;
+      fiber->error =
+          Value::object(allocateString(std::string("Cannot call fiber that is ") + state));
+      fiber->hasError = true;
+      return Value::nil();
+    }
+
+    throwError(Value::object(allocateString(std::string("Cannot call fiber that is ") + state)));
+    return Value::nil();
+  }
+
+  FiberObject *caller = currentFiber_;
+  fiber->caller = caller;
+
+  if (fiber->isNew()) {
+    initFiberForCall(fiber, arg);
+  } else {
+
+    fiber->state = FiberState::RUNNING;
+
+    CallFrame *frame = &fiber->frames.back();
+
+    const uint32_t *prevIP = frame->ip - 1;
+    uint32_t instruction = *prevIP;
+    OpCode op = GET_OPCODE(instruction);
+
+    if (op == OpCode::OP_CALL || op == OpCode::OP_INVOKE) {
+      uint8_t A = GETARG_A(instruction);
+      frame->slots[A] = arg;
+    } else {
+
+      *fiber->stackTop++ = arg;
+    }
+  }
+
+  if (caller->state == FiberState::RUNNING) {
+    caller->state = FiberState::SUSPENDED;
+  }
+
+  currentFiber_ = fiber;
+
+  int savedExitFrameCount = exitFrameCount_;
+  exitFrameCount_ = fiber->frameCount;
+
+  InterpretResult result = run();
+
+  exitFrameCount_ = savedExitFrameCount;
+  yieldPending_ = false;
+
+  Value returnValue = Value::nil();
+
+  if (fiber->state == FiberState::DONE || fiber->state == FiberState::SUSPENDED) {
+    returnValue = fiber->yieldValue;
+  } else if (fiber->state == FiberState::ERROR) {
+
+    if (fiber->hasError && !isTry) {
+      throwError(fiber->error);
+    }
+
+    return Value::nil();
+  }
+
+  caller->state = FiberState::RUNNING;
+  currentFiber_ = caller;
+
+  return returnValue;
+}
+
+void VM::fiberYield(Value value) {
+  FiberObject *fiber = currentFiber_;
+
+  if (fiber == mainFiber_) {
+    throwError(Value::object(allocateString("Cannot yield from main fiber")));
+    return;
+  }
+
+  FiberObject *caller = fiber->caller;
+  if (!caller) {
+    throwError(Value::object(allocateString("Fiber has no caller to yield to")));
+    return;
+  }
+
+  fiber->state = FiberState::SUSPENDED;
+  fiber->yieldValue = value;
+
+  caller->state = FiberState::RUNNING;
+
+  currentFiber_ = caller;
+
+  yieldPending_ = true;
+}
+
+void VM::fiberAbort(Value error) {
+  FiberObject *fiber = currentFiber_;
+  fiber->state = FiberState::ERROR;
+  fiber->error = error;
+  fiber->hasError = true;
+
+  FiberObject *caller = fiber->caller;
+  if (caller) {
+
+    currentFiber_ = caller;
+    caller->state = FiberState::RUNNING;
+    yieldPending_ = true;
+  } else {
+
+    throwError(error);
+  }
 }
 
 UpValue *VM::captureUpvalue(Value *local) {
+  FiberObject *fiber = currentFiber_;
   UpValue *prevUpvalue = nullptr;
-  UpValue *upvalue = openUpvalues_;
+  UpValue *upvalue = fiber->openUpvalues;
 
   while (upvalue != nullptr && upvalue->location > local) {
     prevUpvalue = upvalue;
@@ -1876,86 +2002,35 @@ UpValue *VM::captureUpvalue(Value *local) {
     return upvalue;
   }
 
-  UpValue *newUpvalue = gc_.allocate<UpValue>();
-  newUpvalue->location = local;
-  newUpvalue->closed = Value::nil();
-  newUpvalue->nextOpen = upvalue;
+  UpValue *createdUpvalue = gc_.allocate<UpValue>();
+  createdUpvalue->location = local;
+  createdUpvalue->nextOpen = upvalue;
 
   if (prevUpvalue == nullptr) {
-    openUpvalues_ = newUpvalue;
+    fiber->openUpvalues = createdUpvalue;
   } else {
-    prevUpvalue->nextOpen = newUpvalue;
+    prevUpvalue->nextOpen = createdUpvalue;
   }
 
-  return newUpvalue;
+  return createdUpvalue;
 }
 
 void VM::closeUpvalues(Value *last) {
-  while (openUpvalues_ != nullptr && openUpvalues_->location >= last) {
-    UpValue *upvalue = openUpvalues_;
+  FiberObject *fiber = currentFiber_;
+
+  while (fiber->openUpvalues != nullptr && fiber->openUpvalues->location >= last) {
+    UpValue *upvalue = fiber->openUpvalues;
     upvalue->closed = *upvalue->location;
     upvalue->location = &upvalue->closed;
-    openUpvalues_ = upvalue->nextOpen;
+    fiber->openUpvalues = upvalue->nextOpen;
   }
-}
-
-StringObject *VM::allocateString(const std::string &str) {
-  auto it = strings_.find(str);
-  if (it != strings_.end()) {
-    return it->second;
-  }
-
-  StringObject *obj = gc_.allocate<StringObject>();
-  obj->data = str;
-  obj->hash = std::hash<std::string>{}(str);
-
-  strings_[str] = obj;
-  return obj;
-}
-
-Closure *VM::allocateClosure(const Prototype *proto) {
-  Closure *closure = gc_.allocate<Closure>();
-  closure->proto = proto;
-  closure->upvalues.reserve(proto->numUpvalues);
-  return closure;
-}
-
-ClassObject *VM::allocateClass(const std::string &name) {
-  ClassObject *klass = gc_.allocate<ClassObject>();
-  klass->name = name;
-  return klass;
-}
-
-Instance *VM::allocateInstance(ClassObject *klass) {
-  Instance *instance = gc_.allocate<Instance>();
-  instance->klass = klass;
-  return instance;
-}
-
-ListObject *VM::allocateList(int capacity) {
-  ListObject *list = gc_.allocate<ListObject>();
-  if (capacity > 0) {
-    list->elements.resize(capacity, Value::nil());
-  }
-  return list;
-}
-
-MapObject *VM::allocateMap(int capacity) {
-  MapObject *map = gc_.allocate<MapObject>();
-  if (capacity > 0) {
-    map->entries.reserve(capacity);
-  }
-  return map;
 }
 
 void VM::defineGlobal(const std::string &name, Value value) { globals_[name] = value; }
 
 Value VM::getGlobal(const std::string &name) {
   auto it = globals_.find(name);
-  if (it != globals_.end()) {
-    return it->second;
-  }
-  return Value::nil();
+  return (it != globals_.end()) ? it->second : Value::nil();
 }
 
 void VM::setGlobal(const std::string &name, Value value) { globals_[name] = value; }
@@ -1965,96 +2040,16 @@ void VM::registerNative(const std::string &name, NativeFn fn, int arity, uint8_t
   native->name = name;
   native->function = fn;
   native->arity = arity;
-  native->receiver = Value::nil();
   defineGlobal(name, Value::object(native));
-}
-
-bool VM::hotReload(const std::string &moduleName, const CompiledChunk &newChunk) {
-  modules_[moduleName] = newChunk;
-
-  for (auto &[name, value] : globals_) {
-    if (value.isClass()) {
-      auto *klass = static_cast<ClassObject *>(value.asGC());
-      klass->methods.clear();
-    }
-  }
-
-  return true;
-}
-
-void VM::registerModule(const std::string &name, const CompiledChunk &chunk) {
-  modules_[name] = chunk;
-}
-
-Value VM::importModule(const std::string &path) {
-  auto it = modules_.find(path);
-  if (it == modules_.end()) {
-    runtimeError("Module not found: %s", path.c_str());
-    return Value::nil();
-  }
-
-  InterpretResult result = interpret(it->second);
-  if (result != InterpretResult::OK) {
-    return Value::nil();
-  }
-
-  Value moduleEnv = lastModuleResult_;
-
-  if (!moduleEnv.isMap()) {
-    return Value::nil();
-  }
-
-  MapObject *envMap = static_cast<MapObject *>(moduleEnv.asGC());
-  MapObject *exports = allocateMap(8);
-
-  for (const auto &exportName : it->second.exports) {
-    StringObject *key = allocateString(exportName);
-    Value val = envMap->get(Value::object(key));
-    exports->set(Value::object(key), val);
-  }
-
-  return Value::object(exports);
-}
-
-InterpretResult VM::executeModule(const CompiledChunk &chunk) {
-  Closure *mainClosure = allocateClosure(&chunk.mainProto);
-  protect(Value::object(mainClosure));
-
-  Value *frameStart = stackTop_;
-
-  CallFrame frame;
-  frame.closure = mainClosure;
-  frame.ip = mainClosure->proto->code.data();
-  frame.slots = frameStart;
-  frame.expectedResults = 0;
-
-  ensureStack(mainClosure->proto->maxStackSize);
-
-  int startFrameCount = frameCount_;
-  frames_.push_back(frame);
-  frameCount_++;
-
-  Value *frameEnd = frame.slots + mainClosure->proto->maxStackSize;
-  for (Value *slot = frame.slots; slot < frameEnd; ++slot) {
-    *slot = Value::nil();
-  }
-  stackTop_ = frameEnd;
-
-  InterpretResult result = run(startFrameCount);
-
-  stackTop_ = frameStart;
-
-  unprotect(1);
-
-  return result;
 }
 
 bool VM::valuesEqual(Value a, Value b) { return a.equals(b); }
 
 void VM::resetStack() {
-  stackTop_ = stack_.data();
-  frameCount_ = 0;
-  openUpvalues_ = nullptr;
+  if (mainFiber_) {
+    mainFiber_->reset();
+  }
+  currentFiber_ = mainFiber_;
 
   pcallStack_.clear();
   hasError_ = false;
@@ -2065,6 +2060,21 @@ void VM::resetStack() {
 
 void VM::collectGarbage() { gc_.collect(); }
 
+void VM::throwError(Value errorValue) {
+  if (!pcallStack_.empty()) {
+    hasError_ = true;
+    errorValue_ = errorValue;
+  } else {
+    std::string errorMsg;
+    if (errorValue.isString()) {
+      errorMsg = static_cast<StringObject *>(errorValue.asGC())->data;
+    } else {
+      errorMsg = "error: " + errorValue.toString();
+    }
+    runtimeError("%s", errorMsg.c_str());
+  }
+}
+
 void VM::runtimeError(const char *format, ...) {
   char buffer[512];
   va_list args;
@@ -2073,11 +2083,11 @@ void VM::runtimeError(const char *format, ...) {
   va_end(args);
 
   std::string message = buffer;
-
   message += "\n----------------\nCall stack:";
 
-  for (int i = frameCount_ - 1; i >= 0; --i) {
-    CallFrame &frame = frames_[i];
+  FiberObject *fiber = currentFiber_;
+  for (int i = fiber->frameCount - 1; i >= 0; --i) {
+    CallFrame &frame = fiber->frames[i];
     const Prototype *proto = frame.closure->proto;
     size_t instruction = frame.ip - proto->code.data() - 1;
     int line = getLine(proto, instruction);
@@ -2118,28 +2128,36 @@ int VM::getLine(const Prototype *proto, size_t instruction) {
   return line;
 }
 
+std::string VM::getStackTrace() {
+  std::string trace = "Call stack:";
+  FiberObject *fiber = currentFiber_;
+
+  for (int i = fiber->frameCount - 1; i >= 0; --i) {
+    CallFrame &frame = fiber->frames[i];
+    const Prototype *proto = frame.closure->proto;
+    size_t instruction = frame.ip - proto->code.data() - 1;
+    int line = getLine(proto, instruction);
+    trace += "\n  [line " + std::to_string(line) + "] in ";
+    trace += proto->name.empty() ? "<script>" : proto->name + "()";
+  }
+
+  return trace;
+}
+
 void VM::invokeDefers(CallFrame *framePtr) {
   if (framePtr->defers.empty())
     return;
 
-  size_t frameIndex = framePtr - frames_.data();
+  FiberObject *fiber = currentFiber_;
+  size_t frameIndex = framePtr - fiber->frames.data();
 
-  while (!frames_[frameIndex].defers.empty()) {
-    Value deferVal = frames_[frameIndex].defers.back();
-
-    frames_[frameIndex].defers.pop_back();
+  while (!fiber->frames[frameIndex].defers.empty()) {
+    Value deferVal = fiber->frames[frameIndex].defers.back();
+    fiber->frames[frameIndex].defers.pop_back();
 
     if (deferVal.isClosure()) {
       Closure *closure = static_cast<Closure *>(deferVal.asGC());
-
-      if (stackTop_ >= stack_.data() + config_.stackSize) {
-        runtimeError("Stack overflow during defer");
-        return;
-      }
-
-      *stackTop_ = deferVal;
-      stackTop_++;
-
+      *fiber->stackTop++ = deferVal;
       call(closure, 0);
     }
 
@@ -2148,13 +2166,72 @@ void VM::invokeDefers(CallFrame *framePtr) {
   }
 }
 
-void VM::dumpStack() const {
-  printf("\n=== Stack Dump ===\n");
-  printf("Stack range: [%p, %p)\n", static_cast<const void *>(stack_.data()),
-         static_cast<const void *>(stackTop_));
+void VM::setNativeMultiReturn(const std::vector<Value> &values) {
+  hasNativeMultiReturn_ = true;
+  nativeMultiReturn_ = values;
+}
 
-  for (const Value *slot = stack_.data(); slot < stackTop_; ++slot) {
-    size_t offset = slot - stack_.data();
+void VM::setNativeMultiReturn(std::initializer_list<Value> values) {
+  hasNativeMultiReturn_ = true;
+  nativeMultiReturn_.clear();
+  nativeMultiReturn_.insert(nativeMultiReturn_.end(), values.begin(), values.end());
+}
+
+StringObject *VM::allocateString(const std::string &str) {
+  auto it = strings_.find(str);
+  if (it != strings_.end()) {
+    return it->second;
+  }
+
+  StringObject *strObj = gc_.allocate<StringObject>();
+  strObj->data = str;
+  strObj->hash = static_cast<uint32_t>(std::hash<std::string>{}(str));
+  strings_[str] = strObj;
+  return strObj;
+}
+
+Closure *VM::allocateClosure(const Prototype *proto) {
+  Closure *closure = gc_.allocate<Closure>();
+  closure->proto = proto;
+  return closure;
+}
+
+ClassObject *VM::allocateClass(const std::string &name) {
+  ClassObject *klass = gc_.allocate<ClassObject>();
+  klass->name = name;
+  return klass;
+}
+
+Instance *VM::allocateInstance(ClassObject *klass) {
+  Instance *instance = gc_.allocate<Instance>();
+  instance->klass = klass;
+  return instance;
+}
+
+ListObject *VM::allocateList(int capacity) {
+  ListObject *list = gc_.allocate<ListObject>();
+  if (capacity > 0) {
+    list->elements.resize(capacity, Value::nil());
+  }
+  return list;
+}
+
+MapObject *VM::allocateMap(int capacity) {
+  MapObject *map = gc_.allocate<MapObject>();
+  if (capacity > 0) {
+    map->entries.reserve(capacity);
+  }
+  return map;
+}
+
+void VM::dumpStack() const {
+  FiberObject *fiber = currentFiber_;
+  printf("\n=== Stack Dump (Fiber %p) ===\n", static_cast<const void *>(fiber));
+  printf("Stack range: [%p, %p)\n", static_cast<const void *>(fiber->stack.data()),
+         static_cast<const void *>(fiber->stackTop));
+
+  for (const Value *slot = fiber->stack.data(); slot < fiber->stackTop; ++slot) {
+    size_t offset = slot - fiber->stack.data();
     printf("  [%04zu] %s\n", offset, slot->toString().c_str());
   }
   printf("==================\n\n");
@@ -2169,50 +2246,48 @@ void VM::dumpGlobals() const {
 }
 
 int VM::getInfo(Value *f, const char *what, DebugInfo *out_info) {
-  if (!f || !what || !out_info) {
+  if (!f || !what || !out_info)
     return 0;
-  }
+
   if (f->isClosure()) {
     const Closure *closure = static_cast<const Closure *>(f->asGC());
     const Prototype *proto = closure->proto;
     while (*what) {
       char c = *what++;
       switch (c) {
-      case 'S': {
+      case 'S':
         out_info->source = proto->source;
         out_info->shortSrc = proto->short_src;
         out_info->lineDefined = proto->lineDefined;
         out_info->lastLineDefined = proto->lastLineDefined;
-      } break;
+        break;
       }
     }
     return 1;
-  } else if (f->isNativeFunc()) {
-    return 0;
-  } else {
-    return 0;
   }
+  return 0;
 }
 
 int VM::getStack(int f, const char *what, DebugInfo *out_info) {
-  if (!what || !out_info) {
+  if (!what || !out_info)
     return 0;
-  }
-  if (f < 0 || f >= frameCount_) {
+
+  FiberObject *fiber = currentFiber_;
+  if (f < 0 || f >= fiber->frameCount)
     return 0;
-  }
-  CallFrame &frame = frames_[frames_.size() - 1 - f];
+
+  CallFrame &frame = fiber->frames[fiber->frames.size() - 1 - f];
   const Prototype *proto = frame.closure->proto;
 
   while (*what) {
     char c = *what++;
     switch (c) {
-    case 'S': {
+    case 'S':
       out_info->source = proto->source;
       out_info->shortSrc = proto->short_src;
       out_info->lineDefined = proto->lineDefined;
       out_info->lastLineDefined = proto->lastLineDefined;
-    } break;
+      break;
     case 'l': {
       size_t instruction = frame.ip - proto->code.data() - 1;
       out_info->currentLine = getLine(proto, instruction);
@@ -2222,50 +2297,50 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
   return 1;
 }
 
-void VM::throwError(Value errorValue) {
-  if (!pcallStack_.empty()) {
-    hasError_ = true;
-    errorValue_ = errorValue;
-  } else {
-    std::string errorMsg;
-    if (errorValue.isString()) {
-      errorMsg = static_cast<StringObject *>(errorValue.asGC())->data;
-    } else {
-      errorMsg = "error: " + errorValue.toString();
+bool VM::hotReload(const std::string &moduleName, const CompiledChunk &newChunk) {
+  modules_[moduleName] = newChunk;
+
+  for (auto &[name, value] : globals_) {
+    if (value.isClass()) {
+      auto *klass = static_cast<ClassObject *>(value.asGC());
+      klass->methods.clear();
     }
-    runtimeError("%s", errorMsg.c_str());
-  }
-}
-
-std::string VM::getStackTrace() {
-  std::string trace = "Call stack:";
-
-  for (int i = frameCount_ - 1; i >= 0; --i) {
-    CallFrame &frame = frames_[i];
-    const Prototype *proto = frame.closure->proto;
-    size_t instruction = frame.ip - proto->code.data() - 1;
-    int line = getLine(proto, instruction);
-    trace += "\n  [line " + std::to_string(line) + "] in ";
-    trace += proto->name.empty() ? "<script>" : proto->name + "()";
   }
 
-  return trace;
+  return true;
 }
 
-void VM::setNativeMultiReturn(const std::vector<Value> &values) {
-  hasNativeMultiReturn_ = true;
-  nativeMultiReturn_ = values;
+void VM::registerModule(const std::string &name, const CompiledChunk &chunk) {
+  modules_[name] = chunk;
 }
 
-void VM::setNativeMultiReturn(std::initializer_list<Value> values) {
-  hasNativeMultiReturn_ = true;
-  nativeMultiReturn_.clear();
-  nativeMultiReturn_.insert(nativeMultiReturn_.end(), values.begin(), values.end());
-}
+Value VM::importModule(const std::string &path) {
+  auto it = modules_.find(path);
+  if (it == modules_.end()) {
+    runtimeError("Module not found: %s", path.c_str());
+    return Value::nil();
+  }
 
-InterpretResult VM::protectedCall(Value callee, int argCount, Value *resultSlot,
-                                  int expectedResults) {
-  return InterpretResult::OK;
+  InterpretResult result = interpret(it->second);
+  if (result != InterpretResult::OK) {
+    return Value::nil();
+  }
+
+  Value moduleEnv = lastModuleResult_;
+  if (!moduleEnv.isMap()) {
+    return Value::nil();
+  }
+
+  MapObject *envMap = static_cast<MapObject *>(moduleEnv.asGC());
+  MapObject *exports = allocateMap(8);
+
+  for (const auto &exportName : it->second.exports) {
+    StringObject *key = allocateString(exportName);
+    Value val = envMap->get(Value::object(key));
+    exports->set(Value::object(key), val);
+  }
+
+  return Value::object(exports);
 }
 
 } // namespace spt

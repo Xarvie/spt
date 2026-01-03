@@ -2,25 +2,18 @@
 
 #include "../Common/OpCode.h"
 #include "../Common/Types.h"
+#include "Fiber.h" // Fiber 定义了 CallFrame
 #include "GC.h"
 #include "Module.h"
 #include "Object.h"
 #include "Value.h"
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace spt {
-
-// 调用帧
-struct CallFrame {
-  Closure *closure;
-  const Instruction *ip;     // 指令指针
-  Value *slots;              // 栈帧基址
-  int expectedResults = 1;   // 期望返回值数量 (-1 表示全部)
-  std::vector<Value> defers; // 存储当前帧所有 defer 的闭包 (LIFO 队列)
-};
 
 // 执行结果
 enum class InterpretResult { OK, COMPILE_ERROR, RUNTIME_ERROR };
@@ -29,25 +22,26 @@ enum class InterpretResult { OK, COMPILE_ERROR, RUNTIME_ERROR };
 // Protected call 上下文 - 用于 pcall 的错误恢复
 // ============================================================================
 struct ProtectedCallContext {
-  int frameCount;        // 进入pcall时的帧数
-  Value *stackTop;       // 进入pcall时的栈顶
-  Value *resultSlot;     // 存放结果的槽位
-  int expectedResults;   // 期望的返回值数量
-  UpValue *openUpvalues; // 进入pcall时的开放upvalue链表
-  bool active = false;   // 是否处于受保护调用中
+  FiberObject *fiber;    // pcall 时的 fiber
+  int frameCount;        // 进入 pcall 时的帧数
+  Value *stackTop;       // 进入 pcall 时的栈顶
+  UpValue *openUpvalues; // 进入 pcall 时的开放 upvalue 链表
+  bool active = false;
 };
 
 // 虚拟机配置
 struct VMConfig {
-  size_t stackSize = 256 * 1024;      // 栈大小
+  size_t stackSize = 256 * 1024;      // 栈大小（每个 fiber）
   size_t heapSize = 64 * 1024 * 1024; // 堆大小
   bool enableGC = true;
   bool debugMode = false;
-  bool enableHotReload = true;          // 启用模块热更新
-  std::vector<std::string> modulePaths; // 模块搜索路径
+  bool enableHotReload = true;
+  std::vector<std::string> modulePaths;
 };
 
+// ============================================================================
 // 虚拟机
+// ============================================================================
 class VM {
 public:
   friend class GC;
@@ -58,13 +52,12 @@ public:
 
   explicit VM(const VMConfig &config = {});
   ~VM();
-  void ensureStack(int neededSlots);
+
   // === 执行 ===
   InterpretResult interpret(const CompiledChunk &chunk);
   InterpretResult call(Closure *closure, int argCount);
 
   // === 热更新 ===
-  // 替换模块字节码,立即生效
   bool hotReload(const std::string &moduleName, const CompiledChunk &newChunk);
 
   ModuleManager *moduleManager() { return moduleManager_.get(); }
@@ -91,7 +84,6 @@ public:
   // === 调试 ===
   void dumpStack() const;
   void dumpGlobals() const;
-
   int getInfo(Value *f, const char *what, DebugInfo *out_info);
   int getStack(int f, const char *what, DebugInfo *out_info);
 
@@ -107,16 +99,33 @@ public:
   Instance *allocateInstance(ClassObject *klass);
   ListObject *allocateList(int capacity);
   MapObject *allocateMap(int capacity);
+  FiberObject *allocateFiber(Closure *closure);
 
   Value getLastModuleResult() const { return lastModuleResult_; }
 
-  inline void protect(Value value) { *stackTop_++ = value; }
+  // === 栈保护（通过当前 fiber）===
+  void protect(Value value);
+  void unprotect(int count = 1);
 
-  inline void unprotect(int count = 1) { stackTop_ -= count; }
+  // === Fiber 访问 ===
+  FiberObject *currentFiber() const { return currentFiber_; }
+
+  FiberObject *mainFiber() const { return mainFiber_; }
+
+  // === Fiber 操作（供原生函数使用）===
+  // 调用 fiber，返回 yield 或 return 的值
+  Value fiberCall(FiberObject *fiber, Value arg, bool isTry);
+  // 从当前 fiber yield
+  void fiberYield(Value value);
+  // 中止当前 fiber
+  void fiberAbort(Value error);
+
+  // === 错误处理（公开供 Fiber 使用）===
+  void throwError(Value errorValue);
 
 private:
-  // === 执行循环 ===
-  InterpretResult run(int minFrameCount);
+  // === 核心执行循环 ===
+  InterpretResult run();
 
   // === 内置函数注册 ===
   void registerBuiltinFunctions();
@@ -132,62 +141,53 @@ private:
 
   // === 错误处理 ===
   void runtimeError(const char *format, ...);
-
   int getLine(const Prototype *proto, size_t instruction);
+  std::string getStackTrace();
 
-  // 执行指定帧的所有 defer
+  // === Defer 执行 ===
   void invokeDefers(CallFrame *frame);
 
-public:
-  // === pcall 支持 ===
-  // 用于 error() 函数抛出错误值
-  void throwError(Value errorValue);
-
-private:
-  // 获取当前的调用栈信息作为字符串
-  std::string getStackTrace();
-  // 内部受保护调用实现
-  InterpretResult protectedCall(Value callee, int argCount, Value *resultSlot, int expectedResults);
-
   // === 原生函数多返回值支持 ===
-  // 设置原生函数的多个返回值，这些值会被 OP_CALL 正确处理
   void setNativeMultiReturn(const std::vector<Value> &values);
   void setNativeMultiReturn(std::initializer_list<Value> values);
 
-  std::unique_ptr<ModuleManager> moduleManager_;
+  // === Fiber 内部操作 ===
+  // 初始化 fiber 准备首次运行
+  void initFiberForCall(FiberObject *fiber, Value arg);
+  // 切换到指定 fiber
+  void switchToFiber(FiberObject *fiber);
 
 private:
   VMConfig config_;
 
-  // 栈
-  std::vector<Value> stack_;
-  Value *stackTop_;
+  // === Fiber 相关（核心变更）===
+  FiberObject *mainFiber_ = nullptr;    // 主 fiber（VM 启动时创建）
+  FiberObject *currentFiber_ = nullptr; // 当前执行的 fiber
 
-  // 调用帧
-  std::vector<CallFrame> frames_;
-  int frameCount_ = 0;
-
-  // 全局变量
+  // === 全局变量 ===
   std::unordered_map<std::string, Value> globals_;
 
-  // 字符串驻留
+  // === 字符串驻留 ===
   std::unordered_map<std::string, StringObject *> strings_;
 
-  // 开放 UpValue 链表
-  UpValue *openUpvalues_ = nullptr;
-
-  // 模块缓存
+  // === 模块缓存 ===
   std::unordered_map<std::string, CompiledChunk> modules_;
-  Value lastModuleResult_; // 用于暂存模块执行后的返回值 (__env map)
+  Value lastModuleResult_;
+
+  std::unique_ptr<ModuleManager> moduleManager_;
 
   // === pcall 错误状态 ===
-  std::vector<ProtectedCallContext> pcallStack_; // 嵌套pcall的上下文栈
-  bool hasError_ = false;                        // 是否有未处理的错误
-  Value errorValue_;                             // 错误值 (error函数抛出的值)
+  std::vector<ProtectedCallContext> pcallStack_;
+  bool hasError_ = false;
+  Value errorValue_;
+
+  // === 模块执行控制 ===
+  int exitFrameCount_ = 0;    // run() 应该在 frameCount 降到此值时返回
+  bool yieldPending_ = false; // yield 后需要退出 run()
 
   // === 原生函数多返回值支持 ===
-  std::vector<Value> nativeMultiReturn_; // 原生函数的多返回值
-  bool hasNativeMultiReturn_ = false;    // 是否有多返回值
+  std::vector<Value> nativeMultiReturn_;
+  bool hasNativeMultiReturn_ = false;
 
   // GC
   GC gc_;

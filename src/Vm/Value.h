@@ -23,7 +23,7 @@ struct Value {
     bool boolean;
     int64_t integer;
     double number;
-    GCObject *gc; // String, List, Map, Object, Closure 等
+    GCObject *gc; // String, List, Map, Object, Closure, Fiber 等
   } as;
 
   // ========================================================================
@@ -46,11 +46,11 @@ struct Value {
   bool isString() const;
   bool isList() const;
   bool isMap() const;
-  bool isObject() const;   // 已废弃，使用 isInstance()
   bool isInstance() const; // 实例对象
   bool isClosure() const;
   bool isClass() const;
   bool isNativeFunc() const; // 原生函数
+  bool isFiber() const;      // Fiber 检查
 
   // ========================================================================
   // 值提取

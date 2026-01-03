@@ -1,4 +1,5 @@
 #include "SptStdlibs.h"
+#include "Fiber.h"
 #include "Object.h"
 #include "VM.h"
 #include <algorithm>
@@ -22,10 +23,8 @@ static Value listPush(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList())
     return Value::nil();
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
-  if (argc >= 1) {
+  if (argc >= 1)
     list->elements.push_back(argv[0]);
-  }
   return Value::nil();
 }
 
@@ -33,11 +32,8 @@ static Value listPop(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList())
     return Value::nil();
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
-  if (list->elements.empty()) {
+  if (list->elements.empty())
     return Value::nil();
-  }
-
   Value result = list->elements.back();
   list->elements.pop_back();
   return result;
@@ -47,17 +43,13 @@ static Value listInsert(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 2)
     return Value::nil();
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
   if (!argv[0].isInt())
     return Value::nil();
   int64_t idx = argv[0].asInt();
-
   if (idx < 0)
     idx = 0;
-  if (idx > static_cast<int64_t>(list->elements.size())) {
-    idx = static_cast<int64_t>(list->elements.size());
-  }
-
+  if (idx > static_cast<int64_t>(list->elements.size()))
+    idx = list->elements.size();
   list->elements.insert(list->elements.begin() + idx, argv[1]);
   return Value::nil();
 }
@@ -65,8 +57,7 @@ static Value listInsert(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listClear(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList())
     return Value::nil();
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
-  list->elements.clear();
+  static_cast<ListObject *>(receiver.asGC())->elements.clear();
   return Value::nil();
 }
 
@@ -74,15 +65,11 @@ static Value listRemoveAt(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 1)
     return Value::nil();
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
   if (!argv[0].isInt())
     return Value::nil();
   int64_t idx = argv[0].asInt();
-
-  if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
+  if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size()))
     return Value::nil();
-  }
-
   Value result = list->elements[idx];
   list->elements.erase(list->elements.begin() + idx);
   return result;
@@ -92,33 +79,23 @@ static Value listSlice(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 2)
     return Value::nil();
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
   if (!argv[0].isInt() || !argv[1].isInt())
     return Value::nil();
-
   int64_t start = argv[0].asInt();
   int64_t end = argv[1].asInt();
-  int64_t len = static_cast<int64_t>(list->elements.size());
-
+  int64_t len = list->elements.size();
   if (start < 0)
     start = std::max(int64_t(0), len + start);
   if (end < 0)
     end = std::max(int64_t(0), len + end);
-
   start = std::clamp(start, int64_t(0), len);
   end = std::clamp(end, int64_t(0), len);
-
-  if (end <= start) {
+  if (end <= start)
     return Value::object(vm->allocateList(0));
-  }
-
   ListObject *result = vm->allocateList(0);
   vm->protect(Value::object(result));
-
-  for (int64_t i = start; i < end; ++i) {
+  for (int64_t i = start; i < end; ++i)
     result->elements.push_back(list->elements[i]);
-  }
-
   vm->unprotect(1);
   return Value::object(result);
 }
@@ -127,19 +104,15 @@ static Value listJoin(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList())
     return Value::object(vm->allocateString(""));
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
   std::string sep = "";
-  if (argc >= 1 && argv[0].isString()) {
+  if (argc >= 1 && argv[0].isString())
     sep = static_cast<StringObject *>(argv[0].asGC())->data;
-  }
-
   std::string result;
   for (size_t i = 0; i < list->elements.size(); ++i) {
     if (i > 0)
       result += sep;
     result += list->elements[i].toString();
   }
-
   return Value::object(vm->allocateString(result));
 }
 
@@ -147,11 +120,9 @@ static Value listIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 1)
     return Value::integer(-1);
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
   for (size_t i = 0; i < list->elements.size(); ++i) {
-    if (list->elements[i].equals(argv[0])) {
-      return Value::integer(static_cast<int64_t>(i));
-    }
+    if (list->elements[i].equals(argv[0]))
+      return Value::integer(i);
   }
   return Value::integer(-1);
 }
@@ -160,11 +131,9 @@ static Value listContains(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 1)
     return Value::boolean(false);
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
-
   for (const auto &elem : list->elements) {
-    if (elem.equals(argv[0])) {
+    if (elem.equals(argv[0]))
       return Value::boolean(true);
-    }
   }
   return Value::boolean(false);
 }
@@ -172,15 +141,13 @@ static Value listContains(VM *vm, Value receiver, int argc, Value *argv) {
 static Value mapHas(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap() || argc < 1)
     return Value::boolean(false);
-  MapObject *map = static_cast<MapObject *>(receiver.asGC());
-  return Value::boolean(map->has(argv[0]));
+  return Value::boolean(static_cast<MapObject *>(receiver.asGC())->has(argv[0]));
 }
 
 static Value mapClear(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap())
     return Value::nil();
-  MapObject *map = static_cast<MapObject *>(receiver.asGC());
-  map->entries.clear();
+  static_cast<MapObject *>(receiver.asGC())->entries.clear();
   return Value::nil();
 }
 
@@ -188,14 +155,10 @@ static Value mapKeys(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap())
     return Value::nil();
   MapObject *map = static_cast<MapObject *>(receiver.asGC());
-
   ListObject *result = vm->allocateList(0);
   vm->protect(Value::object(result));
-
-  for (const auto &entry : map->entries) {
+  for (const auto &entry : map->entries)
     result->elements.push_back(entry.first);
-  }
-
   vm->unprotect(1);
   return Value::object(result);
 }
@@ -204,14 +167,10 @@ static Value mapValues(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap())
     return Value::nil();
   MapObject *map = static_cast<MapObject *>(receiver.asGC());
-
   ListObject *result = vm->allocateList(0);
   vm->protect(Value::object(result));
-
-  for (const auto &entry : map->entries) {
+  for (const auto &entry : map->entries)
     result->elements.push_back(entry.second);
-  }
-
   vm->unprotect(1);
   return Value::object(result);
 }
@@ -220,9 +179,7 @@ static Value mapRemove(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap() || argc < 1)
     return Value::nil();
   MapObject *map = static_cast<MapObject *>(receiver.asGC());
-
   Value key = argv[0];
-
   for (auto it = map->entries.begin(); it != map->entries.end(); ++it) {
     if (it->first.equals(key)) {
       Value value = it->second;
@@ -237,97 +194,64 @@ static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return Value::object(vm->allocateString(""));
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  const std::string &data = str->data;
-
-  if (argc < 2 || !argv[0].isInt() || !argv[1].isInt()) {
+  if (argc < 2 || !argv[0].isInt() || !argv[1].isInt())
     return Value::object(vm->allocateString(""));
-  }
-
   int64_t start = argv[0].asInt();
   int64_t end = argv[1].asInt();
-  int64_t len = static_cast<int64_t>(data.size());
-
+  int64_t len = str->data.size();
   if (start < 0)
     start = std::max(int64_t(0), len + start);
   if (end < 0)
     end = std::max(int64_t(0), len + end);
-
   start = std::clamp(start, int64_t(0), len);
   end = std::clamp(end, int64_t(0), len);
-
-  if (end <= start) {
+  if (end <= start)
     return Value::object(vm->allocateString(""));
-  }
-
-  std::string result = data.substr(static_cast<size_t>(start), static_cast<size_t>(end - start));
-  return Value::object(vm->allocateString(result));
+  return Value::object(vm->allocateString(str->data.substr(start, end - start)));
 }
 
 static Value stringIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
-  if (!receiver.isString() || argc < 1)
+  if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::integer(-1);
-  if (!argv[0].isString())
-    return Value::integer(-1);
-
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *substr = static_cast<StringObject *>(argv[0].asGC());
-
-  size_t pos = str->data.find(substr->data);
-  if (pos == std::string::npos) {
-    return Value::integer(-1);
-  }
-  return Value::integer(static_cast<int64_t>(pos));
+  StringObject *sub = static_cast<StringObject *>(argv[0].asGC());
+  size_t pos = str->data.find(sub->data);
+  return Value::integer((pos == std::string::npos) ? -1 : static_cast<int64_t>(pos));
 }
 
 static Value stringContains(VM *vm, Value receiver, int argc, Value *argv) {
-  if (!receiver.isString() || argc < 1)
+  if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::boolean(false);
-  if (!argv[0].isString())
-    return Value::boolean(false);
-
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *substr = static_cast<StringObject *>(argv[0].asGC());
-
-  return Value::boolean(str->data.find(substr->data) != std::string::npos);
+  StringObject *sub = static_cast<StringObject *>(argv[0].asGC());
+  return Value::boolean(str->data.find(sub->data) != std::string::npos);
 }
 
 static Value stringStartsWith(VM *vm, Value receiver, int argc, Value *argv) {
-  if (!receiver.isString() || argc < 1)
+  if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::boolean(false);
-  if (!argv[0].isString())
-    return Value::boolean(false);
-
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *prefix = static_cast<StringObject *>(argv[0].asGC());
-
-  if (prefix->data.size() > str->data.size())
+  StringObject *pre = static_cast<StringObject *>(argv[0].asGC());
+  if (pre->data.size() > str->data.size())
     return Value::boolean(false);
-
-  return Value::boolean(str->data.compare(0, prefix->data.size(), prefix->data) == 0);
+  return Value::boolean(str->data.compare(0, pre->data.size(), pre->data) == 0);
 }
 
 static Value stringEndsWith(VM *vm, Value receiver, int argc, Value *argv) {
-  if (!receiver.isString() || argc < 1)
+  if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::boolean(false);
-  if (!argv[0].isString())
-    return Value::boolean(false);
-
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *suffix = static_cast<StringObject *>(argv[0].asGC());
-
-  if (suffix->data.size() > str->data.size())
+  StringObject *suf = static_cast<StringObject *>(argv[0].asGC());
+  if (suf->data.size() > str->data.size())
     return Value::boolean(false);
-
-  return Value::boolean(str->data.compare(str->data.size() - suffix->data.size(),
-                                          suffix->data.size(), suffix->data) == 0);
+  return Value::boolean(
+      str->data.compare(str->data.size() - suf->data.size(), suf->data.size(), suf->data) == 0);
 }
 
 static Value stringToUpper(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
-
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  std::string result = str->data;
+  std::string result = static_cast<StringObject *>(receiver.asGC())->data;
   std::transform(result.begin(), result.end(), result.begin(), ::toupper);
   return Value::object(vm->allocateString(result));
 }
@@ -335,9 +259,7 @@ static Value stringToUpper(VM *vm, Value receiver, int argc, Value *argv) {
 static Value stringToLower(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
-
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  std::string result = str->data;
+  std::string result = static_cast<StringObject *>(receiver.asGC())->data;
   std::transform(result.begin(), result.end(), result.begin(), ::tolower);
   return Value::object(vm->allocateString(result));
 }
@@ -345,41 +267,28 @@ static Value stringToLower(VM *vm, Value receiver, int argc, Value *argv) {
 static Value stringTrim(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
-
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  const std::string &data = str->data;
-
+  const std::string &data = static_cast<StringObject *>(receiver.asGC())->data;
   size_t start = data.find_first_not_of(" \t\n\r\f\v");
-  if (start == std::string::npos) {
+  if (start == std::string::npos)
     return Value::object(vm->allocateString(""));
-  }
   size_t end = data.find_last_not_of(" \t\n\r\f\v");
-
   return Value::object(vm->allocateString(data.substr(start, end - start + 1)));
 }
 
 static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return Value::nil();
-
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  std::string delimiter = "";
-
-  if (argc >= 1 && argv[0].isString()) {
-    delimiter = static_cast<StringObject *>(argv[0].asGC())->data;
-  }
-
+  std::string delimiter =
+      (argc >= 1 && argv[0].isString()) ? static_cast<StringObject *>(argv[0].asGC())->data : "";
   ListObject *result = vm->allocateList(0);
   vm->protect(Value::object(result));
 
   if (delimiter.empty()) {
-
-    for (char c : str->data) {
+    for (char c : str->data)
       result->elements.push_back(Value::object(vm->allocateString(std::string(1, c))));
-    }
   } else {
-    size_t start = 0;
-    size_t end;
+    size_t start = 0, end;
     while ((end = str->data.find(delimiter, start)) != std::string::npos) {
       result->elements.push_back(
           Value::object(vm->allocateString(str->data.substr(start, end - start))));
@@ -387,7 +296,6 @@ static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
     }
     result->elements.push_back(Value::object(vm->allocateString(str->data.substr(start))));
   }
-
   vm->unprotect(1);
   return Value::object(result);
 }
@@ -397,26 +305,19 @@ static Value stringFind(VM *vm, Value receiver, int argc, Value *argv) {
 }
 
 static Value stringReplace(VM *vm, Value receiver, int argc, Value *argv) {
-  if (!receiver.isString() || argc < 2)
+  if (!receiver.isString() || argc < 2 || !argv[0].isString() || !argv[1].isString())
     return receiver;
-  if (!argv[0].isString() || !argv[1].isString())
-    return receiver;
-
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
   StringObject *oldStr = static_cast<StringObject *>(argv[0].asGC());
   StringObject *newStr = static_cast<StringObject *>(argv[1].asGC());
-
-  if (oldStr->data.empty()) {
+  if (oldStr->data.empty())
     return receiver;
-  }
-
   std::string result = str->data;
   size_t pos = 0;
   while ((pos = result.find(oldStr->data, pos)) != std::string::npos) {
     result.replace(pos, oldStr->data.length(), newStr->data);
     pos += newStr->data.length();
   }
-
   return Value::object(vm->allocateString(result));
 }
 
@@ -443,17 +344,39 @@ static const MethodEntry stringMethods[] = {{"slice", stringSlice, 2},
                                             {"replace", stringReplace, 2},
                                             {nullptr, nullptr, 0}};
 
+static Value fiberCall(VM *vm, Value receiver, int argc, Value *argv) {
+  if (!receiver.isFiber()) {
+    vm->throwError(Value::object(vm->allocateString("Expected fiber")));
+    return Value::nil();
+  }
+
+  return vm->fiberCall(static_cast<FiberObject *>(receiver.asGC()),
+                       (argc > 0) ? argv[0] : Value::nil(), false);
+}
+
+static Value fiberTry(VM *vm, Value receiver, int argc, Value *argv) {
+  if (!receiver.isFiber()) {
+    vm->throwError(Value::object(vm->allocateString("Expected fiber")));
+    return Value::nil();
+  }
+  FiberObject *fiber = static_cast<FiberObject *>(receiver.asGC());
+
+  vm->fiberCall(fiber, (argc > 0) ? argv[0] : Value::nil(), true);
+  return fiber->hasError ? fiber->error : Value::nil();
+}
+
+static const MethodEntry fiberMethods[] = {
+    {"call", fiberCall, -1}, {"try", fiberTry, -1}, {nullptr, nullptr, 0}};
+
 bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fieldName,
                                    Value &outValue) {
 
   if (object.isList()) {
     ListObject *list = static_cast<ListObject *>(object.asGC());
-
     if (fieldName == "length") {
-      outValue = Value::integer(static_cast<int64_t>(list->elements.size()));
+      outValue = Value::integer(list->elements.size());
       return true;
     }
-
     for (const MethodEntry *m = listMethods; m->name != nullptr; ++m) {
       if (fieldName == m->name) {
         outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
@@ -465,12 +388,10 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fiel
 
   if (object.isMap()) {
     MapObject *map = static_cast<MapObject *>(object.asGC());
-
     if (fieldName == "size") {
-      outValue = Value::integer(static_cast<int64_t>(map->entries.size()));
+      outValue = Value::integer(map->entries.size());
       return true;
     }
-
     for (const MethodEntry *m = mapMethods; m->name != nullptr; ++m) {
       if (fieldName == m->name) {
         outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
@@ -482,13 +403,32 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fiel
 
   if (object.isString()) {
     StringObject *str = static_cast<StringObject *>(object.asGC());
-
     if (fieldName == "length") {
-      outValue = Value::integer(static_cast<int64_t>(str->data.size()));
+      outValue = Value::integer(str->data.size());
+      return true;
+    }
+    for (const MethodEntry *m = stringMethods; m->name != nullptr; ++m) {
+      if (fieldName == m->name) {
+        outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (object.isFiber()) {
+    FiberObject *fiber = static_cast<FiberObject *>(object.asGC());
+
+    if (fieldName == "isDone") {
+      outValue = Value::boolean(fiber->isDone() || fiber->isError());
+      return true;
+    }
+    if (fieldName == "error") {
+      outValue = fiber->hasError ? fiber->error : Value::nil();
       return true;
     }
 
-    for (const MethodEntry *m = stringMethods; m->name != nullptr; ++m) {
+    for (const MethodEntry *m = fiberMethods; m->name != nullptr; ++m) {
       if (fieldName == m->name) {
         outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
         return true;
@@ -502,7 +442,6 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fiel
 
 bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, const std::string &methodName, int argc,
                                     Value *argv, Value &outResult) {
-
   if (receiver.isList()) {
     for (const MethodEntry *m = listMethods; m->name != nullptr; ++m) {
       if (methodName == m->name) {
@@ -512,7 +451,6 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, const std::string &m
     }
     return false;
   }
-
   if (receiver.isMap()) {
     for (const MethodEntry *m = mapMethods; m->name != nullptr; ++m) {
       if (methodName == m->name) {
@@ -522,7 +460,6 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, const std::string &m
     }
     return false;
   }
-
   if (receiver.isString()) {
     for (const MethodEntry *m = stringMethods; m->name != nullptr; ++m) {
       if (methodName == m->name) {
@@ -532,7 +469,15 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, const std::string &m
     }
     return false;
   }
-
+  if (receiver.isFiber()) {
+    for (const MethodEntry *m = fiberMethods; m->name != nullptr; ++m) {
+      if (methodName == m->name) {
+        outResult = m->fn(vm, receiver, argc, argv);
+        return true;
+      }
+    }
+    return false;
+  }
   return false;
 }
 
