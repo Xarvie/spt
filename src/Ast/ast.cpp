@@ -60,16 +60,6 @@ MapType::~MapType() {
   delete valueType;
 }
 
-UnionType::UnionType(std::vector<AstType *> members, SourceLocation loc)
-    : AstType(std::move(loc)), memberTypes(std::move(members)) {}
-
-UnionType::~UnionType() { deleteVectorItems(memberTypes); }
-
-TupleType::TupleType(std::vector<AstType *> elements, SourceLocation loc)
-    : AstType(std::move(loc)), elementTypes(std::move(elements)) {}
-
-TupleType::~TupleType() { deleteVectorItems(elementTypes); }
-
 UserType::~UserType() = default;
 
 FunctionKeywordType::FunctionKeywordType(SourceLocation loc) : AstType(std::move(loc)) {}
@@ -110,12 +100,6 @@ AstType *MapType::clone() const {
     delete clonedValueType;
     throw;
   }
-}
-
-AstType *UnionType::clone() const { return new UnionType(cloneAstTypeList(memberTypes), location); }
-
-AstType *TupleType::clone() const {
-  return new TupleType(cloneAstTypeList(elementTypes), location);
 }
 
 AstType *UserType::clone() const { return new UserType(this->qualifiedNameParts, this->location); }

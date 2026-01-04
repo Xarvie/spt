@@ -4,6 +4,14 @@
 
 namespace spt {
 
+void FiberObject::fixUpvaluePointers(Value *oldStackBase, size_t used, ptrdiff_t offset) {
+  UpValue *uv = openUpvalues;
+  while (uv != nullptr) {
+    uv->location += offset;
+    uv = uv->nextOpen;
+  }
+}
+
 static Value fiberCreate(VM *vm, Value receiver, int argc, Value *argv) {
   if (argc < 1 || !argv[0].isClosure()) {
     vm->throwError(Value::object(vm->allocateString("Fiber.create requires a function")));

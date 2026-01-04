@@ -1,6 +1,7 @@
 #pragma once
 #include "../Common/Types.h"
 #include "Value.h"
+#include <deque>
 #include <vector>
 
 namespace spt {
@@ -16,7 +17,7 @@ struct UpValue;
 struct CallFrame {
   Closure *closure = nullptr;
   const Instruction *ip = nullptr; // 指令指针
-  Value *slots = nullptr;          // 栈帧基址
+  int slotsBase = 0;               // 栈帧基址（相对于栈底的偏移量索引）
   int expectedResults = 1;         // 期望返回值数量 (-1 表示全部)
   std::vector<Value> defers;       // defer 闭包栈 (LIFO)
 };
@@ -42,7 +43,9 @@ struct FiberObject : GCObject {
   std::vector<Value> stack;
   Value *stackTop = nullptr;
 
-  std::vector<CallFrame> frames;
+  // 使用 std::deque 替代 std::vector，扩容时不会移动旧元素
+  // 保证 CallFrame 地址的稳定性
+  std::deque<CallFrame> frames;
   int frameCount = 0;
 
   UpValue *openUpvalues = nullptr;
@@ -69,7 +72,7 @@ struct FiberObject : GCObject {
     type = ValueType::Fiber;
     stack.resize(DEFAULT_STACK_SIZE);
     stackTop = stack.data();
-    frames.reserve(MAX_FRAMES);
+    // deque 不需要 reserve
     error = Value::nil();
     yieldValue = Value::nil();
   }
@@ -87,7 +90,6 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
-  // === 栈管理 ===
   void ensureStack(size_t needed) {
     size_t used = stackTop - stack.data();
     if (used + needed > stack.size()) {
@@ -96,21 +98,27 @@ struct FiberObject : GCObject {
         newSize *= 2;
       }
 
-      // 保存相对偏移
-      std::vector<size_t> slotOffsets;
-      for (int i = 0; i < frameCount; ++i) {
-        slotOffsets.push_back(frames[i].slots - stack.data());
-      }
+      // 保存旧栈基地址
+      Value *oldStackBase = stack.data();
 
+      // 扩容栈
       stack.resize(newSize);
 
-      // 恢复指针
-      stackTop = stack.data() + used;
-      for (int i = 0; i < frameCount; ++i) {
-        frames[i].slots = stack.data() + slotOffsets[i];
+      // 计算新旧地址差值
+      Value *newStackBase = stack.data();
+      ptrdiff_t offset = newStackBase - oldStackBase;
+
+      // 恢复 stackTop 指针
+      stackTop = newStackBase + used;
+
+      // 由于 UpValue 是不完整类型，调用外部函数处理
+      if (openUpvalues != nullptr && offset != 0) {
+        fixUpvaluePointers(oldStackBase, used, offset);
       }
     }
   }
+
+  void fixUpvaluePointers(Value *oldStackBase, size_t used, ptrdiff_t offset);
 
   size_t stackUsed() const { return stackTop - stack.data(); }
 
@@ -123,6 +131,11 @@ struct FiberObject : GCObject {
   Value pop() { return *--stackTop; }
 
   Value peek(int distance = 0) const { return stackTop[-1 - distance]; }
+
+  // === 辅助方法：根据 slotsBase 获取实际的 slots 指针 ===
+  Value *getSlots(int slotsBase) { return stack.data() + slotsBase; }
+
+  Value *getSlots(const CallFrame &frame) { return stack.data() + frame.slotsBase; }
 
   // === 重置===
   void reset() {

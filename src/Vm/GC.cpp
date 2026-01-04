@@ -290,7 +290,7 @@ void GC::freeObject(GCObject *obj) {
   case ValueType::Fiber: {
     FiberObject *fiber = static_cast<FiberObject *>(obj);
     bytesAllocated_ -= sizeof(FiberObject) + (fiber->stack.capacity() * sizeof(Value)) +
-                       (fiber->frames.capacity() * sizeof(CallFrame));
+                       (fiber->frames.size() * sizeof(CallFrame));
     delete fiber;
     break;
   }

@@ -445,22 +445,21 @@ void VM::registerBuiltinFunctions() {
             result = InterpretResult::RUNTIME_ERROR;
           } else {
 
-            size_t slotsOffset = (callBase + 1) - fiber->stack.data();
+            int slotsBaseOffset = static_cast<int>((callBase + 1) - fiber->stack.data());
 
             fiber->ensureStack(proto->maxStackSize);
-
-            Value *newSlots = fiber->stack.data() + slotsOffset;
 
             CallFrame newFrame;
             newFrame.closure = closure;
             newFrame.ip = proto->code.data();
             newFrame.expectedResults = -1;
-            newFrame.slots = newSlots;
+            newFrame.slotsBase = slotsBaseOffset;
 
-            for (Value *p = fiber->stackTop; p < newFrame.slots + proto->maxStackSize; ++p) {
+            Value *newSlots = fiber->stack.data() + slotsBaseOffset;
+            for (Value *p = fiber->stackTop; p < newSlots + proto->maxStackSize; ++p) {
               *p = Value::nil();
             }
-            fiber->stackTop = newFrame.slots + proto->maxStackSize;
+            fiber->stackTop = newSlots + proto->maxStackSize;
 
             fiber->frames.push_back(newFrame);
             fiber->frameCount++;
@@ -586,7 +585,7 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
   CallFrame frame;
   frame.closure = mainClosure;
   frame.ip = mainClosure->proto->code.data();
-  frame.slots = currentFiber_->stackTop;
+  frame.slotsBase = static_cast<int>(currentFiber_->stackTop - currentFiber_->stack.data());
 
   for (int i = 0; i < mainClosure->proto->maxStackSize; ++i) {
     currentFiber_->stackTop[i] = Value::nil();
@@ -613,20 +612,19 @@ InterpretResult VM::call(Closure *closure, int argCount) {
     return InterpretResult::RUNTIME_ERROR;
   }
 
-  size_t argsOffset = (fiber->stackTop - argCount) - fiber->stack.data();
+  int slotsBaseOffset = static_cast<int>((fiber->stackTop - argCount) - fiber->stack.data());
 
   fiber->ensureStack(closure->proto->maxStackSize);
-
-  Value *argsStart = fiber->stack.data() + argsOffset;
 
   CallFrame newFrame;
   newFrame.closure = closure;
   newFrame.ip = closure->proto->code.data();
   newFrame.expectedResults = 1;
-  newFrame.slots = argsStart;
+  newFrame.slotsBase = slotsBaseOffset;
 
-  Value *frameEnd = newFrame.slots + closure->proto->maxStackSize;
-  for (Value *slot = newFrame.slots + argCount; slot < frameEnd; ++slot) {
+  Value *argsStart = fiber->stack.data() + slotsBaseOffset;
+  Value *frameEnd = argsStart + closure->proto->maxStackSize;
+  for (Value *slot = argsStart + argCount; slot < frameEnd; ++slot) {
     *slot = Value::nil();
   }
   fiber->stackTop = frameEnd;
@@ -650,23 +648,22 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
   Closure *mainClosure = allocateClosure(&chunk.mainProto);
   protect(Value::object(mainClosure));
 
-  size_t frameStartOffset = fiber->stackTop - fiber->stack.data();
+  int frameStartOffset = static_cast<int>(fiber->stackTop - fiber->stack.data());
 
   fiber->ensureStack(mainClosure->proto->maxStackSize);
-
-  Value *frameStart = fiber->stack.data() + frameStartOffset;
 
   CallFrame frame;
   frame.closure = mainClosure;
   frame.ip = mainClosure->proto->code.data();
-  frame.slots = frameStart;
+  frame.slotsBase = frameStartOffset;
   frame.expectedResults = 0;
 
   fiber->frames.push_back(frame);
   fiber->frameCount++;
 
-  Value *frameEnd = frame.slots + mainClosure->proto->maxStackSize;
-  for (Value *slot = frame.slots; slot < frameEnd; ++slot) {
+  Value *frameStart = fiber->stack.data() + frameStartOffset;
+  Value *frameEnd = frameStart + mainClosure->proto->maxStackSize;
+  for (Value *slot = frameStart; slot < frameEnd; ++slot) {
     *slot = Value::nil();
   }
   fiber->stackTop = frameEnd;
@@ -692,6 +689,9 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
 InterpretResult VM::run() {
   FiberObject *fiber = currentFiber_;
   CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
+
+  Value *stackStart = fiber->stack.data();
+  Value *slots = stackStart + frame->slotsBase;
   uint32_t instruction;
 
 #if SPT_USE_COMPUTED_GOTO
@@ -703,12 +703,18 @@ InterpretResult VM::run() {
 #define FRAMES fiber->frames
 #define FRAME_COUNT fiber->frameCount
 
+#define REFRESH_SLOTS()                                                                            \
+  do {                                                                                             \
+    stackStart = fiber->stack.data();                                                              \
+    slots = stackStart + frame->slotsBase;                                                         \
+  } while (0)
+
   SPT_DISPATCH_LOOP_BEGIN()
 
   SPT_OPCODE(OP_MOVE) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
-    frame->slots[A] = frame->slots[B];
+    slots[A] = slots[B];
     SPT_DISPATCH();
   }
 
@@ -733,7 +739,7 @@ InterpretResult VM::run() {
           }
         },
         constant);
-    frame->slots[A] = value;
+    slots[A] = value;
     SPT_DISPATCH();
   }
 
@@ -741,7 +747,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    frame->slots[A] = Value::boolean(B != 0);
+    slots[A] = Value::boolean(B != 0);
     if (C != 0)
       frame->ip++;
     SPT_DISPATCH();
@@ -751,7 +757,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     for (int i = 0; i <= B; ++i) {
-      frame->slots[A + i] = Value::nil();
+      slots[A + i] = Value::nil();
     }
     SPT_DISPATCH();
   }
@@ -760,7 +766,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     ListObject *list = allocateList(B);
-    frame->slots[A] = Value::object(list);
+    slots[A] = Value::object(list);
     SPT_DISPATCH();
   }
 
@@ -768,7 +774,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     MapObject *map = allocateMap(B);
-    frame->slots[A] = Value::object(map);
+    slots[A] = Value::object(map);
     SPT_DISPATCH();
   }
 
@@ -776,8 +782,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value container = frame->slots[B];
-    Value index = frame->slots[C];
+    Value container = slots[B];
+    Value index = slots[C];
 
     if (container.isList()) {
       auto *list = static_cast<ListObject *>(container.asGC());
@@ -790,10 +796,10 @@ InterpretResult VM::run() {
         runtimeError("List index out of range");
         return InterpretResult::RUNTIME_ERROR;
       }
-      frame->slots[A] = list->elements[idx];
+      slots[A] = list->elements[idx];
     } else if (container.isMap()) {
       auto *map = static_cast<MapObject *>(container.asGC());
-      frame->slots[A] = map->get(index);
+      slots[A] = map->get(index);
     } else {
       runtimeError("Cannot index type: %s", container.typeName());
       return InterpretResult::RUNTIME_ERROR;
@@ -805,9 +811,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value container = frame->slots[A];
-    Value index = frame->slots[B];
-    Value value = frame->slots[C];
+    Value container = slots[A];
+    Value index = slots[B];
+    Value value = slots[C];
 
     if (container.isList()) {
       auto *list = static_cast<ListObject *>(container.asGC());
@@ -835,7 +841,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value object = frame->slots[B];
+    Value object = slots[B];
     const auto &keyConst = frame->closure->proto->constants[C];
 
     if (!std::holds_alternative<std::string>(keyConst)) {
@@ -848,7 +854,7 @@ InterpretResult VM::run() {
     if (object.isList() || object.isMap() || object.isString() || object.isFiber()) {
       Value result;
       if (StdlibDispatcher::getProperty(this, object, fieldName, result)) {
-        frame->slots[A] = result;
+        slots[A] = result;
         SPT_DISPATCH();
       }
       if (!object.isMap()) {
@@ -866,21 +872,21 @@ InterpretResult VM::run() {
           result = it->second;
         }
       }
-      frame->slots[A] = result;
+      slots[A] = result;
     } else if (object.isClass()) {
       auto *klass = static_cast<ClassObject *>(object.asGC());
 
       if (klass->name == "Fiber" && fieldName == "current") {
-        frame->slots[A] = Value::object(currentFiber_);
+        slots[A] = Value::object(currentFiber_);
         SPT_DISPATCH();
       }
 
       auto it = klass->methods.find(fieldName);
       if (it != klass->methods.end()) {
-        frame->slots[A] = it->second;
+        slots[A] = it->second;
       } else {
         auto itStatic = klass->statics.find(fieldName);
-        frame->slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
+        slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
       }
     } else if (object.isMap()) {
       auto *map = static_cast<MapObject *>(object.asGC());
@@ -900,7 +906,7 @@ InterpretResult VM::run() {
           result = it->second;
         }
       }
-      frame->slots[A] = result;
+      slots[A] = result;
     } else {
       runtimeError("Cannot get field '%s' from type: %s", fieldName.c_str(), object.typeName());
       return InterpretResult::RUNTIME_ERROR;
@@ -912,9 +918,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value object = frame->slots[A];
+    Value object = slots[A];
     const auto &keyConst = frame->closure->proto->constants[B];
-    Value value = frame->slots[C];
+    Value value = slots[C];
 
     if (!std::holds_alternative<std::string>(keyConst)) {
       runtimeError("SETFIELD requires string key constant");
@@ -950,14 +956,14 @@ InterpretResult VM::run() {
     }
     const std::string &className = std::get<std::string>(nameConst);
     ClassObject *klass = allocateClass(className);
-    frame->slots[A] = Value::object(klass);
+    slots[A] = Value::object(klass);
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_NEWOBJ) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
-    Value classValue = frame->slots[B];
+    Value classValue = slots[B];
 
     if (!classValue.isClass()) {
       runtimeError("Cannot instantiate non-class type");
@@ -966,7 +972,7 @@ InterpretResult VM::run() {
 
     auto *klass = static_cast<ClassObject *>(classValue.asGC());
     Instance *instance = allocateInstance(klass);
-    frame->slots[A] = Value::object(instance);
+    slots[A] = Value::object(instance);
     SPT_DISPATCH();
   }
 
@@ -978,7 +984,7 @@ InterpretResult VM::run() {
       return InterpretResult::RUNTIME_ERROR;
     }
     UpValue *upval = frame->closure->upvalues[B];
-    frame->slots[A] = *upval->location;
+    slots[A] = *upval->location;
     SPT_DISPATCH();
   }
 
@@ -990,7 +996,7 @@ InterpretResult VM::run() {
       return InterpretResult::RUNTIME_ERROR;
     }
     UpValue *upval = frame->closure->upvalues[B];
-    *upval->location = frame->slots[A];
+    *upval->location = slots[A];
     SPT_DISPATCH();
   }
 
@@ -1004,20 +1010,20 @@ InterpretResult VM::run() {
     for (size_t i = 0; i < proto.numUpvalues; ++i) {
       const auto &uvDesc = proto.upvalues[i];
       if (uvDesc.isLocal) {
-        closure->upvalues.push_back(captureUpvalue(&frame->slots[uvDesc.index]));
+        closure->upvalues.push_back(captureUpvalue(&slots[uvDesc.index]));
       } else {
         closure->upvalues.push_back(frame->closure->upvalues[uvDesc.index]);
       }
     }
 
     unprotect(1);
-    frame->slots[A] = Value::object(closure);
+    slots[A] = Value::object(closure);
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_CLOSE_UPVALUE) {
     uint8_t A = GETARG_A(instruction);
-    closeUpvalues(&frame->slots[A]);
+    closeUpvalues(&slots[A]);
     SPT_DISPATCH();
   }
 
@@ -1025,20 +1031,20 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value b = frame->slots[B];
-    Value c = frame->slots[C];
+    Value b = slots[B];
+    Value c = slots[C];
 
     if (b.isInt() && c.isInt()) {
-      frame->slots[A] = Value::integer(b.asInt() + c.asInt());
+      slots[A] = Value::integer(b.asInt() + c.asInt());
     } else if (b.isNumber() && c.isNumber()) {
       double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-      frame->slots[A] = Value::number(left + right);
+      slots[A] = Value::number(left + right);
     } else if (b.isString() || c.isString()) {
       std::string s1 = b.toString();
       std::string s2 = c.toString();
       StringObject *result = allocateString(s1 + s2);
-      frame->slots[A] = Value::object(result);
+      slots[A] = Value::object(result);
     } else {
       runtimeError("Operands must be numbers or strings");
       return InterpretResult::RUNTIME_ERROR;
@@ -1050,15 +1056,15 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value b = frame->slots[B];
-    Value c = frame->slots[C];
+    Value b = slots[B];
+    Value c = slots[C];
 
     if (b.isInt() && c.isInt()) {
-      frame->slots[A] = Value::integer(b.asInt() - c.asInt());
+      slots[A] = Value::integer(b.asInt() - c.asInt());
     } else if (b.isNumber() && c.isNumber()) {
       double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-      frame->slots[A] = Value::number(left - right);
+      slots[A] = Value::number(left - right);
     } else {
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
@@ -1070,15 +1076,15 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value b = frame->slots[B];
-    Value c = frame->slots[C];
+    Value b = slots[B];
+    Value c = slots[C];
 
     if (b.isInt() && c.isInt()) {
-      frame->slots[A] = Value::integer(b.asInt() * c.asInt());
+      slots[A] = Value::integer(b.asInt() * c.asInt());
     } else if (b.isNumber() && c.isNumber()) {
       double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-      frame->slots[A] = Value::number(left * right);
+      slots[A] = Value::number(left * right);
     } else {
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
@@ -1090,8 +1096,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value b = frame->slots[B];
-    Value c = frame->slots[C];
+    Value b = slots[B];
+    Value c = slots[C];
 
     if (!b.isNumber() || !c.isNumber()) {
       runtimeError("Operands must be numbers");
@@ -1107,9 +1113,9 @@ InterpretResult VM::run() {
     }
 
     if (b.isInt() && c.isInt()) {
-      frame->slots[A] = Value::integer(b.asInt() / c.asInt());
+      slots[A] = Value::integer(b.asInt() / c.asInt());
     } else {
-      frame->slots[A] = Value::number(left / right);
+      slots[A] = Value::number(left / right);
     }
     SPT_DISPATCH();
   }
@@ -1118,8 +1124,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value b = frame->slots[B];
-    Value c = frame->slots[C];
+    Value b = slots[B];
+    Value c = slots[C];
 
     if (!b.isInt() || !c.isInt()) {
       runtimeError("Modulo requires integer operands");
@@ -1132,19 +1138,19 @@ InterpretResult VM::run() {
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    frame->slots[A] = Value::integer(b.asInt() % right);
+    slots[A] = Value::integer(b.asInt() % right);
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_UNM) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
-    Value b = frame->slots[B];
+    Value b = slots[B];
 
     if (b.isInt()) {
-      frame->slots[A] = Value::integer(-b.asInt());
+      slots[A] = Value::integer(-b.asInt());
     } else if (b.isFloat()) {
-      frame->slots[A] = Value::number(-b.asFloat());
+      slots[A] = Value::number(-b.asFloat());
     } else {
       runtimeError("Operand must be a number");
       return InterpretResult::RUNTIME_ERROR;
@@ -1162,7 +1168,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    bool equal = valuesEqual(frame->slots[A], frame->slots[B]);
+    bool equal = valuesEqual(slots[A], slots[B]);
     if (equal != (C != 0)) {
       frame->ip++;
     }
@@ -1173,8 +1179,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value a = frame->slots[A];
-    Value b = frame->slots[B];
+    Value a = slots[A];
+    Value b = slots[B];
 
     bool result = false;
     if (a.isInt() && b.isInt()) {
@@ -1198,8 +1204,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value a = frame->slots[A];
-    Value b = frame->slots[B];
+    Value a = slots[A];
+    Value b = slots[B];
 
     bool result = false;
     if (a.isInt() && b.isInt()) {
@@ -1222,7 +1228,7 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_TEST) {
     uint8_t A = GETARG_A(instruction);
     uint8_t C = GETARG_C(instruction);
-    bool isTruthy = frame->slots[A].isTruthy();
+    bool isTruthy = slots[A].isTruthy();
     if (isTruthy != (C != 0)) {
       frame->ip++;
     }
@@ -1236,7 +1242,7 @@ InterpretResult VM::run() {
     int argCount = B - 1;
     int expectedResults = C - 1;
 
-    Value callee = frame->slots[A];
+    Value callee = slots[A];
 
     if (callee.isClosure()) {
       Closure *closure = static_cast<Closure *>(callee.asGC());
@@ -1253,21 +1259,23 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      size_t argsOffset = (frame->slots + A + 1) - fiber->stack.data();
+      int newSlotsBase = frame->slotsBase + A + 1;
 
       fiber->ensureStack(proto->maxStackSize);
 
-      Value *argsStart = fiber->stack.data() + argsOffset;
+      REFRESH_SLOTS();
+
+      Value *argsStart = stackStart + newSlotsBase;
 
       CallFrame newFrame;
       newFrame.closure = closure;
       newFrame.ip = proto->code.data();
       newFrame.expectedResults = expectedResults;
-      newFrame.slots = argsStart;
+      newFrame.slotsBase = newSlotsBase;
 
-      Value *targetStackTop = newFrame.slots + proto->maxStackSize;
+      Value *targetStackTop = argsStart + proto->maxStackSize;
 
-      for (Value *p = newFrame.slots + argCount; p < targetStackTop; ++p) {
+      for (Value *p = argsStart + argCount; p < targetStackTop; ++p) {
         *p = Value::nil();
       }
 
@@ -1276,6 +1284,8 @@ InterpretResult VM::run() {
       FRAME_COUNT++;
 
       frame = &FRAMES[FRAME_COUNT - 1];
+
+      REFRESH_SLOTS();
 
     } else if (callee.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
@@ -1289,7 +1299,7 @@ InterpretResult VM::run() {
       hasNativeMultiReturn_ = false;
       nativeMultiReturn_.clear();
 
-      Value *argsStart = &frame->slots[A + 1];
+      Value *argsStart = &slots[A + 1];
       Value result = native->function(this, native->receiver, argCount, argsStart);
 
       if (yieldPending_) {
@@ -1301,6 +1311,7 @@ InterpretResult VM::run() {
 
         fiber = currentFiber_;
         frame = &fiber->frames[fiber->frameCount - 1];
+        REFRESH_SLOTS();
         SPT_DISPATCH();
       }
 
@@ -1313,25 +1324,25 @@ InterpretResult VM::run() {
 
         if (expectedResults == -1) {
           for (int i = 0; i < returnCount; ++i) {
-            frame->slots[A + i] = nativeMultiReturn_[i];
+            slots[A + i] = nativeMultiReturn_[i];
           }
         } else if (expectedResults > 0) {
           for (int i = 0; i < returnCount && i < expectedResults; ++i) {
-            frame->slots[A + i] = nativeMultiReturn_[i];
+            slots[A + i] = nativeMultiReturn_[i];
           }
           for (int i = returnCount; i < expectedResults; ++i) {
-            frame->slots[A + i] = Value::nil();
+            slots[A + i] = Value::nil();
           }
         } else {
           if (returnCount > 0) {
-            frame->slots[A] = nativeMultiReturn_[0];
+            slots[A] = nativeMultiReturn_[0];
           }
         }
 
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
       } else {
-        frame->slots[A] = result;
+        slots[A] = result;
       }
 
     } else {
@@ -1345,7 +1356,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value receiver = frame->slots[A];
+    Value receiver = slots[A];
     int totalArgs = B;
     int userArgCount = totalArgs - 1;
 
@@ -1357,7 +1368,7 @@ InterpretResult VM::run() {
     const std::string &methodName = std::get<std::string>(methodNameConst);
 
     Value method = Value::nil();
-    Value *argsStart = &frame->slots[A + 1];
+    Value *argsStart = &slots[A + 1];
 
     if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
       Value directResult;
@@ -1370,11 +1381,13 @@ InterpretResult VM::run() {
         }
 
         if (fiber != currentFiber_) {
+
           fiber = currentFiber_;
           frame = &fiber->frames[fiber->frameCount - 1];
+          REFRESH_SLOTS();
           SPT_DISPATCH();
         }
-        frame->slots[A] = directResult;
+        slots[A] = directResult;
         SPT_DISPATCH();
       }
 
@@ -1453,24 +1466,26 @@ InterpretResult VM::run() {
       }
 
       for (int i = totalArgs - 1; i >= 0; --i) {
-        frame->slots[A + 1 + i] = frame->slots[A + i];
+        slots[A + 1 + i] = slots[A + i];
       }
 
-      size_t slotsOffset = (frame->slots + A + 1) - fiber->stack.data();
+      int newSlotsBase = frame->slotsBase + A + 1;
 
       fiber->ensureStack(proto->maxStackSize);
 
-      Value *newSlots = fiber->stack.data() + slotsOffset;
+      REFRESH_SLOTS();
+
+      Value *newSlots = stackStart + newSlotsBase;
 
       CallFrame newFrame;
       newFrame.closure = closure;
       newFrame.ip = proto->code.data();
       newFrame.expectedResults = 1;
-      newFrame.slots = newSlots;
+      newFrame.slotsBase = newSlotsBase;
 
-      Value *targetStackTop = newFrame.slots + proto->maxStackSize;
+      Value *targetStackTop = newSlots + proto->maxStackSize;
 
-      for (Value *p = newFrame.slots + totalArgs; p < targetStackTop; ++p) {
+      for (Value *p = newSlots + totalArgs; p < targetStackTop; ++p) {
         *p = Value::nil();
       }
 
@@ -1478,6 +1493,8 @@ InterpretResult VM::run() {
       FRAMES.push_back(newFrame);
       FRAME_COUNT++;
       frame = &FRAMES[FRAME_COUNT - 1];
+
+      REFRESH_SLOTS();
     } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
 
@@ -1502,8 +1519,10 @@ InterpretResult VM::run() {
       }
 
       if (fiber != currentFiber_) {
+
         fiber = currentFiber_;
         frame = &fiber->frames[fiber->frameCount - 1];
+        REFRESH_SLOTS();
         SPT_DISPATCH();
       }
 
@@ -1512,11 +1531,11 @@ InterpretResult VM::run() {
       }
 
       if (hasNativeMultiReturn_) {
-        frame->slots[A] = nativeMultiReturn_.empty() ? Value::nil() : nativeMultiReturn_[0];
+        slots[A] = nativeMultiReturn_.empty() ? Value::nil() : nativeMultiReturn_[0];
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
       } else {
-        frame->slots[A] = result;
+        slots[A] = result;
       }
     } else {
       runtimeError("'%s.%s' is not callable", receiver.typeName(), methodName.c_str());
@@ -1537,9 +1556,11 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
       frame = &FRAMES[FRAME_COUNT - 1];
+
+      REFRESH_SLOTS();
     }
 
-    Value *returnValues = frame->slots + A;
+    Value *returnValues = slots + A;
     int expectedResults = frame->expectedResults;
 
     bool isRootFrame = (FRAME_COUNT == 1);
@@ -1548,10 +1569,11 @@ InterpretResult VM::run() {
 
     Value *destSlot = nullptr;
     if (!isRootFrame && !isModuleExit) {
-      destSlot = frame->slots - 1;
+
+      destSlot = stackStart + frame->slotsBase - 1;
     }
 
-    closeUpvalues(frame->slots);
+    closeUpvalues(slots);
 
     FRAME_COUNT--;
     FRAMES.pop_back();
@@ -1592,6 +1614,8 @@ InterpretResult VM::run() {
 
     frame = &FRAMES[FRAME_COUNT - 1];
 
+    REFRESH_SLOTS();
+
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
         destSlot[i] = returnValues[i];
@@ -1605,7 +1629,7 @@ InterpretResult VM::run() {
           destSlot[i] = Value::nil();
         }
       }
-      STACK_TOP = frame->slots + frame->closure->proto->maxStackSize;
+      STACK_TOP = slots + frame->closure->proto->maxStackSize;
     }
 
     SPT_DISPATCH();
@@ -1631,6 +1655,7 @@ InterpretResult VM::run() {
     }
 
     frame = &FRAMES[FRAME_COUNT - 1];
+    REFRESH_SLOTS();
 
     if (exportsTable.isMap()) {
       MapObject *errorCheck = static_cast<MapObject *>(exportsTable.asGC());
@@ -1648,7 +1673,7 @@ InterpretResult VM::run() {
       }
     }
 
-    frame->slots[A] = exportsTable;
+    slots[A] = exportsTable;
     SPT_DISPATCH();
   }
 
@@ -1676,6 +1701,7 @@ InterpretResult VM::run() {
     }
 
     frame = &FRAMES[FRAME_COUNT - 1];
+    REFRESH_SLOTS();
 
     if (exportsTable.isMap()) {
       MapObject *exports = static_cast<MapObject *>(exportsTable.asGC());
@@ -1695,9 +1721,9 @@ InterpretResult VM::run() {
 
       StringObject *symKey = allocateString(symbolName);
       Value symbolValue = exports->get(Value::object(symKey));
-      frame->slots[A] = symbolValue;
+      slots[A] = symbolValue;
     } else {
-      frame->slots[A] = Value::nil();
+      slots[A] = Value::nil();
     }
 
     SPT_DISPATCH();
@@ -1707,7 +1733,7 @@ InterpretResult VM::run() {
 
   SPT_OPCODE(OP_DEFER) {
     uint8_t A = GETARG_A(instruction);
-    Value deferClosure = frame->slots[A];
+    Value deferClosure = slots[A];
     frame->defers.push_back(deferClosure);
     SPT_DISPATCH();
   }
@@ -1716,12 +1742,12 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     int8_t sC = static_cast<int8_t>(GETARG_C(instruction));
-    Value b = frame->slots[B];
+    Value b = slots[B];
 
     if (b.isInt()) {
-      frame->slots[A] = Value::integer(b.asInt() + sC);
+      slots[A] = Value::integer(b.asInt() + sC);
     } else if (b.isFloat()) {
-      frame->slots[A] = Value::number(b.asFloat() + sC);
+      slots[A] = Value::number(b.asFloat() + sC);
     } else {
       runtimeError("ADDI requires numeric operand");
       return InterpretResult::RUNTIME_ERROR;
@@ -1752,7 +1778,7 @@ InterpretResult VM::run() {
         },
         constant);
 
-    bool equal = valuesEqual(frame->slots[A], kVal);
+    bool equal = valuesEqual(slots[A], kVal);
     if (equal != (C != 0)) {
       frame->ip++;
     }
@@ -1763,7 +1789,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
     uint8_t C = GETARG_C(instruction);
-    Value a = frame->slots[A];
+    Value a = slots[A];
     bool equal = false;
     if (a.isInt()) {
       equal = (a.asInt() == sB);
@@ -1780,7 +1806,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
     uint8_t C = GETARG_C(instruction);
-    Value a = frame->slots[A];
+    Value a = slots[A];
     bool result = false;
     if (a.isInt()) {
       result = (a.asInt() < sB);
@@ -1797,7 +1823,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
     uint8_t C = GETARG_C(instruction);
-    Value a = frame->slots[A];
+    Value a = slots[A];
     bool result = false;
     if (a.isInt()) {
       result = (a.asInt() <= sB);
@@ -1816,6 +1842,7 @@ InterpretResult VM::run() {
 #undef STACK_TOP
 #undef FRAMES
 #undef FRAME_COUNT
+#undef REFRESH_SLOTS
 }
 
 FiberObject *VM::allocateFiber(Closure *closure) {
@@ -1840,10 +1867,11 @@ void VM::initFiberForCall(FiberObject *fiber, Value arg) {
   CallFrame frame;
   frame.closure = fiber->closure;
   frame.ip = proto->code.data();
-  frame.slots = fiber->stack.data();
+  frame.slotsBase = 0;
   frame.expectedResults = 1;
 
-  Value *frameEnd = frame.slots + proto->maxStackSize;
+  Value *frameStart = fiber->stack.data();
+  Value *frameEnd = frameStart + proto->maxStackSize;
   for (Value *p = fiber->stackTop; p < frameEnd; ++p) {
     *p = Value::nil();
   }
@@ -1906,7 +1934,9 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
 
     if (op == OpCode::OP_CALL || op == OpCode::OP_INVOKE) {
       uint8_t A = GETARG_A(instruction);
-      frame->slots[A] = arg;
+
+      Value *frameSlots = fiber->stack.data() + frame->slotsBase;
+      frameSlots[A] = arg;
     } else {
 
       *fiber->stackTop++ = arg;
@@ -2149,15 +2179,14 @@ void VM::invokeDefers(CallFrame *framePtr) {
     return;
 
   FiberObject *fiber = currentFiber_;
-  size_t frameIndex = framePtr - fiber->frames.data();
 
-  while (!fiber->frames[frameIndex].defers.empty()) {
-    Value deferVal = fiber->frames[frameIndex].defers.back();
-    fiber->frames[frameIndex].defers.pop_back();
+  while (!framePtr->defers.empty()) {
+    Value deferVal = framePtr->defers.back();
+    framePtr->defers.pop_back();
 
     if (deferVal.isClosure()) {
       Closure *closure = static_cast<Closure *>(deferVal.asGC());
-      *fiber->stackTop++ = deferVal;
+      fiber->push(deferVal);
       call(closure, 0);
     }
 

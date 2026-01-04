@@ -96,8 +96,6 @@ class AnyType;
 class AutoType;
 class ListType;
 class MapType;
-class UnionType;
-class TupleType;
 class UserType;
 class FunctionKeywordType;
 class CoroutineKeywordType;
@@ -217,31 +215,12 @@ public:
   virtual AstType *clone() const override;
 };
 
-class UnionType : public AstType {
-public:
-  std::vector<AstType *> memberTypes;
-  UnionType(std::vector<AstType *> members, SourceLocation loc);
-  virtual ~UnionType() override;
-  virtual AstType *clone() const override;
-};
-
-class TupleType : public AstType {
-public:
-  std::vector<AstType *> elementTypes;
-  TupleType(std::vector<AstType *> elements, SourceLocation loc);
-  virtual ~TupleType() override;
-  virtual AstType *clone() const override;
-};
 
 class UserType : public AstType {
 public:
-  // --- 修改：将 std::string name 替换为 vector ---
-  // std::string name; // 旧的成员
+
   std::vector<std::string> qualifiedNameParts; ///< 存储限定名的各个部分，例如 {"Module", "Type"}
 
-  // --- 结束修改 ---
-
-  // --- 修改：更新构造函数以接受 vector ---
 
   UserType(std::vector<std::string> nameParts, SourceLocation loc)
       : AstType(std::move(loc)), qualifiedNameParts(std::move(nameParts)) {}
