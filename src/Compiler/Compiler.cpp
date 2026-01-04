@@ -122,7 +122,6 @@ void Compiler::compileDefer(DeferStatementNode *node) {
     compileBlock(node->body);
   }
 
-  cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
   cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
 
   Prototype childProto = cg_->endFunction();
@@ -245,8 +244,7 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
 
   compileBlock(node->body);
 
-  cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
-  cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+  cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
 
   Prototype childProto = cg_->endFunction();
   int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
@@ -424,7 +422,6 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
         compileBlock(func->body);
       }
 
-      cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
       cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
 
       Prototype childProto = cg_->endFunction();
@@ -1342,7 +1339,6 @@ void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
     }
   }
 
-  cg_->emitABC(OpCode::OP_LOADNIL, 0, 0, 0);
   cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
 
   Prototype childProto = cg_->endFunction();
