@@ -409,7 +409,7 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
 
       int numParams = static_cast<int>(func->params.size());
 
-      cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
+      cg_->beginFunction(source_, func->name, numParams + 1 /* add this */, func->isVariadic, func);
 
       int paramIndex = 0;
       for (auto *param : func->params) {
