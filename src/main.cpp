@@ -2962,7 +2962,7 @@ void registerStackReallocationTests(TestRunner &runner) {
     } else if (res == nil) {
         print("nil");
     } else {
-        print("c);
+        print("c");
     }
     )",
                  "nil");
