@@ -409,55 +409,31 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
 
       int numParams = static_cast<int>(func->params.size());
       if (func->params.empty()) {
-        numParams++; /* add this */
+        error("need this param");
+        return;
       } else if (auto *userType = dynamic_cast<UserType *>(func->params[0]->typeAnnotation);
                  userType != nullptr) {
         if (userType->qualifiedNameParts[0] != decl->name || func->params[0]->name != "this") {
-          numParams++; /* add this */
+          error("need this param");
+          return;
         }
       } else if ((dynamic_cast<AnyType *>(func->params[0]->typeAnnotation) ||
                   dynamic_cast<AutoType *>(func->params[0]->typeAnnotation)) &&
                  func->params[0]->name != "this") {
-        numParams++; /* add this */
+        error("need this param");
+        return;
       } else if (dynamic_cast<ListType *>(func->params[0]->typeAnnotation) ||
                  dynamic_cast<MapType *>(func->params[0]->typeAnnotation) ||
                  dynamic_cast<PrimitiveType *>(func->params[0]->typeAnnotation) ||
                  dynamic_cast<CoroutineKeywordType *>(func->params[0]->typeAnnotation) ||
                  dynamic_cast<FunctionKeywordType *>(func->params[0]->typeAnnotation)) {
-        numParams++; /* add this */
+        error("need this param");
+        return;
       }
 
       cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
 
       int paramIndex = 0;
-
-      if (func->params.empty()) {
-        cg_->addLocal("this");
-        cg_->current()->locals.back().slot = paramIndex++;
-        cg_->markInitialized();
-      } else if (auto *userType = dynamic_cast<UserType *>(func->params[0]->typeAnnotation);
-                 userType != nullptr) {
-        if (userType->qualifiedNameParts[0] != decl->name || func->params[0]->name != "this") {
-          cg_->addLocal("this");
-          cg_->current()->locals.back().slot = paramIndex++;
-          cg_->markInitialized();
-        }
-      } else if ((dynamic_cast<AnyType *>(func->params[0]->typeAnnotation) ||
-                  dynamic_cast<AutoType *>(func->params[0]->typeAnnotation)) &&
-                 func->params[0]->name != "this") {
-        cg_->addLocal("this");
-        cg_->current()->locals.back().slot = paramIndex++;
-        cg_->markInitialized();
-      } else if (dynamic_cast<ListType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<MapType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<PrimitiveType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<CoroutineKeywordType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<FunctionKeywordType *>(func->params[0]->typeAnnotation)) {
-        cg_->addLocal("this");
-        cg_->current()->locals.back().slot = paramIndex++;
-        cg_->markInitialized();
-      }
-
       for (auto *param : func->params) {
         cg_->addLocal(param->name);
         cg_->current()->locals.back().slot = paramIndex++;

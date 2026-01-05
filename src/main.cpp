@@ -541,53 +541,6 @@ void registerClasses(TestRunner &runner) {
        )",
                  "1\n6\n7");
 
-  runner.addTest("Class Methods 2",
-                  R"(
-            class Counter {
-                int value;
-                void init(Counter this, int start) {
-                    this.value = start;
-                }
-                void increment(Counter this) {
-                    this.value = this.value + 1;
-                }
-                void add(Counter this, int n) {
-                    this.value = this.value + n;
-                }
-                int anyThisGet(any this) {
-                  return this.value;
-                }
-                void empty() {
-                  print("empty");
-                }
-                void listTest(list<int> test) {
-                  print("list", test[0]);
-                }
-                void mapTest(map<string, int> test) {
-                  print("map", test["a"]);
-                }
-                void intTest(int test) {
-                  print(test);
-                }
-                void stringTest(string test) {
-                  print(test);
-                }
-            }
-            Counter c = new Counter(0);
-            c.increment();
-            print(c.anyThisGet());
-            c.add(5);
-            print(c.anyThisGet());
-            c.increment();
-            print(c.anyThisGet());
-            c.empty();
-            c.listTest([1, 2, 3]);
-            c.mapTest({"a": 1, "b": 2});
-            c.intTest(1);
-            c.stringTest("string");
-       )",
-                  "1\n6\n7\nempty\nlist 1\nmap 1\n1\nstring");
-
   runner.addTest("Class Method Chaining Style",
                  R"(
             class Point {
@@ -2981,7 +2934,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   runner.addTest("Stack Realloc - Stress Test",
                  R"(
         class SecurityVault {
-            void clearCache(string password) {
+            void clearCache(SecurityVault this, string password) {
             }
         }
 
