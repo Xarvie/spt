@@ -411,11 +411,13 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       if (func->params.empty()) {
         numParams++; /* add this */
       } else if (auto *userType = dynamic_cast<UserType *>(func->params[0]->typeAnnotation);
-                 userType == nullptr || userType->qualifiedNameParts[0] != decl->name) {
-        numParams++; /* add this */
+                 userType != nullptr) {
+        if (userType->qualifiedNameParts[0] != decl->name || func->params[0]->name != "this") {
+          numParams++; /* add this */
+        }
       } else if ((dynamic_cast<AnyType *>(func->params[0]->typeAnnotation) ||
                   dynamic_cast<AutoType *>(func->params[0]->typeAnnotation)) &&
-                 func->params[0]->name == "this") {
+                 func->params[0]->name != "this") {
         numParams++; /* add this */
       }
 
