@@ -419,6 +419,13 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
                   dynamic_cast<AutoType *>(func->params[0]->typeAnnotation)) &&
                  func->params[0]->name != "this") {
         numParams++; /* add this */
+      } else if (dynamic_cast<ListType *>(func->params[0]->typeAnnotation) ||
+                 dynamic_cast<MapType *>(func->params[0]->typeAnnotation) ||
+                 dynamic_cast<PrimitiveType *>(func->params[0]->typeAnnotation) ||
+                 dynamic_cast<CoroutineKeywordType *>(func->params[0]->typeAnnotation) ||
+                 dynamic_cast<FunctionKeywordType *>(func->params[0]->typeAnnotation) ||
+                 dynamic_cast<MapType *>(func->params[0]->typeAnnotation)) {
+        numParams++; /* add this */
       }
 
       cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
