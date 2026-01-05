@@ -680,7 +680,7 @@ void registerClasses(TestRunner &runner) {
                  R"(
             class Receiver {
                 int value;
-                void init(Inner this, int v) {
+                void init(Receiver this, int v) {
                     this.value = v;
                 }
             }
