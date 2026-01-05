@@ -675,6 +675,23 @@ void registerClasses(TestRunner &runner) {
             print(o.inner.value);
        )",
                  "42");
+
+  runner.addTest("Object Receiver",
+                 R"(
+            class Receiver {
+                int value;
+                void init(Inner this, int v) {
+                    this.value = v;
+                }
+            }
+            int receiverMethodAdd(any this, int a){
+                return this.value + a;
+            }
+            auto o = new Receiver(42);
+            o.add = receiverMethodAdd;
+            print(o.add(1));
+       )",
+                 "43");
 }
 
 // =========================================================
