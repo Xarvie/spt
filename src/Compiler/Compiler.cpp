@@ -408,8 +408,18 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       int tempSlot = cg_->allocSlot();
 
       int numParams = static_cast<int>(func->params.size());
+      if (func->params.empty()) {
+        numParams++; /* add this */
+      } else if (auto *userType = dynamic_cast<UserType *>(func->params[0]->typeAnnotation);
+                 userType == nullptr || userType->qualifiedNameParts[0] != decl->name) {
+        numParams++; /* add this */
+      } else if ((dynamic_cast<AnyType *>(func->params[0]->typeAnnotation) ||
+                  dynamic_cast<AutoType *>(func->params[0]->typeAnnotation)) &&
+                 func->params[0]->name == "this") {
+        numParams++; /* add this */
+      }
 
-      cg_->beginFunction(source_, func->name, numParams + 1 /* add this */, func->isVariadic, func);
+      cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
 
       int paramIndex = 0;
       for (auto *param : func->params) {
