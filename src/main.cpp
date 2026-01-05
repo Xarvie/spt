@@ -2930,6 +2930,26 @@ void registerStackReallocationTests(TestRunner &runner) {
             print(stressTest(10));
        )",
                  "245");  // 10 * 20 + (0+1+...+9) = 200 + 45 = 245
+
+  runner.addTest("Stack Realloc - Stress Test",
+                 R"(
+        class SecurityVault {
+            void clearCache(string password) {
+            }
+        }
+
+        var vault = new SecurityVault();
+        string res = vault.clearCache("123456");
+
+        if (res == "123456") {
+            print("返回值泄露");
+        } else if (res == nil) {
+            print("nil");
+        } else {
+            print("未知结果: " .. res);
+        }
+       )",
+                 "nil");
 }
 // =========================================================
 // 主函数
