@@ -20,6 +20,7 @@ struct CallFrame {
   int slotsBase = 0;               // 栈帧基址（相对于栈底的偏移量索引）
   int expectedResults = 1;         // 期望返回值数量 (-1 表示全部)
   std::vector<Value> defers;       // defer 闭包栈 (LIFO)
+  int returnBase;
 };
 
 // ============================================================================

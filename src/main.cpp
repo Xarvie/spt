@@ -2903,7 +2903,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "100");
 
-  runner.addTest("Stack Realloc - Stress Test",
+  runner.addTest("Stack Realloc - Stress Test0",
                  R"(
             // 组合多种操作
             int stressTest(int iterations) {
@@ -2931,10 +2931,10 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "245");  // 10 * 20 + (0+1+...+9) = 200 + 45 = 245
 
-  runner.addTest("Stack Realloc - Stress Test",
+  runner.addTest("Stack Realloc - return leak",
                  R"(
         class SecurityVault {
-            void clearCache(SecurityVault this, string password) {
+            void clearCache(string password) {
             }
         }
 

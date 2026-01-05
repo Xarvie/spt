@@ -1272,6 +1272,7 @@ InterpretResult VM::run() {
       newFrame.ip = proto->code.data();
       newFrame.expectedResults = expectedResults;
       newFrame.slotsBase = newSlotsBase;
+      newFrame.returnBase = frame->slotsBase + A;
 
       Value *targetStackTop = argsStart + proto->maxStackSize;
 
@@ -1454,10 +1455,23 @@ InterpretResult VM::run() {
       Closure *closure = static_cast<Closure *>(method.asGC());
       const Prototype *proto = closure->proto;
 
-      if (!proto->isVararg && totalArgs != proto->numParams) {
-        runtimeError("Method '%s' expects %d arguments, got %d", methodName.c_str(),
-                     proto->numParams, totalArgs);
-        return InterpretResult::RUNTIME_ERROR;
+      int totalArgsProvided = B;
+      bool dropThis = false;
+
+      if (proto->needsReceiver) {
+        if (!proto->isVararg && totalArgsProvided != proto->numParams) {
+          runtimeError("Method '%s' expects %d arguments (including 'this'), got %d",
+                       methodName.c_str(), proto->numParams, totalArgsProvided);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+        dropThis = false;
+      } else {
+        if (!proto->isVararg && totalArgsProvided != (proto->numParams + 1)) {
+          runtimeError("Method '%s' expects %d arguments, got %d", methodName.c_str(),
+                       proto->numParams, totalArgsProvided - 1);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+        dropThis = true;
       }
 
       if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
@@ -1465,11 +1479,11 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      for (int i = totalArgs - 1; i >= 0; --i) {
+      for (int i = totalArgsProvided - 1; i >= 0; --i) {
         slots[A + 1 + i] = slots[A + i];
       }
 
-      int newSlotsBase = frame->slotsBase + A + 1;
+      int newSlotsBase = frame->slotsBase + A + (dropThis ? 2 : 1);
 
       fiber->ensureStack(proto->maxStackSize);
 
@@ -1482,10 +1496,13 @@ InterpretResult VM::run() {
       newFrame.ip = proto->code.data();
       newFrame.expectedResults = 1;
       newFrame.slotsBase = newSlotsBase;
+      newFrame.returnBase = frame->slotsBase + A;
 
       Value *targetStackTop = newSlots + proto->maxStackSize;
 
-      for (Value *p = newSlots + totalArgs; p < targetStackTop; ++p) {
+      int argsPushed = dropThis ? (totalArgsProvided - 1) : totalArgsProvided;
+
+      for (Value *p = newSlots + argsPushed; p < targetStackTop; ++p) {
         *p = Value::nil();
       }
 
@@ -1564,13 +1581,11 @@ InterpretResult VM::run() {
     int expectedResults = frame->expectedResults;
 
     bool isRootFrame = (FRAME_COUNT == 1);
-
     bool isModuleExit = (exitFrameCount_ > 0 && FRAME_COUNT == exitFrameCount_);
 
     Value *destSlot = nullptr;
     if (!isRootFrame && !isModuleExit) {
-
-      destSlot = stackStart + frame->slotsBase - 1;
+      destSlot = stackStart + frame->returnBase;
     }
 
     closeUpvalues(slots);

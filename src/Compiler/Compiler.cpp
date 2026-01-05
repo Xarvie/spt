@@ -231,14 +231,21 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   int nameSlot = cg_->addLocal(node->name);
   cg_->markInitialized();
 
-  cg_->beginFunction(source_, node->name, node->params.size(), false, node);
+  int numParams = static_cast<int>(node->params.size());
+  cg_->beginFunction(source_, node->name, numParams, node->isVariadic, node);
+
+  if (!node->params.empty() && node->params[0]->name == "this") {
+    cg_->current()->proto.needsReceiver = true;
+  } else {
+    cg_->current()->proto.needsReceiver = false;
+  }
+  // =========================================================
 
   int paramIndex = 0;
   for (auto *param : node->params) {
     cg_->setLineGetter(param);
     cg_->addLocal(param->name);
     cg_->current()->locals.back().slot = paramIndex++;
-
     cg_->markInitialized();
   }
 
@@ -410,6 +417,12 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       int numParams = static_cast<int>(func->params.size());
 
       cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
+
+      if (!func->params.empty() && func->params[0]->name == "this") {
+        cg_->current()->proto.needsReceiver = true;
+      } else {
+        cg_->current()->proto.needsReceiver = false;
+      }
 
       int paramIndex = 0;
       for (auto *param : func->params) {
@@ -1324,6 +1337,12 @@ void Compiler::compileMapLiteral(LiteralMapNode *node, int dest) {
 void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
   int numParams = static_cast<int>(lambda->params.size());
   cg_->beginFunction(source_, "<lambda>", numParams, lambda->isVariadic, lambda);
+
+  if (!lambda->params.empty() && lambda->params[0]->name == "this") {
+    cg_->current()->proto.needsReceiver = true;
+  } else {
+    cg_->current()->proto.needsReceiver = false;
+  }
 
   int paramIndex = 0;
   for (auto *param : lambda->params) {
