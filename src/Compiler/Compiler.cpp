@@ -421,8 +421,12 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       if (func->body) {
         compileBlock(func->body);
       }
-
-      cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+      if (auto primitiveType = dynamic_cast<PrimitiveType *>(func->returnType);
+          primitiveType && primitiveType->primitiveKind == PrimitiveTypeKind::VOID) {
+        cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
+      } else {
+        cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+      }
 
       Prototype childProto = cg_->endFunction();
       int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
@@ -1339,7 +1343,12 @@ void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
     }
   }
 
-  cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+  if (auto primitiveType = dynamic_cast<PrimitiveType *>(lambda->returnType);
+      primitiveType && primitiveType->primitiveKind == PrimitiveTypeKind::VOID) {
+    cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
+  } else {
+    cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+  }
 
   Prototype childProto = cg_->endFunction();
   int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
