@@ -408,28 +408,6 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       int tempSlot = cg_->allocSlot();
 
       int numParams = static_cast<int>(func->params.size());
-      if (func->params.empty()) {
-        error("need this param");
-        return;
-      } else if (auto *userType = dynamic_cast<UserType *>(func->params[0]->typeAnnotation);
-                 userType != nullptr) {
-        if (userType->qualifiedNameParts[0] != decl->name || func->params[0]->name != "this") {
-          error("need this param");
-          return;
-        }
-      } else if ((dynamic_cast<AnyType *>(func->params[0]->typeAnnotation) ||
-                  dynamic_cast<AutoType *>(func->params[0]->typeAnnotation)) &&
-                 func->params[0]->name != "this") {
-        error("need this param");
-        return;
-      } else if (dynamic_cast<ListType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<MapType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<PrimitiveType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<CoroutineKeywordType *>(func->params[0]->typeAnnotation) ||
-                 dynamic_cast<FunctionKeywordType *>(func->params[0]->typeAnnotation)) {
-        error("need this param");
-        return;
-      }
 
       cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
 
@@ -443,12 +421,8 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       if (func->body) {
         compileBlock(func->body);
       }
-      if (auto primitiveType = dynamic_cast<PrimitiveType *>(func->returnType);
-          primitiveType && primitiveType->primitiveKind == PrimitiveTypeKind::VOID) {
-        cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
-      } else {
-        cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
-      }
+
+      cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
 
       Prototype childProto = cg_->endFunction();
       int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
@@ -1365,12 +1339,7 @@ void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
     }
   }
 
-  if (auto primitiveType = dynamic_cast<PrimitiveType *>(lambda->returnType);
-      primitiveType && primitiveType->primitiveKind == PrimitiveTypeKind::VOID) {
-    cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
-  } else {
-    cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
-  }
+  cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
 
   Prototype childProto = cg_->endFunction();
   int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());

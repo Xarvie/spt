@@ -2812,7 +2812,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 6. defer 与栈使用
   // ---------------------------------------------------------
 
-  runner.addTest("Stack Realloc - Defer After Recursion",
+  runner.addTest("Defer After Recursion",
                  R"(
             list<string> logs = [];
 
