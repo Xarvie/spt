@@ -2950,6 +2950,22 @@ void registerStackReallocationTests(TestRunner &runner) {
         }
        )",
                  "nil");
+
+  runner.addTest("Return Leak Check - Lambda",
+                 R"(
+    auto leakTest = function(int secret) -> void {
+    };
+    var res = leakTest(999);
+
+    if (res == 999) {
+        print("a");
+    } else if (res == nil) {
+        print("nil");
+    } else {
+        print("c);
+    }
+    )",
+                 "nil");
 }
 // =========================================================
 // 主函数
