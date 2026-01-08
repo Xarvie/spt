@@ -315,27 +315,18 @@ void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &
   int methodIdx = cg_->addStringConstant(methodName);
 
   if (methodIdx > 255) {
-
     compileMethodInvokeFallback(receiverExpr, methodName, methodIdx, arguments, dest, nResults);
     return;
   }
 
-  int receiverSlot = cg_->allocSlot();
-  compileExpression(receiverExpr, receiverSlot);
+  int base = cg_->allocSlot();
+  compileExpression(receiverExpr, base);
 
-  std::vector<int> argSlots;
   for (int i = 0; i < argCount; ++i) {
     int argSlot = cg_->allocSlot();
     compileExpression(arguments[i], argSlot);
-    argSlots.push_back(argSlot);
-  }
 
-  int base = cg_->allocSlots(totalArgs);
 
-  cg_->emitABC(OpCode::OP_MOVE, base, receiverSlot, 0);
-
-  for (int i = 0; i < argCount; ++i) {
-    cg_->emitABC(OpCode::OP_MOVE, base + 1 + i, argSlots[i], 0);
   }
 
   cg_->emitABC(OpCode::OP_INVOKE, base, totalArgs, methodIdx);
@@ -347,55 +338,39 @@ void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &
   }
 
   cg_->freeSlots(totalArgs);
-  cg_->freeSlots(argCount);
-  cg_->freeSlots(1);
 }
 
 void Compiler::compileMethodInvokeFallback(Expression *receiverExpr, const std::string &methodName,
                                            int methodIdx,
                                            const std::vector<Expression *> &arguments, int dest,
                                            int nResults) {
-
   int argCount = static_cast<int>(arguments.size());
+  int methodSlot = cg_->allocSlot();
 
   int receiverSlot = cg_->allocSlot();
   compileExpression(receiverExpr, receiverSlot);
 
-  int methodSlot = cg_->allocSlot();
   int keySlot = cg_->allocSlot();
   cg_->emitABx(OpCode::OP_LOADK, keySlot, methodIdx);
   cg_->emitABC(OpCode::OP_GETINDEX, methodSlot, receiverSlot, keySlot);
   cg_->freeSlots(1);
 
-  std::vector<int> argSlots;
   for (int i = 0; i < argCount; ++i) {
     int argSlot = cg_->allocSlot();
     compileExpression(arguments[i], argSlot);
-    argSlots.push_back(argSlot);
   }
 
-  int callBase = cg_->allocSlots(2 + argCount);
+  cg_->emitABC(OpCode::OP_CALL, methodSlot, argCount + 2, nResults + 1);
 
-  cg_->emitABC(OpCode::OP_MOVE, callBase, methodSlot, 0);
-  cg_->emitABC(OpCode::OP_MOVE, callBase + 1, receiverSlot, 0);
-
-  for (int i = 0; i < argCount; ++i) {
-    cg_->emitABC(OpCode::OP_MOVE, callBase + 2 + i, argSlots[i], 0);
-  }
-
-  cg_->emitABC(OpCode::OP_CALL, callBase, argCount + 2, nResults + 1);
-
-  if (nResults > 0 && dest != callBase) {
+  if (nResults > 0 && dest != methodSlot) {
     for (int i = 0; i < nResults; ++i) {
-      cg_->emitABC(OpCode::OP_MOVE, dest + i, callBase + i, 0);
+      cg_->emitABC(OpCode::OP_MOVE, dest + i, methodSlot + i, 0);
     }
   }
 
   cg_->freeSlots(2 + argCount);
-  cg_->freeSlots(argCount);
-  cg_->freeSlots(1);
-  cg_->freeSlots(1);
 }
+
 
 void Compiler::compileClassDecl(ClassDeclNode *decl) {
   int slot = cg_->addLocal(decl->name);
