@@ -32,7 +32,7 @@ enum class OpCode : uint8_t {
 
   /* --- 类与对象支持 --- */
   OP_NEWCLASS, /* A Bx    | R[A] := NewClass(K[Bx]) (创建类定义)        */
-  OP_NEWOBJ,   /* A B     | R[A] := NewInstance(R[B]) (基于类定义实例化)  */
+  OP_NEWOBJ,   /* A B C   | R[A] := new R[B]( R[B+1] ... R[B+C] ) B:类对象基址 C:参数个数*/
 
   /* --- 闭包与 UpValue (Flat 模式，索引从 0 开始) --- */
   OP_GETUPVAL,      /* A B     | R[A] := UpValue[B]                         */

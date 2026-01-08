@@ -2,79 +2,80 @@
 #include <filesystem>
 
 void registerBench(TestRunner &runner) {
-  runner.addTest("Recursion - Fibonacci",
+  runner.addTest("Particle Simulation",
                  R"(
-            int fib(int n) {
-                if (n < 2) { return n; }
-                return fib(n-1) + fib(n-2);
-            }
-            print(fib(38));
-       )",
-                 "39088169");
-//
-//runner.addTest("Arithmetic Operations",
-//               R"spt(
-//// Spt 性能对比测试：向量场热度模拟
-//class Vector {
-//    float x;
-//    float y;
-//    void init(Vector this, float x, float y) {
-//        this.x = x;
-//        this.y = y;
-//    }
-//    // 模拟高频调用的方法
-//    void add(Vector this, Vector other) {
-//        this.x += other.x;
-//        this.y += other.y;
-//    }
-//}
-//
-//auto getSimulator = function() -> function {
-//    // 闭包变量：模拟环境参数
-//    float friction = 0.95;
-//    int bound = 100;
-//
-//    return function(list<any> particles, int steps) -> float {
-//        float totalMagnitude = 0.0;
-//
-//        for (int s = 0; s < steps; s = s + 1) {
-//            for (int i = 0; i < particles.length; i = i + 1) {
-//                Vector p = particles[i];
-//
-//                // 1. 触发 OP_INVOKE (方法调用优化)
-//                p.add(new Vector(1.0, 0.5));
-//
-//                // 2. 复杂的 if-else 分支
-//                if (p.x > toFloat(bound)) {
-//                    p.x = 0.0;
-//                } else if (p.x < 0.0) {
-//                    p.x = toFloat(bound);
-//                }
-//
-//                // 3. 闭包变量访问 (UPVALUE 查找)
-//                p.x *= friction;
-//                p.y *= friction;
-//            }
-//        }
-//
-//        // 计算最终状态
-//        for (int j = 0; j < particles.length; j = j + 1) {
-//            totalMagnitude += sqrt(particles[j].x * particles[j].x + particles[j].y * particles[j].y);
-//        }
-//        return totalMagnitude;
-//    };
-//};
-//
-//auto simulate = getSimulator();
-//list<any> pool = [];
-//for (int k = 0; k < 100; k = k + 1) {
-//    pool.push(new Vector(toFloat(k), toFloat(k)));
-//}
-//
-//print(simulate(pool, 500));
-//       )spt",
-//               "2124.264579");
+            class Vector {
+                float x;
+                float y;
 
+                void init(Vector this, float x, float y) {
+                    this.x = x;
+                    this.y = y;
+                }
+
+                void add(Vector this, float dx, float dy) {
+                    this.x += dx;
+                    this.y += dy;
+                }
+            }
+
+            class Particle {
+                Vector pos;
+                Vector vel;
+                int id;
+
+                void init(Particle this, int id) {
+                    this.id = id;
+                    // 嵌套对象创建
+                    this.pos = new Vector(0.0, 0.0);
+                    this.vel = new Vector(1.5, 0.5);
+                }
+
+                void update(Particle this) {
+                    // 核心热点：方法调用 (OP_INVOKE)
+                    this.pos.add(this.vel.x, this.vel.y);
+
+                    // 简单的边界反弹逻辑 (条件跳转)
+                    if (this.pos.x > 100.0) {
+                        this.pos.x = 0.0;
+                    }
+                    if (this.pos.y > 100.0) {
+                        this.pos.y = 0.0;
+                    }
+                }
+
+                float checksum(Particle this) {
+                    return this.pos.x + this.pos.y;
+                }
+            }
+
+            // 1. 初始化容器
+            list<any> systems = [];
+            int count = 2000;
+
+            for (int i = 0; i < count; i += 1) {
+                systems.push(new Particle(i));
+            }
+
+            // 2. 主模拟循环
+            int frames = 1000;
+            for (int f = 0; f < frames; f += 1) {
+                for (int i = 0; i < systems.length; i += 1) {
+                    Particle p = systems[i];
+                    p.update();
+                }
+            }
+
+            // 3. 验证结果
+            float total = 0.0;
+            for (int i = 0; i < systems.length; i += 1) {
+                Particle p = systems[i];
+                total += p.checksum();
+            }
+
+            print(toInt(total));
+       )",
+                 "382000");
 }
 
 // =========================================================

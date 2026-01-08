@@ -963,6 +963,8 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_NEWOBJ) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+
     Value classValue = slots[B];
 
     if (!classValue.isClass()) {
@@ -972,7 +974,84 @@ InterpretResult VM::run() {
 
     auto *klass = static_cast<ClassObject *>(classValue.asGC());
     Instance *instance = allocateInstance(klass);
-    slots[A] = Value::object(instance);
+    Value instanceVal = Value::object(instance);
+
+    slots[A] = instanceVal;
+
+    auto it = klass->methods.find("init");
+    if (it != klass->methods.end()) {
+      Value initializer = it->second;
+
+      slots[B] = instanceVal;
+
+      if (initializer.isClosure()) {
+        Closure *closure = static_cast<Closure *>(initializer.asGC());
+        const Prototype *proto = closure->proto;
+
+        int providedArgs = C;
+        if (proto->needsReceiver) {
+          providedArgs += 1;
+        }
+
+        if (!proto->isVararg && providedArgs != proto->numParams) {
+          runtimeError("init expects %d arguments, got %d", proto->numParams, providedArgs);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+        // =========================================================
+
+        if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+          runtimeError("Stack overflow");
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        int newSlotsBase = frame->slotsBase + B;
+
+        fiber->ensureStack(proto->maxStackSize);
+        REFRESH_SLOTS();
+
+        Value *argsStart = stackStart + newSlotsBase;
+
+        CallFrame newFrame;
+        newFrame.closure = closure;
+        newFrame.ip = proto->code.data();
+        newFrame.expectedResults = 0;
+        newFrame.slotsBase = newSlotsBase;
+        newFrame.returnBase = frame->slotsBase + A;
+
+        Value *targetStackTop = argsStart + proto->maxStackSize;
+        for (Value *p = argsStart + providedArgs; p < targetStackTop; ++p) {
+          *p = Value::nil();
+        }
+
+        STACK_TOP = targetStackTop;
+        FRAMES.push_back(newFrame);
+        FRAME_COUNT++;
+
+        frame = &FRAMES[FRAME_COUNT - 1];
+        REFRESH_SLOTS();
+
+      } else if (initializer.isNativeFunc()) {
+        NativeFunction *native = static_cast<NativeFunction *>(initializer.asGC());
+
+        if (native->arity != -1 && C != native->arity) {
+          runtimeError("Native init expects %d arguments, got %d", native->arity, C);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        Value *argsStart = &slots[B + 1];
+        native->function(this, instanceVal, C, argsStart);
+      } else {
+        runtimeError("init method must be a function");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+    } else {
+      if (C > 0) {
+        runtimeError("Class '%s' has no init method but arguments were provided.",
+                     klass->name.c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+    }
+
     SPT_DISPATCH();
   }
 

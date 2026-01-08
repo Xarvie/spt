@@ -1189,8 +1189,8 @@ void Compiler::compileLambda(LambdaNode *node, int dest) { compileLambdaBody(nod
 void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
   cg_->setLineGetter(node);
 
-  std::string className = node->classType->getFullName();
   int classSlot = cg_->allocSlot();
+  std::string className = node->classType->getFullName();
 
   int local = cg_->resolveLocal(className);
   if (local >= 0) {
@@ -1212,75 +1212,18 @@ void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
     }
   }
 
-  cg_->emitABC(OpCode::OP_NEWOBJ, dest, classSlot, 0);
-  cg_->freeSlots(1);
+  for (auto *arg : node->arguments) {
+    int argSlot = cg_->allocSlot();
+    compileExpression(arg, argSlot);
+  }
 
-  int initIdx = cg_->addStringConstant("init");
   int argCount = static_cast<int>(node->arguments.size());
 
-  if (initIdx <= 255) {
-
-    int checkSlot = cg_->allocSlot();
-    cg_->emitABC(OpCode::OP_GETFIELD, checkSlot, dest, initIdx);
-    cg_->emitABC(OpCode::OP_TEST, checkSlot, 0, 0);
-    int skipJump = cg_->emitJump(OpCode::OP_JMP);
-    cg_->freeSlots(1);
-
-    std::vector<int> argSlots;
-    for (int i = 0; i < argCount; ++i) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(node->arguments[i], argSlot);
-      argSlots.push_back(argSlot);
-    }
-
-    int invokeBase = cg_->allocSlots(1 + argCount);
-
-    cg_->emitABC(OpCode::OP_MOVE, invokeBase, dest, 0);
-
-    for (int i = 0; i < argCount; ++i) {
-      cg_->emitABC(OpCode::OP_MOVE, invokeBase + 1 + i, argSlots[i], 0);
-    }
-
-    cg_->emitABC(OpCode::OP_INVOKE, invokeBase, argCount + 1, initIdx);
-
-    cg_->freeSlots(1 + argCount);
-    cg_->freeSlots(argCount);
-
-    cg_->patchJump(skipJump);
-  } else {
-
-    int methodSlot = cg_->allocSlot();
-    int keySlot = cg_->allocSlot();
-    cg_->emitABx(OpCode::OP_LOADK, keySlot, initIdx);
-    cg_->emitABC(OpCode::OP_GETINDEX, methodSlot, dest, keySlot);
-    cg_->freeSlots(1);
-
-    cg_->emitABC(OpCode::OP_TEST, methodSlot, 0, 0);
-    int jumpIfNil = cg_->emitJump(OpCode::OP_JMP);
-
-    std::vector<int> argSlots;
-    for (int i = 0; i < argCount; ++i) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(node->arguments[i], argSlot);
-      argSlots.push_back(argSlot);
-    }
-
-    int callBase = cg_->allocSlots(2 + argCount);
-    cg_->emitABC(OpCode::OP_MOVE, callBase, methodSlot, 0);
-    cg_->emitABC(OpCode::OP_MOVE, callBase + 1, dest, 0);
-
-    for (int i = 0; i < argCount; ++i) {
-      cg_->emitABC(OpCode::OP_MOVE, callBase + 2 + i, argSlots[i], 0);
-    }
-
-    cg_->emitABC(OpCode::OP_CALL, callBase, argCount + 2, 1);
-
-    cg_->freeSlots(2 + argCount);
-    cg_->freeSlots(argCount);
-
-    cg_->patchJump(jumpIfNil);
-    cg_->freeSlots(1);
+  if (argCount > 255) {
+    error("Too many arguments for constructor", node->location);
   }
+  cg_->emitABC(OpCode::OP_NEWOBJ, dest, classSlot, argCount);
+  cg_->freeSlots(1 + argCount);
 }
 
 void Compiler::compileThis(ThisExpressionNode *, int dest) {
