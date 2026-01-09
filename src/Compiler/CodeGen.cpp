@@ -260,12 +260,20 @@ int CodeGen::emitJump(OpCode op, int32_t offset) {
 
 void CodeGen::patchJump(int jumpInst) {
   int offset = currentPc() - jumpInst - 1;
-  current_->proto.code[jumpInst] = MAKE_AsBx(static_cast<uint8_t>(OpCode::OP_JMP), 0, offset);
+  Instruction oldInst = current_->proto.code[jumpInst];
+  OpCode op = GET_OPCODE(oldInst);
+  uint8_t a = GETARG_A(oldInst);
+
+  current_->proto.code[jumpInst] = MAKE_AsBx(static_cast<uint8_t>(op), a, offset);
 }
 
 void CodeGen::patchJumpTo(int jumpInst, int target) {
   int offset = target - jumpInst - 1;
-  current_->proto.code[jumpInst] = MAKE_AsBx(static_cast<uint8_t>(OpCode::OP_JMP), 0, offset);
+  Instruction oldInst = current_->proto.code[jumpInst];
+  OpCode op = GET_OPCODE(oldInst);
+  uint8_t a = GETARG_A(oldInst);
+
+  current_->proto.code[jumpInst] = MAKE_AsBx(static_cast<uint8_t>(op), a, offset);
 }
 
 void CodeGen::emitCloseUpvalue(int slot) { emitABC(OpCode::OP_CLOSE_UPVALUE, slot, 0, 0); }

@@ -119,6 +119,8 @@ namespace spt {
   SPT_DISPATCH_TABLE_ENTRY(OP_EQI)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_LTI)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_LEI)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_FORPREP)                                                             \
+  SPT_DISPATCH_TABLE_ENTRY(OP_FORLOOP)                                                             \
   SPT_DISPATCH_TABLE_END()
 
 } // namespace spt

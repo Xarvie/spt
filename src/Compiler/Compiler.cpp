@@ -614,7 +614,116 @@ void Compiler::compileWhileStatement(WhileStatementNode *stmt) {
   cg_->endLoop();
 }
 
+static Expression *getStepExpression(const std::string &varName, Statement *updateStmt) {
+  if (auto *ua = dynamic_cast<UpdateAssignmentNode *>(updateStmt)) {
+    if (auto *id = dynamic_cast<IdentifierNode *>(ua->lvalue)) {
+      if (id->name == varName && ua->op == OperatorKind::ASSIGN_ADD) {
+        return ua->rvalue;
+      }
+    }
+  }
+
+  else if (auto *assign = dynamic_cast<AssignmentNode *>(updateStmt)) {
+    if (assign->lvalues.size() == 1 && assign->rvalues.size() == 1) {
+      auto *lId = dynamic_cast<IdentifierNode *>(assign->lvalues[0]);
+      if (lId && lId->name == varName) {
+        auto *binOp = dynamic_cast<BinaryOpNode *>(assign->rvalues[0]);
+        if (binOp && binOp->op == OperatorKind::ADD) {
+          auto *leftId = dynamic_cast<IdentifierNode *>(binOp->left);
+          if (leftId && leftId->name == varName)
+            return binOp->right;
+
+          auto *rightId = dynamic_cast<IdentifierNode *>(binOp->right);
+          if (rightId && rightId->name == varName)
+            return binOp->left;
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
+bool Compiler::tryCompileNumericLoop(ForCStyleStatementNode *stmt) {
+  if (!stmt->initializer ||
+      !std::holds_alternative<std::vector<Declaration *>>(*stmt->initializer)) {
+    return false;
+  }
+
+  auto &decls = std::get<std::vector<Declaration *>>(*stmt->initializer);
+  if (decls.size() != 1)
+    return false;
+
+  auto *varDecl = dynamic_cast<VariableDeclNode *>(decls[0]);
+  if (!varDecl)
+    return false;
+  std::string varName = varDecl->name;
+
+  auto *binOp = dynamic_cast<BinaryOpNode *>(stmt->condition);
+  if (!binOp)
+    return false;
+
+  auto *leftId = dynamic_cast<IdentifierNode *>(binOp->left);
+  if (!leftId || leftId->name != varName)
+    return false;
+
+  if (binOp->op != OperatorKind::LT && binOp->op != OperatorKind::LE)
+    return false;
+
+  if (stmt->updateActions.size() != 1)
+    return false;
+  Expression *stepExpr = getStepExpression(varName, stmt->updateActions[0]);
+  if (!stepExpr)
+    return false;
+
+  cg_->beginScope();
+
+  cg_->setLineGetter(varDecl);
+  int indexSlot = cg_->addLocal(varName);
+  if (varDecl->initializer) {
+    compileExpression(varDecl->initializer, indexSlot);
+  } else {
+    cg_->emitABC(OpCode::OP_LOADNIL, indexSlot, 0, 0);
+  }
+  cg_->markInitialized();
+
+  int limitSlot = cg_->allocSlot();
+  compileExpression(binOp->right, limitSlot);
+
+  if (binOp->op == OperatorKind::LT) {
+    cg_->emitABC(OpCode::OP_ADDI, limitSlot, limitSlot, static_cast<uint8_t>(-1));
+  }
+
+  int stepSlot = cg_->allocSlot();
+  compileExpression(stepExpr, stepSlot);
+
+  int forPrepPc = cg_->currentPc();
+  cg_->emitAsBx(OpCode::OP_FORPREP, indexSlot, 0);
+  int prepJump = forPrepPc;
+
+  cg_->beginLoop(forPrepPc + 1);
+
+  compileBlock(stmt->body);
+
+  int loopEndPc = cg_->currentPc();
+
+  cg_->patchContinues(loopEndPc);
+
+  int jumpBackOffset = forPrepPc - loopEndPc;
+  cg_->emitAsBx(OpCode::OP_FORLOOP, indexSlot, jumpBackOffset);
+
+  cg_->patchBreaks();
+  cg_->endLoop();
+
+  cg_->patchJumpTo(prepJump, loopEndPc);
+
+  cg_->endScope();
+  return true;
+}
+
 void Compiler::compileForCStyle(ForCStyleStatementNode *stmt) {
+  if (tryCompileNumericLoop(stmt)) {
+    return;
+  }
   cg_->beginScope();
 
   if (stmt->initializer) {

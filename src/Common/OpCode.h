@@ -73,6 +73,10 @@ enum class OpCode : uint8_t {
   OP_EQI, /* iABC if (R[A] == sB) != C then pc++  */
   OP_LTI, /* iABC if (R[A] < sB) != C then pc++   */
   OP_LEI, /* iABC: if (R[A] <= sB) != C then pc++ A: 寄存器, B: 有符号8位立即数, C: 期望结果*/
+
+  OP_FORPREP, /* A sBx | R[A] -= R[A+2]; pc += sBx      初始化：预减 Step，跳转到循环尾部首次检查 */
+  OP_FORLOOP, /* A sBx | R[A] += R[A+2]; if R[A] <= R[A+1] then pc += sBx 循环尾：步进 + 检查 + 回跳
+               */
 };
 
 /* --- 指令解码宏 (完全兼容 Lua 5.4 布局) --- */

@@ -686,6 +686,14 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
   return result;
 }
 
+static inline double valueToNum(const Value &v) {
+  if (v.isInt())
+    return static_cast<double>(v.asInt());
+  if (v.isFloat())
+    return v.asFloat();
+  return 0.0;
+}
+
 InterpretResult VM::run() {
   FiberObject *fiber = currentFiber_;
   CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
@@ -1930,6 +1938,82 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+#define CHECK_NUM(val, msg)                                                                        \
+  if (!val.isNumber()) {                                                                           \
+    runtimeError(msg);                                                                             \
+    return InterpretResult::RUNTIME_ERROR;                                                         \
+  }
+
+  SPT_OPCODE(OP_FORPREP) {
+    uint8_t A = GETARG_A(instruction);
+    int32_t sBx = GETARG_sBx(instruction);
+
+    Value &idx = slots[A];
+    Value limit = slots[A + 1];
+    Value step = slots[A + 2];
+
+    CHECK_NUM(idx, "'for' loop initial value must be a number");
+    CHECK_NUM(limit, "'for' loop limit must be a number");
+    CHECK_NUM(step, "'for' loop step must be a number");
+
+    if (idx.isInt() && step.isInt() && limit.isInt()) {
+      idx = Value::integer(idx.asInt() - step.asInt());
+    } else {
+      double nIdx = valueToNum(idx);
+      double nStep = valueToNum(step);
+      idx = Value::number(nIdx - nStep);
+    }
+
+    frame->ip += sBx;
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_FORLOOP) {
+    uint8_t A = GETARG_A(instruction);
+    int32_t sBx = GETARG_sBx(instruction);
+
+    Value &idx = slots[A];
+    Value limit = slots[A + 1];
+    Value step = slots[A + 2];
+
+    CHECK_NUM(idx, "'for' loop variable corrupted (must be a number)");
+    CHECK_NUM(step, "'for' loop step corrupted (must be a number)");
+    CHECK_NUM(limit, "'for' loop limit corrupted (must be a number)");
+
+    if (idx.isInt() && step.isInt() && limit.isInt()) {
+      int64_t iStep = step.asInt();
+      int64_t iIdx = idx.asInt() + iStep;
+      idx = Value::integer(iIdx);
+
+      int64_t iLimit = limit.asInt();
+
+      if (iStep > 0) {
+        if (iIdx <= iLimit)
+          frame->ip += sBx;
+      } else {
+        if (iIdx >= iLimit)
+          frame->ip += sBx;
+      }
+    } else {
+      double nStep = valueToNum(step);
+      double nIdx = valueToNum(idx) + nStep;
+      double nLimit = valueToNum(limit);
+
+      idx = Value::number(nIdx);
+
+      if (nStep > 0) {
+        if (nIdx <= nLimit)
+          frame->ip += sBx;
+      } else {
+        if (nIdx >= nLimit)
+          frame->ip += sBx;
+      }
+    }
+
+    SPT_DISPATCH();
+  }
+
+#undef CHECK_NUM
   SPT_DISPATCH_LOOP_END()
 
 #undef FIBER

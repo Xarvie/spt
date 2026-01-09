@@ -511,6 +511,10 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "LTI";
   case OpCode::OP_LEI:
     return "LEI";
+  case OpCode::OP_FORPREP:
+    return "FORPREP";
+  case OpCode::OP_FORLOOP:
+    return "FORLOOP";
 
   default:
     return "UNKNOWN";

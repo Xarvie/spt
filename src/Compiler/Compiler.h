@@ -38,6 +38,7 @@ private:
   void compileIfStatement(IfStatementNode *stmt);
   void compileWhileStatement(WhileStatementNode *stmt);
   void compileForCStyle(ForCStyleStatementNode *stmt);
+  bool tryCompileNumericLoop(ForCStyleStatementNode *stmt);
   void compileForEach(ForEachStatementNode *stmt);
   void compileReturn(ReturnStatementNode *stmt);
   void compileBreak(BreakStatementNode *stmt);
