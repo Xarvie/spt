@@ -522,8 +522,6 @@ void VM::registerBuiltinFunctions() {
           this->closeUpvalues(savedStackTop);
 
           while (fiber->frameCount > savedFrameCount) {
-            CallFrame *currentFrame = &fiber->frames.back();
-            this->invokeDefers(currentFrame);
             fiber->frames.pop_back();
             fiber->frameCount--;
           }
@@ -1654,16 +1652,6 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(instruction);
     int returnCount = (B >= 1) ? B - 1 : 0;
 
-    if (!frame->defers.empty()) {
-      invokeDefers(frame);
-      if (hasError_) {
-        return InterpretResult::RUNTIME_ERROR;
-      }
-      frame = &FRAMES[FRAME_COUNT - 1];
-
-      REFRESH_SLOTS();
-    }
-
     Value *returnValues = slots + A;
     int expectedResults = frame->expectedResults;
 
@@ -1834,10 +1822,8 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_EXPORT) { SPT_DISPATCH(); }
 
   SPT_OPCODE(OP_DEFER) {
-    uint8_t A = GETARG_A(instruction);
-    Value deferClosure = slots[A];
-    frame->defers.push_back(deferClosure);
-    SPT_DISPATCH();
+    runtimeError("defer is not supported");
+    return InterpretResult::RUNTIME_ERROR;
   }
 
   SPT_OPCODE(OP_ADDI) {
@@ -2357,27 +2343,6 @@ std::string VM::getStackTrace() {
   }
 
   return trace;
-}
-
-void VM::invokeDefers(CallFrame *framePtr) {
-  if (framePtr->defers.empty())
-    return;
-
-  FiberObject *fiber = currentFiber_;
-
-  while (!framePtr->defers.empty()) {
-    Value deferVal = framePtr->defers.back();
-    framePtr->defers.pop_back();
-
-    if (deferVal.isClosure()) {
-      Closure *closure = static_cast<Closure *>(deferVal.asGC());
-      fiber->push(deferVal);
-      call(closure, 0);
-    }
-
-    if (hasError_)
-      return;
-  }
 }
 
 void VM::setNativeMultiReturn(const std::vector<Value> &values) {

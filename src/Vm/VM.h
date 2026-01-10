@@ -145,9 +145,6 @@ private:
   int getLine(const Prototype *proto, size_t instruction);
   std::string getStackTrace();
 
-  // === Defer 执行 ===
-  void invokeDefers(CallFrame *frame);
-
   // === 原生函数多返回值支持 ===
   void setNativeMultiReturn(const std::vector<Value> &values);
   void setNativeMultiReturn(std::initializer_list<Value> values);

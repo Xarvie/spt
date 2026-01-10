@@ -196,9 +196,6 @@ void GC::traceReferences() {
         if (frame.closure) {
           markObject(frame.closure);
         }
-        for (Value &deferVal : frame.defers) {
-          markValue(deferVal);
-        }
       }
 
       UpValue *upvalue = fiber->openUpvalues;

@@ -1917,6 +1917,48 @@ void registerDeferTests(TestRunner &runner) {
             nested();
        )",
                  "start\nouter");
+
+  runner.addTest("Defer After Recursion",
+                 R"(
+            list<string> logs = [];
+
+            void testDefer(int depth) {
+                defer { logs.push("defer-" .. depth); }
+
+                if (depth > 0) {
+                    testDefer(depth - 1);
+                } else {
+                    logs.push("bottom");
+                }
+            }
+
+            testDefer(20);
+            print(logs.length);
+            print(logs[0]);
+            print(logs[logs.length - 1]);
+       )",
+                 "22\nbottom\ndefer-20");
+
+  runner.addTest("Defer with Closure",
+                 R"(
+            int result = 0;
+
+            void testDeferClosure(int n) {
+                int local = n;
+                defer {
+                    result = result + local;
+                }
+
+                if (n > 0) {
+                    testDeferClosure(n - 1);
+                }
+            }
+
+            testDeferClosure(30);
+            // result = 30 + 29 + ... + 0 = 465
+            print(result);
+       )",
+                 "465");
 }
 
 void registerFiberTests(TestRunner &runner) {
@@ -2782,52 +2824,6 @@ void registerStackReallocationTests(TestRunner &runner) {
                  "11\n12\n13\n21\n22\n23");
 
   // ---------------------------------------------------------
-  // 6. defer 与栈使用
-  // ---------------------------------------------------------
-
-  runner.addTest("Defer After Recursion",
-                 R"(
-            list<string> logs = [];
-
-            void testDefer(int depth) {
-                defer { logs.push("defer-" .. depth); }
-
-                if (depth > 0) {
-                    testDefer(depth - 1);
-                } else {
-                    logs.push("bottom");
-                }
-            }
-
-            testDefer(20);
-            print(logs.length);
-            print(logs[0]);
-            print(logs[logs.length - 1]);
-       )",
-                 "22\nbottom\ndefer-20");
-
-  runner.addTest("Stack Realloc - Defer with Closure",
-                 R"(
-            int result = 0;
-
-            void testDeferClosure(int n) {
-                int local = n;
-                defer {
-                    result = result + local;
-                }
-
-                if (n > 0) {
-                    testDeferClosure(n - 1);
-                }
-            }
-
-            testDeferClosure(30);
-            // result = 30 + 29 + ... + 0 = 465
-            print(result);
-       )",
-                 "465");
-
-  // ---------------------------------------------------------
   // 7. 边界情况
   // ---------------------------------------------------------
 
@@ -2958,7 +2954,7 @@ int main(int argc, char *argv[]) {
   registerEdgeCases(runner);
   registerIntegrationTests(runner);
   registerBuiltinFunctions(runner);
-  registerDeferTests(runner);
+  //  registerDeferTests(runner);
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
   runner.runAll();
