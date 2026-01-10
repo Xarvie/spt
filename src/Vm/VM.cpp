@@ -1,6 +1,7 @@
 #include "VM.h"
 
 #include "Fiber.h"
+#include "NativeBinding.h"
 #include "SptDebug.hpp"
 #include "SptStdlibs.h"
 #include "VMDispatch.h"
@@ -909,6 +910,63 @@ InterpretResult VM::run() {
         auto itStatic = klass->statics.find(fieldName);
         slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
       }
+    } else if (object.isNativeInstance()) {
+
+      auto *instance = static_cast<NativeInstance *>(object.asGC());
+
+      auto fieldIt = instance->fields.find(fieldName);
+      if (fieldIt != instance->fields.end()) {
+        slots[A] = fieldIt->second;
+        SPT_DISPATCH();
+      }
+
+      if (instance->nativeClass) {
+        const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
+        if (prop && prop->getter) {
+          slots[A] = prop->getter(this, instance);
+          SPT_DISPATCH();
+        }
+
+        const NativeMethodDesc *nativeMethod = instance->nativeClass->findMethod(fieldName);
+        if (nativeMethod) {
+
+          NativeFunction *boundMethod = gc_.allocate<NativeFunction>();
+          boundMethod->name = fieldName;
+          boundMethod->arity = nativeMethod->arity;
+          boundMethod->receiver = object;
+
+          boundMethod->function = [nativeMethod](VM *vm, Value receiver, int argc,
+                                                 Value *args) -> Value {
+            NativeInstance *inst = static_cast<NativeInstance *>(receiver.asGC());
+            return nativeMethod->function(vm, inst, argc, args);
+          };
+          slots[A] = Value::object(boundMethod);
+          SPT_DISPATCH();
+        }
+      }
+
+      slots[A] = Value::nil();
+    } else if (object.isNativeClass()) {
+
+      auto *nativeClass = static_cast<NativeClassObject *>(object.asGC());
+
+      auto it = nativeClass->statics.find(fieldName);
+      if (it != nativeClass->statics.end()) {
+        slots[A] = it->second;
+        SPT_DISPATCH();
+      }
+
+      NativeClassObject *base = nativeClass->baseClass;
+      while (base) {
+        auto baseIt = base->statics.find(fieldName);
+        if (baseIt != base->statics.end()) {
+          slots[A] = baseIt->second;
+          SPT_DISPATCH();
+        }
+        base = base->baseClass;
+      }
+
+      slots[A] = Value::nil();
     } else if (object.isMap()) {
       auto *map = static_cast<MapObject *>(object.asGC());
       Value result = Value::nil();
@@ -953,6 +1011,24 @@ InterpretResult VM::run() {
     if (object.isInstance()) {
       auto *instance = static_cast<Instance *>(object.asGC());
       instance->setField(fieldName, value);
+    } else if (object.isNativeInstance()) {
+
+      auto *instance = static_cast<NativeInstance *>(object.asGC());
+
+      if (instance->nativeClass) {
+        const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
+        if (prop) {
+          if (prop->isReadOnly || !prop->setter) {
+            runtimeError("Property '%s' is read-only on native class '%s'", fieldName.c_str(),
+                         instance->nativeClass->name.c_str());
+            return InterpretResult::RUNTIME_ERROR;
+          }
+          prop->setter(this, instance, value);
+          SPT_DISPATCH();
+        }
+      }
+
+      instance->fields[fieldName] = value;
     } else if (object.isClass()) {
       auto *klass = static_cast<ClassObject *>(object.asGC());
       klass->methods[fieldName] = value;
@@ -988,8 +1064,28 @@ InterpretResult VM::run() {
 
     Value classValue = slots[B];
 
+    if (classValue.isNativeClass()) {
+      NativeClassObject *nativeClass = static_cast<NativeClassObject *>(classValue.asGC());
+
+      if (!nativeClass->hasConstructor()) {
+        runtimeError("Native class '%s' has no constructor", nativeClass->name.c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      Value *argsStart = &slots[B + 1];
+      NativeInstance *instance = createNativeInstance(nativeClass, C, argsStart);
+
+      if (!instance) {
+
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      slots[A] = Value::object(instance);
+      SPT_DISPATCH();
+    }
+
     if (!classValue.isClass()) {
-      runtimeError("Cannot instantiate non-class type");
+      runtimeError("Cannot instantiate non-class type '%s'", classValue.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
 
@@ -1495,7 +1591,24 @@ InterpretResult VM::run() {
       } else {
         slots[A] = result;
       }
+    } else if (callee.isNativeClass()) {
 
+      NativeClassObject *nativeClass = static_cast<NativeClassObject *>(callee.asGC());
+
+      if (!nativeClass->hasConstructor()) {
+        runtimeError("Native class '%s' has no constructor", nativeClass->name.c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      Value *argsStart = &slots[A + 1];
+      NativeInstance *instance = createNativeInstance(nativeClass, argCount, argsStart);
+
+      if (!instance) {
+
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      slots[A] = Value::object(instance);
     } else {
       runtimeError("Attempt to call a non-function value of type '%s'", callee.typeName());
       return InterpretResult::RUNTIME_ERROR;
@@ -1576,6 +1689,56 @@ InterpretResult VM::run() {
         runtimeError("Instance has no method '%s'", methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
+    } else if (receiver.isNativeInstance()) {
+
+      NativeInstance *instance = static_cast<NativeInstance *>(receiver.asGC());
+
+      if (!instance->nativeClass) {
+        runtimeError("Native instance has no class information");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      const NativeMethodDesc *nativeMethod = instance->nativeClass->findMethod(methodName);
+      if (nativeMethod) {
+
+        if (nativeMethod->arity != -1 && userArgCount != nativeMethod->arity) {
+          runtimeError("Native method '%s' expects %d arguments, got %d", methodName.c_str(),
+                       nativeMethod->arity, userArgCount);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        Value result = nativeMethod->function(this, instance, userArgCount, argsStart);
+
+        if (yieldPending_) {
+          yieldPending_ = false;
+          return InterpretResult::OK;
+        }
+
+        if (fiber != currentFiber_) {
+          fiber = currentFiber_;
+          frame = &fiber->frames[fiber->frameCount - 1];
+          REFRESH_SLOTS();
+          SPT_DISPATCH();
+        }
+
+        if (hasError_ && !pcallStack_.empty()) {
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        slots[A] = result;
+        SPT_DISPATCH();
+      }
+
+      auto fieldIt = instance->fields.find(methodName);
+      if (fieldIt != instance->fields.end()) {
+        method = fieldIt->second;
+      }
+
+      if (method.isNil()) {
+        runtimeError("Native instance of '%s' has no method '%s'",
+                     instance->nativeClass->name.c_str(), methodName.c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
     } else if (receiver.isClass()) {
       ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
 
@@ -1593,6 +1756,30 @@ InterpretResult VM::run() {
 
       if (method.isNil()) {
         runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodName.c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+    } else if (receiver.isNativeClass()) {
+
+      NativeClassObject *nativeClass = static_cast<NativeClassObject *>(receiver.asGC());
+
+      auto it = nativeClass->statics.find(methodName);
+      if (it != nativeClass->statics.end()) {
+        method = it->second;
+      }
+
+      NativeClassObject *base = nativeClass->baseClass;
+      while (method.isNil() && base) {
+        auto baseIt = base->statics.find(methodName);
+        if (baseIt != base->statics.end()) {
+          method = baseIt->second;
+          break;
+        }
+        base = base->baseClass;
+      }
+
+      if (method.isNil()) {
+        runtimeError("Native class '%s' has no static method '%s'", nativeClass->name.c_str(),
+                     methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else {
@@ -2616,6 +2803,46 @@ Value VM::importModule(const std::string &path) {
   }
 
   return Value::object(exports);
+}
+
+NativeClassObject *VM::allocateNativeClass(const std::string &name) {
+  NativeClassObject *nativeClass = gc_.allocate<NativeClassObject>();
+  nativeClass->name = name;
+  return nativeClass;
+}
+
+NativeInstance *VM::allocateNativeInstance(NativeClassObject *nativeClass) {
+  NativeInstance *instance = gc_.allocate<NativeInstance>();
+  instance->nativeClass = nativeClass;
+  instance->ownership = nativeClass ? nativeClass->defaultOwnership : OwnershipMode::OwnedByVM;
+  return instance;
+}
+
+NativeInstance *VM::createNativeInstance(NativeClassObject *nativeClass, int argc, Value *argv) {
+  if (!nativeClass) {
+    runtimeError("Cannot create instance of null native class");
+    return nullptr;
+  }
+
+  if (!nativeClass->hasConstructor()) {
+    runtimeError("Native class '%s' has no constructor", nativeClass->name.c_str());
+    return nullptr;
+  }
+
+  NativeInstance *instance = allocateNativeInstance(nativeClass);
+  protect(Value::object(instance));
+
+  void *data = nativeClass->constructor(this, argc, argv);
+  if (!data) {
+    unprotect(1);
+    runtimeError("Failed to construct native object of type '%s'", nativeClass->name.c_str());
+    return nullptr;
+  }
+
+  instance->data = data;
+  unprotect(1);
+
+  return instance;
 }
 
 } // namespace spt

@@ -34,13 +34,13 @@ struct Value {
     bool boolean;
     int64_t integer;
     double number;
-    GCObject *gc; // String, List, Map, Object, Closure, Fiber 等
+    GCObject *gc; // String, List, Map, Object, Closure, Fiber, NativeClass, NativeObject 等
   } as;
 
   // ========================================================================
   // 构造函数
   // ========================================================================
-   static Value nil() {
+  static Value nil() {
     Value v;
     v.type = ValueType::Nil;
     v.as.gc = nullptr;
@@ -96,7 +96,7 @@ struct Value {
 
   bool isMap() const { return type == ValueType::Map; }
 
-  // 实例对象
+  // 实例对象 (script-defined class instance)
   bool isInstance() const { return type == ValueType::Object; }
 
   bool isClosure() const { return type == ValueType::Closure; }
@@ -108,6 +108,28 @@ struct Value {
 
   // Fiber 检查
   bool isFiber() const { return type == ValueType::Fiber; }
+
+  // === 原生绑定类型检查 ===
+
+  // 是否为原生类（已在 VM 中注册的 C++ 类）
+  bool isNativeClass() const { return type == ValueType::NativeClass; }
+
+  // 是否为原生实例（包装在 NativeInstance 中的 C++ 对象）
+  bool isNativeInstance() const { return type == ValueType::NativeObject; }
+
+  // 是否为任何可调用对象：闭包、原生函数或原生类（构造函数）
+  bool isCallable() const {
+    return type == ValueType::Closure || type == ValueType::NativeFunc ||
+           type == ValueType::Class || type == ValueType::NativeClass;
+  }
+
+  // 是否为任何对象实例：脚本定义的实例或原生 C++ 实例
+  bool isAnyInstance() const {
+    return type == ValueType::Object || type == ValueType::NativeObject;
+  }
+
+  // 是否为任何类类型：脚本定义的类或原生 C++ 类
+  bool isAnyClass() const { return type == ValueType::Class || type == ValueType::NativeClass; }
 
   // ========================================================================
   // 值提取
@@ -188,7 +210,7 @@ struct ListObject : GCObject {
 // Map 对象
 // ============================================================================
 struct MapObject : GCObject {
-  std::unordered_map<Value, Value> entries;
+  ankerl::unordered_dense::map<Value, Value> entries;
 
   MapObject() { type = ValueType::Map; }
 

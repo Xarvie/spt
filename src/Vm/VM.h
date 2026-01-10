@@ -16,6 +16,9 @@
 
 namespace spt {
 
+struct NativeClassObject;
+struct NativeInstance;
+
 // 执行结果
 enum class InterpretResult { OK, COMPILE_ERROR, RUNTIME_ERROR };
 
@@ -47,6 +50,7 @@ class SPT_API_CLASS VM {
 public:
   friend class GC;
   friend class ModuleManager;
+  template <typename T> friend class NativeClassBuilder;
 
   using ErrorHandler = std::function<void(const std::string &, int line)>;
   using PrintHandler = std::function<void(const std::string &)>;
@@ -101,6 +105,11 @@ public:
   ListObject *allocateList(int capacity);
   MapObject *allocateMap(int capacity);
   FiberObject *allocateFiber(Closure *closure);
+
+  NativeClassObject *allocateNativeClass(const std::string &name);
+  NativeInstance *allocateNativeInstance(NativeClassObject *nativeClass);
+
+  NativeInstance *createNativeInstance(NativeClassObject *nativeClass, int argc, Value *argv);
 
   Value getLastModuleResult() const { return lastModuleResult_; }
 

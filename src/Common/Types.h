@@ -22,7 +22,9 @@ enum class ValueType : uint8_t {
   NativeFunc,
   Class,
   Upvalue,
-  Fiber
+  Fiber,
+  NativeClass,
+  NativeObject
 };
 
 // 常量值 - 编译期使用
@@ -64,7 +66,7 @@ struct Prototype {
   uint8_t numUpvalues = 0;    // UpValue 数量
   uint8_t maxStackSize = 0;   // 最大栈深度
   bool isVararg = false;      // 是否可变参数
-  bool needsReceiver = false; // 是否需要“this”
+  bool needsReceiver = false; // 是否需要"this"
 
   std::vector<Instruction> code;        // 指令序列
   std::vector<ConstantValue> constants; // 常量表

@@ -10,6 +10,7 @@ namespace spt {
 class VM;
 struct GCObject;
 struct Instance;
+struct NativeInstance;
 
 // GC 配置
 struct GCConfig {
@@ -60,8 +61,9 @@ private:
   void sweep();
 
   // === 终结器支持 ===
-  void runFinalizers();                    // 执行待终结对象的 __gc 方法
-  void invokeGCMethod(Instance *instance); // 调用单个对象的 __gc 方法
+  void runFinalizers();                                  // 执行待终结对象的 __gc 方法
+  void invokeGCMethod(Instance *instance);               // 调用单个对象的 __gc 方法
+  void invokeNativeDestructor(NativeInstance *instance); // 调用 native 对象析构
 
   void freeObject(GCObject *obj);
   void removeWhiteStrings();
@@ -75,8 +77,9 @@ private:
   std::vector<RootVisitor> roots_;    // 额外根集
 
   // === 终结器队列 ===
-  std::vector<Instance *> finalizerQueue_; // 待执行终结器的对象
-  bool inFinalizer_ = false;               // 是否正在执行终结器（防止递归 GC）
+  std::vector<Instance *> finalizerQueue_;             // 待执行终结器的对象
+  std::vector<NativeInstance *> nativeFinalizerQueue_; // 待执行析构的 native 对象
+  bool inFinalizer_ = false; // 是否正在执行终结器（防止递归 GC）
 
   size_t bytesAllocated_ = 0;
   size_t threshold_;

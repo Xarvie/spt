@@ -1,5 +1,6 @@
 #include "GC.h"
 #include "Fiber.h"
+#include "NativeBinding.h"
 #include "Object.h"
 #include "VM.h"
 
@@ -92,6 +93,10 @@ void GC::markRoots() {
   }
 
   for (Instance *instance : finalizerQueue_) {
+    markObject(instance);
+  }
+
+  for (NativeInstance *instance : nativeFinalizerQueue_) {
     markObject(instance);
   }
 }
@@ -219,6 +224,34 @@ void GC::traceReferences() {
       break;
     }
 
+    case ValueType::NativeClass: {
+      auto *nativeClass = static_cast<NativeClassObject *>(obj);
+
+      if (nativeClass->baseClass) {
+        markObject(nativeClass->baseClass);
+      }
+
+      for (auto &[name, val] : nativeClass->statics) {
+        Value v = val;
+        markValue(v);
+      }
+      break;
+    }
+
+    case ValueType::NativeObject: {
+      auto *nativeInstance = static_cast<NativeInstance *>(obj);
+
+      if (nativeInstance->nativeClass) {
+        markObject(nativeInstance->nativeClass);
+      }
+
+      for (auto &[name, value] : nativeInstance->fields) {
+        Value v = value;
+        markValue(v);
+      }
+      break;
+    }
+
     default:
       break;
     }
@@ -243,6 +276,20 @@ void GC::sweep() {
 
           instance->marked = true;
           finalizerQueue_.push_back(instance);
+          pointer = &((*pointer)->next);
+          continue;
+        }
+      }
+
+      if (unreached->type == ValueType::NativeObject) {
+        NativeInstance *nativeInstance = static_cast<NativeInstance *>(unreached);
+
+        if (nativeInstance->ownership == OwnershipMode::OwnedByVM && nativeInstance->nativeClass &&
+            nativeInstance->nativeClass->hasDestructor() && !nativeInstance->isDestroyed &&
+            nativeInstance->data) {
+
+          nativeInstance->marked = true;
+          nativeFinalizerQueue_.push_back(nativeInstance);
           pointer = &((*pointer)->next);
           continue;
         }
@@ -321,6 +368,29 @@ void GC::freeObject(GCObject *obj) {
     break;
   }
 
+  case ValueType::NativeClass: {
+    NativeClassObject *nativeClass = static_cast<NativeClassObject *>(obj);
+    bytesAllocated_ -= sizeof(NativeClassObject);
+    delete nativeClass;
+    break;
+  }
+
+  case ValueType::NativeObject: {
+    NativeInstance *nativeInstance = static_cast<NativeInstance *>(obj);
+
+    if (nativeInstance->ownership == OwnershipMode::OwnedByVM && !nativeInstance->isDestroyed &&
+        nativeInstance->data && nativeInstance->nativeClass &&
+        nativeInstance->nativeClass->destructor) {
+      nativeInstance->nativeClass->destructor(nativeInstance->data);
+    }
+
+    bytesAllocated_ -=
+        sizeof(NativeInstance) +
+        (nativeInstance->nativeClass ? nativeInstance->nativeClass->instanceDataSize : 0);
+    delete nativeInstance;
+    break;
+  }
+
   default:
     delete obj;
     break;
@@ -329,7 +399,7 @@ void GC::freeObject(GCObject *obj) {
 }
 
 void GC::runFinalizers() {
-  if (finalizerQueue_.empty())
+  if (finalizerQueue_.empty() && nativeFinalizerQueue_.empty())
     return;
 
   inFinalizer_ = true;
@@ -343,6 +413,16 @@ void GC::runFinalizers() {
       instance->isFinalized = true;
     }
 
+    instance->marked = false;
+  }
+
+  std::vector<NativeInstance *> nativeToFinalize = std::move(nativeFinalizerQueue_);
+  nativeFinalizerQueue_.clear();
+
+  for (NativeInstance *instance : nativeToFinalize) {
+    if (!instance->isDestroyed) {
+      invokeNativeDestructor(instance);
+    }
     instance->marked = false;
   }
 
@@ -378,6 +458,22 @@ void GC::invokeGCMethod(Instance *instance) {
     vm_->hasError_ = false;
     vm_->errorValue_ = Value::nil();
   }
+}
+
+void GC::invokeNativeDestructor(NativeInstance *instance) {
+  if (!instance || !instance->nativeClass || !instance->data || instance->isDestroyed)
+    return;
+
+  if (instance->ownership != OwnershipMode::OwnedByVM)
+    return;
+
+  if (instance->nativeClass->destructor) {
+
+    instance->nativeClass->destructor(instance->data);
+  }
+
+  instance->isDestroyed = true;
+  instance->data = nullptr;
 }
 
 } // namespace spt
