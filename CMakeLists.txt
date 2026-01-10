@@ -33,15 +33,14 @@ endif()
 PickSourceFiles(
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         sourceFiles
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/TestRunner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/sptscript.cpp
 )
 PickIncludeDirectories(${CMAKE_CURRENT_SOURCE_DIR}/src/
         includeDirs
         )
 add_subdirectory(runtime)
-
-list(REMOVE_ITEM sourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
-list(REMOVE_ITEM sourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/src/TestRunner.cpp)
-list(REMOVE_ITEM sourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/src/sptscript.cpp)
 
 add_library(sptscript_library_static STATIC ${sourceFiles})
 target_include_directories(sptscript_library_static PUBLIC ${includeDirs}
