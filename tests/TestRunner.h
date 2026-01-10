@@ -1,8 +1,10 @@
 #pragma once
 
 #include "catch_amalgamated.hpp"
+#include "util_os.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -38,7 +40,7 @@ public:
 
   TestRunner() : testDir_(getTestDir()) {
     cleanupTestDir();
-    setupModules();
+    setupTestDir();
   }
 
   ~TestRunner() { cleanupTestDir(); }
@@ -66,12 +68,15 @@ private:
 
   // 获取唯一的测试目录名称
   std::string getTestDir() {
+    static std::atomic<uint64_t> counter{0};
     std::ostringstream oss;
-    oss << "./test_env_" << std::this_thread::get_id();
+
+    oss << "./test_env_" + std::to_string(get_current_process_id()) + "_" +
+               std::to_string(++counter);
     return oss.str();
   }
 
-  void setupModules() {
+  void setupTestDir() {
     std::error_code ec;
     fs::create_directories(testDir_, ec);
   }
