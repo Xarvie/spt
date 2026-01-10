@@ -29,44 +29,113 @@ struct Value {
   // ========================================================================
   // 构造函数
   // ========================================================================
-  static Value nil();
-  static Value boolean(bool b);
-  static Value integer(int64_t i);
-  static Value number(double n);
-  static Value object(GCObject *obj);
+   static Value nil() {
+    Value v;
+    v.type = ValueType::Nil;
+    v.as.gc = nullptr;
+    return v;
+  }
+
+  static Value boolean(bool b) {
+    Value v;
+    v.type = ValueType::Bool;
+    v.as.boolean = b;
+    return v;
+  }
+
+  static Value integer(int64_t i) {
+    Value v;
+    v.type = ValueType::Int;
+    v.as.integer = i;
+    return v;
+  }
+
+  static Value number(double n) {
+    Value v;
+    v.type = ValueType::Float;
+    v.as.number = n;
+    return v;
+  }
+
+  static Value object(GCObject *obj) {
+    Value v;
+    v.type = obj ? obj->type : ValueType::Nil;
+    v.as.gc = obj;
+    return v;
+  }
 
   // ========================================================================
   // 类型检查
   // ========================================================================
-  bool isNil() const;
-  bool isBool() const;
-  bool isInt() const;
-  bool isFloat() const;  // 纯浮点数（不包括整数）
-  bool isNumber() const; // 数字（整数或浮点数）
-  bool isString() const;
-  bool isList() const;
-  bool isMap() const;
-  bool isInstance() const; // 实例对象
-  bool isClosure() const;
-  bool isClass() const;
-  bool isNativeFunc() const; // 原生函数
-  bool isFiber() const;      // Fiber 检查
+  bool isNil() const { return type == ValueType::Nil; }
+
+  bool isBool() const { return type == ValueType::Bool; }
+
+  bool isInt() const { return type == ValueType::Int; }
+
+  // 纯浮点数（不包括整数）
+  bool isFloat() const { return type == ValueType::Float; }
+
+  // 数字（整数或浮点数）
+  bool isNumber() const { return type == ValueType::Float || type == ValueType::Int; }
+
+  bool isString() const { return type == ValueType::String; }
+
+  bool isList() const { return type == ValueType::List; }
+
+  bool isMap() const { return type == ValueType::Map; }
+
+  // 实例对象
+  bool isInstance() const { return type == ValueType::Object; }
+
+  bool isClosure() const { return type == ValueType::Closure; }
+
+  bool isClass() const { return type == ValueType::Class; }
+
+  // 原生函数
+  bool isNativeFunc() const { return type == ValueType::NativeFunc; }
+
+  // Fiber 检查
+  bool isFiber() const { return type == ValueType::Fiber; }
 
   // ========================================================================
   // 值提取
   // ========================================================================
-  bool asBool() const;
-  int64_t asInt() const;
-  double asFloat() const;  // 获取浮点数（只能用于 Float 类型）
-  double asNumber() const; // 获取数字（自动转换 Int -> Float）
-  GCObject *asGC() const;
+  bool asBool() const { return as.boolean; }
+
+  int64_t asInt() const { return as.integer; }
+
+  // 获取浮点数（只能用于 Float 类型）
+  double asFloat() const { return as.number; }
+
+  // 获取数字（自动转换 Int -> Float）
+  double asNumber() const {
+    return type == ValueType::Int ? static_cast<double>(as.integer) : as.number;
+  }
+
+  GCObject *asGC() const { return as.gc; }
 
   // ========================================================================
   // 转换
   // ========================================================================
   std::string toString() const;
-  bool toBool() const;
-  bool isTruthy() const; // 真值性（Lua 风格：只有 nil 和 false 为假）
+
+  bool toBool() const {
+    if (type == ValueType::Nil)
+      return false;
+    if (type == ValueType::Bool)
+      return as.boolean;
+    return true;
+  }
+
+  // 真值性（Lua 风格：只有 nil 和 false 为假）
+  bool isTruthy() const {
+    if (type == ValueType::Nil)
+      return false;
+    if (type == ValueType::Bool)
+      return as.boolean;
+    return true;
+  }
 
   // ========================================================================
   // 类型信息
