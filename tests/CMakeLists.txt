@@ -3,6 +3,7 @@ set(sptscript_library sptscript_library_static)
 # 添加可执行文件
 add_executable(tests_all
                catch_amalgamated.cpp
+               util_os.cpp
                test_all.cpp
                test_map.cpp
 )
@@ -43,6 +44,7 @@ add_test(NAME OldTests
 # 基准测试需要不同的编译选项
 add_executable(test_benchmarks
                catch_amalgamated.cpp
+               util_os.cpp
                test_benchmark.cpp
 )
 
