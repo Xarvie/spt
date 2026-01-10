@@ -2945,26 +2945,26 @@ void registerStackReallocationTests(TestRunner &runner) {
 // 主函数
 // =========================================================
 int main(int argc, char *argv[]) {
-  //  TestRunner runner;
-  //  registerBasics(runner);
-  //  registerControlFlow(runner);
-  //  registerFunctions(runner);
-  //  registerClasses(runner);
-  //  registerLists(runner);
-  //  registerMaps(runner);
-  //  registerStrings(runner);
-  //  registerModules(runner);
-  //  registerInvokeTests(runner);
-  //  registerEdgeCases(runner);
-  //  registerIntegrationTests(runner);
-  //  registerBuiltinFunctions(runner);
-  //  registerDeferTests(runner);
-  //  registerFiberTests(runner);
-  //  registerStackReallocationTests(runner);
-  //  runner.runAll();
-
   TestRunner runner;
-  registerFib38Bench(runner);
+  registerBasics(runner);
+  registerControlFlow(runner);
+  registerFunctions(runner);
+  registerClasses(runner);
+  registerLists(runner);
+  registerMaps(runner);
+  registerStrings(runner);
+  registerModules(runner);
+  registerInvokeTests(runner);
+  registerEdgeCases(runner);
+  registerIntegrationTests(runner);
+  registerBuiltinFunctions(runner);
+  registerDeferTests(runner);
+  registerFiberTests(runner);
+  registerStackReallocationTests(runner);
   runner.runAll();
+
+  //  TestRunner runner;
+  //  registerFib38Bench(runner);
+  //  runner.runAll();
   return 0;
 }

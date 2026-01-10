@@ -5,6 +5,17 @@
 
 namespace spt {
 
+static int tryResolveLocalSlot(CodeGen *cg, Expression *expr) {
+  if (auto *id = dynamic_cast<IdentifierNode *>(expr)) {
+    int local = cg->resolveLocal(id->name);
+
+    if (local >= 0 && local <= 255) {
+      return local;
+    }
+  }
+  return -1;
+}
+
 Compiler::Compiler(const std::string &moduleName, const std::string &source)
     : moduleName_(moduleName), source_(source), cg_(std::make_unique<CodeGen>(moduleName)) {}
 
@@ -490,8 +501,14 @@ int Compiler::compileCondition(Expression *expr) {
 
   if (auto *bin = dynamic_cast<BinaryOpNode *>(expr)) {
     if (isComparisonOp(bin->op)) {
-      int leftSlot = cg_->allocSlot();
-      compileExpression(bin->left, leftSlot);
+      int leftSlot = tryResolveLocalSlot(cg_.get(), bin->left);
+      bool isTemp = false;
+
+      if (leftSlot == -1) {
+        leftSlot = cg_->allocSlot();
+        compileExpression(bin->left, leftSlot);
+        isTemp = true;
+      }
 
       int8_t imm = 0;
       int constIdx = -1;
@@ -530,12 +547,10 @@ int Compiler::compileCondition(Expression *expr) {
       }
 
       if (optimized) {
-
         uint8_t bVal =
             (op == OpCode::OP_EQK) ? static_cast<uint8_t>(constIdx) : static_cast<uint8_t>(imm);
         cg_->emitABC(op, leftSlot, bVal, k);
       } else {
-
         int rightSlot = cg_->allocSlot();
         compileExpression(bin->right, rightSlot);
 
@@ -548,7 +563,9 @@ int Compiler::compileCondition(Expression *expr) {
         cg_->emitABC(stdOp, leftSlot, rightSlot, k);
         cg_->freeSlots(1);
       }
-      cg_->freeSlots(1);
+
+      if (isTemp)
+        cg_->freeSlots(1);
 
       return cg_->emitJump(OpCode::OP_JMP);
     }
@@ -823,10 +840,17 @@ void Compiler::compileReturn(ReturnStatementNode *stmt) {
   if (stmt->returnValue.empty()) {
     cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
   } else if (stmt->returnValue.size() == 1) {
-    int slot = cg_->allocSlot();
-    compileExpression(stmt->returnValue[0], slot);
-    cg_->emitABC(OpCode::OP_RETURN, slot, 2, 0);
-    cg_->freeSlots(1);
+    int localSlot = tryResolveLocalSlot(cg_.get(), stmt->returnValue[0]);
+
+    if (localSlot != -1) {
+      cg_->emitABC(OpCode::OP_RETURN, localSlot, 2, 0);
+    } else {
+      int slot = cg_->allocSlot();
+      compileExpression(stmt->returnValue[0], slot);
+      cg_->emitABC(OpCode::OP_RETURN, slot, 2, 0);
+      cg_->freeSlots(1);
+    }
+
   } else {
     int base = cg_->allocSlots(static_cast<int>(stmt->returnValue.size()));
     for (size_t i = 0; i < stmt->returnValue.size(); ++i) {
@@ -1061,17 +1085,6 @@ void Compiler::compileIdentifier(IdentifierNode *node, int dest) {
   }
 
   cg_->freeSlots(1);
-}
-
-static int tryResolveLocalSlot(CodeGen *cg, Expression *expr) {
-  if (auto *id = dynamic_cast<IdentifierNode *>(expr)) {
-    int local = cg->resolveLocal(id->name);
-
-    if (local >= 0 && local <= 255) {
-      return local;
-    }
-  }
-  return -1;
 }
 
 void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
