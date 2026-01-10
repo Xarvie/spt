@@ -10,6 +10,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "Ast/ast.h"
@@ -35,10 +36,16 @@ public:
     bool expectRuntimeError;        // 是否预期发生运行时错误
   };
 
+  TestRunner() : testDir_(getTestDir()) {
+    cleanupTestDir();
+    setupModules();
+  }
+
+  ~TestRunner() { cleanupTestDir(); }
+
   // 添加普通测试
   void runTest(const std::string &name, const std::string &script,
                const std::string &expectedOutput) {
-    init();
     SECTION(name) { runSingleTest({name, script, expectedOutput, {}, false}); }
   }
 
@@ -46,29 +53,33 @@ public:
   void runModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
                      const std::string &script, const std::string &expectedOutput,
                      bool expectRuntimeError = false) {
-    init();
     SECTION(name) { runSingleTest({name, script, expectedOutput, modules, expectRuntimeError}); }
   }
 
   // 添加预期失败的测试 (Negative Test)
   void runFailTest(const std::string &name, const std::string &script) {
-    init();
     SECTION(name) { runSingleTest({name, script, "", {}, true}); }
   }
 
 private:
   std::string testDir_;
-  bool initialized_ = false;
 
-  void init() {
-    if (initialized_)
-      return;
-    // 准备测试环境目录
-    testDir_ = "./test_env_tmp";
-    if (fs::exists(testDir_))
-      fs::remove_all(testDir_);
-    fs::create_directories(testDir_);
-    initialized_ = true;
+  // 获取唯一的测试目录名称
+  std::string getTestDir() {
+    std::ostringstream oss;
+    oss << "./test_env_" << std::this_thread::get_id();
+    return oss.str();
+  }
+
+  void setupModules() {
+    std::error_code ec;
+    fs::create_directories(testDir_, ec);
+  }
+
+  // 清理临时目录
+  void cleanupTestDir() {
+    std::error_code ec;
+    fs::remove_all(testDir_, ec);
   }
 
   std::string trim(const std::string &str) {
@@ -101,15 +112,15 @@ private:
 
   // 清理辅助文件
   void cleanupModules(const std::vector<ModuleDef> &modules) {
+    std::error_code ec;
     for (const auto &mod : modules) {
       std::string path = testDir_ + "/" + mod.name + ".spt";
-      if (fs::exists(path))
-        fs::remove(path);
+      fs::remove(path, ec);
     }
   }
 
   void runSingleTest(const TestCase &test) {
-    // 0. 环境准备
+    // 0. 环境准备 - 创建独立的临时目录
     setupModules(test.modules);
 
     // 1. 解析
