@@ -1,5 +1,6 @@
 #include "TestRunner.h"
 #include "Vm/NativeBinding.h"
+#include <cmath>
 #include <filesystem>
 
 void registerBench(TestRunner &runner) {
