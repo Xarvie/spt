@@ -102,6 +102,12 @@ namespace spt {
   SPT_DISPATCH_TABLE_ENTRY(OP_DIV)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_MOD)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_UNM)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_BAND)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_BOR)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_BXOR)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_BNOT)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_SHL)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_SHR)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_JMP)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_EQ)                                                                  \
   SPT_DISPATCH_TABLE_ENTRY(OP_LT)                                                                  \

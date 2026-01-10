@@ -48,6 +48,14 @@ enum class OpCode : uint8_t {
   OP_MOD, /* A B C   | R[A] := R[B] % R[C]                        */
   OP_UNM, /* A B     | R[A] := -R[B]                              */
 
+  /* --- 位运算 --- */
+  OP_BAND, /* A B C   | R[A] := R[B] & R[C]                        */
+  OP_BOR,  /* A B C   | R[A] := R[B] | R[C]                        */
+  OP_BXOR, /* A B C   | R[A] := R[B] ^ R[C]                        */
+  OP_BNOT, /* A B     | R[A] := ~R[B]                              */
+  OP_SHL,  /* A B C   | R[A] := R[B] << R[C]                       */
+  OP_SHR,  /* A B C   | R[A] := R[B] >> R[C]                       */
+
   /* --- 比较与逻辑 (测试跳转模式) --- */
   OP_JMP,  /* sBx     | pc += sBx                                  */
   OP_EQ,   /* A B C   | if ((R[A] == R[B]) != C) then pc++         */

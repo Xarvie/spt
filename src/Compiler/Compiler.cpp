@@ -1252,10 +1252,12 @@ void Compiler::compileUnaryOp(UnaryOpNode *node, int dest) {
     cg_->emitABC(OpCode::OP_UNM, dest, dest, 0);
     break;
   case OperatorKind::NOT:
-
     cg_->emitABC(OpCode::OP_TEST, dest, 0, 0);
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 1);
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 0);
+    break;
+  case OperatorKind::BW_NOT:
+    cg_->emitABC(OpCode::OP_BNOT, dest, dest, 0);
     break;
   default:
     error("Unknown unary operator", node->location);
@@ -1567,7 +1569,26 @@ OpCode Compiler::binaryOpToOpcode(OperatorKind op) {
   case OperatorKind::MOD:
   case OperatorKind::ASSIGN_MOD:
     return OpCode::OP_MOD;
+  case OperatorKind::CONCAT:
+  case OperatorKind::ASSIGN_CONCAT:
+    return OpCode::OP_ADD;
+  case OperatorKind::BW_AND:
+  case OperatorKind::ASSIGN_BW_AND:
+    return OpCode::OP_BAND;
+  case OperatorKind::BW_OR:
+  case OperatorKind::ASSIGN_BW_OR:
+    return OpCode::OP_BOR;
+  case OperatorKind::BW_XOR:
+  case OperatorKind::ASSIGN_BW_XOR:
+    return OpCode::OP_BXOR;
+  case OperatorKind::BW_LSHIFT:
+  case OperatorKind::ASSIGN_BW_LSHIFT:
+    return OpCode::OP_SHL;
+  case OperatorKind::BW_RSHIFT:
+  case OperatorKind::ASSIGN_BW_RSHIFT:
+    return OpCode::OP_SHR;
   default:
+    error("Invalid binary operator");
     return OpCode::OP_ADD;
   }
 }

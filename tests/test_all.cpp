@@ -1738,7 +1738,269 @@ void registerBuiltinFunctions(TestRunner &runner) {
 }
 
 // =========================================================
-// 13. Defer语句测试 (Defer Statement)
+// 13. 位运算测试 (Bitwise Operations)
+// =========================================================
+void registerBitwiseTests(TestRunner &runner) {
+  // 按位与 (&)
+  runner.runTest("Bitwise - AND Basic",
+                 R"(
+            int a = 12;    // 1100
+            int b = 10;    // 1010
+            print(a & b);  // 1000 = 8
+            print(15 & 7);  // 1111 & 0111 = 0111 = 7
+            print(255 & 15); // 11111111 & 00001111 = 00001111 = 15
+       )",
+                 "8\n7\n15");
+
+  runner.runTest("Bitwise - AND with Zero",
+                 R"(
+            print(0 & 0);
+            print(0 & 5);
+            print(5 & 0);
+            print(42 & 0);
+       )",
+                 "0\n0\n0\n0");
+
+  runner.runTest("Bitwise - AND Self",
+                 R"(
+            print(5 & 5);
+            print(255 & 255);
+            print(1024 & 1024);
+       )",
+                 "5\n255\n1024");
+
+  // 按位或 (|)
+  runner.runTest("Bitwise - OR Basic",
+                 R"(
+            int a = 12;    // 1100
+            int b = 10;    // 1010
+            print(a | b);  // 1110 = 14
+            print(5 | 3);   // 0101 | 0011 = 0111 = 7
+            print(240 | 15); // 11110000 | 00001111 = 11111111 = 255
+       )",
+                 "14\n7\n255");
+
+  runner.runTest("Bitwise - OR with Zero",
+                 R"(
+            print(0 | 0);
+            print(0 | 5);
+            print(5 | 0);
+            print(42 | 0);
+       )",
+                 "0\n5\n5\n42");
+
+  runner.runTest("Bitwise - OR Self",
+                 R"(
+            print(5 | 5);
+            print(255 | 255);
+            print(1024 | 1024);
+       )",
+                 "5\n255\n1024");
+
+  // 按位异或 (^)
+  runner.runTest("Bitwise - XOR Basic",
+                 R"(
+            int a = 12;    // 1100
+            int b = 10;    // 1010
+            print(a ^ b);  // 0110 = 6
+            print(5 ^ 3);   // 0101 ^ 0011 = 0110 = 6
+            print(15 ^ 15); // 应该为 0
+       )",
+                 "6\n6\n0");
+
+  runner.runTest("Bitwise - XOR Properties",
+                 R"(
+            // 异或交换律
+            print((5 ^ 3) == (3 ^ 5));
+            
+            // 异或结合律
+            print(((5 ^ 3) ^ 7) == (5 ^ (3 ^ 7)));
+            
+            // 异或恒等律
+            print((5 ^ 0) == 5);
+       )",
+                 "true\ntrue\ntrue");
+
+  runner.runTest("Bitwise - XOR Swap",
+                 R"(
+            int a = 10;
+            int b = 20;
+            // 使用异或交换两个变量的值
+            a = a ^ b;
+            b = a ^ b;
+            a = a ^ b;
+            print(a);
+            print(b);
+       )",
+                 "20\n10");
+
+  // 按位非 (~)
+  runner.runTest("Bitwise - NOT Basic",
+                 R"(
+            // 注意：结果取决于整数的位宽
+            print(~0);
+            print(~255);
+            print(~15);
+       )",
+                 "-1\n-256\n-16");
+
+  runner.runTest("Bitwise - NOT Double",
+                 R"(
+            int x = 42;
+            print(~~x == x);
+            print(~~100 == 100);
+       )",
+                 "true\ntrue");
+
+  // 左移 (<<)
+  runner.runTest("Bitwise - Left Shift Basic",
+                 R"(
+            print(1 << 0);
+            print(1 << 1);
+            print(1 << 2);
+            print(1 << 3);
+            print(1 << 8);
+       )",
+                 "1\n2\n4\n8\n256");
+
+  runner.runTest("Bitwise - Left Shift Multiply",
+                 R"(
+            print(5 << 1);  // 5 * 2 = 10
+            print(5 << 2);  // 5 * 4 = 20
+            print(5 << 3);  // 5 * 8 = 40
+            print(10 << 4); // 10 * 16 = 160
+       )",
+                 "10\n20\n40\n160");
+
+  runner.runTest("Bitwise - Left Shift by Zero",
+                 R"(
+            print(42 << 0);
+            print(255 << 0);
+            print(1024 << 0);
+       )",
+                 "42\n255\n1024");
+
+  // 右移 (>>)
+  runner.runTest("Bitwise - Right Shift Basic",
+                 R"(
+            print(256 >> 0);
+            print(256 >> 1);
+            print(256 >> 2);
+            print(256 >> 3);
+            print(256 >> 8);
+       )",
+                 "256\n128\n64\n32\n1");
+
+  runner.runTest("Bitwise - Right Shift Divide",
+                 R"(
+            print(40 >> 1);  // 40 / 2 = 20
+            print(40 >> 2);  // 40 / 4 = 10
+            print(40 >> 3);  // 40 / 8 = 5
+            print(160 >> 4); // 160 / 16 = 10
+       )",
+                 "20\n10\n5\n10");
+
+  runner.runTest("Bitwise - Right Shift by Zero",
+                 R"(
+            print(42 >> 0);
+            print(255 >> 0);
+            print(1024 >> 0);
+       )",
+                 "42\n255\n1024");
+
+  // 组合运算
+  runner.runTest("Bitwise - Combination",
+                 R"(
+            int a = 5;  // 0101
+            int b = 3;  // 0011
+            int c = 8;  // 1000
+            print((a & b) | c);  // (0101 & 0011) | 1000 = 0001 | 1000 = 1001 = 9
+            print((a | b) & c);  // (0101 | 0011) & 1000 = 0111 & 1000 = 0000 = 0
+            print(a ^ b ^ c);    // 0101 ^ 0011 ^ 1000 = 0110 ^ 1000 = 1110 = 14
+       )",
+                 "9\n0\n14");
+
+  runner.runTest("Bitwise - Shift with Mask",
+                 R"(
+            // 提取高位字节
+            int x = 0x12345678;
+            int highByte = (x >> 24) & 0xFF;
+            int lowByte = x & 0xFF;
+            print(highByte);
+            print(lowByte);
+       )",
+                 "18\n120");
+
+  runner.runTest("Bitwise - Flag Operations",
+                 R"(
+            // 模拟标志位操作
+            int flags = 0;
+            int FLAG_READ = 1;    // 0001
+            int FLAG_WRITE = 2;   // 0010
+            int FLAG_EXEC = 4;    // 0100
+            
+            // 设置标志
+            flags = flags | FLAG_READ;
+            print(flags == FLAG_READ);
+            
+            flags = flags | FLAG_WRITE;
+            print(flags == (FLAG_READ | FLAG_WRITE));
+            
+            // 检查标志
+            bool hasRead = (flags & FLAG_READ) != 0;
+            bool hasWrite = (flags & FLAG_WRITE) != 0;
+            bool hasExec = (flags & FLAG_EXEC) != 0;
+            print(hasRead);
+            print(hasWrite);
+            print(hasExec);
+            
+            // 清除标志
+            flags = flags & ~FLAG_READ;
+            print(flags == FLAG_WRITE);
+       )",
+                 "true\ntrue\ntrue\ntrue\nfalse\ntrue");
+
+  runner.runTest("Bitwise - Power of Two Check",
+                 R"(
+            int isPowerOfTwo(int n) {
+                return (n > 0) && ((n & (n - 1)) == 0);
+            }
+            print(isPowerOfTwo(1));
+            print(isPowerOfTwo(2));
+            print(isPowerOfTwo(4));
+            print(isPowerOfTwo(8));
+            print(isPowerOfTwo(16));
+            print(isPowerOfTwo(3));
+            print(isPowerOfTwo(5));
+            print(isPowerOfTwo(0));
+            print(isPowerOfTwo(-2));
+       )",
+                 "true\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\nfalse\nfalse");
+
+  runner.runTest("Bitwise - Bit Counting",
+                 R"(
+            int countBits(int n) {
+                int count = 0;
+                while (n != 0) {
+                    count = count + (n & 1);
+                    n = n >> 1;
+                }
+                return count;
+            }
+            print(countBits(0));
+            print(countBits(1));
+            print(countBits(2));
+            print(countBits(3));
+            print(countBits(7));
+            print(countBits(8));
+            print(countBits(15));
+            print(countBits(255));
+       )",
+                 "0\n1\n1\n2\n3\n1\n4\n8");
+}
+
+// =========================================================
+// 14. Defer语句测试 (Defer Statement)
 // =========================================================
 void registerDeferTests(TestRunner &runner) {
   runner.runTest("Defer - Basic Execution Order",
@@ -2869,7 +3131,7 @@ TEST_CASE("old test all", "[old]") {
   registerEdgeCases(runner);
   registerIntegrationTests(runner);
   registerBuiltinFunctions(runner);
-  // registerDeferTests(runner);
+  registerDeferTests(runner);
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
 }

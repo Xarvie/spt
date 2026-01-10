@@ -1259,6 +1259,57 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+#define SPT_BW_BINARY_OP(opName, op)                                                               \
+  SPT_OPCODE(opName) {                                                                             \
+    uint8_t A = GETARG_A(instruction);                                                             \
+    uint8_t B = GETARG_B(instruction);                                                             \
+    uint8_t C = GETARG_C(instruction);                                                             \
+    Value b = slots[B];                                                                            \
+    Value c = slots[C];                                                                            \
+                                                                                                   \
+    if (!b.isInt() || !c.isInt()) {                                                                \
+      runtimeError("Operands must be integers");                                                   \
+      return InterpretResult::RUNTIME_ERROR;                                                       \
+    }                                                                                              \
+    slots[A] = Value::integer(b.asInt() op c.asInt());                                             \
+    SPT_DISPATCH();                                                                                \
+  }
+
+  SPT_BW_BINARY_OP(OP_BAND, &)
+  SPT_BW_BINARY_OP(OP_BOR, |)
+  SPT_OPCODE(OP_BXOR) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = slots[B];
+    Value c = slots[C];
+    if (!b.isInt() || !c.isInt()) {
+      runtimeError("Operands must be integers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    slots[A] = Value::integer(b.asInt() ^ c.asInt());
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_BNOT) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    Value b = slots[B];
+
+    if (b.isInt()) {
+      slots[A] = Value::integer(~b.asInt());
+    } else {
+      runtimeError("Operand must be a integer");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  SPT_BW_BINARY_OP(OP_SHL, <<)
+  SPT_BW_BINARY_OP(OP_SHR, >>)
+
+#undef SPT_BW_BINARY_OP
+
   SPT_OPCODE(OP_JMP) {
     int32_t sBx = GETARG_sBx(instruction);
     frame->ip += sBx;

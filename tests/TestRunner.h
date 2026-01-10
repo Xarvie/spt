@@ -133,6 +133,8 @@ private:
     // 0. 环境准备 - 创建独立的临时目录
     setupModules(test.modules);
 
+    CAPTURE(test.name, test.script);
+
     // 1. 解析
     AstNode *ast = loadAst(test.script, "test_script");
     REQUIRE(ast);
@@ -149,6 +151,10 @@ private:
     });
 
     CompiledChunk chunk = compiler.compile(ast);
+    std::stringstream dumpStream;
+    spt::BytecodeDumper::dump(chunk, dumpStream);
+    std::string dump = dumpStream.str();
+    CAPTURE(dump);
     destroyAst(ast); // 编译完成后即可销毁 AST
 
     REQUIRE(!compiler.hasError());
@@ -173,7 +179,7 @@ private:
     std::string errors = trim(capturedErrors.str());
     std::string expected = trim(test.expectedOutput);
 
-    CAPTURE(test.name, actual, expected, errors);
+    CAPTURE(actual, expected, errors);
 
     // 4. 清理环境
     cleanupModules(test.modules);

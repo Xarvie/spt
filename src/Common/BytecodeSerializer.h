@@ -69,10 +69,11 @@ class BytecodeDumper {
 public:
   // 对外入口：打印整个 Chunk
   static void dump(const CompiledChunk &chunk);
+  static void dump(const CompiledChunk &chunk, std::ostream &out);
 
 private:
   // 递归打印原型及其子原型
-  static void dumpPrototype(const Prototype &proto, const std::string &prefix = "");
+  static void dumpPrototype(const Prototype &proto, const std::string &prefix, std::ostream &out);
 
   // 辅助函数：操作码转字符串
   static std::string opCodeToString(OpCode op);

@@ -270,30 +270,33 @@ CompiledChunk BytecodeSerializer::loadFromFile(const std::string &path) {
   return deserialize(data);
 }
 
-void BytecodeDumper::dump(const CompiledChunk &chunk) {
-  std::cout << "== Dump Module: " << chunk.moduleName << " ==\n";
-  dumpPrototype(chunk.mainProto);
+void BytecodeDumper::dump(const CompiledChunk &chunk) { dump(chunk, std::cout); }
+
+void BytecodeDumper::dump(const CompiledChunk &chunk, std::ostream &out) {
+  out << "== Dump Module: " << chunk.moduleName << " ==\n";
+  dumpPrototype(chunk.mainProto, "", out);
 }
 
-void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &prefix) {
+void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &prefix,
+                                   std::ostream &out) {
   std::string funcName = proto.name.empty() ? "<anonymous>" : proto.name;
   std::string source = proto.source.empty() ? "=?" : proto.source;
 
-  std::cout << "\n"
-            << prefix << "function " << funcName << " (" << source << ":" << proto.lineDefined
-            << "-" << proto.lastLineDefined << ")\n";
+  out << "\n"
+      << prefix << "function " << funcName << " (" << source << ":" << proto.lineDefined << "-"
+      << proto.lastLineDefined << ")\n";
 
-  std::cout << prefix << "params: " << (int)proto.numParams
-            << ", upvalues: " << (int)proto.numUpvalues << ", slots: " << (int)proto.maxStackSize
-            << ", vararg: " << (proto.isVararg ? "yes" : "no") << "\n";
+  out << prefix << "params: " << (int)proto.numParams << ", upvalues: " << (int)proto.numUpvalues
+      << ", slots: " << (int)proto.maxStackSize << ", vararg: " << (proto.isVararg ? "yes" : "no")
+      << "\n";
 
   for (size_t i = 0; i < proto.code.size(); ++i) {
     Instruction inst = proto.code[i];
     OpCode op = GET_OPCODE(inst);
     int line = getLine(proto, static_cast<int>(i));
 
-    std::cout << prefix << "\t" << "[" << std::setw(3) << i << "] " << "[" << std::setw(3) << line
-              << "] " << std::setw(14) << std::left << opCodeToString(op) << " ";
+    out << prefix << "\t" << "[" << std::setw(3) << i << "] " << "[" << std::setw(3) << line << "] "
+        << std::setw(14) << std::left << opCodeToString(op) << " ";
 
     OpMode mode = getOpMode(op);
     int a = GETARG_A(inst);
@@ -306,7 +309,7 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
 
     switch (mode) {
     case OpMode::iABC:
-      std::cout << std::setw(4) << a << " " << std::setw(4) << b << " " << std::setw(4) << c;
+      out << std::setw(4) << a << " " << std::setw(4) << b << " " << std::setw(4) << c;
 
       if (op == OpCode::OP_GETFIELD || op == OpCode::OP_SETFIELD) {
 
@@ -322,7 +325,7 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
       break;
 
     case OpMode::iABx:
-      std::cout << std::setw(4) << a << " " << std::setw(9) << bx;
+      out << std::setw(4) << a << " " << std::setw(9) << bx;
 
       if (op == OpCode::OP_LOADK) {
         if (bx < proto.constants.size()) {
@@ -338,35 +341,48 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
           const auto &sub = proto.protos[bx];
           comment << "; " << (sub.name.empty() ? "<anonymous>" : sub.name);
         }
+      } else if (op == OpCode::OP_DEFER) {
+        if (bx < proto.protos.size()) {
+          const auto &sub = proto.protos[bx];
+          comment << "; " << (sub.name.empty() ? "<anonymous>" : sub.name);
+        }
       }
       break;
 
     case OpMode::iAsBx:
-      std::cout << std::setw(4) << a << " " << std::setw(9) << sbx;
+      out << std::setw(4) << a << " " << std::setw(9) << sbx;
 
       if (op == OpCode::OP_JMP) {
         int dest = static_cast<int>(i) + sbx + 1;
         comment << "; to [" << dest << "]";
+      } else if (op == OpCode::OP_FORPREP) {
+        int dest = static_cast<int>(i) + sbx + 1;
+        comment << "; to [" << dest << "]";
+      } else if (op == OpCode::OP_FORLOOP) {
+        int dest = static_cast<int>(i) + sbx + 1;
+        comment << "; to [" << dest << "]";
+      } else if (op == OpCode::OP_LOADI) {
+        comment << "; " << sbx;
       }
       break;
     }
 
     std::string commentStr = comment.str();
     if (!commentStr.empty()) {
-      std::cout << "\t" << commentStr;
+      out << "\t" << commentStr;
     }
-    std::cout << "\n";
+    out << "\n";
   }
 
   if (!proto.constants.empty()) {
-    std::cout << prefix << "  Constants (" << proto.constants.size() << "):\n";
+    out << prefix << "  Constants (" << proto.constants.size() << "):\n";
     for (size_t i = 0; i < proto.constants.size(); ++i) {
-      std::cout << prefix << "    [" << i << "] " << constantToString(proto.constants[i]) << "\n";
+      out << prefix << "    [" << i << "] " << constantToString(proto.constants[i]) << "\n";
     }
   }
 
   for (const auto &subProto : proto.protos) {
-    dumpPrototype(subProto, prefix + "  ");
+    dumpPrototype(subProto, prefix + "  ", out);
   }
 }
 
@@ -420,9 +436,13 @@ BytecodeDumper::OpMode BytecodeDumper::getOpMode(OpCode op) {
   case OpCode::OP_NEWCLASS:
   case OpCode::OP_CLOSURE:
   case OpCode::OP_IMPORT:
+  case OpCode::OP_DEFER:
     return OpMode::iABx;
 
   case OpCode::OP_JMP:
+  case OpCode::OP_FORPREP:
+  case OpCode::OP_FORLOOP:
+  case OpCode::OP_LOADI:
     return OpMode::iAsBx;
 
   default:
@@ -476,6 +496,18 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "MOD";
   case OpCode::OP_UNM:
     return "UNM";
+  case OpCode::OP_BAND:
+    return "BAND";
+  case OpCode::OP_BOR:
+    return "BOR";
+  case OpCode::OP_BXOR:
+    return "BXOR";
+  case OpCode::OP_BNOT:
+    return "BNOT";
+  case OpCode::OP_SHL:
+    return "SHL";
+  case OpCode::OP_SHR:
+    return "SHR";
   case OpCode::OP_JMP:
     return "JMP";
   case OpCode::OP_EQ:
@@ -499,7 +531,7 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
   case OpCode::OP_EXPORT:
     return "EXPORT";
   case OpCode::OP_DEFER:
-    return "OP_DEFER";
+    return "DEFER";
 
   case OpCode::OP_ADDI:
     return "ADDI";
@@ -516,7 +548,7 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
   case OpCode::OP_FORLOOP:
     return "FORLOOP";
   case OpCode::OP_LOADI:
-    return "OP_LOADI";
+    return "LOADI";
   default:
     return "UNKNOWN";
   }
