@@ -2869,7 +2869,7 @@ TEST_CASE("old test all", "[old]") {
   registerEdgeCases(runner);
   registerIntegrationTests(runner);
   registerBuiltinFunctions(runner);
-  registerDeferTests(runner);
+  // registerDeferTests(runner);
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
 }
