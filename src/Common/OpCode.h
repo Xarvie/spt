@@ -77,6 +77,7 @@ enum class OpCode : uint8_t {
   OP_FORPREP, /* A sBx | R[A] -= R[A+2]; pc += sBx      初始化：预减 Step，跳转到循环尾部首次检查 */
   OP_FORLOOP, /* A sBx | R[A] += R[A+2]; if R[A] <= R[A+1] then pc += sBx 循环尾：步进 + 检查 + 回跳
                */
+  OP_LOADI /* A sBx | R[A] := sBx  加载17位有符号立即数 (用于优化小整数加载) */
 };
 
 /* --- 指令解码宏 (完全兼容 Lua 5.4 布局) --- */

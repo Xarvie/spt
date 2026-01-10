@@ -515,7 +515,8 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "FORPREP";
   case OpCode::OP_FORLOOP:
     return "FORLOOP";
-
+  case OpCode::OP_LOADI:
+    return "OP_LOADI";
   default:
     return "UNKNOWN";
   }

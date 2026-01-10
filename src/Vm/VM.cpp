@@ -2013,6 +2013,13 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+  SPT_OPCODE(OP_LOADI) {
+    uint8_t A = GETARG_A(instruction);
+    int32_t sBx = GETARG_sBx(instruction);
+    slots[A] = Value::integer(sBx);
+    SPT_DISPATCH();
+  }
+
 #undef CHECK_NUM
   SPT_DISPATCH_LOOP_END()
 

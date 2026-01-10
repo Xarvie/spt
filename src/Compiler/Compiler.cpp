@@ -970,9 +970,16 @@ void Compiler::compileExpressionForValue(Expression *expr) {
 void Compiler::compileLiteral(Expression *expr, int dest) {
   ConstantValue val;
   switch (expr->nodeType) {
-  case NodeType::LITERAL_INT:
-    val = static_cast<LiteralIntNode *>(expr)->value;
+  case NodeType::LITERAL_INT: {
+    int64_t intVal = static_cast<LiteralIntNode *>(expr)->value;
+
+    if (intVal >= -65535 && intVal <= 65535) {
+      cg_->emitAsBx(OpCode::OP_LOADI, dest, static_cast<int32_t>(intVal));
+      return;
+    }
+    val = intVal;
     break;
+  }
   case NodeType::LITERAL_FLOAT:
     val = static_cast<LiteralFloatNode *>(expr)->value;
     break;
