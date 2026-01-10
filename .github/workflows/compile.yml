@@ -6,6 +6,11 @@ jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+
+    concurrency:
+      group: ${{ github.ref }}-${{ github.base_ref }}-${{ github.head_ref }}-${{ matrix.os }}-${{ matrix.arch }}
+      cancel-in-progress: true
+
     strategy:
       fail-fast: false
       matrix:
@@ -26,6 +31,20 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release
+
+      - name: Debug (Linux Only)
+        if: runner.os == 'Linux'
+        run: |
+          ls -l build
+          cd build
+          ls -l bin
+
+      - name: Debug (Windows Only)
+        if: runner.os == 'Windows'
+        run: |
+          dir build
+          cd build
+          dir bin
 
       - name: Run tests
         run: |

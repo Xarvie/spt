@@ -1,4 +1,4 @@
-set(sptscript_library sptscript_library_shared)
+set(sptscript_library sptscript_library_static)
 
 # 添加可执行文件
 add_executable(tests_all
