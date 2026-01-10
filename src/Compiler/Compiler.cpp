@@ -325,8 +325,6 @@ void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &
   for (int i = 0; i < argCount; ++i) {
     int argSlot = cg_->allocSlot();
     compileExpression(arguments[i], argSlot);
-
-
   }
 
   cg_->emitABC(OpCode::OP_INVOKE, base, totalArgs, methodIdx);
@@ -370,7 +368,6 @@ void Compiler::compileMethodInvokeFallback(Expression *receiverExpr, const std::
 
   cg_->freeSlots(2 + argCount);
 }
-
 
 void Compiler::compileClassDecl(ClassDeclNode *decl) {
   int slot = cg_->addLocal(decl->name);

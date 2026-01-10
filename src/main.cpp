@@ -78,6 +78,18 @@ void registerBench(TestRunner &runner) {
                  "382000");
 }
 
+void registerFib38Bench(TestRunner &runner) {
+  runner.addTest("Recursion - Fibonacci",
+                 R"(
+            int fib(int n) {
+                if (n < 2) { return n; }
+                return fib(n-1) + fib(n-2);
+            }
+            print(fib(38));
+       )",
+                 "39088169");
+}
+
 // =========================================================
 // 1. 基础语法与运算 (Basics)
 // =========================================================
@@ -2453,7 +2465,7 @@ void registerStackReallocationTests(TestRunner &runner) {
             // 递归深度 50，在 MAX_FRAMES=64 限制内
             print(deepRecursion(50, 0));
        )",
-                 "1275");  // 1+2+...+50 = 50*51/2 = 1275
+                 "1275"); // 1+2+...+50 = 50*51/2 = 1275
 
   runner.addTest("Stack Realloc - Many Local Variables Per Frame",
                  R"(
@@ -2653,7 +2665,7 @@ void registerStackReallocationTests(TestRunner &runner) {
 
             print(testManyLocals());
        )",
-                 "503");  // 0+9+10+19 + (1+2+...+30) = 38 + 465 = 503
+                 "503"); // 0+9+10+19 + (1+2+...+30) = 38 + 465 = 503
 
   runner.addTest("Stack Realloc - Nested Function Calls with Locals",
                  R"(
@@ -2707,7 +2719,7 @@ void registerStackReallocationTests(TestRunner &runner) {
 
             print(recursiveWithClosure(30, 0));
        )",
-                 "465");  // 1+2+...+30 = 465
+                 "465"); // 1+2+...+30 = 465
 
   runner.addTest("Stack Realloc - Fiber Creating Closures",
                  R"(
@@ -2890,7 +2902,7 @@ void registerStackReallocationTests(TestRunner &runner) {
 
             print(stressTest(10));
        )",
-                 "245");  // 10 * 20 + (0+1+...+9) = 200 + 45 = 245
+                 "245"); // 10 * 20 + (0+1+...+9) = 200 + 45 = 245
 
   runner.addTest("Stack Realloc - return leak",
                  R"(
@@ -2928,30 +2940,31 @@ void registerStackReallocationTests(TestRunner &runner) {
     )",
                  "nil");
 }
+
 // =========================================================
 // 主函数
 // =========================================================
 int main(int argc, char *argv[]) {
-  TestRunner runner;
-  registerBasics(runner);
-  registerControlFlow(runner);
-  registerFunctions(runner);
-  registerClasses(runner);
-  registerLists(runner);
-  registerMaps(runner);
-  registerStrings(runner);
-  registerModules(runner);
-  registerInvokeTests(runner);
-  registerEdgeCases(runner);
-  registerIntegrationTests(runner);
-  registerBuiltinFunctions(runner);
-  registerDeferTests(runner);
-  registerFiberTests(runner);
-  registerStackReallocationTests(runner);
-  runner.runAll();
+  //  TestRunner runner;
+  //  registerBasics(runner);
+  //  registerControlFlow(runner);
+  //  registerFunctions(runner);
+  //  registerClasses(runner);
+  //  registerLists(runner);
+  //  registerMaps(runner);
+  //  registerStrings(runner);
+  //  registerModules(runner);
+  //  registerInvokeTests(runner);
+  //  registerEdgeCases(runner);
+  //  registerIntegrationTests(runner);
+  //  registerBuiltinFunctions(runner);
+  //  registerDeferTests(runner);
+  //  registerFiberTests(runner);
+  //  registerStackReallocationTests(runner);
+  //  runner.runAll();
 
-//    TestRunner runner;
-//    registerBench(runner);
-//    runner.runAll();
+  TestRunner runner;
+  registerFib38Bench(runner);
+  runner.runAll();
   return 0;
 }

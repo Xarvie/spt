@@ -8,11 +8,10 @@
 #include "Object.h"
 #include "Value.h"
 #include "config.h"
-
+#include "unordered_dense.h"
 #include <functional>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace spt {
@@ -167,13 +166,13 @@ private:
   FiberObject *currentFiber_ = nullptr; // 当前执行的 fiber
 
   // === 全局变量 ===
-  std::unordered_map<std::string, Value> globals_;
+  ankerl::unordered_dense::map<std::string, Value> globals_;
 
   // === 字符串驻留 ===
-  std::unordered_map<std::string, StringObject *> strings_;
+  ankerl::unordered_dense::map<std::string, StringObject *> strings_;
 
   // === 模块缓存 ===
-  std::unordered_map<std::string, CompiledChunk> modules_;
+  ankerl::unordered_dense::map<std::string, CompiledChunk> modules_;
   Value lastModuleResult_;
 
   std::unique_ptr<ModuleManager> moduleManager_;

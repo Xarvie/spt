@@ -142,7 +142,7 @@ Value ModuleManager::loadModule(const std::string &moduleName, const std::string
   }
 
   cacheMisses_++;
-  std::unordered_set<std::string> loadingStack;
+  ankerl::unordered_dense::set<std::string> loadingStack;
   Module *module = loadModuleInternal(moduleName, fromPath, loadingStack);
 
   if (!module || module->state != ModuleState::LOADED) {
@@ -155,7 +155,7 @@ Value ModuleManager::loadModule(const std::string &moduleName, const std::string
 
 Module *ModuleManager::loadModuleInternal(const std::string &moduleName,
                                           const std::string &fromPath,
-                                          std::unordered_set<std::string> &loadingStack) {
+                                          ankerl::unordered_dense::set<std::string> &loadingStack) {
 
   if (loadingStack.find(moduleName) != loadingStack.end()) {
     auto module = std::make_unique<Module>();
@@ -422,7 +422,7 @@ std::vector<std::string> ModuleManager::getDependencies(const std::string &modul
 
   std::vector<std::string> result = it->second->metadata.dependencies;
   if (recursive) {
-    std::unordered_set<std::string> visited;
+    ankerl::unordered_dense::set<std::string> visited;
     std::function<void(const std::string &)> collectDeps;
     collectDeps = [&](const std::string &name) {
       if (visited.count(name))
@@ -442,14 +442,14 @@ std::vector<std::string> ModuleManager::getDependencies(const std::string &modul
 }
 
 bool ModuleManager::hasCircularDependency(const std::string &moduleName) {
-  std::unordered_set<std::string> visited;
-  std::unordered_set<std::string> stack;
+  ankerl::unordered_dense::set<std::string> visited;
+  ankerl::unordered_dense::set<std::string> stack;
   return detectCircular(moduleName, visited, stack);
 }
 
 bool ModuleManager::detectCircular(const std::string &moduleName,
-                                   std::unordered_set<std::string> &visited,
-                                   std::unordered_set<std::string> &stack) {
+                                   ankerl::unordered_dense::set<std::string> &visited,
+                                   ankerl::unordered_dense::set<std::string> &stack) {
   if (stack.count(moduleName))
     return true;
   if (visited.count(moduleName))

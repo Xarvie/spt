@@ -55,16 +55,16 @@ constexpr uint8_t UseAbsLine = -1;
 
 // 原型信息 - 函数/闭包的编译产物
 struct Prototype {
-  std::string name;         // 函数名 (调试用)
-  std::string source;       // 源文件名
-  std::string short_src;    // 短源文件名
-  int lineDefined = 0;      // 起始行号
-  int lastLineDefined = 0;  // 结束行号
-  uint8_t numParams = 0;    // 参数数量
-  uint8_t numUpvalues = 0;  // UpValue 数量
-  uint8_t maxStackSize = 0; // 最大栈深度
-  bool isVararg = false;    // 是否可变参数
-  bool needsReceiver = false;//是否需要“this”
+  std::string name;           // 函数名 (调试用)
+  std::string source;         // 源文件名
+  std::string short_src;      // 短源文件名
+  int lineDefined = 0;        // 起始行号
+  int lastLineDefined = 0;    // 结束行号
+  uint8_t numParams = 0;      // 参数数量
+  uint8_t numUpvalues = 0;    // UpValue 数量
+  uint8_t maxStackSize = 0;   // 最大栈深度
+  bool isVararg = false;      // 是否可变参数
+  bool needsReceiver = false; // 是否需要“this”
 
   std::vector<Instruction> code;        // 指令序列
   std::vector<ConstantValue> constants; // 常量表

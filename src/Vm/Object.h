@@ -2,9 +2,9 @@
 
 #include "../Common/Types.h"
 #include "Value.h"
+#include "unordered_dense.h"
 #include <functional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace spt {
@@ -37,9 +37,9 @@ struct Closure : GCObject {
 // ============================================================================
 struct ClassObject : GCObject {
   std::string name;
-  std::unordered_map<std::string, Value> methods; // 方法表（热更新友好）
-  std::unordered_map<std::string, Value> statics; // 静态成员
-  Value gcMethod;                                 // 缓存的 __gc 终结器方法
+  ankerl::unordered_dense::map<std::string, Value> methods; // 方法表（热更新友好）
+  ankerl::unordered_dense::map<std::string, Value> statics; // 静态成员
+  Value gcMethod;                                           // 缓存的 __gc 终结器方法
 
   ClassObject() : gcMethod(Value::nil()) { type = ValueType::Class; }
 
@@ -60,8 +60,8 @@ struct ClassObject : GCObject {
 // ============================================================================
 struct Instance : GCObject {
   ClassObject *klass;
-  std::unordered_map<std::string, Value> fields; // 实例字段
-  bool isFinalized = false;                      // 是否已执行 __gc 终结器
+  ankerl::unordered_dense::map<std::string, Value> fields; // 实例字段
+  bool isFinalized = false;                                // 是否已执行 __gc 终结器
 
   Instance() { type = ValueType::Object; }
 

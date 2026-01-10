@@ -2,11 +2,10 @@
 
 #include "../Common/Types.h"
 #include "Value.h"
+#include "unordered_dense.h"
 #include <functional>
 #include <memory>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace spt {
@@ -191,7 +190,7 @@ public:
 private:
   // 内部加载实现
   Module *loadModuleInternal(const std::string &moduleName, const std::string &fromPath,
-                             std::unordered_set<std::string> &loadingStack);
+                             ankerl::unordered_dense::set<std::string> &loadingStack);
 
   // 编译模块
   bool compileModule(Module *module, const std::string &source);
@@ -206,8 +205,9 @@ private:
   void resolveDependencies(Module *module);
 
   // 循环依赖检测
-  bool detectCircular(const std::string &moduleName, std::unordered_set<std::string> &visited,
-                      std::unordered_set<std::string> &stack);
+  bool detectCircular(const std::string &moduleName,
+                      ankerl::unordered_dense::set<std::string> &visited,
+                      ankerl::unordered_dense::set<std::string> &stack);
 
   // 缓存淘汰（LRU）
   void evictCache();
@@ -222,9 +222,9 @@ private:
   ModuleLoader *loader_; // 由外部管理生命周期或通过vtable->destroy释放
 
   // 模块缓存：名称 -> 模块实例
-  std::unordered_map<std::string, std::unique_ptr<Module>> modules_;
+  ankerl::unordered_dense::map<std::string, std::unique_ptr<Module>> modules_;
   // 路径映射：绝对路径 -> 模块名
-  std::unordered_map<std::string, std::string> pathToName_;
+  ankerl::unordered_dense::map<std::string, std::string> pathToName_;
 
   // 加载顺序（用于 LRU 淘汰）
   std::vector<std::string> loadOrder_;

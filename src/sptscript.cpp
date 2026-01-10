@@ -5,8 +5,8 @@
 
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <iostream>
+#include <sstream>
 
 int runScript(const char *path) {
   std::string source;
