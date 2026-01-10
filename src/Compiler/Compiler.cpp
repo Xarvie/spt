@@ -282,15 +282,21 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
     return;
   }
 
-  int funcSlot = cg_->allocSlot();
-  compileExpression(node->functionExpr, funcSlot);
+  compileExpression(node->functionExpr, dest);
+
+  int funcSlot = dest;
+  int argsStart = dest + 1;
+  int argCount = static_cast<int>(node->arguments.size());
+
+  if (cg_->current()->currentStackTop > argsStart) {
+    funcSlot = cg_->allocSlot();
+    cg_->emitABC(OpCode::OP_MOVE, funcSlot, dest, 0);
+  }
 
   for (auto *arg : node->arguments) {
     int argSlot = cg_->allocSlot();
     compileExpression(arg, argSlot);
   }
-
-  int argCount = static_cast<int>(node->arguments.size());
 
   cg_->emitABC(OpCode::OP_CALL, funcSlot, argCount + 1, nResults + 1);
 
@@ -300,7 +306,11 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
     }
   }
 
-  cg_->freeSlots(argCount + 1);
+  if (funcSlot != dest) {
+    cg_->freeSlots(argCount + 1);
+  } else {
+    cg_->freeSlots(argCount);
+  }
 }
 
 void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &methodName,
