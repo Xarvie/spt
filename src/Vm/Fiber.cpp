@@ -4,10 +4,10 @@
 
 namespace spt {
 
-void FiberObject::fixUpvaluePointers(Value *oldStackBase, size_t used, ptrdiff_t offset) {
+void FiberObject::fixUpvaluePointers(Value *oldBase, Value *newBase) {
   UpValue *uv = openUpvalues;
   while (uv != nullptr) {
-    uv->location += offset;
+    uv->location = newBase + (uv->location - oldBase);
     uv = uv->nextOpen;
   }
 }

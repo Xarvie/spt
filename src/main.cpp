@@ -2942,6 +2942,7 @@ void registerStackReallocationTests(TestRunner &runner) {
 // =========================================================
 int main(int argc, char *argv[]) {
   TestRunner runner;
+#if 1
   registerBasics(runner);
   registerControlFlow(runner);
   registerFunctions(runner);
@@ -2954,13 +2955,12 @@ int main(int argc, char *argv[]) {
   registerEdgeCases(runner);
   registerIntegrationTests(runner);
   registerBuiltinFunctions(runner);
-  //  registerDeferTests(runner);
+
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
+#else
+  registerFib38Bench(runner);
+#endif
   runner.runAll();
-
-  //  TestRunner runner;
-  //  registerFib38Bench(runner);
-  //  runner.runAll();
   return 0;
 }

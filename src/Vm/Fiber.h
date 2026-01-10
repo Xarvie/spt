@@ -1,7 +1,6 @@
 #pragma once
 #include "../Common/Types.h"
 #include "Value.h"
-#include <deque>
 #include <vector>
 
 namespace spt {
@@ -12,14 +11,14 @@ struct Closure;
 struct UpValue;
 
 // ============================================================================
-// CallFrame - 调用帧
+// CallFrame - 调用帧 (POD 类型，无析构函数)
 // ============================================================================
 struct CallFrame {
   Closure *closure = nullptr;
   const Instruction *ip = nullptr; // 指令指针
   int slotsBase = 0;               // 栈帧基址（相对于栈底的偏移量索引）
   int expectedResults = 1;         // 期望返回值数量 (-1 表示全部)
-  int returnBase;
+  int returnBase = 0;              // 返回值存放位置（相对于栈底的偏移量索引）
 };
 
 // ============================================================================
@@ -43,9 +42,7 @@ struct FiberObject : GCObject {
   std::vector<Value> stack;
   Value *stackTop = nullptr;
 
-  // 使用 std::deque 替代 std::vector，扩容时不会移动旧元素
-  // 保证 CallFrame 地址的稳定性
-  std::deque<CallFrame> frames;
+  std::vector<CallFrame> frames;
   int frameCount = 0;
 
   UpValue *openUpvalues = nullptr;
@@ -64,7 +61,8 @@ struct FiberObject : GCObject {
   Value yieldValue;
 
   // === 配置 ===
-  static constexpr size_t DEFAULT_STACK_SIZE = 1024;
+  static constexpr size_t DEFAULT_STACK_SIZE = 64;
+  static constexpr size_t DEFAULT_FRAMES_SIZE = 8;
   static constexpr int MAX_FRAMES = 64;
 
   // === 构造 ===
@@ -72,7 +70,7 @@ struct FiberObject : GCObject {
     type = ValueType::Fiber;
     stack.resize(DEFAULT_STACK_SIZE);
     stackTop = stack.data();
-    // deque 不需要 reserve
+    frames.resize(DEFAULT_FRAMES_SIZE);
     error = Value::nil();
     yieldValue = Value::nil();
   }
@@ -90,35 +88,63 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
-  void ensureStack(size_t needed) {
+  // === 容量管理 ===
+  void ensureStack(int needed) {
     size_t used = stackTop - stack.data();
-    if (used + needed > stack.size()) {
-      size_t newSize = stack.size() * 2;
-      while (used + needed > newSize) {
-        newSize *= 2;
-      }
+    size_t required = used + static_cast<size_t>(needed);
 
-      // 保存旧栈基地址
-      Value *oldStackBase = stack.data();
+    if (required <= stack.size()) {
+      return; // 空间足够
+    }
 
-      // 扩容栈
-      stack.resize(newSize);
+    // 按 2 倍扩容
+    size_t newSize = stack.size() * 2;
+    while (newSize < required) {
+      newSize *= 2;
+    }
 
-      // 计算新旧地址差值
-      Value *newStackBase = stack.data();
-      ptrdiff_t offset = newStackBase - oldStackBase;
+    // 记录旧基地址
+    Value *oldBase = stack.data();
 
-      // 恢复 stackTop 指针
-      stackTop = newStackBase + used;
+    // 扩容
+    stack.resize(newSize);
 
-      // 由于 UpValue 是不完整类型，调用外部函数处理
-      if (openUpvalues != nullptr && offset != 0) {
-        fixUpvaluePointers(oldStackBase, used, offset);
+    // 获取新基地址
+    Value *newBase = stack.data();
+
+    // 指针修复
+    if (oldBase != newBase) {
+      // 1. 更新 stackTop
+      stackTop = newBase + (stackTop - oldBase);
+
+      // 2. 修复 UpValue 指针（通过外部函数，因为 UpValue 是不完整类型）
+      if (openUpvalues != nullptr) {
+        fixUpvaluePointers(oldBase, newBase);
       }
     }
   }
 
-  void fixUpvaluePointers(Value *oldStackBase, size_t used, ptrdiff_t offset);
+  void ensureFrames(int needed) {
+    size_t required = static_cast<size_t>(frameCount + needed);
+
+    if (required <= frames.size()) {
+      return; // 空间足够
+    }
+
+    // 按 2 倍扩容
+    size_t newSize = frames.size() * 2;
+    if (newSize < DEFAULT_FRAMES_SIZE) {
+      newSize = DEFAULT_FRAMES_SIZE;
+    }
+    while (newSize < required) {
+      newSize *= 2;
+    }
+
+    frames.resize(newSize);
+    // 无需指针修复，因为通过索引访问帧
+  }
+
+  void fixUpvaluePointers(Value *oldBase, Value *newBase);
 
   size_t stackUsed() const { return stackTop - stack.data(); }
 
@@ -141,7 +167,7 @@ struct FiberObject : GCObject {
   void reset() {
     state = FiberState::NEW;
     stackTop = stack.data();
-    frames.clear();
+    // 不清空 frames，只重置计数（保留预分配的内存）
     frameCount = 0;
     openUpvalues = nullptr;
     caller = nullptr;

@@ -448,12 +448,7 @@ void VM::registerBuiltinFunctions() {
             int slotsBaseOffset = static_cast<int>((callBase + 1) - fiber->stack.data());
 
             fiber->ensureStack(proto->maxStackSize);
-
-            CallFrame newFrame;
-            newFrame.closure = closure;
-            newFrame.ip = proto->code.data();
-            newFrame.expectedResults = -1;
-            newFrame.slotsBase = slotsBaseOffset;
+            fiber->ensureFrames(1);
 
             Value *newSlots = fiber->stack.data() + slotsBaseOffset;
             for (Value *p = fiber->stackTop; p < newSlots + proto->maxStackSize; ++p) {
@@ -461,8 +456,12 @@ void VM::registerBuiltinFunctions() {
             }
             fiber->stackTop = newSlots + proto->maxStackSize;
 
-            fiber->frames.push_back(newFrame);
-            fiber->frameCount++;
+            CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
+            newFrame->closure = closure;
+            newFrame->ip = proto->code.data();
+            newFrame->expectedResults = -1;
+            newFrame->slotsBase = slotsBaseOffset;
+            newFrame->returnBase = 0;
 
             int savedExitFrameCount = this->exitFrameCount_;
             this->exitFrameCount_ = fiber->frameCount;
@@ -522,7 +521,7 @@ void VM::registerBuiltinFunctions() {
           this->closeUpvalues(savedStackTop);
 
           while (fiber->frameCount > savedFrameCount) {
-            fiber->frames.pop_back();
+            // 仅递减计数（禁止 pop_back）
             fiber->frameCount--;
           }
 
@@ -579,19 +578,22 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
   protect(Value::object(mainClosure));
 
   currentFiber_->ensureStack(mainClosure->proto->maxStackSize);
+  currentFiber_->ensureFrames(1);
 
-  CallFrame frame;
-  frame.closure = mainClosure;
-  frame.ip = mainClosure->proto->code.data();
-  frame.slotsBase = static_cast<int>(currentFiber_->stackTop - currentFiber_->stack.data());
+  int slotsBaseOffset = static_cast<int>(currentFiber_->stackTop - currentFiber_->stack.data());
 
   for (int i = 0; i < mainClosure->proto->maxStackSize; ++i) {
     currentFiber_->stackTop[i] = Value::nil();
   }
   currentFiber_->stackTop += mainClosure->proto->maxStackSize;
 
-  currentFiber_->frames.push_back(frame);
-  currentFiber_->frameCount = 1;
+  // 使用索引方式入栈帧
+  CallFrame *frame = &currentFiber_->frames[currentFiber_->frameCount++];
+  frame->closure = mainClosure;
+  frame->ip = mainClosure->proto->code.data();
+  frame->slotsBase = slotsBaseOffset;
+  frame->expectedResults = 1;
+  frame->returnBase = 0;
 
   return run();
 }
@@ -613,12 +615,7 @@ InterpretResult VM::call(Closure *closure, int argCount) {
   int slotsBaseOffset = static_cast<int>((fiber->stackTop - argCount) - fiber->stack.data());
 
   fiber->ensureStack(closure->proto->maxStackSize);
-
-  CallFrame newFrame;
-  newFrame.closure = closure;
-  newFrame.ip = closure->proto->code.data();
-  newFrame.expectedResults = 1;
-  newFrame.slotsBase = slotsBaseOffset;
+  fiber->ensureFrames(1);
 
   Value *argsStart = fiber->stack.data() + slotsBaseOffset;
   Value *frameEnd = argsStart + closure->proto->maxStackSize;
@@ -627,8 +624,13 @@ InterpretResult VM::call(Closure *closure, int argCount) {
   }
   fiber->stackTop = frameEnd;
 
-  fiber->frames.push_back(newFrame);
-  fiber->frameCount++;
+  // 使用索引方式入栈帧
+  CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
+  newFrame->closure = closure;
+  newFrame->ip = closure->proto->code.data();
+  newFrame->expectedResults = 1;
+  newFrame->slotsBase = slotsBaseOffset;
+  newFrame->returnBase = 0;
 
   int savedExitFrameCount = exitFrameCount_;
   exitFrameCount_ = fiber->frameCount;
@@ -649,15 +651,15 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
   int frameStartOffset = static_cast<int>(fiber->stackTop - fiber->stack.data());
 
   fiber->ensureStack(mainClosure->proto->maxStackSize);
+  fiber->ensureFrames(1);
 
-  CallFrame frame;
-  frame.closure = mainClosure;
-  frame.ip = mainClosure->proto->code.data();
-  frame.slotsBase = frameStartOffset;
-  frame.expectedResults = 0;
-
-  fiber->frames.push_back(frame);
-  fiber->frameCount++;
+  // 使用索引方式入栈帧
+  CallFrame *frame = &fiber->frames[fiber->frameCount++];
+  frame->closure = mainClosure;
+  frame->ip = mainClosure->proto->code.data();
+  frame->slotsBase = frameStartOffset;
+  frame->expectedResults = 0;
+  frame->returnBase = 0;
 
   Value *frameStart = fiber->stack.data() + frameStartOffset;
   Value *frameEnd = frameStart + mainClosure->proto->maxStackSize;
@@ -696,8 +698,8 @@ InterpretResult VM::run() {
   FiberObject *fiber = currentFiber_;
   CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
 
-  Value *stackStart = fiber->stack.data();
-  Value *slots = stackStart + frame->slotsBase;
+  Value *stackBase = fiber->stack.data();
+  Value *slots = stackBase + frame->slotsBase;
   uint32_t instruction;
 
 #if SPT_USE_COMPUTED_GOTO
@@ -709,10 +711,17 @@ InterpretResult VM::run() {
 #define FRAMES fiber->frames
 #define FRAME_COUNT fiber->frameCount
 
+#define REFRESH_CACHE()                                                                            \
+  do {                                                                                             \
+    stackBase = fiber->stack.data();                                                               \
+    frame = &fiber->frames[fiber->frameCount - 1];                                                 \
+    slots = stackBase + frame->slotsBase;                                                          \
+  } while (0)
+
 #define REFRESH_SLOTS()                                                                            \
   do {                                                                                             \
-    stackStart = fiber->stack.data();                                                              \
-    slots = stackStart + frame->slotsBase;                                                         \
+    stackBase = fiber->stack.data();                                                               \
+    slots = stackBase + frame->slotsBase;                                                          \
   } while (0)
 
   SPT_DISPATCH_LOOP_BEGIN()
@@ -1011,30 +1020,33 @@ InterpretResult VM::run() {
         }
 
         int newSlotsBase = frame->slotsBase + B;
+        int neededStack = newSlotsBase + proto->maxStackSize;
 
-        fiber->ensureStack(proto->maxStackSize);
-        REFRESH_SLOTS();
+        // 安全扩容
+        fiber->ensureStack(neededStack);
+        fiber->ensureFrames(1);
+        REFRESH_CACHE();
 
-        Value *argsStart = stackStart + newSlotsBase;
-
-        CallFrame newFrame;
-        newFrame.closure = closure;
-        newFrame.ip = proto->code.data();
-        newFrame.expectedResults = 0;
-        newFrame.slotsBase = newSlotsBase;
-        newFrame.returnBase = frame->slotsBase + A;
-
+        Value *argsStart = stackBase + newSlotsBase;
         Value *targetStackTop = argsStart + proto->maxStackSize;
+
         for (Value *p = argsStart + providedArgs; p < targetStackTop; ++p) {
           *p = Value::nil();
         }
 
         STACK_TOP = targetStackTop;
-        FRAMES.push_back(newFrame);
-        FRAME_COUNT++;
 
-        frame = &FRAMES[FRAME_COUNT - 1];
-        REFRESH_SLOTS();
+        // 使用索引方式入栈帧（禁止 push_back）
+        CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
+        newFrame->closure = closure;
+        newFrame->ip = proto->code.data();
+        newFrame->expectedResults = 0;
+        newFrame->slotsBase = newSlotsBase;
+        newFrame->returnBase = frame->slotsBase + A;
+
+        // 切换上下文
+        frame = newFrame;
+        slots = stackBase + frame->slotsBase;
 
       } else if (initializer.isNativeFunc()) {
         NativeFunction *native = static_cast<NativeFunction *>(initializer.asGC());
@@ -1345,33 +1357,34 @@ InterpretResult VM::run() {
       }
 
       int newSlotsBase = frame->slotsBase + A + 1;
+      int neededStack = newSlotsBase + proto->maxStackSize;
 
-      fiber->ensureStack(proto->maxStackSize);
+      // 安全扩容
+      fiber->ensureStack(neededStack);
+      fiber->ensureFrames(1);
+      REFRESH_CACHE();
 
-      REFRESH_SLOTS();
-
-      Value *argsStart = stackStart + newSlotsBase;
-
-      CallFrame newFrame;
-      newFrame.closure = closure;
-      newFrame.ip = proto->code.data();
-      newFrame.expectedResults = expectedResults;
-      newFrame.slotsBase = newSlotsBase;
-      newFrame.returnBase = frame->slotsBase + A;
-
+      Value *argsStart = stackBase + newSlotsBase;
       Value *targetStackTop = argsStart + proto->maxStackSize;
 
+      // 填充未使用的参数槽为 nil
       for (Value *p = argsStart + argCount; p < targetStackTop; ++p) {
         *p = Value::nil();
       }
 
       STACK_TOP = targetStackTop;
-      FRAMES.push_back(newFrame);
-      FRAME_COUNT++;
 
-      frame = &FRAMES[FRAME_COUNT - 1];
+      // 使用索引方式入栈帧（禁止 push_back）
+      CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
+      newFrame->closure = closure;
+      newFrame->ip = proto->code.data();
+      newFrame->expectedResults = expectedResults;
+      newFrame->slotsBase = newSlotsBase;
+      newFrame->returnBase = frame->slotsBase + A;
 
-      REFRESH_SLOTS();
+      // 切换上下文
+      frame = newFrame;
+      slots = stackBase + frame->slotsBase;
 
     } else if (callee.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
@@ -1569,20 +1582,14 @@ InterpretResult VM::run() {
       }
 
       int newSlotsBase = frame->slotsBase + A + (dropThis ? 2 : 1);
+      int neededStack = newSlotsBase + proto->maxStackSize;
 
-      fiber->ensureStack(proto->maxStackSize);
+      // 安全扩容
+      fiber->ensureStack(neededStack);
+      fiber->ensureFrames(1);
+      REFRESH_CACHE();
 
-      REFRESH_SLOTS();
-
-      Value *newSlots = stackStart + newSlotsBase;
-
-      CallFrame newFrame;
-      newFrame.closure = closure;
-      newFrame.ip = proto->code.data();
-      newFrame.expectedResults = 1;
-      newFrame.slotsBase = newSlotsBase;
-      newFrame.returnBase = frame->slotsBase + A;
-
+      Value *newSlots = stackBase + newSlotsBase;
       Value *targetStackTop = newSlots + proto->maxStackSize;
 
       int argsPushed = dropThis ? (totalArgsProvided - 1) : totalArgsProvided;
@@ -1592,11 +1599,18 @@ InterpretResult VM::run() {
       }
 
       STACK_TOP = targetStackTop;
-      FRAMES.push_back(newFrame);
-      FRAME_COUNT++;
-      frame = &FRAMES[FRAME_COUNT - 1];
 
-      REFRESH_SLOTS();
+      // 使用索引方式入栈帧（禁止 push_back）
+      CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
+      newFrame->closure = closure;
+      newFrame->ip = proto->code.data();
+      newFrame->expectedResults = 1;
+      newFrame->slotsBase = newSlotsBase;
+      newFrame->returnBase = frame->slotsBase + A;
+
+      // 切换上下文
+      frame = newFrame;
+      slots = stackBase + frame->slotsBase;
     } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
 
@@ -1660,13 +1674,13 @@ InterpretResult VM::run() {
 
     Value *destSlot = nullptr;
     if (!isRootFrame && !isModuleExit) {
-      destSlot = stackStart + frame->returnBase;
+      destSlot = stackBase + frame->returnBase;
     }
 
     closeUpvalues(slots);
 
+    // 仅递减计数（禁止 pop_back）
     FRAME_COUNT--;
-    FRAMES.pop_back();
 
     if (isRootFrame) {
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
@@ -1702,9 +1716,9 @@ InterpretResult VM::run() {
       return InterpretResult::OK;
     }
 
-    frame = &FRAMES[FRAME_COUNT - 1];
-
-    REFRESH_SLOTS();
+    // 恢复上下文（通过索引）
+    frame = &fiber->frames[FRAME_COUNT - 1];
+    slots = stackBase + frame->slotsBase;
 
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
@@ -2025,21 +2039,23 @@ FiberObject *VM::allocateFiber(Closure *closure) {
 
 void VM::initFiberForCall(FiberObject *fiber, Value arg) {
   fiber->stackTop = fiber->stack.data();
-  fiber->frames.clear();
   fiber->frameCount = 0;
   fiber->openUpvalues = nullptr;
 
   const Prototype *proto = fiber->closure->proto;
 
   fiber->ensureStack(proto->maxStackSize);
+  fiber->ensureFrames(1);
 
   *fiber->stackTop++ = arg;
 
-  CallFrame frame;
-  frame.closure = fiber->closure;
-  frame.ip = proto->code.data();
-  frame.slotsBase = 0;
-  frame.expectedResults = 1;
+  // 使用索引方式入栈帧
+  CallFrame *frame = &fiber->frames[fiber->frameCount++];
+  frame->closure = fiber->closure;
+  frame->ip = proto->code.data();
+  frame->slotsBase = 0;
+  frame->expectedResults = 1;
+  frame->returnBase = 0;
 
   Value *frameStart = fiber->stack.data();
   Value *frameEnd = frameStart + proto->maxStackSize;
@@ -2048,8 +2064,6 @@ void VM::initFiberForCall(FiberObject *fiber, Value arg) {
   }
   fiber->stackTop = frameEnd;
 
-  fiber->frames.push_back(frame);
-  fiber->frameCount = 1;
   fiber->state = FiberState::RUNNING;
 }
 
@@ -2097,7 +2111,8 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
 
     fiber->state = FiberState::RUNNING;
 
-    CallFrame *frame = &fiber->frames.back();
+    // 使用索引访问而不是 back()
+    CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
 
     const uint32_t *prevIP = frame->ip - 1;
     uint32_t instruction = *prevIP;
@@ -2455,7 +2470,8 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
   if (f < 0 || f >= fiber->frameCount)
     return 0;
 
-  CallFrame &frame = fiber->frames[fiber->frames.size() - 1 - f];
+  // 使用 frameCount 而不是 size()
+  CallFrame &frame = fiber->frames[fiber->frameCount - 1 - f];
   const Prototype *proto = frame.closure->proto;
 
   while (*what) {
