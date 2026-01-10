@@ -39,8 +39,20 @@ struct ClassObject : GCObject {
   std::string name;
   std::unordered_map<std::string, Value> methods; // 方法表（热更新友好）
   std::unordered_map<std::string, Value> statics; // 静态成员
+  Value gcMethod;                                 // 缓存的 __gc 终结器方法
 
-  ClassObject() { type = ValueType::Class; }
+  ClassObject() : gcMethod(Value::nil()) { type = ValueType::Class; }
+
+  // 检查是否有终结器
+  bool hasFinalizer() const { return !gcMethod.isNil(); }
+
+  // 设置方法（自动检测 __gc）
+  void setMethod(const std::string &name, Value method) {
+    methods[name] = method;
+    if (name == "__gc") {
+      gcMethod = method;
+    }
+  }
 };
 
 // ============================================================================
@@ -49,6 +61,7 @@ struct ClassObject : GCObject {
 struct Instance : GCObject {
   ClassObject *klass;
   std::unordered_map<std::string, Value> fields; // 实例字段
+  bool isFinalized = false;                      // 是否已执行 __gc 终结器
 
   Instance() { type = ValueType::Object; }
 

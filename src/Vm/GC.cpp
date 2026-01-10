@@ -27,7 +27,7 @@ void *GC::allocateRaw(size_t size) {
 void GC::deallocate(GCObject *obj) { freeObject(obj); }
 
 void GC::collect() {
-  if (!enabled_)
+  if (!enabled_ || inFinalizer_)
     return;
 
   size_t before = bytesAllocated_;
@@ -39,6 +39,8 @@ void GC::collect() {
   removeWhiteStrings();
 
   sweep();
+
+  runFinalizers();
 
   threshold_ = static_cast<size_t>(bytesAllocated_ * config_.growthFactor);
   if (threshold_ < config_.initialThreshold) {
@@ -87,6 +89,10 @@ void GC::markRoots() {
 
   if (vm_->moduleManager()) {
     vm_->moduleManager()->markRoots();
+  }
+
+  for (Instance *instance : finalizerQueue_) {
+    markObject(instance);
   }
 }
 
@@ -154,6 +160,10 @@ void GC::traceReferences() {
       for (auto &[name, val] : klass->statics) {
         Value v = val;
         markValue(v);
+      }
+
+      if (!klass->gcMethod.isNil()) {
+        markValue(klass->gcMethod);
       }
       break;
     }
@@ -223,8 +233,20 @@ void GC::sweep() {
       (*pointer)->marked = false;
       pointer = &((*pointer)->next);
     } else {
-
       GCObject *unreached = *pointer;
+
+      if (unreached->type == ValueType::Object) {
+        Instance *instance = static_cast<Instance *>(unreached);
+
+        if (instance->klass && instance->klass->hasFinalizer() && !instance->isFinalized) {
+
+          instance->marked = true;
+          finalizerQueue_.push_back(instance);
+          pointer = &((*pointer)->next);
+          continue;
+        }
+      }
+
       *pointer = unreached->next;
       freeObject(unreached);
     }
@@ -300,6 +322,58 @@ void GC::freeObject(GCObject *obj) {
     break;
   }
   objectCount_--;
+}
+
+void GC::runFinalizers() {
+  if (finalizerQueue_.empty())
+    return;
+
+  inFinalizer_ = true;
+
+  std::vector<Instance *> toFinalize = std::move(finalizerQueue_);
+  finalizerQueue_.clear();
+
+  for (Instance *instance : toFinalize) {
+    if (!instance->isFinalized) {
+      invokeGCMethod(instance);
+      instance->isFinalized = true;
+    }
+
+    instance->marked = false;
+  }
+
+  inFinalizer_ = false;
+}
+
+void GC::invokeGCMethod(Instance *instance) {
+  if (!instance || !instance->klass)
+    return;
+
+  Value gcMethod = instance->klass->gcMethod;
+
+  if (!gcMethod.isClosure())
+    return;
+
+  Closure *closure = static_cast<Closure *>(gcMethod.asGC());
+
+  FiberObject *fiber = vm_->currentFiber();
+  if (!fiber)
+    return;
+
+  Value *savedStackTop = fiber->stackTop;
+  int savedFrameCount = fiber->frameCount;
+
+  fiber->push(Value::object(instance));
+
+  InterpretResult result = vm_->call(closure, 0);
+
+  if (result != InterpretResult::OK) {
+    fiber->stackTop = savedStackTop;
+    fiber->frameCount = savedFrameCount;
+
+    vm_->hasError_ = false;
+    vm_->errorValue_ = Value::nil();
+  }
 }
 
 } // namespace spt

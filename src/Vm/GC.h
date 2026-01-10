@@ -9,6 +9,7 @@ namespace spt {
 // 前置声明
 class VM;
 struct GCObject;
+struct Instance;
 
 // GC 配置
 struct GCConfig {
@@ -58,6 +59,10 @@ private:
   void traceReferences();
   void sweep();
 
+  // === 终结器支持 ===
+  void runFinalizers();                    // 执行待终结对象的 __gc 方法
+  void invokeGCMethod(Instance *instance); // 调用单个对象的 __gc 方法
+
   void freeObject(GCObject *obj);
   void removeWhiteStrings();
 
@@ -68,6 +73,10 @@ private:
   GCObject *objects_ = nullptr;       // 所有对象链表
   std::vector<GCObject *> grayStack_; // 灰色对象栈 (三色标记)
   std::vector<RootVisitor> roots_;    // 额外根集
+
+  // === 终结器队列 ===
+  std::vector<Instance *> finalizerQueue_; // 待执行终结器的对象
+  bool inFinalizer_ = false;               // 是否正在执行终结器（防止递归 GC）
 
   size_t bytesAllocated_ = 0;
   size_t threshold_;
