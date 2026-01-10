@@ -284,8 +284,9 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::Map: {
     MapObject *map = static_cast<MapObject *>(obj);
+
     bytesAllocated_ -=
-        sizeof(MapObject) + (map->entries.capacity() * sizeof(std::pair<Value, Value>));
+        sizeof(MapObject) + (map->entries.max_size() * sizeof(std::pair<Value, Value>));
     delete map;
     break;
   }

@@ -38,33 +38,38 @@ public:
   // 添加普通测试
   void runTest(const std::string &name, const std::string &script,
                const std::string &expectedOutput) {
-    SECTION(name) {
-      bool run_single_test = runSingleTest({name, script, expectedOutput, {}, false});
-      REQUIRE(run_single_test);
-    }
+    init();
+    SECTION(name) { runSingleTest({name, script, expectedOutput, {}, false}); }
   }
 
   // 添加带模块文件的测试
   void runModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
                      const std::string &script, const std::string &expectedOutput,
                      bool expectRuntimeError = false) {
-    SECTION(name) {
-      bool run_single_test =
-          runSingleTest({name, script, expectedOutput, modules, expectRuntimeError});
-      REQUIRE(run_single_test);
-    }
+    init();
+    SECTION(name) { runSingleTest({name, script, expectedOutput, modules, expectRuntimeError}); }
   }
 
   // 添加预期失败的测试 (Negative Test)
   void runFailTest(const std::string &name, const std::string &script) {
-    SECTION(name) {
-      bool run_single_test = runSingleTest({name, script, "", {}, true});
-      REQUIRE(run_single_test);
-    }
+    init();
+    SECTION(name) { runSingleTest({name, script, "", {}, true}); }
   }
 
 private:
   std::string testDir_;
+  bool initialized_ = false;
+
+  void init() {
+    if (initialized_)
+      return;
+    // 准备测试环境目录
+    testDir_ = "./test_env_tmp";
+    if (fs::exists(testDir_))
+      fs::remove_all(testDir_);
+    fs::create_directories(testDir_);
+    initialized_ = true;
+  }
 
   std::string trim(const std::string &str) {
     size_t first = str.find_first_not_of(" \t\n\r");
@@ -103,18 +108,16 @@ private:
     }
   }
 
-  bool runSingleTest(const TestCase &test) {
-    auto start = std::chrono::high_resolution_clock::now();
-
+  void runSingleTest(const TestCase &test) {
     // 0. 环境准备
     setupModules(test.modules);
 
     // 1. 解析
     AstNode *ast = loadAst(test.script, "test_script");
+    REQUIRE(ast);
     if (!ast) {
-      printFail(test.name, "Parse Error", "", "");
       cleanupModules(test.modules);
-      return false;
+      return;
     }
 
     // 2. 编译
@@ -127,10 +130,10 @@ private:
     CompiledChunk chunk = compiler.compile(ast);
     destroyAst(ast); // 编译完成后即可销毁 AST
 
+    REQUIRE(!compiler.hasError());
     if (compiler.hasError()) {
-      printFail(test.name, "Compilation Failed", "", compileErrors);
       cleanupModules(test.modules);
-      return false;
+      return;
     }
 
     // 3. 运行
@@ -140,13 +143,16 @@ private:
     VM vm(config);
 
     std::stringstream capturedOutput;
+    std::stringstream capturedErrors;
     vm.setPrintHandler([&](const std::string &msg) { capturedOutput << msg; });
-    //    spt::BytecodeDumper::dump(chunk);
+    vm.setErrorHandler([&](const std::string &err, int) { capturedErrors << err; });
     InterpretResult result = vm.interpret(chunk);
 
-    // 计时结束
-    auto end = std::chrono::high_resolution_clock::now();
-    double duration = std::chrono::duration<double, std::milli>(end - start).count();
+    std::string actual = trim(capturedOutput.str());
+    std::string errors = trim(capturedErrors.str());
+    std::string expected = trim(test.expectedOutput);
+
+    CAPTURE(test.name, actual, expected, errors);
 
     // 4. 清理环境
     cleanupModules(test.modules);
@@ -155,43 +161,17 @@ private:
 
     // 情况 A: 预期运行时错误
     if (test.expectRuntimeError) {
-      if (result != InterpretResult::OK) {
-        // 成功捕获错误：移除绿色代码
-        std::cout << "[       OK ] " << test.name << " (Expected Error Caught)" << " (" << duration
-                  << " ms)" << std::endl;
-        return true;
-      } else {
-        printFail(test.name, "Expected Runtime Error, but got OK", "Runtime Error", "OK");
-        return false;
-      }
+      REQUIRE(result != InterpretResult::OK);
+      return;
     }
 
     // 情况 B: 正常执行
+    REQUIRE(result == InterpretResult::OK);
     if (result != InterpretResult::OK) {
-      printFail(test.name, "Unexpected Runtime Error", test.expectedOutput, capturedOutput.str());
-      return false;
+      return;
     }
 
-    std::string actual = trim(capturedOutput.str());
-    std::string expected = trim(test.expectedOutput);
-
-    if (actual == expected) {
-      std::cout << "[       OK ] " << test.name << " (" << duration << " ms)" << std::endl;
-      return true;
-    } else {
-      printFail(test.name, "Output Mismatch", expected, actual);
-      return false;
-    }
-  }
-
-  void printFail(const std::string &name, const std::string &reason, const std::string &expected,
-                 const std::string &actual) {
-    std::cout << "🔴 [  FAILED  ] " << name << std::endl;
-    std::cout << "             Reason: " << reason << std::endl;
-    if (!expected.empty() || !actual.empty()) {
-      std::cout << "             Expected: \"" << escapeNewlines(expected) << "\"" << std::endl;
-      std::cout << "             Actual:   \"" << escapeNewlines(actual) << "\"" << std::endl;
-    }
+    REQUIRE(actual == expected);
   }
 };
 } // namespace spt::test

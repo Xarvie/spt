@@ -4,6 +4,7 @@ set(sptscript_library sptscript_library_static)
 add_executable(tests_all
                catch_amalgamated.cpp
                test_all.cpp
+               test_map.cpp
 )
 
 # 链接主库
@@ -95,7 +96,7 @@ add_dependencies(run-tests test_benchmarks)
 option(GENERATE_TEST_REPORTS "Generate test reports in XML format" ON)
 if (GENERATE_TEST_REPORTS)
     add_test(NAME GenerateTestReport
-             COMMAND tests_all -r junit -o test_report.xml
+             COMMAND tests_all --reporter JUnit::out=test_report.xml --reporter console::out=-::colour-mode=ansi
              WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
 

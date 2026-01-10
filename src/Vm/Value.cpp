@@ -89,30 +89,35 @@ bool Value::equals(const Value &other) const {
   }
 }
 
-Value MapObject::get(const Value &key) const {
-  for (const auto &[k, v] : entries) {
-    if (k.equals(key))
-      return v;
-  }
-  return Value::nil();
-}
-
-void MapObject::set(const Value &key, const Value &value) {
-  for (auto &[k, v] : entries) {
-    if (k.equals(key)) {
-      v = value;
-      return;
+size_t Value::hash() const noexcept {
+  switch (type) {
+  case ValueType::Nil:
+    return 0;
+  case ValueType::Bool:
+    return as.boolean ? 1 : 0;
+  case ValueType::Int:
+    return as.integer;
+  case ValueType::Float:
+    return std::hash<double>()(as.number);
+  case ValueType::String:
+    if (as.gc) {
+      return std::hash<std::string>()(static_cast<StringObject *>(as.gc)->data);
     }
+    return 0;
+  default:
+    return std::hash<void *>()(as.gc);
   }
-  entries.emplace_back(key, value);
 }
 
-bool MapObject::has(const Value &key) const {
-  for (const auto &[k, v] : entries) {
-    if (k.equals(key))
-      return true;
-  }
-  return false;
+Value MapObject::get(const Value &key) const {
+  auto it = entries.find(key);
+  if (it == entries.end())
+    return Value::nil();
+  return it->second;
 }
+
+void MapObject::set(const Value &key, const Value &value) { entries[key] = value; }
+
+bool MapObject::has(const Value &key) const { return entries.find(key) != entries.end(); }
 
 } // namespace spt

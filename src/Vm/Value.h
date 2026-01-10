@@ -1,9 +1,20 @@
 #pragma once
 
 #include "../Common/Types.h"
+#include "unordered_dense.h"
 #include <cstdint>
 #include <string>
 #include <vector>
+
+namespace spt {
+struct Value;
+}
+
+namespace std {
+template <> struct hash<spt::Value> {
+  size_t operator()(const spt::Value &v) const noexcept;
+};
+} // namespace std
 
 namespace spt {
 
@@ -146,6 +157,12 @@ struct Value {
   // 比较
   // ========================================================================
   bool equals(const Value &other) const;
+
+  size_t hash() const noexcept;
+
+  friend bool operator==(const Value &lhs, const Value &rhs) { return lhs.equals(rhs); }
+
+  friend bool operator!=(const Value &lhs, const Value &rhs) { return !(lhs == rhs); }
 };
 
 // ============================================================================
@@ -171,8 +188,7 @@ struct ListObject : GCObject {
 // Map 对象
 // ============================================================================
 struct MapObject : GCObject {
-  // 简化实现，生产环境应使用更高效的哈希表
-  std::vector<std::pair<Value, Value>> entries;
+  std::unordered_map<Value, Value> entries;
 
   MapObject() { type = ValueType::Map; }
 
@@ -182,3 +198,7 @@ struct MapObject : GCObject {
 };
 
 } // namespace spt
+
+inline size_t std::hash<spt::Value>::operator()(const spt::Value &v) const noexcept {
+  return v.hash();
+}
