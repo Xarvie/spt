@@ -286,7 +286,7 @@ void GC::freeObject(GCObject *obj) {
     MapObject *map = static_cast<MapObject *>(obj);
 
     bytesAllocated_ -=
-        sizeof(MapObject) + (map->entries.max_size() * sizeof(std::pair<Value, Value>));
+        sizeof(MapObject) + (map->entries.bucket_count() * sizeof(std::pair<Value, Value>));
     delete map;
     break;
   }

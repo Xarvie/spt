@@ -63,6 +63,11 @@ public:
     SECTION(name) { runSingleTest({name, script, "", {}, true}); }
   }
 
+  void runBenchmark(const std::string &name, const std::string &script,
+                    const std::string &expectedOutput) {
+    BENCHMARK(std::string{name}) { runSingleTest({name, script, expectedOutput, {}, false}); };
+  }
+
 private:
   std::string testDir_;
 
