@@ -38,6 +38,7 @@ jobs:
           ls -l build
           cd build
           ls -l bin
+          ls -l lib
 
       - name: Debug (Windows Only)
         if: runner.os == 'Windows'
@@ -45,6 +46,7 @@ jobs:
           dir build
           cd build
           dir bin
+          dir lib
 
       - name: Run tests
         run: |

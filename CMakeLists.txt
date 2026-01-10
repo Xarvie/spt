@@ -15,12 +15,18 @@ set(CMAKE_C_STANDARD  99)
 
 option(BUILD_TESTS "Build tests" ON)          # 默认开启测试
 
-# 设置可执行文件输出目录
+# 设置输出目录
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-
-# 设置库文件输出目录
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+# 覆盖所有配置的输出目录
+foreach(config Debug Release MinSizeRel RelWithDebInfo)
+    string(TOUPPER ${config} config_upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR}/bin)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR}/lib)
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR}/lib)
+endforeach()
 
 if(MSVC)
     add_compile_options(/utf-8)
