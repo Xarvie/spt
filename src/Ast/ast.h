@@ -1,7 +1,7 @@
 #ifndef SPT_AST_CPP_RAWPTR_H
 #define SPT_AST_CPP_RAWPTR_H
 
-#include "Types.h"
+#include "Common/Types.h"
 
 #include <cstdint>    // 用于 int64_t
 #include <functional> // 用于 std::function

@@ -13,6 +13,8 @@ set (ANTLR_VERSION "4.13.1")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD  99)
 
+option(BUILD_TESTS "Build tests" ON)          # 默认开启测试
+
 if(MSVC)
     add_compile_options(/utf-8)
 #    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -29,16 +31,32 @@ PickIncludeDirectories(${CMAKE_CURRENT_SOURCE_DIR}/src/
         includeDirs
         )
 add_subdirectory(runtime)
-add_executable(sptscript ${sourceFiles}
-)
-target_include_directories(sptscript PUBLIC ${includeDirs}
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
-        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
-)
 
-target_link_libraries(sptscript PUBLIC antlr4_static)
-#if(MSVC)
-#    target_compile_options(sptscript PRIVATE /O2 /Zi)
-#    target_link_options(sptscript PRIVATE /DEBUG)
-#    SET_TARGET_PROPERTIES(sptscript PROPERTIES LINK_FLAGS "/PROFILE")
-#endif()
+list(REMOVE_ITEM sourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
+list(REMOVE_ITEM sourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/src/TestRunner.cpp)
+list(REMOVE_ITEM sourceFiles ${CMAKE_CURRENT_SOURCE_DIR}/src/sptscript.cpp)
+
+add_library(sptscript_library_static STATIC ${sourceFiles})
+target_include_directories(sptscript_library_static PUBLIC ${includeDirs}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
+                           ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
+)
+target_link_libraries(sptscript_library_static PUBLIC antlr4_static)
+add_library(sptscript_library_shared SHARED ${sourceFiles})
+
+target_include_directories(sptscript_library_shared PUBLIC ${includeDirs}
+                           ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
+                           ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
+)
+target_link_libraries(sptscript_library_shared PRIVATE antlr4_static)
+
+add_executable(sptscript ${CMAKE_CURRENT_SOURCE_DIR}/src/sptscript.cpp)
+target_link_libraries(sptscript PRIVATE sptscript_library_static)
+
+add_executable(sptscript_test_old ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
+target_link_libraries(sptscript_test_old PRIVATE sptscript_library_static)
+
+if (BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif ()

@@ -47,3 +47,17 @@ jobs:
         run: |
           cd /C/_
           cmake --build build --config Release
+
+      - name: Run tests
+        shell: msys2 {0}
+        run: |
+          cd /C/_
+          cd build
+          ctest --output-on-failure -j4
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: C:/build/Testing/**/*.xml

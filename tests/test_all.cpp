@@ -1,82 +1,6 @@
 #include "TestRunner.h"
+#include "catch_amalgamated.hpp"
 #include <filesystem>
-
-void registerBench(TestRunner &runner) {
-  runner.addTest("Particle Simulation",
-                 R"(
-            class Vector {
-                float x;
-                float y;
-
-                void init(Vector this, float x, float y) {
-                    this.x = x;
-                    this.y = y;
-                }
-
-                void add(Vector this, float dx, float dy) {
-                    this.x += dx;
-                    this.y += dy;
-                }
-            }
-
-            class Particle {
-                Vector pos;
-                Vector vel;
-                int id;
-
-                void init(Particle this, int id) {
-                    this.id = id;
-                    // 嵌套对象创建
-                    this.pos = new Vector(0.0, 0.0);
-                    this.vel = new Vector(1.5, 0.5);
-                }
-
-                void update(Particle this) {
-                    // 核心热点：方法调用 (OP_INVOKE)
-                    this.pos.add(this.vel.x, this.vel.y);
-
-                    // 简单的边界反弹逻辑 (条件跳转)
-                    if (this.pos.x > 100.0) {
-                        this.pos.x = 0.0;
-                    }
-                    if (this.pos.y > 100.0) {
-                        this.pos.y = 0.0;
-                    }
-                }
-
-                float checksum(Particle this) {
-                    return this.pos.x + this.pos.y;
-                }
-            }
-
-            // 1. 初始化容器
-            list<any> systems = [];
-            int count = 2000;
-
-            for (int i = 0; i < count; i += 1) {
-                systems.push(new Particle(i));
-            }
-
-            // 2. 主模拟循环
-            int frames = 1000;
-            for (int f = 0; f < frames; f += 1) {
-                for (int i = 0; i < systems.length; i += 1) {
-                    Particle p = systems[i];
-                    p.update();
-                }
-            }
-
-            // 3. 验证结果
-            float total = 0.0;
-            for (int i = 0; i < systems.length; i += 1) {
-                Particle p = systems[i];
-                total += p.checksum();
-            }
-
-            print(toInt(total));
-       )",
-                 "382000");
-}
 
 // =========================================================
 // 1. 基础语法与运算 (Basics)
@@ -2453,7 +2377,7 @@ void registerStackReallocationTests(TestRunner &runner) {
             // 递归深度 50，在 MAX_FRAMES=64 限制内
             print(deepRecursion(50, 0));
        )",
-                 "1275");  // 1+2+...+50 = 50*51/2 = 1275
+                 "1275"); // 1+2+...+50 = 50*51/2 = 1275
 
   runner.addTest("Stack Realloc - Many Local Variables Per Frame",
                  R"(
@@ -2653,7 +2577,7 @@ void registerStackReallocationTests(TestRunner &runner) {
 
             print(testManyLocals());
        )",
-                 "503");  // 0+9+10+19 + (1+2+...+30) = 38 + 465 = 503
+                 "503"); // 0+9+10+19 + (1+2+...+30) = 38 + 465 = 503
 
   runner.addTest("Stack Realloc - Nested Function Calls with Locals",
                  R"(
@@ -2707,7 +2631,7 @@ void registerStackReallocationTests(TestRunner &runner) {
 
             print(recursiveWithClosure(30, 0));
        )",
-                 "465");  // 1+2+...+30 = 465
+                 "465"); // 1+2+...+30 = 465
 
   runner.addTest("Stack Realloc - Fiber Creating Closures",
                  R"(
@@ -2890,7 +2814,7 @@ void registerStackReallocationTests(TestRunner &runner) {
 
             print(stressTest(10));
        )",
-                 "245");  // 10 * 20 + (0+1+...+9) = 200 + 45 = 245
+                 "245"); // 10 * 20 + (0+1+...+9) = 200 + 45 = 245
 
   runner.addTest("Stack Realloc - return leak",
                  R"(
@@ -2928,10 +2852,8 @@ void registerStackReallocationTests(TestRunner &runner) {
     )",
                  "nil");
 }
-// =========================================================
-// 主函数
-// =========================================================
-int main(int argc, char *argv[]) {
+
+TEST_CASE("old test all", "[old]") {
   TestRunner runner;
   registerBasics(runner);
   registerControlFlow(runner);
@@ -2948,10 +2870,5 @@ int main(int argc, char *argv[]) {
   registerDeferTests(runner);
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
-  runner.runAll();
-
-//    TestRunner runner;
-//    registerBench(runner);
-//    runner.runAll();
-  return 0;
+  REQUIRE(runner.runAll() == 0);
 }

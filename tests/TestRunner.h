@@ -1,5 +1,7 @@
 #pragma once
 
+#include "catch_amalgamated.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -74,7 +76,6 @@ public:
     // 清理环境
     if (fs::exists(testDir_))
       fs::remove_all(testDir_);
-
     std::cout << "==================================================" << std::endl;
     if (passed == total) {
       std::cout << "[  PASSED  ] All " << total << " tests passed." << std::endl;
