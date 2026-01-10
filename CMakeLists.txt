@@ -15,6 +15,13 @@ set(CMAKE_C_STANDARD  99)
 
 option(BUILD_TESTS "Build tests" ON)          # 默认开启测试
 
+# 设置可执行文件输出目录
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+# 设置库文件输出目录
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
 if(MSVC)
     add_compile_options(/utf-8)
 #    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -48,7 +55,9 @@ target_include_directories(sptscript_library_shared PUBLIC ${includeDirs}
                            ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
                            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
 )
-target_link_libraries(sptscript_library_shared PRIVATE antlr4_static)
+target_link_libraries(sptscript_library_shared PRIVATE antlr4_shared)
+target_compile_definitions(sptscript_library_shared PUBLIC SPT_BUILD_AS_DLL)
+target_compile_definitions(sptscript_library_shared PRIVATE SPT_EXPORTS)
 
 add_executable(sptscript ${CMAKE_CURRENT_SOURCE_DIR}/src/sptscript.cpp)
 target_link_libraries(sptscript PRIVATE sptscript_library_static)

@@ -7,6 +7,8 @@
 #include "Module.h"
 #include "Object.h"
 #include "Value.h"
+#include "config.h"
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -42,7 +44,7 @@ struct VMConfig {
 // ============================================================================
 // 虚拟机
 // ============================================================================
-class VM {
+class SPT_API_CLASS VM {
 public:
   friend class GC;
   friend class ModuleManager;

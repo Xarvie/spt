@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <iostream>
 
 int runScript(const char *path) {

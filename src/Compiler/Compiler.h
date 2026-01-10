@@ -8,7 +8,7 @@
 
 namespace spt {
 
-class Compiler {
+class SPT_API_CLASS Compiler {
 public:
   using ErrorHandler = std::function<void(const CompileError &)>;
 

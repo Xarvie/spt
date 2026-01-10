@@ -1,6 +1,7 @@
 #ifndef SPT_AST_CPP_RAWPTR_H
 #define SPT_AST_CPP_RAWPTR_H
 
+#include "Common/config.h"
 #include "Common/Types.h"
 
 #include <cstdint>    // 用于 int64_t
@@ -126,7 +127,7 @@ protected:
 };
 
 // --- AST 节点基类 ---
-class AstNode : public spt::ILineGetter {
+class SPT_API_CLASS AstNode : public spt::ILineGetter {
 public:
   SourceLocation location;
   NodeType nodeType;
@@ -833,11 +834,11 @@ public:
 };
 
 // --- 顶级删除函数 ---
-void destroyAst(AstNode *node);
+SPT_API void destroyAst(AstNode *node);
 
 // 用于加载源码并生成 AST 的工具函数
 // 如果 sourceCode 为空，则读取 filename 文件
 // 如果 sourceCode 不为空，filename 仅作报错显示用
-AstNode *loadAst(const std::string &sourceCode, const std::string &filename);
+SPT_API AstNode *loadAst(const std::string &sourceCode, const std::string &filename);
 
 #endif // SPT_AST_CPP_RAWPTR_H

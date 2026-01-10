@@ -20,8 +20,6 @@
 using namespace spt;
 namespace fs = std::filesystem;
 
-extern AstNode *loadAst(const std::string &sourceCode, const std::string &filename);
-
 class TestRunner {
 public:
   struct ModuleDef {

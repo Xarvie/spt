@@ -1,3 +1,5 @@
+set(sptscript_library sptscript_library_shared)
+
 # 添加可执行文件
 add_executable(tests_all
                catch_amalgamated.cpp
@@ -5,7 +7,7 @@ add_executable(tests_all
 )
 
 # 链接主库
-target_link_libraries(tests_all PRIVATE sptscript_library_static)
+target_link_libraries(tests_all PRIVATE ${sptscript_library})
 
 # 设置包含目录
 target_include_directories(tests_all PRIVATE
@@ -43,17 +45,23 @@ add_executable(test_benchmarks
                test_benchmark.cpp
 )
 
-target_link_libraries(test_benchmarks PRIVATE sptscript_library_static)
+target_link_libraries(test_benchmarks PRIVATE ${sptscript_library})
 target_include_directories(test_benchmarks PRIVATE
                            ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
 # 基准测试需要优化
-target_compile_options(test_benchmarks PRIVATE
-                       $<$<CONFIG:Debug>:-O1>
-                       $<$<CONFIG:Release>:-O2>
-)
-
+if (MSVC)
+    target_compile_options(test_benchmarks PRIVATE
+                           $<$<CONFIG:Debug>:/Od /RTC1>
+                           $<$<CONFIG:Release>:/O2>
+    )
+else ()
+    target_compile_options(test_benchmarks PRIVATE
+                           $<$<CONFIG:Debug>:-O1>
+                           $<$<CONFIG:Release>:-O2>
+    )
+endif ()
 add_test(NAME BenchmarkTests
          COMMAND test_benchmarks "[benchmark]"
          WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
