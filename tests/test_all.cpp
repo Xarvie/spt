@@ -2,11 +2,13 @@
 #include "catch_amalgamated.hpp"
 #include <filesystem>
 
+using namespace spt::test;
+
 // =========================================================
 // 1. 基础语法与运算 (Basics)
 // =========================================================
 void registerBasics(TestRunner &runner) {
-  runner.addTest("Arithmetic Operations",
+  runner.runTest("Arithmetic Operations",
                  R"(
             int a = 10;
             int b = 20;
@@ -19,7 +21,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "50\n60\n25\n2\n-10\n3");
 
-  runner.addTest("Float Arithmetic",
+  runner.runTest("Float Arithmetic",
                  R"(
             float x = 3.14;
             float y = 2.0;
@@ -29,7 +31,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "5.14\n6.28\n2.5");
 
-  runner.addTest("String Concatenation",
+  runner.runTest("String Concatenation",
                  R"(
             string s1 = "Hello";
             string s2 = "World";
@@ -39,7 +41,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "Hello World\nValue: 42\ncount: 100");
 
-  runner.addTest("Boolean Operations",
+  runner.runTest("Boolean Operations",
                  R"(
             bool t = true;
             bool f = false;
@@ -52,7 +54,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "true\nfalse\ntrue\nfalse\nfalse\ntrue");
 
-  runner.addTest("Comparison Operators",
+  runner.runTest("Comparison Operators",
                  R"(
             print(5 == 5);
             print(5 != 3);
@@ -65,7 +67,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue");
 
-  runner.addTest("Logic Short-Circuit",
+  runner.runTest("Logic Short-Circuit",
                  R"(
             bool t = true;
             bool f = false;
@@ -74,7 +76,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "OR OK\nAND OK");
 
-  runner.addTest("Variable Shadowing",
+  runner.runTest("Variable Shadowing",
                  R"(
             int a = 100;
             {
@@ -90,7 +92,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "200\n300\n200\n100");
 
-  runner.addTest("Null and Type Checks",
+  runner.runTest("Null and Type Checks",
                  R"(
             var x = null;
             print(x);
@@ -105,7 +107,7 @@ void registerBasics(TestRunner &runner) {
        )",
                  "nil\nis null\n42\nhello\ntrue");
 
-  runner.addTest("Update Assignment Operators",
+  runner.runTest("Update Assignment Operators",
                  R"(
             int a = 10;
             a += 5;
@@ -127,7 +129,7 @@ void registerBasics(TestRunner &runner) {
 // 2. 控制流 (Control Flow)
 // =========================================================
 void registerControlFlow(TestRunner &runner) {
-  runner.addTest("If-Else Chain",
+  runner.runTest("If-Else Chain",
                  R"(
             int x = 15;
             if (x < 10) {
@@ -154,7 +156,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "medium\nsmall\nlarge");
 
-  runner.addTest("While Loop",
+  runner.runTest("While Loop",
                  R"(
             int i = 0;
             int sum = 0;
@@ -166,7 +168,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "10");
 
-  runner.addTest("For Loop",
+  runner.runTest("For Loop",
                  R"(
             int sum = 0;
             for (int i = 1; i <= 5; i = i + 1) {
@@ -176,7 +178,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "15");
 
-  runner.addTest("Nested Loops",
+  runner.runTest("Nested Loops",
                  R"(
             for (int i = 0; i < 3; i = i + 1) {
                 for (int j = 0; j < 2; j = j + 1) {
@@ -186,7 +188,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "0-0\n0-1\n1-0\n1-1\n2-0\n2-1");
 
-  runner.addTest("Break Statement",
+  runner.runTest("Break Statement",
                  R"(
             for (int i = 0; i < 10; i = i + 1) {
                 if (i == 5) { break; }
@@ -195,7 +197,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "0\n1\n2\n3\n4");
 
-  runner.addTest("Continue Statement",
+  runner.runTest("Continue Statement",
                  R"(
             for (int i = 0; i < 5; i = i + 1) {
                 if (i == 2) { continue; }
@@ -204,7 +206,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "0\n1\n3\n4");
 
-  runner.addTest("Nested Break/Continue",
+  runner.runTest("Nested Break/Continue",
                  R"(
             int i = 0;
             while (i < 3) {
@@ -225,7 +227,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "0-0\n0-2\n2-0\n2-2");
 
-  runner.addTest("Recursion - Fibonacci",
+  runner.runTest("Recursion - Fibonacci",
                  R"(
             int fib(int n) {
                 if (n < 2) { return n; }
@@ -238,7 +240,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "0\n1\n5\n55");
 
-  runner.addTest("Recursion - Factorial",
+  runner.runTest("Recursion - Factorial",
                  R"(
             int factorial(int n) {
                 if (n <= 1) { return 1; }
@@ -251,7 +253,7 @@ void registerControlFlow(TestRunner &runner) {
        )",
                  "1\n1\n120\n5040");
 
-  runner.addTest("Early Return",
+  runner.runTest("Early Return",
                  R"(
             int findFirst(int target) {
                 for (int i = 0; i < 100; i = i + 1) {
@@ -271,7 +273,7 @@ void registerControlFlow(TestRunner &runner) {
 // 3. 函数与闭包 (Functions & Closures)
 // =========================================================
 void registerFunctions(TestRunner &runner) {
-  runner.addTest("Basic Function",
+  runner.runTest("Basic Function",
                  R"(
             int add(int a, int b) {
                 return a + b;
@@ -281,7 +283,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "7\n30");
 
-  runner.addTest("Function with No Return Value",
+  runner.runTest("Function with No Return Value",
                  R"(
             void greet(string name) {
                 print("Hello, " .. name);
@@ -291,7 +293,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "Hello, World\nHello, Claude");
 
-  runner.addTest("Nested Functions",
+  runner.runTest("Nested Functions",
                  R"(
             int outer(int x) {
                 int inner(int y) {
@@ -304,7 +306,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "11\n21");
 
-  runner.addTest("Lambda Expression",
+  runner.runTest("Lambda Expression",
                  R"(
             auto add = function(int a, int b) -> int {
                 return a + b;
@@ -316,7 +318,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "7\n30");
 
-  runner.addTest("Closure Basic",
+  runner.runTest("Closure Basic",
                  R"(
             auto makeCounter = function() -> function {
                 int count = 0;
@@ -332,7 +334,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "1\n2\n3");
 
-  runner.addTest("Multiple Closures Independent",
+  runner.runTest("Multiple Closures Independent",
                  R"(
             auto makeCounter = function() -> function {
                 int count = 0;
@@ -351,7 +353,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "1\n2\n1\n3\n2");
 
-  runner.addTest("Closure Shared State",
+  runner.runTest("Closure Shared State",
                  R"(
             var setter;
             var getter;
@@ -368,7 +370,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "10\n42\n100");
 
-  runner.addTest("Higher-Order Function",
+  runner.runTest("Higher-Order Function",
                  R"(
             int apply(function f, int x) {
                 return f(x);
@@ -380,7 +382,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "10\n25");
 
-  runner.addTest("mutivar Function",
+  runner.runTest("mutivar Function",
                  R"(
             mutivar returnAB(int a, int b) {
                 return a, b;
@@ -390,7 +392,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "1 2");
 
-  runner.addTest("Closure with Multiple Upvalues",
+  runner.runTest("Closure with Multiple Upvalues",
                  R"(
             auto makeAdder = function(int a, int b) -> function {
                 return function(int x) -> int {
@@ -403,7 +405,7 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "18\n28");
 
-  runner.addTest("Deeply Nested Closure",
+  runner.runTest("Deeply Nested Closure",
                  R"(
             auto level1 = function(int a) -> function {
                 return function(int b) -> function {
@@ -423,7 +425,7 @@ void registerFunctions(TestRunner &runner) {
 // 4. 类与对象 (Classes & Objects)
 // =========================================================
 void registerClasses(TestRunner &runner) {
-  runner.addTest("Class Basic",
+  runner.runTest("Class Basic",
                  R"(
             class Point {
                 int x;
@@ -439,7 +441,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "10\n20");
 
-  runner.addTest("Class Methods",
+  runner.runTest("Class Methods",
                  R"(
             class Counter {
                 int value;
@@ -466,7 +468,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "1\n6\n7");
 
-  runner.addTest("Class Method Chaining Style",
+  runner.runTest("Class Method Chaining Style",
                  R"(
             class Point {
                 int x;
@@ -492,7 +494,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "15, 25\n30, 50");
 
-  runner.addTest("Multiple Instances",
+  runner.runTest("Multiple Instances",
                  R"(
             class Box {
                 int value;
@@ -512,7 +514,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "10\n20\n30\n100\n20");
 
-  runner.addTest("Class with Complex Fields",
+  runner.runTest("Class with Complex Fields",
                  R"(
             class Container {
                 any data;
@@ -529,7 +531,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "42\nhello\n2");
 
-  runner.addTest("Circular Reference Safety",
+  runner.runTest("Circular Reference Safety",
                  R"(
             class Node {
                 any next;
@@ -549,7 +551,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "1\n2\n1");
 
-  runner.addTest("Class Without Init",
+  runner.runTest("Class Without Init",
                  R"(
             class Simple {
                 int x;
@@ -562,7 +564,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "30");
 
-  runner.addTest("Method Returning Value",
+  runner.runTest("Method Returning Value",
                  R"(
             class Calculator {
                 int value;
@@ -582,7 +584,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "30\n25");
 
-  runner.addTest("Nested Object Access",
+  runner.runTest("Nested Object Access",
                  R"(
             class Inner {
                 int value;
@@ -601,7 +603,7 @@ void registerClasses(TestRunner &runner) {
        )",
                  "42");
 
-  runner.addTest("Object Receiver",
+  runner.runTest("Object Receiver",
                  R"(
             class Receiver {
                 int value;
@@ -623,7 +625,7 @@ void registerClasses(TestRunner &runner) {
 // 5. 数据结构 - List (Lists)
 // =========================================================
 void registerLists(TestRunner &runner) {
-  runner.addTest("List Basic Operations",
+  runner.runTest("List Basic Operations",
                  R"(
             list<int> l = [1, 2, 3];
             print(l[0]);
@@ -634,7 +636,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "1\n2\n3\n20");
 
-  runner.addTest("List Length",
+  runner.runTest("List Length",
                  R"(
             list<int> l1 = [];
             print(l1.length);
@@ -645,7 +647,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "0\n1\n5");
 
-  runner.addTest("List Push and Pop",
+  runner.runTest("List Push and Pop",
                  R"(
             list<int> l = [];
             l.push(10);
@@ -659,7 +661,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "3\n30\n20\n1\n10");
 
-  runner.addTest("List Insert",
+  runner.runTest("List Insert",
                  R"(
             list<int> l = [1, 3];
             l.insert(1, 2);
@@ -671,7 +673,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "1, 2, 3\n0, 1\n4");
 
-  runner.addTest("List RemoveAt",
+  runner.runTest("List RemoveAt",
                  R"(
             list<int> l = [10, 20, 30, 40];
             int removed = l.removeAt(1);
@@ -681,7 +683,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "20\n3\n10, 30, 40");
 
-  runner.addTest("List Clear",
+  runner.runTest("List Clear",
                  R"(
             list<int> l = [1, 2, 3, 4, 5];
             print(l.length);
@@ -690,7 +692,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "5\n0");
 
-  runner.addTest("List IndexOf",
+  runner.runTest("List IndexOf",
                  R"(
             list<int> l = [10, 20, 30, 20, 40];
             print(l.indexOf(20));
@@ -699,7 +701,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "1\n2\n-1");
 
-  runner.addTest("List Contains",
+  runner.runTest("List Contains",
                  R"(
             list<int> l = [1, 2, 3, 4, 5];
             print(l.contains(3));
@@ -707,7 +709,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "true\nfalse");
 
-  runner.addTest("List Mixed Types",
+  runner.runTest("List Mixed Types",
                  R"(
             list<any> l = [1, "hello", true, 3.14];
             print(l[0]);
@@ -717,7 +719,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "1\nhello\ntrue\n3.14");
 
-  runner.addTest("List Nested",
+  runner.runTest("List Nested",
                  R"(
             list<any> matrix = [[1, 2], [3, 4], [5, 6]];
             print(matrix[0][0]);
@@ -726,7 +728,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "1\n4\n5");
 
-  runner.addTest("List Slice",
+  runner.runTest("List Slice",
                  R"(
             list<int> l = [0, 1, 2, 3, 4, 5];
             list<int> s1 = l.slice(1, 4);
@@ -744,7 +746,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "3\n1,2,3\n0,1\n4,5\n2");
 
-  runner.addTest("List Join",
+  runner.runTest("List Join",
                  R"(
             list<any> l1 = [1, 2, 3];
             print(l1.join(","));
@@ -759,7 +761,7 @@ void registerLists(TestRunner &runner) {
        )",
                  "1,2,3\n1 - 2 - 3\n123\nhello world\n[]");
 
-  runner.addTest("List in Loop",
+  runner.runTest("List in Loop",
                  R"(
             list<int> l = [10, 20, 30, 40, 50];
             int sum = 0;
@@ -775,7 +777,7 @@ void registerLists(TestRunner &runner) {
 // 6. 数据结构 - Map (Maps)
 // =========================================================
 void registerMaps(TestRunner &runner) {
-  runner.addTest("Map Basic Operations",
+  runner.runTest("Map Basic Operations",
                  R"(
             map<string, int> m = {"a": 1, "b": 2};
             print(m["a"]);
@@ -787,7 +789,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "1\n2\n3\n100");
 
-  runner.addTest("Map Size",
+  runner.runTest("Map Size",
                  R"(
             map<string, int> m1 = {};
             print(m1.size);
@@ -798,7 +800,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "0\n1\n3");
 
-  runner.addTest("Map Has",
+  runner.runTest("Map Has",
                  R"(
             map<string, int> m = {"a": 1, "b": 2};
             print(m.has("a"));
@@ -807,7 +809,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "true\ntrue\nfalse");
 
-  runner.addTest("Map Remove",
+  runner.runTest("Map Remove",
                  R"(
             map<string, int> m = {"a": 100, "b": 200, "c": 300};
             int val = m.remove("b");
@@ -817,7 +819,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "200\nfalse\n2");
 
-  runner.addTest("Map Keys",
+  runner.runTest("Map Keys",
                  R"(
             map<string, int> m = {"x": 1, "y": 2};
             list<any> keys = m.keys();
@@ -825,7 +827,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "2");
 
-  runner.addTest("Map Values",
+  runner.runTest("Map Values",
                  R"(
             map<string, int> m = {"a": 10, "b": 20};
             list<any> vals = m.values();
@@ -833,7 +835,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "2");
 
-  runner.addTest("Map Clear",
+  runner.runTest("Map Clear",
                  R"(
             map<string, int> m = {"a": 1, "b": 2, "c": 3};
             print(m.size);
@@ -842,7 +844,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "3\n0");
 
-  runner.addTest("Map Mixed Value Types",
+  runner.runTest("Map Mixed Value Types",
                  R"(
             map<string, any> m = {};
             m["int"] = 42;
@@ -856,7 +858,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "42\nhello\ntrue\n2");
 
-  runner.addTest("Map Nested",
+  runner.runTest("Map Nested",
                  R"(
             map<string, any> outer = {};
             map<string, int> inner = {"x": 10, "y": 20};
@@ -866,7 +868,7 @@ void registerMaps(TestRunner &runner) {
        )",
                  "10\n20");
 
-  runner.addTest("Map Integer Keys",
+  runner.runTest("Map Integer Keys",
                  R"(
             map<int, string> m = {};
             m[1] = "one";
@@ -883,7 +885,7 @@ void registerMaps(TestRunner &runner) {
 // 7. 字符串方法 (String Methods)
 // =========================================================
 void registerStrings(TestRunner &runner) {
-  runner.addTest("String Length",
+  runner.runTest("String Length",
                  R"(
             string s1 = "";
             print(s1.length);
@@ -894,7 +896,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "0\n5\n11");
 
-  runner.addTest("String Slice",
+  runner.runTest("String Slice",
                  R"(
             string s = "hello world";
             print(s.slice(0, 5));
@@ -903,7 +905,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "hello\nworld\nh");
 
-  runner.addTest("String Slice Negative Index",
+  runner.runTest("String Slice Negative Index",
                  R"(
             string s = "hello";
             print(s.slice(-3, 5));
@@ -911,7 +913,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "llo\nhell");
 
-  runner.addTest("String IndexOf",
+  runner.runTest("String IndexOf",
                  R"(
             string s = "hello world";
             print(s.indexOf("world"));
@@ -920,7 +922,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "6\n4\n-1");
 
-  runner.addTest("String Contains",
+  runner.runTest("String Contains",
                  R"(
             string s = "hello world";
             print(s.contains("world"));
@@ -929,7 +931,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "true\ntrue\nfalse");
 
-  runner.addTest("String StartsWith EndsWith",
+  runner.runTest("String StartsWith EndsWith",
                  R"(
             string s = "hello world";
             print(s.startsWith("hello"));
@@ -939,7 +941,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "true\nfalse\ntrue\nfalse");
 
-  runner.addTest("String ToUpper ToLower",
+  runner.runTest("String ToUpper ToLower",
                  R"(
             string s = "Hello World";
             print(s.toUpper());
@@ -947,7 +949,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "HELLO WORLD\nhello world");
 
-  runner.addTest("String Trim",
+  runner.runTest("String Trim",
                  R"(
             string s1 = "  hello  ";
             print("[" .. s1.trim() .. "]");
@@ -956,7 +958,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "[hello]\n[test]");
 
-  runner.addTest("String Split",
+  runner.runTest("String Split",
                  R"(
             string s = "a,b,c,d";
             list<any> parts = s.split(",");
@@ -966,7 +968,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "4\na\nc");
 
-  runner.addTest("String Split Empty Delimiter",
+  runner.runTest("String Split Empty Delimiter",
                  R"(
             string s = "abc";
             list<any> chars = s.split("");
@@ -977,7 +979,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "3\na\nb\nc");
 
-  runner.addTest("String Find",
+  runner.runTest("String Find",
                  R"(
             string s = "hello world";
             print(s.find("world"));
@@ -986,7 +988,7 @@ void registerStrings(TestRunner &runner) {
        )",
                  "6\n4\n-1");
 
-  runner.addTest("String Replace",
+  runner.runTest("String Replace",
                  R"(
             string s1 = "hello world";
             print(s1.replace("world", "there"));
@@ -1007,7 +1009,7 @@ void registerStrings(TestRunner &runner) {
 // 8. 模块系统 (Modules)
 // =========================================================
 void registerModules(TestRunner &runner) {
-  runner.addModuleTest("Import Named", {{"math", R"(
+  runner.runModuleTest("Import Named", {{"math", R"(
                 export int square(int x) { return x * x; }
                 export int cube(int x) { return x * x * x; }
             )"}},
@@ -1018,7 +1020,7 @@ void registerModules(TestRunner &runner) {
         )",
                        "25\n27");
 
-  runner.addModuleTest("Import Namespace", {{"utils", R"(
+  runner.runModuleTest("Import Namespace", {{"utils", R"(
                 export int add(int a, int b) { return a + b; }
                 export int mul(int a, int b) { return a * b; }
             )"}},
@@ -1029,7 +1031,7 @@ void registerModules(TestRunner &runner) {
         )",
                        "7\n12");
 
-  runner.addModuleTest("Import Variables", {{"config", R"(
+  runner.runModuleTest("Import Variables", {{"config", R"(
                 export int MAX_SIZE = 100;
                 export string NAME = "TestApp";
             )"}},
@@ -1040,7 +1042,7 @@ void registerModules(TestRunner &runner) {
         )",
                        "100\nTestApp");
 
-  runner.addModuleTest("Import Class", {{"shapes", R"(
+  runner.runModuleTest("Import Class", {{"shapes", R"(
                 export class Rectangle {
                     int width;
                     int height;
@@ -1060,7 +1062,7 @@ void registerModules(TestRunner &runner) {
         )",
                        "50");
 
-  runner.addModuleTest("Multiple Module Import",
+  runner.runModuleTest("Multiple Module Import",
                        {{"mod_a", "export int valA = 10;"},
                         {"mod_b", "export int valB = 20;"},
                         {"mod_c", "export int valC = 30;"}},
@@ -1072,7 +1074,7 @@ void registerModules(TestRunner &runner) {
         )",
                        "60");
 
-  runner.addModuleTest("Module with Closure", {{"counter_mod", R"(
+  runner.runModuleTest("Module with Closure", {{"counter_mod", R"(
                 export auto makeCounter = function() -> function {
                     int count = 0;
                     return function() -> int {
@@ -1095,7 +1097,7 @@ void registerModules(TestRunner &runner) {
 // 9. OP_INVOKE 特定测试 (Method Invocation)
 // =========================================================
 void registerInvokeTests(TestRunner &runner) {
-  runner.addTest("Invoke - List Methods Chain",
+  runner.runTest("Invoke - List Methods Chain",
                  R"(
             list<int> l = [];
             l.push(1);
@@ -1109,7 +1111,7 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "3\n2\n0");
 
-  runner.addTest("Invoke - Map Methods Chain",
+  runner.runTest("Invoke - Map Methods Chain",
                  R"(
             map<string, int> m = {};
             m["a"] = 1;
@@ -1122,14 +1124,14 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "2\ntrue\nfalse\n1");
 
-  runner.addTest("Invoke - String Methods Chain",
+  runner.runTest("Invoke - String Methods Chain",
                  R"(
             string s = "  HELLO  ";
             print(s.trim().toLower());
        )",
                  "hello");
 
-  runner.addTest("Invoke - Method on Expression Result",
+  runner.runTest("Invoke - Method on Expression Result",
                  R"(
             list<int> getList() {
                 return [1, 2, 3, 4, 5];
@@ -1139,7 +1141,7 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "5\n3");
 
-  runner.addTest("Invoke - Nested Method Calls",
+  runner.runTest("Invoke - Nested Method Calls",
                  R"(
             string s = "hello,world,test";
             list<any> parts = s.split(",");
@@ -1148,7 +1150,7 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "HELLO\n5");
 
-  runner.addTest("Invoke - Class Method Multiple Args",
+  runner.runTest("Invoke - Class Method Multiple Args",
                  R"(
             class Math {
                 int add3(Math this, int a, int b, int c) {
@@ -1164,7 +1166,7 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "6\n24");
 
-  runner.addTest("Invoke - Method Returning Object",
+  runner.runTest("Invoke - Method Returning Object",
                  R"(
             class Builder {
                 list<any> items;
@@ -1189,7 +1191,7 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "3\n2");
 
-  runner.addTest("Invoke - Method with Closure Argument",
+  runner.runTest("Invoke - Method with Closure Argument",
                  R"(
             class Processor {
                 int process(Processor this, function f, int value) {
@@ -1203,7 +1205,7 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "20\n50");
 
-  runner.addTest("Invoke - Recursive Method",
+  runner.runTest("Invoke - Recursive Method",
                  R"(
             class Factorial {
                 int calc(Factorial this, int n) {
@@ -1217,7 +1219,7 @@ void registerInvokeTests(TestRunner &runner) {
        )",
                  "120\n5040");
 
-  runner.addTest("Invoke - Method Modifying Fields",
+  runner.runTest("Invoke - Method Modifying Fields",
                  R"(
             class Stack {
                 list<any> data;
@@ -1250,7 +1252,7 @@ void registerInvokeTests(TestRunner &runner) {
 // 10. 边界情况与回归测试 (Edge Cases & Regressions)
 // =========================================================
 void registerEdgeCases(TestRunner &runner) {
-  runner.addTest("Edge - Empty Structures",
+  runner.runTest("Edge - Empty Structures",
                  R"(
             list<any> emptyList = [];
             map<string, any> emptyMap = {};
@@ -1259,7 +1261,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "0\n0");
 
-  runner.addTest("Edge - Single Element",
+  runner.runTest("Edge - Single Element",
                  R"(
             list<int> l = [42];
             print(l[0]);
@@ -1269,7 +1271,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "42\n1\n42\n0");
 
-  runner.addTest("Edge - Deep Nesting",
+  runner.runTest("Edge - Deep Nesting",
                  R"(
             map<string, any> m = {};
             m["a"] = {};
@@ -1279,7 +1281,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "42");
 
-  runner.addTest("Edge - Large Loop",
+  runner.runTest("Edge - Large Loop",
                  R"(
             int sum = 0;
             for (int i = 0; i < 1000; i = i + 1) {
@@ -1289,7 +1291,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "1000");
 
-  runner.addTest("Edge - Many Function Calls",
+  runner.runTest("Edge - Many Function Calls",
                  R"(
             int identity(int x) { return x; }
             int result = identity(identity(identity(identity(identity(42)))));
@@ -1297,7 +1299,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "42");
 
-  runner.addTest("Edge - String Edge Cases",
+  runner.runTest("Edge - String Edge Cases",
                  R"(
             string empty = "";
             print(empty.length);
@@ -1308,7 +1310,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "0\n\n1\nX");
 
-  runner.addTest("Edge - Boolean as Condition",
+  runner.runTest("Edge - Boolean as Condition",
                  R"(
             bool flag = true;
             if (flag) { print("yes"); }
@@ -1317,7 +1319,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "yes\nelse");
 
-  runner.addTest("Edge - Null Handling",
+  runner.runTest("Edge - Null Handling",
                  R"(
             var x = null;
             if (x) { print("truthy"); } else { print("falsy"); }
@@ -1328,7 +1330,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "falsy\ntruthy\ntruthy");
 
-  runner.addTest("Edge - Numeric Limits",
+  runner.runTest("Edge - Numeric Limits",
                  R"(
             int big = 1000000000;
             print(big * 2);
@@ -1337,7 +1339,7 @@ void registerEdgeCases(TestRunner &runner) {
        )",
                  "2000000000\n-2000000000");
 
-  runner.addTest("Edge - Mixed Expressions",
+  runner.runTest("Edge - Mixed Expressions",
                  R"(
             int a = 5;
             int b = 3;
@@ -1357,7 +1359,7 @@ void registerEdgeCases(TestRunner &runner) {
     multiVarScript += "v" + std::to_string(i);
   }
   multiVarScript += " = 0;\nprint(v0);";
-  runner.addTest("Regression - Multi-Var Declaration (Bug #9)", multiVarScript, "0");
+  runner.runTest("Regression - Multi-Var Declaration (Bug #9)", multiVarScript, "0");
 
   std::string hugeModuleBody = R"(
       export var data = {};
@@ -1365,7 +1367,7 @@ void registerEdgeCases(TestRunner &runner) {
           data["key_" .. i] = "value_" .. i;
       }
   )";
-  runner.addModuleTest("Regression - Module GC Safety", {{"stress_module", hugeModuleBody}},
+  runner.runModuleTest("Regression - Module GC Safety", {{"stress_module", hugeModuleBody}},
                        R"(
           import * as s from "stress_module";
           print("OK");
@@ -1377,7 +1379,7 @@ void registerEdgeCases(TestRunner &runner) {
 // 11. 综合测试 (Integration Tests)
 // =========================================================
 void registerIntegrationTests(TestRunner &runner) {
-  runner.addTest("Integration - Simple Calculator",
+  runner.runTest("Integration - Simple Calculator",
                  R"(
             class Calculator {
                 int value;
@@ -1409,7 +1411,7 @@ void registerIntegrationTests(TestRunner &runner) {
        )",
                  "20");
 
-  runner.addTest("Integration - Linked List",
+  runner.runTest("Integration - Linked List",
                  R"(
             class Node {
                 int value;
@@ -1434,7 +1436,7 @@ void registerIntegrationTests(TestRunner &runner) {
        )",
                  "6");
 
-  runner.addTest("Integration - Word Counter",
+  runner.runTest("Integration - Word Counter",
                  R"(
             string text = "hello world hello";
             list<any> words = text.split(" ");
@@ -1453,7 +1455,7 @@ void registerIntegrationTests(TestRunner &runner) {
        )",
                  "2\n1");
 
-  runner.addTest("Integration - Event System",
+  runner.runTest("Integration - Event System",
                  R"(
             class EventEmitter {
                 list<any> listeners;
@@ -1480,7 +1482,7 @@ void registerIntegrationTests(TestRunner &runner) {
        )",
                  "30");
 
-  runner.addTest("Integration - Binary Search",
+  runner.runTest("Integration - Binary Search",
                  R"(
             int search(list<int> arr, int target) {
                 int left = 0;
@@ -1507,7 +1509,7 @@ void registerIntegrationTests(TestRunner &runner) {
        )",
                  "3\n0\n7\n-1");
 
-  runner.addTest("Integration - Memoized Fibonacci",
+  runner.runTest("Integration - Memoized Fibonacci",
                  R"(
             map<int, int> cache = {};
 
@@ -1525,7 +1527,7 @@ void registerIntegrationTests(TestRunner &runner) {
        )",
                  "55\n6765\n832040");
 
-  runner.addTest("Integration - State Machine",
+  runner.runTest("Integration - State Machine",
                  R"(
             class StateMachine {
                 string state;
@@ -1567,7 +1569,7 @@ void registerIntegrationTests(TestRunner &runner) {
 // =========================================================
 void registerBuiltinFunctions(TestRunner &runner) {
   // 类型转换
-  runner.addTest("Builtin - toInt",
+  runner.runTest("Builtin - toInt",
                  R"(
             print(toInt(3.7));
             print(toInt(3.2));
@@ -1578,7 +1580,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "3\n3\n42\n123\n1\n0");
 
-  runner.addTest("Builtin - toFloat",
+  runner.runTest("Builtin - toFloat",
                  R"(
             print(toFloat(42));
             print(toFloat("3.14"));
@@ -1586,7 +1588,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "42\n3.14\n1");
 
-  runner.addTest("Builtin - toString",
+  runner.runTest("Builtin - toString",
                  R"(
             print(toString(42));
             print(toString(true));
@@ -1595,7 +1597,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "42\ntrue\nfalse\nnil");
 
-  runner.addTest("Builtin - toBool",
+  runner.runTest("Builtin - toBool",
                  R"(
             print(toBool(1));
             print(toBool(0));
@@ -1606,7 +1608,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
                  "true\ntrue\ntrue\ntrue\nfalse");
 
   // 类型检查
-  runner.addTest("Builtin - Type Checks",
+  runner.runTest("Builtin - Type Checks",
                  R"(
             print(isInt(42));
             print(isInt(3.14));
@@ -1623,7 +1625,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "true\nfalse\ntrue\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse");
 
-  runner.addTest("Builtin - typeOf",
+  runner.runTest("Builtin - typeOf",
                  R"(
             print(typeOf(42));
             print(typeOf(3.14));
@@ -1635,7 +1637,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "int\nfloat\nstring\nbool\nnil\nlist\nmap");
 
-  runner.addTest("Builtin - isList isMap isFunction",
+  runner.runTest("Builtin - isList isMap isFunction",
                  R"(
             print(isList([1, 2, 3]));
             print(isList("not a list"));
@@ -1648,7 +1650,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
                  "true\nfalse\ntrue\nfalse\ntrue\nfalse");
 
   // 数学函数
-  runner.addTest("Builtin - Math Functions",
+  runner.runTest("Builtin - Math Functions",
                  R"(
             print(abs(-5));
             print(abs(5));
@@ -1663,7 +1665,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "5\n5\n3.14\n3\n3\n4\n4\n3\n4\n4");
 
-  runner.addTest("Builtin - sqrt pow",
+  runner.runTest("Builtin - sqrt pow",
                  R"(
             print(toInt(sqrt(16)));
             print(toInt(sqrt(9)));
@@ -1672,7 +1674,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "4\n3\n1024\n27");
 
-  runner.addTest("Builtin - min max",
+  runner.runTest("Builtin - min max",
                  R"(
             print(min(3, 7));
             print(min(10, 2));
@@ -1684,7 +1686,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
                  "3\n2\n7\n10\n-5\n5");
 
   // 实用函数
-  runner.addTest("Builtin - len",
+  runner.runTest("Builtin - len",
                  R"(
             print(len("hello"));
             print(len([1, 2, 3, 4]));
@@ -1694,7 +1696,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "5\n4\n2\n0\n0");
 
-  runner.addTest("Builtin - char ord",
+  runner.runTest("Builtin - char ord",
                  R"(
             print(char(65));
             print(char(97));
@@ -1704,7 +1706,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "A\na\n65\n97\n48");
 
-  runner.addTest("Builtin - range",
+  runner.runTest("Builtin - range",
                  R"(
             list<int> r1 = range(0, 5);
             print(r1.length);
@@ -1720,7 +1722,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
        )",
                  "5\n0,4\n5\n1,5\n5\n5,1");
 
-  runner.addTest("Builtin - pcall",
+  runner.runTest("Builtin - pcall",
                  R"(
             int divide(int a, int b){
               if(b == 0){ error("division by zero"); }
@@ -1739,7 +1741,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
 // 13. Defer语句测试 (Defer Statement)
 // =========================================================
 void registerDeferTests(TestRunner &runner) {
-  runner.addTest("Defer - Basic Execution Order",
+  runner.runTest("Defer - Basic Execution Order",
                  R"(
             list<string> logs = [];
             void run() {
@@ -1752,7 +1754,7 @@ void registerDeferTests(TestRunner &runner) {
        )",
                  "start,second,first");
 
-  runner.addTest("Defer - With Return Statement",
+  runner.runTest("Defer - With Return Statement",
                  R"(
             int testReturn() {
                 defer { print("deferred"); }
@@ -1763,7 +1765,7 @@ void registerDeferTests(TestRunner &runner) {
        )",
                  "returning\ndeferred\n42");
 
-  runner.addTest("Defer - Modifying Side Effects",
+  runner.runTest("Defer - Modifying Side Effects",
                  R"(
             int global1 = 0;
             void sideEffect() {
@@ -1776,7 +1778,7 @@ void registerDeferTests(TestRunner &runner) {
        )",
                  "0\n100");
 
-  runner.addTest("Defer - Closure Capture",
+  runner.runTest("Defer - Closure Capture",
                  R"(
             void captureTest() {
                 int x = 10;
@@ -1790,7 +1792,7 @@ void registerDeferTests(TestRunner &runner) {
        )",
                  "20");
 
-  runner.addTest("Defer - Inside Control Flow (Function Scope)",
+  runner.runTest("Defer - Inside Control Flow (Function Scope)",
                  R"(
             void scopeTest() {
                 if (true) {
@@ -1804,7 +1806,7 @@ void registerDeferTests(TestRunner &runner) {
        )",
                  "inside block\noutside block\ndeferred");
 
-  runner.addTest("Defer - Argument Evaluation",
+  runner.runTest("Defer - Argument Evaluation",
                  R"(
              // 测试 defer 内部的代码是在最后执行的，而不是定义时执行
             void evalTime() {
@@ -1818,7 +1820,7 @@ void registerDeferTests(TestRunner &runner) {
        )",
                  "correct");
 
-  runner.addTest("Defer - Nested Defers",
+  runner.runTest("Defer - Nested Defers",
                  R"(
             void nested() {
                 defer {
@@ -1837,7 +1839,7 @@ void registerFiberTests(TestRunner &runner) {
   // 基础功能测试
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Basic Creation",
+  runner.runTest("Fiber - Basic Creation",
                  R"(
             auto f = Fiber.create(function(int x) -> int {
                 return x * 2;
@@ -1846,7 +1848,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "fiber");
 
-  runner.addTest("Fiber - Simple Call",
+  runner.runTest("Fiber - Simple Call",
                  R"(
             auto f = Fiber.create(function(int x) -> int {
                 return x + 10;
@@ -1856,7 +1858,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "15");
 
-  runner.addTest("Fiber - isDone after completion",
+  runner.runTest("Fiber - isDone after completion",
                  R"(
             auto f = Fiber.create(function(int x) -> int {
                 return x;
@@ -1871,7 +1873,7 @@ void registerFiberTests(TestRunner &runner) {
   // Yield 测试
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Single Yield",
+  runner.runTest("Fiber - Single Yield",
                  R"(
             auto f = Fiber.create(function(int x) -> int {
                 Fiber.yield(x * 2);
@@ -1884,7 +1886,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "20\nfalse\n30\ntrue");
 
-  runner.addTest("Fiber - Multiple Yields",
+  runner.runTest("Fiber - Multiple Yields",
                  R"(
             auto f = Fiber.create(function(any _) -> string {
                 Fiber.yield("first");
@@ -1900,7 +1902,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "first\nsecond\nthird\ndone\ntrue");
 
-  runner.addTest("Fiber - Yield with Value Passing",
+  runner.runTest("Fiber - Yield with Value Passing",
                  R"(
             // 计数器 fiber：接收增量，返回当前值
             auto counter = Fiber.create(function(int start) -> int {
@@ -1921,7 +1923,7 @@ void registerFiberTests(TestRunner &runner) {
   // 生成器模式
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Generator Pattern",
+  runner.runTest("Fiber - Generator Pattern",
                  R"(
             auto range = function(int start, int end) -> any {
                 return Fiber.create(function(any _) -> int {
@@ -1944,7 +1946,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "0,1,2,3,4,");
 
-  runner.addTest("Fiber - Fibonacci Generator",
+  runner.runTest("Fiber - Fibonacci Generator",
                  R"(
             auto fibGen = Fiber.create(function(int n) -> int {
                 int a = 0;
@@ -1972,7 +1974,7 @@ void registerFiberTests(TestRunner &runner) {
   // 错误处理
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Abort",
+  runner.runTest("Fiber - Abort",
                  R"(
             auto f = Fiber.create(function(any _) -> string {
                 Fiber.yield("before");
@@ -1986,7 +1988,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "before\ntrue\nsomething went wrong");
 
-  runner.addTest("Fiber - Error Property",
+  runner.runTest("Fiber - Error Property",
                  R"(
             auto f = Fiber.create(function(any _) -> int {
                 Fiber.abort("test error");
@@ -1999,7 +2001,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "nil\ntest error\ntrue");
 
-  runner.addTest("Fiber - Try Catches Error",
+  runner.runTest("Fiber - Try Catches Error",
                  R"(
             auto f = Fiber.create(function(any _) -> int {
                 Fiber.abort("oops");
@@ -2015,7 +2017,7 @@ void registerFiberTests(TestRunner &runner) {
   // Fiber.current
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Current",
+  runner.runTest("Fiber - Current",
                  R"(
             auto f = Fiber.create(function(any _) -> string {
                 var me = Fiber.current;
@@ -2029,7 +2031,7 @@ void registerFiberTests(TestRunner &runner) {
   // 协作式多任务
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Cooperative Multitasking",
+  runner.runTest("Fiber - Cooperative Multitasking",
                  R"(
             list<string> log = [];
 
@@ -2058,7 +2060,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "T1-1,T2-1,T1-2,T2-2,T1-3");
 
-  runner.addTest("Fiber - Round Robin Scheduler",
+  runner.runTest("Fiber - Round Robin Scheduler",
                  R"(
             list<string> output = [];
 
@@ -2097,7 +2099,7 @@ void registerFiberTests(TestRunner &runner) {
   // 状态机
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - State Machine",
+  runner.runTest("Fiber - State Machine",
                  R"(
             // 使用 Fiber 实现简单的状态机
             auto trafficLight = Fiber.create(function(any _) -> string {
@@ -2120,7 +2122,7 @@ void registerFiberTests(TestRunner &runner) {
   // 嵌套 Fiber
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Nested Fiber Calls",
+  runner.runTest("Fiber - Nested Fiber Calls",
                  R"(
             auto inner = Fiber.create(function(int x) -> int {
                 return x * 2;
@@ -2140,7 +2142,7 @@ void registerFiberTests(TestRunner &runner) {
   // 闘包与 Fiber
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Closure Capture",
+  runner.runTest("Fiber - Closure Capture",
                  R"(
             int counter = 0;
 
@@ -2160,7 +2162,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "1\n2\n3\n3");
 
-  runner.addTest("Fiber - Factory with Closure",
+  runner.runTest("Fiber - Factory with Closure",
                  R"(
             auto makeAccumulator = function(int initial) -> any {
                 int sum = initial;
@@ -2184,7 +2186,7 @@ void registerFiberTests(TestRunner &runner) {
   // 边界情况
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Call Completed Fiber",
+  runner.runTest("Fiber - Call Completed Fiber",
                  R"(
             auto f = Fiber.create(function(any _) -> int {
                 return 42;
@@ -2197,7 +2199,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "42\ntrue\ntrue");
 
-  runner.addTest("Fiber - Yield Nil",
+  runner.runTest("Fiber - Yield Nil",
                  R"(
             auto f = Fiber.create(function(any _) -> any {
                 Fiber.yield(null);
@@ -2209,7 +2211,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "true\ndone");
 
-  runner.addTest("Fiber - Empty Function",
+  runner.runTest("Fiber - Empty Function",
                  R"(
             auto f = Fiber.create(function(any _) -> any {
                 return null;
@@ -2224,7 +2226,7 @@ void registerFiberTests(TestRunner &runner) {
   // 复杂场景
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Pipeline Processing",
+  runner.runTest("Fiber - Pipeline Processing",
                  R"(
             // 数据处理管道
             auto producer = Fiber.create(function(any _) -> int {
@@ -2252,7 +2254,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "2,4,6,8,10");
 
-  runner.addTest("Fiber - Suspend without Value",
+  runner.runTest("Fiber - Suspend without Value",
                  R"(
             auto f = Fiber.create(function(any _) -> string {
                 print("before suspend");
@@ -2270,7 +2272,7 @@ void registerFiberTests(TestRunner &runner) {
   // 与其他特性的交互
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - With List Operations",
+  runner.runTest("Fiber - With List Operations",
                  R"(
             auto listProcessor = Fiber.create(function(list<int> items) -> int {
                 for (int i = 0; i < items.length; i = i + 1) {
@@ -2289,7 +2291,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "1,4,9,16,25");
 
-  runner.addTest("Fiber - With Map",
+  runner.runTest("Fiber - With Map",
                  R"(
             auto f = Fiber.create(function(map<string, int> data) -> string {
                 list<string> keys = data.keys();
@@ -2315,7 +2317,7 @@ void registerFiberTests(TestRunner &runner) {
   // 性能相关（简单压力测试）
   // ---------------------------------------------------------
 
-  runner.addTest("Fiber - Many Yields",
+  runner.runTest("Fiber - Many Yields",
                  R"(
             auto f = Fiber.create(function(int n) -> int {
                 int sum = 0;
@@ -2339,7 +2341,7 @@ void registerFiberTests(TestRunner &runner) {
        )",
                  "100\n4950");
 
-  runner.addTest("Fiber - Multiple Fibers",
+  runner.runTest("Fiber - Multiple Fibers",
                  R"(
             int sum = 0;
             for (int i = 0; i < 10; i = i + 1) {
@@ -2367,7 +2369,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 1. 触发栈（Value数组）扩容，而非帧数限制
   // ---------------------------------------------------------
 
-  runner.addTest("Stack Realloc - Deep Recursion",
+  runner.runTest("Stack Realloc - Deep Recursion",
                  R"(
             // 使用尾递归风格，递归深度控制在 MAX_FRAMES 以内
             int deepRecursion(int n, int acc) {
@@ -2379,7 +2381,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "1275"); // 1+2+...+50 = 50*51/2 = 1275
 
-  runner.addTest("Stack Realloc - Many Local Variables Per Frame",
+  runner.runTest("Stack Realloc - Many Local Variables Per Frame",
                  R"(
             // 每个帧使用大量局部变量，触发栈空间扩容
             int testManyLocals(int depth) {
@@ -2402,7 +2404,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 2. UpValue 在栈扩容后的正确性
   // ---------------------------------------------------------
 
-  runner.addTest("Stack Realloc - UpValue After Growth",
+  runner.runTest("Stack Realloc - UpValue After Growth",
                  R"(
             // 创建捕获局部变量的闭包，然后触发栈扩容
             auto makeCounter = function() -> function {
@@ -2429,7 +2431,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "1\n2\n3");
 
-  runner.addTest("Stack Realloc - Multiple UpValues",
+  runner.runTest("Stack Realloc - Multiple UpValues",
                  R"(
             auto makeAdder = function(int base) -> function {
                 int a = base;
@@ -2453,7 +2455,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "61\n62");
 
-  runner.addTest("Stack Realloc - Nested Closures with UpValues",
+  runner.runTest("Stack Realloc - Nested Closures with UpValues",
                  R"(
             auto outer = function() -> function {
                 int x = 100;
@@ -2483,7 +2485,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 3. Fiber 中的栈使用
   // ---------------------------------------------------------
 
-  runner.addTest("Stack Realloc - Fiber Deep Call",
+  runner.runTest("Stack Realloc - Fiber Deep Call",
                  R"(
             auto f = Fiber.create(function(int n) -> int {
                 int deepSum(int m, int acc) {
@@ -2497,7 +2499,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "820");
 
-  runner.addTest("Stack Realloc - Fiber Yield After Stack Use",
+  runner.runTest("Stack Realloc - Fiber Yield After Stack Use",
                  R"(
             auto f = Fiber.create(function(any _) -> int {
                 int x = 10;
@@ -2523,7 +2525,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "10\n10\n20\n25");
 
-  runner.addTest("Stack Realloc - Fiber with UpValue",
+  runner.runTest("Stack Realloc - Fiber with UpValue",
                  R"(
             int shared = 0;
 
@@ -2555,7 +2557,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 4. 大量局部变量场景
   // ---------------------------------------------------------
 
-  runner.addTest("Stack Realloc - Many Local Variables",
+  runner.runTest("Stack Realloc - Many Local Variables",
                  R"(
             int testManyLocals() {
                 int a0 = 0; int a1 = 1; int a2 = 2; int a3 = 3; int a4 = 4;
@@ -2579,7 +2581,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "503"); // 0+9+10+19 + (1+2+...+30) = 38 + 465 = 503
 
-  runner.addTest("Stack Realloc - Nested Function Calls with Locals",
+  runner.runTest("Stack Realloc - Nested Function Calls with Locals",
                  R"(
             int level1(int n) {
                 int x1 = n;
@@ -2616,7 +2618,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 5. 混合场景：闭包 + 递归
   // ---------------------------------------------------------
 
-  runner.addTest("Stack Realloc - Closure in Recursion",
+  runner.runTest("Stack Realloc - Closure in Recursion",
                  R"(
             int recursiveWithClosure(int n, int acc) {
                 auto add = function(int x) -> int {
@@ -2633,7 +2635,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "465"); // 1+2+...+30 = 465
 
-  runner.addTest("Stack Realloc - Fiber Creating Closures",
+  runner.runTest("Stack Realloc - Fiber Creating Closures",
                  R"(
             auto f = Fiber.create(function(int count) -> int {
                 list<function> closures = [];
@@ -2665,7 +2667,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "90");
 
-  runner.addTest("Stack Realloc - Multiple Fibers Interleaved",
+  runner.runTest("Stack Realloc - Multiple Fibers Interleaved",
                  R"(
             auto makeRecursiveFiber = function(int id) -> any {
                 return Fiber.create(function(int depth) -> int {
@@ -2697,7 +2699,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 6. defer 与栈使用
   // ---------------------------------------------------------
 
-  runner.addTest("Defer After Recursion",
+  runner.runTest("Defer After Recursion",
                  R"(
             list<string> logs = [];
 
@@ -2718,7 +2720,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "22\nbottom\ndefer-20");
 
-  runner.addTest("Stack Realloc - Defer with Closure",
+  runner.runTest("Stack Realloc - Defer with Closure",
                  R"(
             int result = 0;
 
@@ -2743,7 +2745,7 @@ void registerStackReallocationTests(TestRunner &runner) {
   // 7. 边界情况
   // ---------------------------------------------------------
 
-  runner.addTest("Stack Realloc - Empty Fiber Resume",
+  runner.runTest("Stack Realloc - Empty Fiber Resume",
                  R"(
             auto f = Fiber.create(function(any _) -> int {
                 int deep(int n) {
@@ -2758,7 +2760,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "42\ntrue");
 
-  runner.addTest("Stack Realloc - Closure Outlives Stack Frame",
+  runner.runTest("Stack Realloc - Closure Outlives Stack Frame",
                  R"(
             auto createClosures = function() -> list<function> {
                 list<function> result = [];
@@ -2788,7 +2790,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "100");
 
-  runner.addTest("Stack Realloc - Stress Test0",
+  runner.runTest("Stack Realloc - Stress Test0",
                  R"(
             // 组合多种操作
             int stressTest(int iterations) {
@@ -2816,7 +2818,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "245"); // 10 * 20 + (0+1+...+9) = 200 + 45 = 245
 
-  runner.addTest("Stack Realloc - return leak",
+  runner.runTest("Stack Realloc - return leak",
                  R"(
         class SecurityVault {
             void clearCache(string password) {
@@ -2836,7 +2838,7 @@ void registerStackReallocationTests(TestRunner &runner) {
        )",
                  "nil");
 
-  runner.addTest("Return Leak Check - Lambda",
+  runner.runTest("Return Leak Check - Lambda",
                  R"(
     auto leakTest = function(int secret) -> void {
     };
@@ -2870,5 +2872,4 @@ TEST_CASE("old test all", "[old]") {
   registerDeferTests(runner);
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
-  REQUIRE(runner.runAll() == 0);
 }

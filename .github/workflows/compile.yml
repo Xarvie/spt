@@ -32,26 +32,10 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      - name: Debug (Linux Only)
-        if: runner.os == 'Linux'
-        run: |
-          ls -l build
-          cd build
-          ls -l bin
-          ls -l lib
-
-      - name: Debug (Windows Only)
-        if: runner.os == 'Windows'
-        run: |
-          dir build
-          cd build
-          dir bin
-          dir lib
-
       - name: Run tests
         run: |
           cd build
-          ctest --output-on-failure -j4
+          ctest -C Release --output-on-failure -j4
 
       - name: Upload test results
         uses: actions/upload-artifact@v4

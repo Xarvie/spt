@@ -17,7 +17,7 @@
 #include "Compiler/Compiler.h"
 #include "Vm/VM.h"
 
-using namespace spt;
+namespace spt::test {
 namespace fs = std::filesystem;
 
 class TestRunner {
@@ -36,56 +36,34 @@ public:
   };
 
   // 添加普通测试
-  void addTest(const std::string &name, const std::string &script,
+  void runTest(const std::string &name, const std::string &script,
                const std::string &expectedOutput) {
-    tests_.push_back({name, script, expectedOutput, {}, false});
+    SECTION(name) {
+      bool run_single_test = runSingleTest({name, script, expectedOutput, {}, false});
+      REQUIRE(run_single_test);
+    }
   }
 
   // 添加带模块文件的测试
-  void addModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
+  void runModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
                      const std::string &script, const std::string &expectedOutput,
                      bool expectRuntimeError = false) {
-    tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError});
+    SECTION(name) {
+      bool run_single_test =
+          runSingleTest({name, script, expectedOutput, modules, expectRuntimeError});
+      REQUIRE(run_single_test);
+    }
   }
 
   // 添加预期失败的测试 (Negative Test)
-  void addFailTest(const std::string &name, const std::string &script) {
-    tests_.push_back({name, script, "", {}, true});
-  }
-
-  int runAll() {
-    int passed = 0;
-    int total = tests_.size();
-
-    // 准备测试环境目录
-    testDir_ = "./test_env_tmp";
-    if (fs::exists(testDir_))
-      fs::remove_all(testDir_);
-    fs::create_directories(testDir_);
-
-    std::cout << "Running " << total << " tests..." << std::endl;
-
-    for (const auto &test : tests_) {
-      if (runSingleTest(test)) {
-        passed++;
-      }
+  void runFailTest(const std::string &name, const std::string &script) {
+    SECTION(name) {
+      bool run_single_test = runSingleTest({name, script, "", {}, true});
+      REQUIRE(run_single_test);
     }
-
-    // 清理环境
-    if (fs::exists(testDir_))
-      fs::remove_all(testDir_);
-    std::cout << "==================================================" << std::endl;
-    if (passed == total) {
-      std::cout << "[  PASSED  ] All " << total << " tests passed." << std::endl;
-    } else {
-      std::cout << "🔴 [  FAILED  ] " << (total - passed) << " tests failed." << std::endl;
-    }
-
-    return (passed == total) ? 0 : 1;
   }
 
 private:
-  std::vector<TestCase> tests_;
   std::string testDir_;
 
   std::string trim(const std::string &str) {
@@ -198,7 +176,6 @@ private:
     std::string expected = trim(test.expectedOutput);
 
     if (actual == expected) {
-      // 成功：移除绿色代码
       std::cout << "[       OK ] " << test.name << " (" << duration << " ms)" << std::endl;
       return true;
     } else {
@@ -217,3 +194,4 @@ private:
     }
   }
 };
+} // namespace spt::test

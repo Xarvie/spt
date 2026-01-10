@@ -1,11 +1,13 @@
 
 #include "catch_amalgamated.hpp"
 
-#include <TestRunner.h>
+#include "TestRunner.h"
+
+using namespace spt::test;
 
 TEST_CASE("old test all", "[benchmark][old]") {
   TestRunner runner;
-  runner.addTest("Particle Simulation",
+  runner.runTest("Particle Simulation",
                  R"(
             class Vector {
                 float x;
@@ -79,5 +81,4 @@ TEST_CASE("old test all", "[benchmark][old]") {
             print(toInt(total));
        )",
                  "382000");
-  REQUIRE(runner.runAll() == 0);
 }
