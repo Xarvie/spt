@@ -1345,7 +1345,7 @@ InterpretResult VM::run() {
       Closure *closure = static_cast<Closure *>(callee.asGC());
       const Prototype *proto = closure->proto;
 
-      if (!proto->isVararg && argCount != proto->numParams) {
+      if (argCount != proto->numParams && !proto->isVararg) {
         runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
                      proto->numParams, argCount);
         return InterpretResult::RUNTIME_ERROR;
