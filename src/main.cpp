@@ -1,4 +1,5 @@
 #include "TestRunner.h"
+#include "Vm/NativeBinding.h"
 #include <filesystem>
 
 void registerBench(TestRunner &runner) {
@@ -78,6 +79,20 @@ void registerBench(TestRunner &runner) {
                  "382000");
 }
 
+void registerMapBench(TestRunner &runner) {
+  runner.addTest("Map RW Bench",
+                 R"(
+             map<string, int> m = {};
+
+             for (int i = 0; i < 10000000; i = i + 1) {
+                m[toString(i)] = i;
+                m[toString(i+1)] = m[toString(i)];
+             }
+             print(m.size);
+       )",
+                 "10000001");
+}
+
 void registerFib40Bench(TestRunner &runner) {
   runner.addTest("Recursion - Fibonacci",
                  R"(
@@ -88,6 +103,514 @@ void registerFib40Bench(TestRunner &runner) {
             print(fib(40));
        )",
                  "102334155");
+}
+
+// ----------------------------------------------------------------------------
+// Example 1: Vector3 类 - 演示属性、方法、静态方法
+// ----------------------------------------------------------------------------
+class Vector3 {
+public:
+  double x, y, z;
+
+  Vector3() : x(0), y(0), z(0) {}
+
+  Vector3(double x, double y, double z) : x(x), y(y), z(z) {}
+
+  double length() const { return std::sqrt(x * x + y * y + z * z); }
+
+  void normalize() {
+    double len = length();
+    if (len > 0) {
+      x /= len;
+      y /= len;
+      z /= len;
+    }
+  }
+
+  Vector3 add(const Vector3 &other) const { return Vector3(x + other.x, y + other.y, z + other.z); }
+
+  double dot(const Vector3 &other) const { return x * other.x + y * other.y + z * other.z; }
+
+  Vector3 scale(double s) const { return Vector3(x * s, y * s, z * s); }
+};
+
+// Vector3 注册函数
+void registerVector3(VM *vm) {
+  NativeClassBuilder<Vector3>(vm, "Vector3")
+      // 构造函数
+      .constructor([](VM *vm, int argc, Value *argv) -> void * {
+        double x = (argc > 0 && argv[0].isNumber()) ? argv[0].asNumber() : 0.0;
+        double y = (argc > 1 && argv[1].isNumber()) ? argv[1].asNumber() : 0.0;
+        double z = (argc > 2 && argv[2].isNumber()) ? argv[2].asNumber() : 0.0;
+        return new Vector3(x, y, z);
+      })
+      .defaultDestructor()
+
+      // 可读写属性 x, y, z
+      .property(
+          "x",
+          [](VM *vm, NativeInstance *inst) -> Value {
+            return Value::number(inst->as<Vector3>()->x);
+          },
+          [](VM *vm, NativeInstance *inst, Value value) {
+            inst->as<Vector3>()->x = value.isNumber() ? value.asNumber() : 0.0;
+          })
+      .property(
+          "y",
+          [](VM *vm, NativeInstance *inst) -> Value {
+            return Value::number(inst->as<Vector3>()->y);
+          },
+          [](VM *vm, NativeInstance *inst, Value value) {
+            inst->as<Vector3>()->y = value.isNumber() ? value.asNumber() : 0.0;
+          })
+      .property(
+          "z",
+          [](VM *vm, NativeInstance *inst) -> Value {
+            return Value::number(inst->as<Vector3>()->z);
+          },
+          [](VM *vm, NativeInstance *inst, Value value) {
+            inst->as<Vector3>()->z = value.isNumber() ? value.asNumber() : 0.0;
+          })
+
+      // 只读属性 length
+      .propertyReadOnly("length",
+                        [](VM *vm, NativeInstance *inst) -> Value {
+                          return Value::number(inst->as<Vector3>()->length());
+                        })
+
+      // 方法: normalize (修改自身)
+      .method(
+          "normalize",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            inst->as<Vector3>()->normalize();
+            return Value::nil();
+          },
+          0)
+
+      // 方法: add (返回新 Vector3)
+      .method(
+          "add",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            if (argc < 1 || !argv[0].isNativeInstance()) {
+              vm->throwError(Value::object(vm->allocateString("add expects a Vector3")));
+              return Value::nil();
+            }
+            NativeInstance *other = static_cast<NativeInstance *>(argv[0].asGC());
+            Vector3 *otherVec = other->safeCast<Vector3>();
+            if (!otherVec) {
+              vm->throwError(Value::object(vm->allocateString("add expects a Vector3")));
+              return Value::nil();
+            }
+            Vector3 result = inst->as<Vector3>()->add(*otherVec);
+            NativeInstance *resultInst =
+                createNativeObject<Vector3>(vm, result.x, result.y, result.z);
+            return Value::object(resultInst);
+          },
+          1)
+
+      // 方法: dot (返回数值)
+      .method(
+          "dot",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            if (argc < 1 || !argv[0].isNativeInstance()) {
+              return Value::number(0);
+            }
+            NativeInstance *other = static_cast<NativeInstance *>(argv[0].asGC());
+            Vector3 *otherVec = other->safeCast<Vector3>();
+            if (!otherVec)
+              return Value::number(0);
+            return Value::number(inst->as<Vector3>()->dot(*otherVec));
+          },
+          1)
+
+      // 方法: scale (返回新 Vector3)
+      .method(
+          "scale",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            double s = (argc > 0 && argv[0].isNumber()) ? argv[0].asNumber() : 1.0;
+            Vector3 result = inst->as<Vector3>()->scale(s);
+            NativeInstance *resultInst =
+                createNativeObject<Vector3>(vm, result.x, result.y, result.z);
+            return Value::object(resultInst);
+          },
+          1)
+
+      // 静态方法: zero
+      .staticMethod(
+          "zero",
+          [](VM *vm, Value receiver, int argc, Value *argv) -> Value {
+            NativeInstance *inst = createNativeObject<Vector3>(vm, 0, 0, 0);
+            return Value::object(inst);
+          },
+          0)
+
+      // 静态方法: one
+      .staticMethod(
+          "one",
+          [](VM *vm, Value receiver, int argc, Value *argv) -> Value {
+            NativeInstance *inst = createNativeObject<Vector3>(vm, 1, 1, 1);
+            return Value::object(inst);
+          },
+          0)
+
+      .build();
+}
+
+// ----------------------------------------------------------------------------
+// Example 2: Counter 类 - 简单的计数器，演示状态管理
+// ----------------------------------------------------------------------------
+class Counter {
+public:
+  int value;
+  int step;
+
+  Counter() : value(0), step(1) {}
+
+  Counter(int initial, int step) : value(initial), step(step) {}
+
+  void increment() { value += step; }
+
+  void decrement() { value -= step; }
+
+  void reset() { value = 0; }
+};
+
+void registerCounter(VM *vm) {
+  NativeClassBuilder<Counter>(vm, "Counter")
+      .constructor([](VM *vm, int argc, Value *argv) -> void * {
+        int initial = (argc > 0 && argv[0].isInt()) ? static_cast<int>(argv[0].asInt()) : 0;
+        int step = (argc > 1 && argv[1].isInt()) ? static_cast<int>(argv[1].asInt()) : 1;
+        return new Counter(initial, step);
+      })
+      .defaultDestructor()
+
+      .property(
+          "value",
+          [](VM *vm, NativeInstance *inst) -> Value {
+            return Value::integer(inst->as<Counter>()->value);
+          },
+          [](VM *vm, NativeInstance *inst, Value value) {
+            inst->as<Counter>()->value = value.isInt() ? static_cast<int>(value.asInt()) : 0;
+          })
+
+      .property(
+          "step",
+          [](VM *vm, NativeInstance *inst) -> Value {
+            return Value::integer(inst->as<Counter>()->step);
+          },
+          [](VM *vm, NativeInstance *inst, Value value) {
+            inst->as<Counter>()->step = value.isInt() ? static_cast<int>(value.asInt()) : 1;
+          })
+
+      .method(
+          "increment",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            inst->as<Counter>()->increment();
+            return Value::integer(inst->as<Counter>()->value);
+          },
+          0)
+
+      .method(
+          "decrement",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            inst->as<Counter>()->decrement();
+            return Value::integer(inst->as<Counter>()->value);
+          },
+          0)
+
+      .method(
+          "reset",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            inst->as<Counter>()->reset();
+            return Value::nil();
+          },
+          0)
+
+      .build();
+}
+
+// ----------------------------------------------------------------------------
+// Example 3: StringBuffer 类 - 字符串缓冲区，演示字符串操作
+// ----------------------------------------------------------------------------
+class StringBuffer {
+public:
+  std::string buffer;
+
+  StringBuffer() = default;
+
+  explicit StringBuffer(const std::string &initial) : buffer(initial) {}
+
+  void append(const std::string &str) { buffer += str; }
+
+  void clear() { buffer.clear(); }
+
+  size_t length() const { return buffer.length(); }
+
+  std::string toString() const { return buffer; }
+};
+
+void registerStringBuffer(VM *vm) {
+  NativeClassBuilder<StringBuffer>(vm, "StringBuffer")
+      .constructor([](VM *vm, int argc, Value *argv) -> void * {
+        if (argc > 0 && argv[0].isString()) {
+          StringObject *str = static_cast<StringObject *>(argv[0].asGC());
+          return new StringBuffer(str->data);
+        }
+        return new StringBuffer();
+      })
+      .defaultDestructor()
+
+      .propertyReadOnly("length",
+                        [](VM *vm, NativeInstance *inst) -> Value {
+                          return Value::integer(inst->as<StringBuffer>()->length());
+                        })
+
+      .method(
+          "append",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            if (argc > 0 && argv[0].isString()) {
+              StringObject *str = static_cast<StringObject *>(argv[0].asGC());
+              inst->as<StringBuffer>()->append(str->data);
+            }
+            return Value::object(inst); // 返回 this 支持链式调用
+          },
+          1)
+
+      .method(
+          "clear",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            inst->as<StringBuffer>()->clear();
+            return Value::object(inst);
+          },
+          0)
+
+      .method(
+          "toString",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            return Value::object(vm->allocateString(inst->as<StringBuffer>()->toString()));
+          },
+          0)
+
+      .build();
+}
+
+// ----------------------------------------------------------------------------
+// 注册所有原生绑定
+// ----------------------------------------------------------------------------
+void registerAllNativeBindings(VM *vm) {
+  registerVector3(vm);
+  registerCounter(vm);
+  registerStringBuffer(vm);
+}
+
+// ============================================================================
+// Native Binding Tests
+// ============================================================================
+void registerNativeBindingTests(TestRunner &runner) {
+  // Vector3 基础测试
+  runner.addNativeTest("Native - Vector3 Basic",
+                       R"(
+        auto v = Vector3(1.0, 2.0, 3.0);
+        print(v.x);
+        print(v.y);
+        print(v.z);
+      )",
+                       "1\n2\n3", registerVector3);
+
+  // Vector3 属性修改
+  runner.addNativeTest("Native - Vector3 Property Set",
+                       R"(
+        auto v = Vector3(0.0, 0.0, 0.0);
+        v.x = 10.0;
+        v.y = 20.0;
+        v.z = 30.0;
+        print(v.x);
+        print(v.y);
+        print(v.z);
+      )",
+                       "10\n20\n30", registerVector3);
+
+  // Vector3 只读属性 length
+  runner.addNativeTest("Native - Vector3 Length",
+                       R"(
+        auto v = Vector3(3.0, 4.0, 0.0);
+        print(v.length);
+      )",
+                       "5", registerVector3);
+
+  // Vector3 方法调用
+  runner.addNativeTest("Native - Vector3 Add",
+                       R"(
+        auto v1 = Vector3(1.0, 2.0, 3.0);
+        auto v2 = Vector3(4.0, 5.0, 6.0);
+        auto v3 = v1.add(v2);
+        print(v3.x);
+        print(v3.y);
+        print(v3.z);
+      )",
+                       "5\n7\n9", registerVector3);
+
+  // Vector3 dot 方法
+  runner.addNativeTest("Native - Vector3 Dot",
+                       R"(
+        auto v1 = Vector3(1.0, 2.0, 3.0);
+        auto v2 = Vector3(4.0, 5.0, 6.0);
+        print(v1.dot(v2));
+      )",
+                       "32", registerVector3);
+
+  // Vector3 静态方法
+  runner.addNativeTest("Native - Vector3 Static Methods",
+                       R"(
+        auto zero = Vector3.zero();
+        auto one = Vector3.one();
+        print(zero.x .. " " .. zero.y .. " " .. zero.z);
+        print(one.x .. " " .. one.y .. " " .. one.z);
+      )",
+                       "0.000000 0.000000 0.000000\n1.000000 1.000000 1.000000", registerVector3);
+
+  // Vector3 scale 方法
+  runner.addNativeTest("Native - Vector3 Scale",
+                       R"(
+        auto v = Vector3(1.0, 2.0, 3.0);
+        auto scaled = v.scale(2.0);
+        print(scaled.x);
+        print(scaled.y);
+        print(scaled.z);
+      )",
+                       "2\n4\n6", registerVector3);
+
+  // Counter 基础测试
+  runner.addNativeTest("Native - Counter Basic",
+                       R"(
+        auto c = Counter(0, 1);
+        print(c.value);
+        c.increment();
+        print(c.value);
+        c.increment();
+        print(c.value);
+        c.decrement();
+        print(c.value);
+      )",
+                       "0\n1\n2\n1", registerCounter);
+
+  // Counter 自定义步长
+  runner.addNativeTest("Native - Counter Custom Step",
+                       R"(
+        auto c = Counter(10, 5);
+        print(c.value);
+        c.increment();
+        print(c.value);
+        c.increment();
+        print(c.value);
+        c.reset();
+        print(c.value);
+      )",
+                       "10\n15\n20\n0", registerCounter);
+
+  // Counter 属性修改
+  runner.addNativeTest("Native - Counter Property Set",
+                       R"(
+        auto c = Counter(0, 1);
+        c.value = 100;
+        c.step = 10;
+        c.increment();
+        print(c.value);
+      )",
+                       "110", registerCounter);
+
+  // StringBuffer 基础测试
+  runner.addNativeTest("Native - StringBuffer Basic",
+                       R"(
+        auto sb = StringBuffer();
+        sb.append("Hello");
+        sb.append(" ");
+        sb.append("World");
+        print(sb.toString());
+        print(sb.length);
+      )",
+                       "Hello World\n11", registerStringBuffer);
+
+  // StringBuffer 初始值
+  runner.addNativeTest("Native - StringBuffer Initial",
+                       R"(
+        auto sb = StringBuffer("Initial: ");
+        sb.append("Value");
+        print(sb.toString());
+      )",
+                       "Initial: Value", registerStringBuffer);
+
+  // StringBuffer 链式调用
+  runner.addNativeTest("Native - StringBuffer Chaining",
+                       R"(
+        auto sb = StringBuffer();
+        sb.append("A").append("B").append("C");
+        print(sb.toString());
+      )",
+                       "ABC", registerStringBuffer);
+
+  // StringBuffer clear
+  runner.addNativeTest("Native - StringBuffer Clear",
+                       R"(
+        auto sb = StringBuffer("Hello");
+        print(sb.length);
+        sb.clear();
+        print(sb.length);
+        sb.append("New");
+        print(sb.toString());
+      )",
+                       "5\n0\nNew", registerStringBuffer);
+
+  // 多个原生类组合测试
+  runner.addNativeTest("Native - Multiple Classes",
+                       R"(
+        auto v1 = Vector3(1.0, 0.0, 0.0);
+        auto v2 = Vector3(0.0, 1.0, 0.0);
+        auto c = Counter(0, 1);
+        auto sb = StringBuffer();
+
+        auto v3 = v1.add(v2);
+        c.increment();
+        c.increment();
+        sb.append("Result: ");
+        sb.append(v3.x .. "," .. v3.y .. "," .. v3.z);
+        sb.append(" Count: ");
+        sb.append(toString(c.value));
+
+        print(sb.toString());
+      )",
+                       "Result: 1.000000,1.000000,0.000000 Count: 2", registerAllNativeBindings);
+
+  // 原生对象在循环中使用
+  runner.addNativeTest("Native - Vector3 In Loop",
+                       R"(
+        var sum = Vector3.zero();
+        for (int i = 1; i <= 3; i = i + 1) {
+            var v = Vector3(toFloat(i), toFloat(i * 2), toFloat(i * 3));
+            sum = sum.add(v);
+        }
+        print(toInt(sum.x));
+        print(toInt(sum.y));
+        print(toInt(sum.z));
+      )",
+                       "6\n12\n18", registerVector3);
+
+  // 原生对象作为容器元素
+  runner.addNativeTest("Native - Vector3 In List",
+                       R"(
+        list<any> vectors = [];
+        vectors.push(Vector3(1.0, 0.0, 0.0));
+        vectors.push(Vector3(0.0, 1.0, 0.0));
+        vectors.push(Vector3(0.0, 0.0, 1.0));
+
+        float total = 0.0;
+        for (int i = 0; i < vectors.length; i = i + 1) {
+            var v = vectors[i];
+            total = total + v.length;
+        }
+        print(toInt(total));
+      )",
+                       "3", registerVector3);
 }
 
 // =========================================================
@@ -2958,8 +3481,10 @@ int main(int argc, char *argv[]) {
   registerDeferTests(runner);
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
+  registerNativeBindingTests(runner);
 #else
-  registerFib40Bench(runner);
+
+  registerMapBench(runner);
 #endif
   runner.runAll();
   return 0;

@@ -22,6 +22,9 @@ extern AstNode *loadAst(const std::string &sourceCode, const std::string &filena
 
 class TestRunner {
 public:
+  // 原生绑定注册函数类型
+  using NativeBindingRegistrar = std::function<void(VM *)>;
+
   struct ModuleDef {
     std::string name;
     std::string content;
@@ -31,26 +34,46 @@ public:
     std::string name;
     std::string script;
     std::string expectedOutput;
-    std::vector<ModuleDef> modules; // 辅助模块文件
-    bool expectRuntimeError;        // 是否预期发生运行时错误
+    std::vector<ModuleDef> modules;         // 辅助模块文件
+    bool expectRuntimeError;                // 是否预期发生运行时错误
+    NativeBindingRegistrar nativeRegistrar; // 原生绑定注册函数（可选）
   };
 
   // 添加普通测试
   void addTest(const std::string &name, const std::string &script,
                const std::string &expectedOutput) {
-    tests_.push_back({name, script, expectedOutput, {}, false});
+    tests_.push_back({name, script, expectedOutput, {}, false, nullptr});
+  }
+
+  // 添加带原生绑定的测试
+  void addNativeTest(const std::string &name, const std::string &script,
+                     const std::string &expectedOutput, NativeBindingRegistrar registrar) {
+    tests_.push_back({name, script, expectedOutput, {}, false, registrar});
   }
 
   // 添加带模块文件的测试
   void addModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
                      const std::string &script, const std::string &expectedOutput,
                      bool expectRuntimeError = false) {
-    tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError});
+    tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError, nullptr});
+  }
+
+  // 添加带模块和原生绑定的测试
+  void addModuleNativeTest(const std::string &name, const std::vector<ModuleDef> &modules,
+                           const std::string &script, const std::string &expectedOutput,
+                           NativeBindingRegistrar registrar, bool expectRuntimeError = false) {
+    tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError, registrar});
   }
 
   // 添加预期失败的测试 (Negative Test)
   void addFailTest(const std::string &name, const std::string &script) {
-    tests_.push_back({name, script, "", {}, true});
+    tests_.push_back({name, script, "", {}, true, nullptr});
+  }
+
+  // 添加预期失败且带原生绑定的测试
+  void addNativeFailTest(const std::string &name, const std::string &script,
+                         NativeBindingRegistrar registrar) {
+    tests_.push_back({name, script, "", {}, true, registrar});
   }
 
   int runAll() {
@@ -161,6 +184,11 @@ private:
     config.debugMode = false;
     config.modulePaths = {testDir_}; // 将临时目录加入模块搜索路径
     VM vm(config);
+
+    // 3.5 注册原生绑定（如果有）
+    if (test.nativeRegistrar) {
+      test.nativeRegistrar(&vm);
+    }
 
     std::stringstream capturedOutput;
     vm.setPrintHandler([&](const std::string &msg) { capturedOutput << msg; });
