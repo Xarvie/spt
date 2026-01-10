@@ -19,6 +19,7 @@ struct CallFrame {
   int slotsBase = 0;               // 栈帧基址（相对于栈底的偏移量索引）
   int expectedResults = 1;         // 期望返回值数量 (-1 表示全部)
   int returnBase = 0;              // 返回值存放位置（相对于栈底的偏移量索引）
+  int deferBase = 0;               // 记录进入该帧时的 defer 栈顶位置
 };
 
 // ============================================================================
@@ -44,6 +45,9 @@ struct FiberObject : GCObject {
 
   std::vector<CallFrame> frames;
   int frameCount = 0;
+
+  std::vector<Value> deferStack;
+  int deferTop = 0; // 指向 deferStack 的下一个可用位置
 
   UpValue *openUpvalues = nullptr;
 
@@ -71,6 +75,10 @@ struct FiberObject : GCObject {
     stack.resize(DEFAULT_STACK_SIZE);
     stackTop = stack.data();
     frames.resize(DEFAULT_FRAMES_SIZE);
+
+    deferStack.resize(16);
+    deferTop = 0;
+
     error = Value::nil();
     yieldValue = Value::nil();
   }
@@ -124,6 +132,18 @@ struct FiberObject : GCObject {
     }
   }
 
+  void ensureDefers(int needed) {
+    if (deferTop + needed <= (int)deferStack.size()) {
+      return;
+    }
+    size_t newSize = deferStack.size() * 2;
+    while (newSize < deferTop + needed) {
+      newSize *= 2;
+    }
+    deferStack.resize(newSize);
+    // deferStack 存的是 Value (副本)，不需要像 stack 那样修复指针
+  }
+
   void ensureFrames(int needed) {
     size_t required = static_cast<size_t>(frameCount + needed);
 
@@ -169,6 +189,7 @@ struct FiberObject : GCObject {
     stackTop = stack.data();
     // 不清空 frames，只重置计数（保留预分配的内存）
     frameCount = 0;
+    deferTop = 0;
     openUpvalues = nullptr;
     caller = nullptr;
     error = Value::nil();

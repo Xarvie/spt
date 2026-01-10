@@ -78,16 +78,16 @@ void registerBench(TestRunner &runner) {
                  "382000");
 }
 
-void registerFib38Bench(TestRunner &runner) {
+void registerFib40Bench(TestRunner &runner) {
   runner.addTest("Recursion - Fibonacci",
                  R"(
             int fib(int n) {
                 if (n < 2) { return n; }
                 return fib(n-1) + fib(n-2);
             }
-            print(fib(38));
+            print(fib(40));
        )",
-                 "39088169");
+                 "102334155");
 }
 
 // =========================================================
@@ -2955,11 +2955,11 @@ int main(int argc, char *argv[]) {
   registerEdgeCases(runner);
   registerIntegrationTests(runner);
   registerBuiltinFunctions(runner);
-
+  registerDeferTests(runner);
   registerFiberTests(runner);
   registerStackReallocationTests(runner);
 #else
-  registerFib38Bench(runner);
+  registerFib40Bench(runner);
 #endif
   runner.runAll();
   return 0;

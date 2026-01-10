@@ -155,6 +155,8 @@ private:
   // 切换到指定 fiber
   void switchToFiber(FiberObject *fiber);
 
+  void invokeDefers(CallFrame *frame);
+
 private:
   VMConfig config_;
 

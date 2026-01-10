@@ -198,6 +198,10 @@ void GC::traceReferences() {
         }
       }
 
+      for (int i = 0; i < fiber->deferTop; ++i) {
+        markValue(fiber->deferStack[i]);
+      }
+
       UpValue *upvalue = fiber->openUpvalues;
       while (upvalue != nullptr) {
         markObject(upvalue);
@@ -309,7 +313,9 @@ void GC::freeObject(GCObject *obj) {
   case ValueType::Fiber: {
     FiberObject *fiber = static_cast<FiberObject *>(obj);
     bytesAllocated_ -= sizeof(FiberObject) + (fiber->stack.capacity() * sizeof(Value)) +
-                       (fiber->frames.size() * sizeof(CallFrame));
+                       (fiber->frames.capacity() * sizeof(CallFrame)) +
+                       (fiber->deferStack.capacity() * sizeof(Value));
+
     delete fiber;
     break;
   }
