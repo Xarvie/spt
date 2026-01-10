@@ -32,7 +32,7 @@ function(PickSourceFiles current_dir variable)
         endif ()
     endforeach()
 
-    # 5. 将结果更新到父作用域 [cite: 2]
+    # 5. 将结果更新到父作用域
     set(${variable} ${${variable}} PARENT_SCOPE)
 endfunction()
 
