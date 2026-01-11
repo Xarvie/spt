@@ -250,7 +250,6 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   } else {
     cg_->current()->proto.needsReceiver = false;
   }
-  // =========================================================
 
   int paramIndex = 0;
   for (auto *param : node->params) {
@@ -514,19 +513,13 @@ int Compiler::compileCondition(Expression *expr) {
       int constIdx = -1;
       OpCode op = OpCode::OP_EQ;
       bool optimized = false;
-
       int k = 0;
 
-      bool isEqNe = (bin->op == OperatorKind::EQ || bin->op == OperatorKind::NE);
-      bool isLtGe = (bin->op == OperatorKind::LT || bin->op == OperatorKind::GE);
-      bool isLeGt = (bin->op == OperatorKind::LE || bin->op == OperatorKind::GT);
-
-      if (bin->op == OperatorKind::NE || bin->op == OperatorKind::GE ||
-          bin->op == OperatorKind::GT) {
+      if (bin->op == OperatorKind::NE) {
         k = 1;
       }
 
-      if (isEqNe) {
+      if (bin->op == OperatorKind::EQ || bin->op == OperatorKind::NE) {
         if (isSmallInt(bin->right, imm)) {
           op = OpCode::OP_EQI;
           optimized = true;
@@ -534,16 +527,28 @@ int Compiler::compileCondition(Expression *expr) {
           op = OpCode::OP_EQK;
           optimized = true;
         }
-      } else if (isLtGe) {
+      }
+
+      else if (bin->op == OperatorKind::LT) {
         if (isSmallInt(bin->right, imm)) {
           op = OpCode::OP_LTI;
           optimized = true;
+        } else {
+          op = OpCode::OP_LT;
         }
-      } else if (isLeGt) {
+      }
+
+      else if (bin->op == OperatorKind::LE) {
         if (isSmallInt(bin->right, imm)) {
           op = OpCode::OP_LEI;
           optimized = true;
+        } else {
+          op = OpCode::OP_LE;
         }
+      } else if (bin->op == OperatorKind::GT) {
+        op = OpCode::OP_LT;
+      } else if (bin->op == OperatorKind::GE) {
+        op = OpCode::OP_LE;
       }
 
       if (optimized) {
@@ -554,13 +559,14 @@ int Compiler::compileCondition(Expression *expr) {
         int rightSlot = cg_->allocSlot();
         compileExpression(bin->right, rightSlot);
 
-        OpCode stdOp = OpCode::OP_EQ;
-        if (isLtGe)
-          stdOp = OpCode::OP_LT;
-        else if (isLeGt)
-          stdOp = OpCode::OP_LE;
+        if (bin->op == OperatorKind::GT || bin->op == OperatorKind::GE) {
 
-        cg_->emitABC(stdOp, leftSlot, rightSlot, k);
+          cg_->emitABC(op, rightSlot, leftSlot, k);
+        } else {
+
+          cg_->emitABC(op, leftSlot, rightSlot, k);
+        }
+
         cg_->freeSlots(1);
       }
 
@@ -1158,16 +1164,11 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
     int k = 0;
     OpCode op = OpCode::OP_EQ;
 
-    bool isEqNe = (node->op == OperatorKind::EQ || node->op == OperatorKind::NE);
-    bool isLtGe = (node->op == OperatorKind::LT || node->op == OperatorKind::GE);
-    bool isLeGt = (node->op == OperatorKind::LE || node->op == OperatorKind::GT);
-
-    if (node->op == OperatorKind::NE || node->op == OperatorKind::GE ||
-        node->op == OperatorKind::GT) {
+    if (node->op == OperatorKind::NE) {
       k = 1;
     }
 
-    if (isEqNe) {
+    if (node->op == OperatorKind::EQ || node->op == OperatorKind::NE) {
       if (isSmallInt(node->right, imm)) {
         op = OpCode::OP_EQI;
         optimized = true;
@@ -1175,16 +1176,26 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
         op = OpCode::OP_EQK;
         optimized = true;
       }
-    } else if (isLtGe) {
+    }
+
+    else if (node->op == OperatorKind::LT) {
       if (isSmallInt(node->right, imm)) {
         op = OpCode::OP_LTI;
         optimized = true;
+      } else {
+        op = OpCode::OP_LT;
       }
-    } else if (isLeGt) {
+    } else if (node->op == OperatorKind::LE) {
       if (isSmallInt(node->right, imm)) {
         op = OpCode::OP_LEI;
         optimized = true;
+      } else {
+        op = OpCode::OP_LE;
       }
+    } else if (node->op == OperatorKind::GT) {
+      op = OpCode::OP_LT;
+    } else if (node->op == OperatorKind::GE) {
+      op = OpCode::OP_LE;
     }
 
     if (optimized) {
@@ -1201,17 +1212,15 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
         rightTemp = true;
       }
 
-      OpCode stdOp = OpCode::OP_EQ;
-      if (isLtGe)
-        stdOp = OpCode::OP_LT;
-      else if (isLeGt)
-        stdOp = OpCode::OP_LE;
+      if (node->op == OperatorKind::GT || node->op == OperatorKind::GE) {
+        cg_->emitABC(op, rightSlot, leftSlot, k);
+      } else {
+        cg_->emitABC(op, leftSlot, rightSlot, k);
+      }
 
-      cg_->emitABC(stdOp, leftSlot, rightSlot, k);
       if (rightTemp)
         cg_->freeSlots(1);
     }
-
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 0, 1);
     cg_->emitABC(OpCode::OP_LOADBOOL, dest, 1, 0);
 
