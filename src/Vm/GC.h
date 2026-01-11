@@ -31,6 +31,17 @@ public:
   void *allocateRaw(size_t size);
   void deallocate(GCObject *obj);
 
+  // === 内存跟踪 ===
+  void trackAllocation(size_t bytes) { bytesAllocated_ += bytes; }
+
+  void trackDeallocation(size_t bytes) {
+    if (bytes <= bytesAllocated_) {
+      bytesAllocated_ -= bytes;
+    } else {
+      bytesAllocated_ = 0; // 防止下溢
+    }
+  }
+
   // === 回收控制 ===
   void collect();
   void collectIfNeeded();
@@ -87,7 +98,7 @@ private:
   bool enabled_ = true;
 };
 
-// 模板实现
+// 分配时只记录 sizeof(T)，动态内存由对象自己跟踪
 template <typename T, typename... Args> T *GC::allocate(Args &&...args) {
   collectIfNeeded();
 
