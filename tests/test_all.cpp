@@ -67,6 +67,24 @@ void registerBasics(TestRunner &runner) {
        )",
                  "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue");
 
+  runner.runTest("Comparison NaN",
+                 R"(
+            float nanX = sqrt(-1);
+            print(nanX == nanX); // false
+            print(nanX != nanX); // true
+            print(nanX < nanX); // false
+            print(nanX > nanX); // false
+            print(nanX <= nanX); // false
+            print(nanX >= nanX); // false
+            print(nanX == 1); // false
+            print(nanX != 1); // true
+            print(nanX < 1); // false
+            print(nanX > 1); // false
+            print(nanX <= 1); // false
+            print(nanX >= 1); // false
+       )",
+                 "false\ntrue\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\nfalse\nfalse\nfalse\nfalse");
+
   runner.runTest("Logic Short-Circuit",
                  R"(
             bool t = true;

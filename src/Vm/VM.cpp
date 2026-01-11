@@ -1550,7 +1550,11 @@ InterpretResult VM::run() {
     } else if (a.isNumber() && b.isNumber()) {
       double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
       double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-      result = left < right;
+      if (std::isnan(left) || std::isnan(right)) {
+        result = false;
+      } else {
+        result = left < right;
+      }
     } else {
       runtimeError("Cannot compare non-numeric types");
       return InterpretResult::RUNTIME_ERROR;
@@ -1575,7 +1579,11 @@ InterpretResult VM::run() {
     } else if (a.isNumber() && b.isNumber()) {
       double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
       double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-      result = left <= right;
+      if (std::isnan(left) || std::isnan(right)) {
+        result = false;
+      } else {
+        result = left <= right;
+      }
     } else {
       runtimeError("Cannot compare non-numeric types");
       return InterpretResult::RUNTIME_ERROR;

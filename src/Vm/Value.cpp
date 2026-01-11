@@ -94,9 +94,8 @@ bool Value::equals(const Value &other) const {
   case ValueType::Int:
     return as.integer == other.as.integer;
   case ValueType::Float:
-
-    if (std::isnan(as.number) && std::isnan(other.as.number)) {
-      return true;
+    if (std::isnan(as.number) || std::isnan(other.as.number)) {
+      return false;
     }
     return as.number == other.as.number;
   case ValueType::String:
