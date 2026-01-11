@@ -128,6 +128,8 @@ namespace spt {
   SPT_DISPATCH_TABLE_ENTRY(OP_FORPREP)                                                             \
   SPT_DISPATCH_TABLE_ENTRY(OP_FORLOOP)                                                             \
   SPT_DISPATCH_TABLE_ENTRY(OP_LOADI)                                                               \
+  SPT_DISPATCH_TABLE_ENTRY(OP_TFORCALL)                                                            \
+  SPT_DISPATCH_TABLE_ENTRY(OP_TFORLOOP)                                                            \
   SPT_DISPATCH_TABLE_END()
 
 } // namespace spt

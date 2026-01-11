@@ -85,7 +85,9 @@ void SemanticAnalyzer::analyzeStatement(Statement *stmt) {
 
   case NodeType::FOR_EACH_STATEMENT: {
     auto *forEach = static_cast<ForEachStatementNode *>(stmt);
-    analyzeExpression(forEach->iterableExpr);
+    for (auto *expr : forEach->iterableExprs) {
+      analyzeExpression(expr);
+    }
     if (forEach->body)
       analyzeBlock(forEach->body);
     break;

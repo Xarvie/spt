@@ -2626,11 +2626,11 @@ AstBuilderVisitor::visitForEachExplicitControl(LangParser::ForEachExplicitContro
   SourceLocation loc = getSourceLocation(forStmtCtx);
 
   std::vector<ParameterDeclNode *> loopVars;
-  Expression *iterableExpr = nullptr;
+  std::vector<Expression *> iterableExprs;
   BlockNode *body = nullptr;
 
   try {
-
+    // 1. 处理循环变量
     auto declItemsCtx = ctx->declaration_item();
     if (declItemsCtx.empty()) {
       throw std::runtime_error("For-each 循环缺少循环变量声明");
@@ -2664,19 +2664,31 @@ AstBuilderVisitor::visitForEachExplicitControl(LangParser::ForEachExplicitContro
       loopVars.push_back(varDecl);
     }
 
-    if (!ctx->expression())
-      throw std::runtime_error("For-each 缺少可迭代对象表达式");
-    std::any iterResult = visit(ctx->expression());
-    AstNode *iterRaw =
-        safeAnyCastRawPtr<AstNode>(iterResult, "visitForEachExplicitControl > iterable expression");
-    iterableExpr = dynamic_cast<Expression *>(iterRaw);
-    if (!iterableExpr && iterResult.has_value()) {
-      delete iterRaw;
-      throw std::runtime_error("For-each 需要一个可迭代的表达式");
+    // 2. 处理表达式列表 (expressionList)
+    if (ctx->expressionList()) {
+      auto exprListCtx = ctx->expressionList();
+      for (auto exprCtx : exprListCtx->expression()) {
+        std::any iterResult = visit(exprCtx);
+        AstNode *iterRaw =
+            safeAnyCastRawPtr<AstNode>(iterResult, "visitForEachExplicitControl > expression");
+        Expression *expr = dynamic_cast<Expression *>(iterRaw);
+        if (!expr && iterResult.has_value()) {
+          delete iterRaw;
+          throw std::runtime_error("For-each 迭代源必须是表达式");
+        }
+        if (expr) {
+          iterableExprs.push_back(expr);
+        }
+      }
+    } else {
+      throw std::runtime_error("For-each 缺少表达式列表");
     }
-    if (!iterableExpr)
-      throw std::runtime_error("For-each 可迭代对象访问失败");
 
+    if (iterableExprs.empty()) {
+      throw std::runtime_error("For-each 至少需要一个迭代表达式");
+    }
+
+    // 3. 处理循环体
     if (!forStmtCtx->blockStatement())
       throw std::runtime_error("For 循环体 blockStatement 为空");
     std::any bodyResult = visit(forStmtCtx->blockStatement());
@@ -2689,16 +2701,16 @@ AstBuilderVisitor::visitForEachExplicitControl(LangParser::ForEachExplicitContro
     if (!body)
       throw std::runtime_error("For 体访问失败");
 
+    // 4. 创建节点 (传入 Vector)
     ForEachStatementNode *forNode =
-        new ForEachStatementNode(std::move(loopVars), iterableExpr, body, loc);
+        new ForEachStatementNode(std::move(loopVars), std::move(iterableExprs), body, loc);
     if (!forNode)
       throw std::runtime_error("创建 ForEachStatementNode 失败");
     return std::any(static_cast<AstNode *>(forNode));
 
   } catch (...) {
-
     deleteVectorItems(loopVars);
-    delete iterableExpr;
+    deleteVectorItems(iterableExprs);
     delete body;
     throw;
   }

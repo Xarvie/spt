@@ -898,6 +898,300 @@ void registerControlFlow(TestRunner &runner) {
                  "7\n50");
 }
 
+void registerGenericLoopTests(TestRunner &runner) {
+  // 1. 基础显式三元组
+  runner.addTest("Generic For - Explicit Triple",
+                 R"(
+            int iter(any state, int c) {
+                if (c < 3) {
+                    return c + 1;
+                }
+                return null;
+            }
+
+            for (auto i : iter, null, 0) {
+                print("cnt: " .. i);
+            }
+       )",
+                 "cnt: 1\ncnt: 2\ncnt: 3");
+
+  // 2. 进阶：多返回值初始化 (Factory Pattern)
+  runner.addTest("Generic For - Factory Initialization",
+                 R"(
+            int my_next(int limit, int current) {
+                if (current < limit) {
+                    return current + 1;
+                }
+                return null;
+            }
+
+            mutivar my_range(int limit) {
+                return my_next, limit, 0;
+            }
+
+            for (auto i : my_range(3)) {
+                print(i);
+            }
+       )",
+                 "1\n2\n3");
+
+  // 3. 闭包迭代器 (Stateful Closure Iterator)
+  runner.addTest("Generic For - Closure Iterator",
+                 R"(
+            function make_counter(int max) {
+                int count = 0;
+                return function(any s, any c) -> int {
+                    if (count < max) {
+                        count = count + 1;
+                        return count;
+                    }
+                    return null;
+                };
+            }
+
+            for (auto i : make_counter(2)) {
+                print("closure: " .. i);
+            }
+       )",
+                 "closure: 1\nclosure: 2");
+
+  // 4. 双变量迭代 (Key, Value)
+  runner.addTest("Generic For - Key Value Iteration",
+                 R"(
+            mutivar list_iter(list lst, int idx) {
+                idx = idx + 1;
+                if (idx < len(lst)) {
+                    return idx, lst[idx];
+                }
+                return null;
+            }
+
+            list data = ["a", "b"];
+
+            for (auto i, auto v : list_iter, data, -1) {
+                print(i .. " -> " .. v);
+            }
+       )",
+                 "0 -> a\n1 -> b");
+
+  // 5. 循环控制 (Break / Continue)
+  runner.addTest("Generic For - Break/Continue",
+                 R"(
+            int iter(any s, int c) {
+                if (c < 10) { return c + 1; }
+                return null;
+            }
+
+            for (auto i : iter, null, 0) {
+                if (i == 2) { continue; }
+                if (i == 4) { break; }
+                print(i);
+            }
+       )",
+                 "1\n3");
+
+  // 6. 作用域测试
+  runner.addTest("Generic For - Scope Shadowing",
+                 R"(
+            int i = 100;
+
+            int iter(any s, int c) {
+                if (c < 1) { return c + 1; }
+                return null;
+            }
+
+            for (auto i : iter, null, 0) {
+                print("inner: " .. i);
+            }
+            print("outer: " .. i);
+       )",
+                 "inner: 1\nouter: 100");
+
+  // 7. 标准 pairs (List)
+  runner.addTest("Pairs - List Iteration",
+                 R"(
+            list data = ["A", "B", "C"];
+            string res = "";
+
+            for (auto i, auto v : pairs(data)) {
+                res = res .. i .. ":" .. v .. " ";
+            }
+            print(res);
+
+       )",
+                 "0:A 1:B 2:C ");
+
+  // 8. 标准 pairs (Map)
+  runner.addTest("Pairs - Map Iteration",
+                 R"(
+            map data = {"name": "spt", "ver": 1};
+            int count = 0;
+
+            for (auto k, auto v : pairs(data)) {
+                print("key type: " .. typeOf(k));
+                count = count + 1;
+            }
+            print(count);
+       )",
+                 "key type: string\nkey type: string\n2"); // 注意并不能保证次序。
+
+  // 9. 边界情况：立即 Break 和 Continue
+  runner.addTest("Generic For - Immediate Boundary",
+                 R"(
+            int iter(any s, int c) {
+                if (c < 3) {
+                    return c + 1;
+                }
+                return null;
+            }
+
+            print("Test Break:");
+            for (auto i : iter, null, 0) {
+                break;
+                print("Unreachable");
+            }
+
+            print("Test Continue:");
+            for (auto i : iter, null, 0) {
+                continue;
+                print("Unreachable");
+            }
+            print("Done");
+       )",
+                 "Test Break:\nTest Continue:\nDone");
+
+  // 10. 嵌套循环的 Break/Continue
+  runner.addTest(
+      "Generic For - Nested Loop Control",
+      R"(
+            int iter(any s, int c) {
+                if (c < 2) {
+                    return c + 1;
+                }
+                return null;
+            }
+
+            // Outer loop runs 1, 2
+            for (auto i : iter, null, 0) {
+                print("Out: " .. i);
+
+                // Inner loop runs 1, 2
+                for (auto j : iter, null, 0) {
+                    if (j == 2) {
+                        print(" Inner Break at " .. j);
+                        break; // 应该只跳出内层循环
+                    }
+                    print(" Inner: " .. j);
+                }
+
+                if (i == 2) {
+                    print("Outer Break");
+                    break; // 跳出外层循环
+                }
+            }
+       )",
+      "Out: 1\n Inner: 1\n Inner Break at 2\nOut: 2\n Inner: 1\n Inner Break at 2\nOuter Break");
+
+  // 11. 闭包迭代器的状态维持 (Continue 不应重置闭包状态)
+  runner.addTest("Generic For - Closure State Preservation",
+                 R"(
+            function make_iter(int max) {
+                int count = 0;
+                return function(any s, any c) -> int {
+                    count = count + 1;
+                    if (count <= max) {
+                        return count;
+                    }
+                    return null;
+                };
+            }
+
+            // 1, 2, 3, 4, 5
+            for (auto i : make_iter(5)) {
+                // 模拟简单的跳过逻辑: 跳过 2 和 4
+                if (i == 2) { continue; }
+                if (i == 4) { continue; }
+                print(i);
+            }
+       )",
+                 "1\n3\n5");
+
+  // 12. 复杂混合逻辑 (Stress Test)
+  runner.addTest("Generic For - Mixed Logic",
+                 R"(
+            int iter(any s, int c) {
+                if (c < 10) {
+                    return c + 1;
+                }
+                return null;
+            }
+
+            // 目标: 打印 1, 2, 跳过 3, 打印 4, 在 5 停止
+            for (auto i : iter, null, 0) {
+                if (i == 3) { continue; }
+                if (i == 5) { break; }
+                print(i);
+            }
+       )",
+                 "1\n2\n4");
+
+  // 13. Pairs List 模式下的 Break/Continue
+  runner.addTest("Pairs List - Control Flow",
+                 R"(
+            list data = ["A", "SKIP", "C", "STOP", "E"];
+            string res = "";
+
+            for (auto i, auto v : pairs(data)) {
+                if (v == "SKIP") { continue; }
+
+                res = res .. v;
+
+                if (v == "STOP") { break; }
+            }
+            print(res);
+       )",
+                 "ACSTOP");
+
+  // 14. Pairs Map 模式下的 Continue (累加求和测试)
+  // 无论遍历顺序如何，只要正确跳过了 "ignore" 键，总和一定是固定的。
+  runner.addTest("Pairs Map - Continue (Order Independent)",
+                 R"(
+            map data = {
+                "a": 10,
+                "ignore": 500,
+                "b": 20,
+                "c": 30
+            };
+            int sum = 0;
+
+            for (auto k, auto v : pairs(data)) {
+                if (k == "ignore") { continue; }
+                sum = sum + v;
+            }
+            print(sum);
+       )",
+                 "60"); // 10 + 20 + 30 = 60
+
+  // 15. Pairs Map 模式下的 Break (单次执行测试)
+  // 原理：无论 Map 内部顺序如何，遇到第一个元素就 Break，计数器应该永远是 1。
+  runner.addTest("Pairs Map - Break (Order Independent)",
+                 R"(
+            map data = {
+                "x": 1,
+                "y": 2,
+                "z": 3
+            };
+            int count = 0;
+
+            for (auto k, auto v : pairs(data)) {
+                count = count + 1;
+                break; // 立即中断
+            }
+            print(count);
+       )",
+                 "1");
+}
+
 // =========================================================
 // 3. 函数与闭包 (Functions & Closures)
 // =========================================================
@@ -3492,6 +3786,7 @@ int main(int argc, char *argv[]) {
 #if 1
   registerBasics(runner);
   registerControlFlow(runner);
+  registerGenericLoopTests(runner);
   registerFunctions(runner);
   registerClasses(runner);
   registerLists(runner);

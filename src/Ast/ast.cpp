@@ -218,12 +218,6 @@ ForCStyleStatementNode::~ForCStyleStatementNode() {
   delete body;
 }
 
-ForEachStatementNode::~ForEachStatementNode() {
-  deleteVectorItems(loopVariables);
-  delete iterableExpr;
-  delete body;
-}
-
 BreakStatementNode::~BreakStatementNode() = default;
 ContinueStatementNode::~ContinueStatementNode() = default;
 

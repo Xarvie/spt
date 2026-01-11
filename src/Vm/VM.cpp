@@ -634,6 +634,95 @@ void VM::registerBuiltinFunctions() {
         return Value::boolean(c > 0 && (a[0].isClosure() || a[0].isNativeFunc()));
       },
       1);
+
+  registerNative(
+      "__iter_list",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 2)
+          return Value::nil();
+        Value listVal = args[0];
+        Value idxVal = args[1];
+
+        if (!listVal.isList())
+          return Value::nil();
+        ListObject *list = static_cast<ListObject *>(listVal.asGC());
+
+        int64_t nextIdx = 0;
+        if (idxVal.isNil()) {
+          nextIdx = 0;
+        } else if (idxVal.isInt()) {
+          nextIdx = idxVal.asInt() + 1;
+        } else {
+          return Value::nil();
+        }
+
+        if (nextIdx >= 0 && nextIdx < static_cast<int64_t>(list->elements.size())) {
+
+          vm->setNativeMultiReturn({Value::integer(nextIdx), list->elements[nextIdx]});
+
+          return Value::integer(nextIdx);
+        }
+
+        return Value::nil();
+      },
+      2);
+
+  registerNative(
+      "__iter_map",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 2)
+          return Value::nil();
+        Value mapVal = args[0];
+        Value keyVal = args[1];
+
+        if (!mapVal.isMap())
+          return Value::nil();
+        MapObject *map = static_cast<MapObject *>(mapVal.asGC());
+
+        auto &entries = map->entries;
+        auto it = entries.end();
+
+        if (keyVal.isNil()) {
+
+          it = entries.begin();
+        } else {
+
+          it = entries.find(keyVal);
+          if (it != entries.end()) {
+            ++it;
+          }
+        }
+
+        if (it != entries.end()) {
+          vm->setNativeMultiReturn({it->first, it->second});
+          return it->first;
+        }
+
+        return Value::nil();
+      },
+      2);
+
+  registerNative(
+      "pairs",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1)
+          return Value::nil();
+        Value target = args[0];
+
+        if (target.isList()) {
+          Value iterFunc = vm->getGlobal("__iter_list");
+          vm->setNativeMultiReturn({iterFunc, target, Value::integer(-1)});
+          return iterFunc;
+        } else if (target.isMap()) {
+          Value iterFunc = vm->getGlobal("__iter_map");
+          vm->setNativeMultiReturn({iterFunc, target, Value::nil()});
+          return iterFunc;
+        }
+
+        vm->throwError(Value::object(vm->allocateString("pairs() expects a list or map")));
+        return Value::nil();
+      },
+      1);
 }
 
 InterpretResult VM::interpret(const CompiledChunk &chunk) {
@@ -2435,6 +2524,104 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+  SPT_OPCODE(OP_TFORCALL) {
+    const uint8_t A = GETARG_A(instruction);
+    const uint8_t C = GETARG_C(instruction);
+
+    Value *base = &slots[A];
+    Value funcVal = base[0];
+
+    if (funcVal.isClosure()) {
+      Closure *closure = static_cast<Closure *>(funcVal.asGC());
+      const Prototype *proto = closure->proto;
+
+      size_t currentSize = fiber->stackTop - fiber->stack.data();
+      if (currentSize + 3 + proto->maxStackSize >= fiber->stack.size()) {
+        fiber->ensureStack(proto->maxStackSize + 3);
+        base = &slots[A];
+      }
+
+      Value *top = fiber->stackTop;
+      top[0] = base[0];
+      top[1] = base[1];
+      top[2] = base[2];
+      fiber->stackTop += 3;
+
+      CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
+      newFrame->closure = closure;
+      newFrame->ip = proto->code.data();
+
+      newFrame->slotsBase = static_cast<int>(top - fiber->stack.data()) + 1;
+
+      newFrame->returnBase = frame->slotsBase + A + 3;
+      newFrame->expectedResults = C;
+      newFrame->deferBase = fiber->deferTop;
+
+      frame = newFrame;
+
+      Value *newStackStart = fiber->stack.data() + newFrame->slotsBase;
+      Value *newStackEnd = newStackStart + proto->maxStackSize;
+      while (fiber->stackTop < newStackEnd) {
+        *fiber->stackTop++ = Value::nil();
+      }
+
+      REFRESH_CACHE();
+    }
+
+    else if (funcVal.isNativeFunc()) {
+      NativeFunction *native = static_cast<NativeFunction *>(funcVal.asGC());
+
+      nativeMultiReturn_.clear();
+      hasNativeMultiReturn_ = false;
+
+      Value result = native->function(this, Value::nil(), 2, &base[1]);
+
+      if (hasError_)
+        return InterpretResult::RUNTIME_ERROR;
+
+      REFRESH_SLOTS();
+      Value *dest = &slots[A + 3];
+
+      if (hasNativeMultiReturn_) {
+        const size_t count = nativeMultiReturn_.size();
+        const size_t limit = (count < C) ? count : C;
+        for (size_t i = 0; i < limit; ++i)
+          dest[i] = nativeMultiReturn_[i];
+        for (size_t i = limit; i < C; ++i)
+          dest[i] = Value::nil();
+      } else {
+        if (C > 0) {
+          dest[0] = result;
+          for (int i = 1; i < C; ++i)
+            dest[i] = Value::nil();
+        }
+      }
+    } else {
+      runtimeError("attempt to iterate over a non-function value");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_TFORLOOP) {
+
+    const uint8_t A = GETARG_A(instruction);
+
+    Value *var1 = &slots[A + 3];
+
+    if (!var1->isNil()) {
+
+      slots[A + 2] = *var1;
+
+    } else {
+
+      const int32_t sBx = GETARG_sBx(instruction);
+      frame->ip += sBx;
+    }
+
+    SPT_DISPATCH();
+  }
 #undef CHECK_NUM
   SPT_DISPATCH_LOOP_END()
 

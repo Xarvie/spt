@@ -812,34 +812,82 @@ void Compiler::compileForCStyle(ForCStyleStatementNode *stmt) {
 void Compiler::compileForEach(ForEachStatementNode *stmt) {
   cg_->beginScope();
 
-  int iterSlot = cg_->allocSlot();
-  compileExpression(stmt->iterableExpr, iterSlot);
+  int baseSlot = cg_->allocSlots(3);
 
-  std::vector<int> varSlots;
-  for (auto *param : stmt->loopVariables) {
-    int slot = cg_->addLocal(param->name);
-    varSlots.push_back(slot);
+  const auto &exprs = stmt->iterableExprs;
+  if (exprs.empty()) {
+    cg_->emitABC(OpCode::OP_LOADNIL, baseSlot, 2, 0);
+  } else {
+    int slotsFilled = 0;
+    const int TOTAL_NEEDED = 3;
+
+    for (size_t i = 0; i < exprs.size(); ++i) {
+      if (slotsFilled >= TOTAL_NEEDED) {
+        break;
+      }
+
+      Expression *expr = exprs[i];
+      int currentSlot = baseSlot + slotsFilled;
+      int needed = TOTAL_NEEDED - slotsFilled;
+      bool isLastExpr = (i == exprs.size() - 1);
+
+      if (isLastExpr) {
+        if (auto *call = dynamic_cast<FunctionCallNode *>(expr)) {
+          compileFunctionCall(call, currentSlot, needed);
+          slotsFilled += needed;
+        } else {
+          compileExpression(expr, currentSlot);
+          slotsFilled += 1;
+        }
+      } else {
+        compileExpression(expr, currentSlot);
+        slotsFilled += 1;
+      }
+    }
+
+    if (slotsFilled < TOTAL_NEEDED) {
+      int nilStart = baseSlot + slotsFilled;
+      int nilCount = TOTAL_NEEDED - slotsFilled;
+      cg_->emitABC(OpCode::OP_LOADNIL, nilStart, nilCount - 1, 0);
+    }
   }
 
-  int loopStart = cg_->currentPc();
-  cg_->beginLoop(loopStart);
+  int nVars = static_cast<int>(stmt->loopVariables.size());
 
-  int resultSlot = varSlots.empty() ? cg_->allocSlot() : varSlots[0];
+  cg_->allocSlots(nVars);
 
-  cg_->emitABC(OpCode::OP_CALL, iterSlot, 1, static_cast<uint8_t>(varSlots.size() + 1));
+  for (int i = 0; i < nVars; ++i) {
+    auto *param = stmt->loopVariables[i];
 
-  cg_->emitABC(OpCode::OP_TEST, resultSlot, 0, 0);
-  int exitJump = cg_->emitJump(OpCode::OP_JMP);
+    cg_->addLocal(param->name);
+
+    cg_->current()->locals.back().slot = baseSlot + 3 + i;
+    cg_->markInitialized();
+  }
+
+  int loopStartPc = cg_->currentPc();
+  cg_->beginLoop(loopStartPc);
+
+  cg_->emitABC(OpCode::OP_TFORCALL, baseSlot, 0, nVars);
+
+  int tforloopPc = cg_->currentPc();
+  cg_->emitAsBx(OpCode::OP_TFORLOOP, baseSlot, 0);
 
   compileBlock(stmt->body);
 
-  int loopJump = cg_->currentPc() - loopStart;
-  cg_->emitAsBx(OpCode::OP_JMP, 0, -loopJump - 1);
+  int jumpBackOffset = cg_->currentPc() - loopStartPc;
+  cg_->emitAsBx(OpCode::OP_JMP, 0, -jumpBackOffset - 1);
 
-  cg_->patchJump(exitJump);
+  int exitPc = cg_->currentPc();
+  cg_->patchJumpTo(tforloopPc, exitPc);
+
   cg_->patchBreaks();
+  cg_->patchContinues(loopStartPc);
+
   cg_->endLoop();
   cg_->endScope();
+
+  cg_->freeSlots(3 + nVars);
 }
 
 void Compiler::compileReturn(ReturnStatementNode *stmt) {

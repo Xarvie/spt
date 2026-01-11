@@ -313,9 +313,8 @@ forStatement
 forControl
     // 形式一: C 风格 (init; condition; update)
     : forInitStatement SEMICOLON expression? SEMICOLON forUpdate? #forCStyleControl
-    // 注意: update 部分允许零或多个逗号分隔的更新表达式/语句
-    // 形式二: For-Each 风格 (Type var1, Type var2 : collection)
-    | declaration_item (COMMA declaration_item)* COL expression #forEachExplicitControl
+    // 形式二：支持 for (T1 k, T1 v : iterFunc, state, initVal)
+    | declaration_item (COMMA declaration_item)* COL expressionList #forEachExplicitControl
     ;
 
 forUpdate:

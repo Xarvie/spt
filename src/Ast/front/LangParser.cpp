@@ -518,7 +518,7 @@ void langparserParserInitialize() {
       0,   654, 659, 3,   24,  12,  0,   655, 656, 5,   73,  0,   0,   656, 658, 3,   24,  12,  0,
       657, 655, 1,   0,   0,   0,   658, 661, 1,   0,   0,   0,   659, 657, 1,   0,   0,   0,   659,
       660, 1,   0,   0,   0,   660, 662, 1,   0,   0,   0,   661, 659, 1,   0,   0,   0,   662, 663,
-      5,   75,  0,   0,   663, 664, 3,   42,  21,  0,   664, 666, 1,   0,   0,   0,   665, 645, 1,
+      5,   75,  0,   0,   663, 664, 3,   44,  22,  0,   664, 666, 1,   0,   0,   0,   665, 645, 1,
       0,   0,   0,   665, 654, 1,   0,   0,   0,   666, 107, 1,   0,   0,   0,   667, 672, 3,   110,
       55,  0,   668, 669, 5,   73,  0,   0,   669, 671, 3,   110, 55,  0,   670, 668, 1,   0,   0,
       0,   671, 674, 1,   0,   0,   0,   672, 670, 1,   0,   0,   0,   672, 673, 1,   0,   0,   0,
@@ -6336,8 +6336,8 @@ tree::TerminalNode *LangParser::ForEachExplicitControlContext::COL() {
   return getToken(LangParser::COL, 0);
 }
 
-LangParser::ExpressionContext *LangParser::ForEachExplicitControlContext::expression() {
-  return getRuleContext<LangParser::ExpressionContext>(0);
+LangParser::ExpressionListContext *LangParser::ForEachExplicitControlContext::expressionList() {
+  return getRuleContext<LangParser::ExpressionListContext>(0);
 }
 
 std::vector<tree::TerminalNode *> LangParser::ForEachExplicitControlContext::COMMA() {
@@ -6459,7 +6459,7 @@ LangParser::ForControlContext *LangParser::forControl() {
       setState(662);
       match(LangParser::COL);
       setState(663);
-      expression();
+      expressionList();
       break;
     }
 

@@ -687,15 +687,20 @@ public:
 class ForEachStatementNode : public Statement {
 public:
   std::vector<ParameterDeclNode *> loopVariables;
-  Expression *iterableExpr = nullptr;
+  std::vector<Expression *> iterableExprs;
   BlockNode *body = nullptr;
 
-  ForEachStatementNode(std::vector<ParameterDeclNode *> vars, Expression *iter, BlockNode *b,
-                       SourceLocation loc)
+  ForEachStatementNode(std::vector<ParameterDeclNode *> vars, std::vector<Expression *> exprs,
+                       BlockNode *b, SourceLocation loc)
       : Statement(std::move(loc), NodeType::FOR_EACH_STATEMENT), loopVariables(std::move(vars)),
-        iterableExpr(iter), body(b) {} // 传递类型
+        iterableExprs(std::move(exprs)), body(b) {}
 
-  virtual ~ForEachStatementNode() override;
+  virtual ~ForEachStatementNode() override {
+    deleteVectorItems(loopVariables);
+    deleteVectorItems(iterableExprs);
+    if (body)
+      delete body;
+  }
 };
 
 class BreakStatementNode : public Statement {

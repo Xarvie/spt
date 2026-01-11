@@ -1754,7 +1754,7 @@ public:
     std::vector<Declaration_itemContext *> declaration_item();
     Declaration_itemContext *declaration_item(size_t i);
     antlr4::tree::TerminalNode *COL();
-    ExpressionContext *expression();
+    ExpressionListContext *expressionList();
     std::vector<antlr4::tree::TerminalNode *> COMMA();
     antlr4::tree::TerminalNode *COMMA(size_t i);
 

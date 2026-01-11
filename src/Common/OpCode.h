@@ -85,7 +85,63 @@ enum class OpCode : uint8_t {
   OP_FORPREP, /* A sBx | R[A] -= R[A+2]; pc += sBx      初始化：预减 Step，跳转到循环尾部首次检查 */
   OP_FORLOOP, /* A sBx | R[A] += R[A+2]; if R[A] <= R[A+1] then pc += sBx 循环尾：步进 + 检查 + 回跳
                */
-  OP_LOADI /* A sBx | R[A] := sBx  加载17位有符号立即数 (用于优化小整数加载) */
+  OP_LOADI, /* A sBx | R[A] := sBx  加载17位有符号立即数 (用于优化小整数加载) */
+
+  /* ** OP_TFORCALL
+  ** 格式: A C
+  **
+  ** [输入寄存器布局 - 硬性契约]
+  ** R[A]   : Generator 函数 (迭代器)
+  ** R[A+1] : State (状态常量)
+  ** R[A+2] : Control (控制变量，上一轮的第一个返回值)
+  **
+  ** [输出寄存器布局]
+  ** R[A+3] ... R[A+2+C] : 本次迭代的返回值 (Loop Variables)
+  **
+  ** [关键行为]
+  ** 1. 自动压栈调用 R[A](R[A+1], R[A+2])。
+  ** 2. 若是 Script Closure：
+  ** - 创建新栈帧。
+  ** - 注意：新帧的 slotsBase 必须指向 R[A+1] (State)，即偏移量需 +1，
+  ** 以确保被调用函数的参数 0 是 State，参数 1 是 Control。
+  ** 3. 若是 Native Function：
+  ** - 直接传入 &slots[A+1] 作为参数数组基址。
+  ** 4. 结果强制回写到 R[A+3] 起始的位置。
+  **
+  ** [编译器配合]
+  ** 编译器必须强制将循环变量符号 (i, v...) 绑定到 slot A+3, A+4...
+  ** 而非分配新的局部变量槽位。
+  */
+  OP_TFORCALL,
+
+  /* ** OP_TFORLOOP
+  ** 格式: A sBx
+  **
+  ** [操作数]
+  ** A   : 基址。指向 Generator 函数的位置 (与 TFORCALL 共享 A)。
+  ** sBx : 退出跳转偏移 (Exit Jump Offset)。指向循环结束后的指令。
+  **
+  ** [输入检查]
+  ** 检查 R[A+3] (即迭代器的第一个返回值 Var1)。
+  **
+  ** [逻辑分支]
+  ** 1. 若 R[A+3] != nil (循环继续):
+  ** - 注意:关键副作用: R[A+2] = R[A+3]
+  ** (将当前的 Var1 更新为下一次调用的 Control 变量)。
+  ** - 不跳转 (Fallthrough)，继续执行循环体。
+  **
+  ** 2. 若 R[A+3] == nil (循环结束):
+  ** - PC += sBx (跳转到循环外)。
+  **
+  ** [典型指令流]
+  ** Loop:
+  ** OP_TFORCALL A, C
+  ** OP_TFORLOOP A, ExitOffset
+  ** ... 循环体 ...
+  ** OP_JUMP     Loop
+  ** Exit:
+  */
+  OP_TFORLOOP,
 };
 
 /* --- 指令解码宏 (完全兼容 Lua 5.4 布局) --- */
