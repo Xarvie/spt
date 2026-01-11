@@ -71,7 +71,6 @@ enum class OpCode : uint8_t {
   /* --- 模块系统 --- */
   OP_IMPORT,      /* A Bx    | R[A] := import(K[Bx])  导入模块              */
   OP_IMPORT_FROM, /* A B C   | R[A] := import(K[B])[K[C]]  导入特定符号      */
-  OP_EXPORT,      /* A       | export R[A]  标记导出                        */
 
   OP_DEFER, /* A Bx | 将栈槽 R[A] 处的闭包压入当前函数的 defer 栈 */
 

@@ -528,8 +528,6 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "IMPORT";
   case OpCode::OP_IMPORT_FROM:
     return "IMPORT_FROM";
-  case OpCode::OP_EXPORT:
-    return "EXPORT";
   case OpCode::OP_DEFER:
     return "DEFER";
 

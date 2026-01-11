@@ -2191,8 +2191,6 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
-  SPT_OPCODE(OP_EXPORT) { SPT_DISPATCH(); }
-
   SPT_OPCODE(OP_DEFER) {
     uint8_t A = GETARG_A(instruction);
     Value deferClosure = slots[A];
