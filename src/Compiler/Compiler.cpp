@@ -1575,6 +1575,9 @@ OpCode Compiler::binaryOpToOpcode(OperatorKind op) {
   case OperatorKind::DIV:
   case OperatorKind::ASSIGN_DIV:
     return OpCode::OP_DIV;
+  case OperatorKind::IDIV:
+  case OperatorKind::ASSIGN_IDIV:
+    return OpCode::OP_IDIV;
   case OperatorKind::MOD:
   case OperatorKind::ASSIGN_MOD:
     return OpCode::OP_MOD;

@@ -1377,6 +1377,40 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+  SPT_OPCODE(OP_IDIV) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = slots[B];
+    Value c = slots[C];
+
+    if (!b.isNumber() || !c.isNumber()) {
+      runtimeError("Operands must be numbers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+    double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
+
+    if (right == 0.0) {
+      runtimeError("Division by zero");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    double result = std::floor(left / right);
+
+    constexpr double maxInt = static_cast<double>(INT64_MAX);
+    constexpr double minInt = static_cast<double>(INT64_MIN);
+
+    if (result >= minInt && result <= maxInt) {
+      slots[A] = Value::integer(static_cast<int64_t>(result));
+    } else {
+      slots[A] = Value::number(result);
+    }
+
+    SPT_DISPATCH();
+  }
+
   SPT_OPCODE(OP_MOD) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);

@@ -2281,6 +2281,10 @@ void registerBuiltinFunctions(TestRunner &runner) {
   // 数学函数
   runner.addTest("Builtin - Math Functions",
                  R"(
+            int i = 4;
+            i~/=3.1;
+            print(i);
+            print(4~/3.1);
             print(abs(-5));
             print(abs(5));
             print(abs(-3.14));
@@ -2292,7 +2296,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
             print(round(3.5));
             print(round(3.6));
        )",
-                 "5\n5\n3.14\n3\n3\n4\n4\n3\n4\n4");
+                 "1\n1\n5\n5\n3.14\n3\n3\n4\n4\n3\n4\n4");
 
   runner.addTest("Builtin - sqrt pow",
                  R"(

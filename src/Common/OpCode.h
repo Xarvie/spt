@@ -41,12 +41,13 @@ enum class OpCode : uint8_t {
   OP_CLOSE_UPVALUE, /* A       | Close UpValues >= R[A]                     */
 
   /* --- 算术运算 --- */
-  OP_ADD, /* A B C   | R[A] := R[B] + R[C]                        */
-  OP_SUB, /* A B C   | R[A] := R[B] - R[C]                        */
-  OP_MUL, /* A B C   | R[A] := R[B] * R[C]                        */
-  OP_DIV, /* A B C   | R[A] := R[B] / R[C]                        */
-  OP_MOD, /* A B C   | R[A] := R[B] % R[C]                        */
-  OP_UNM, /* A B     | R[A] := -R[B]                              */
+  OP_ADD,  /* A B C   | R[A] := R[B] + R[C]                        */
+  OP_SUB,  /* A B C   | R[A] := R[B] - R[C]                        */
+  OP_MUL,  /* A B C   | R[A] := R[B] * R[C]                        */
+  OP_DIV,  /* A B C   | R[A] := R[B] / R[C]                        */
+  OP_IDIV, /* A B C   | R[A] := floor(R[B] / R[C])                */
+  OP_MOD,  /* A B C   | R[A] := R[B] % R[C]                        */
+  OP_UNM,  /* A B     | R[A] := -R[B]                              */
 
   /* --- 位运算 --- */
   OP_BAND, /* A B C   | R[A] := R[B] & R[C]                        */

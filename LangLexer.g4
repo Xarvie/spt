@@ -54,14 +54,15 @@ ADD: '+';               // 加法
 SUB: '-';               // 减法 / 一元负号
 MUL: '*';               // 乘法
 DIV: '/';               // 除法
+IDIV: '~/';             // 整数除法
 MOD: '%';               // 取模
-// POW 已移除 (无幂运算符)
 
 ASSIGN: '=';            // 赋值
 ADD_ASSIGN: '+=';       // 加法赋值
 SUB_ASSIGN: '-=';       // 减法赋值
 MUL_ASSIGN: '*=';       // 乘法赋值
 DIV_ASSIGN: '/=';       // 除法赋值
+IDIV_ASSIGN: '~/=';     // 整数除法赋值
 MOD_ASSIGN: '%=';       // 取模赋值
 CONCAT_ASSIGN: '..=';   // 字符串连接赋值
 

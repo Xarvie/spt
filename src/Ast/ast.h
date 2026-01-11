@@ -1,8 +1,8 @@
 #ifndef SPT_AST_CPP_RAWPTR_H
 #define SPT_AST_CPP_RAWPTR_H
 
-#include "Common/config.h"
 #include "Common/Types.h"
+#include "Common/config.h"
 
 #include <cstdint>    // 用于 int64_t
 #include <functional> // 用于 std::function
@@ -216,12 +216,9 @@ public:
   virtual AstType *clone() const override;
 };
 
-
 class UserType : public AstType {
 public:
-
   std::vector<std::string> qualifiedNameParts; ///< 存储限定名的各个部分，例如 {"Module", "Type"}
-
 
   UserType(std::vector<std::string> nameParts, SourceLocation loc)
       : AstType(std::move(loc)), qualifiedNameParts(std::move(nameParts)) {}
@@ -281,6 +278,7 @@ enum class OperatorKind {
   SUB,
   MUL,
   DIV,
+  IDIV,
   MOD,
   CONCAT,
   LT,
@@ -300,6 +298,7 @@ enum class OperatorKind {
   ASSIGN_SUB,
   ASSIGN_MUL,
   ASSIGN_DIV,
+  ASSIGN_IDIV,
   ASSIGN_MOD,
   ASSIGN_CONCAT,
   ASSIGN_BW_AND,

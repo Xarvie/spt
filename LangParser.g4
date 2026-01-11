@@ -49,7 +49,7 @@ deferStatement
 // --- 赋值语句 ---
 /** 更新赋值语句: lvalue op= expression */
 updateStatement
- : lvalue op=(ADD_ASSIGN | SUB_ASSIGN | MUL_ASSIGN | DIV_ASSIGN | MOD_ASSIGN | CONCAT_ASSIGN /* 可添加位移等复合赋值 */) expression  #updateAssignStmt
+ : lvalue op=(ADD_ASSIGN | SUB_ASSIGN | MUL_ASSIGN | DIV_ASSIGN | IDIV_ASSIGN | MOD_ASSIGN | CONCAT_ASSIGN) expression  #updateAssignStmt
  ;
 
 /** 赋值语句: lvalue, lvalue = expression, expression */
@@ -221,7 +221,7 @@ addSubExpOp:(ADD | SUB);
 mulDivModExp
     : unaryExp (mulDivModExpOp unaryExp)* #mulDivModExpression
     ;
-mulDivModExpOp:(MUL | DIV | MOD);
+mulDivModExpOp:(MUL | DIV | IDIV | MOD);
 /** 一元前缀运算符 (!, -, #, ~) - 右结合 */
 unaryExp
     : (NOT | SUB | LEN | BIT_NOT) unaryExp #unaryPrefix

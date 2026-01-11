@@ -100,6 +100,7 @@ namespace spt {
   SPT_DISPATCH_TABLE_ENTRY(OP_SUB)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_MUL)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_DIV)                                                                 \
+  SPT_DISPATCH_TABLE_ENTRY(OP_IDIV)                                                                \
   SPT_DISPATCH_TABLE_ENTRY(OP_MOD)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_UNM)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_BAND)                                                                \

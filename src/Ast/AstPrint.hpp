@@ -73,6 +73,8 @@ inline std::string getOperatorName(OperatorKind op) {
     return "*=";
   case OperatorKind::ASSIGN_DIV:
     return "/=";
+  case OperatorKind::ASSIGN_IDIV:
+    return "~/=";
   case OperatorKind::ASSIGN_MOD:
     return "%=";
   case OperatorKind::ASSIGN_CONCAT:

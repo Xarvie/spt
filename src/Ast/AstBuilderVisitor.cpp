@@ -210,6 +210,9 @@ std::any AstBuilderVisitor::visitBinaryExpressionRawPtr(
     case LangParser::DIV:
       opKind = OperatorKind::DIV;
       break;
+    case LangParser::IDIV:
+      opKind = OperatorKind::IDIV;
+      break;
     case LangParser::MOD:
       opKind = OperatorKind::MOD;
       break;
@@ -1076,6 +1079,9 @@ std::any AstBuilderVisitor::visitUpdateAssignStmt(LangParser::UpdateAssignStmtCo
     break;
   case LangParser::DIV_ASSIGN:
     op = OperatorKind::ASSIGN_DIV;
+    break;
+  case LangParser::IDIV_ASSIGN:
+    op = OperatorKind::ASSIGN_IDIV;
     break;
   case LangParser::MOD_ASSIGN:
     op = OperatorKind::ASSIGN_MOD;
