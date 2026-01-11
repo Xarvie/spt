@@ -12,7 +12,7 @@ null
 'map'
 'function'
 'coro'
-'mutivar'
+'vars'
 'if'
 'else'
 'while'
@@ -99,7 +99,7 @@ LIST
 MAP
 FUNCTION
 COROUTINE
-MUTIVAR
+VARS
 IF
 ELSE
 WHILE

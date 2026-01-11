@@ -111,7 +111,7 @@ void langparserParserInitialize() {
                                "arguments"},
       std::vector<std::string>{
           "",         "'int'",  "'float'", "'number'", "'string'",   "'bool'",     "'any'",
-          "'void'",   "'null'", "'list'",  "'map'",    "'function'", "'coro'",     "'mutivar'",
+          "'void'",   "'null'", "'list'",  "'map'",    "'function'", "'coro'",     "'vars'",
           "'if'",     "'else'", "'while'", "'for'",    "'break'",    "'continue'", "'return'",
           "'defer'",  "'true'", "'false'", "'const'",  "'auto'",     "'global'",   "'static'",
           "'import'", "'as'",   "'type'",  "'from'",   "'private'",  "'export'",   "'class'",
@@ -135,7 +135,7 @@ void langparserParserInitialize() {
                                "MAP",
                                "FUNCTION",
                                "COROUTINE",
-                               "MUTIVAR",
+                               "VARS",
                                "IF",
                                "ELSE",
                                "WHILE",
@@ -1996,8 +1996,8 @@ void LangParser::VariableDeclarationContext::copyFrom(VariableDeclarationContext
 //----------------- MutiVariableDeclarationDefContext
 //------------------------------------------------------------------
 
-tree::TerminalNode *LangParser::MutiVariableDeclarationDefContext::MUTIVAR() {
-  return getToken(LangParser::MUTIVAR, 0);
+tree::TerminalNode *LangParser::MutiVariableDeclarationDefContext::VARS() {
+  return getToken(LangParser::VARS, 0);
 }
 
 std::vector<tree::TerminalNode *> LangParser::MutiVariableDeclarationDefContext::IDENTIFIER() {
@@ -2153,11 +2153,11 @@ LangParser::VariableDeclarationContext *LangParser::variableDeclaration() {
       break;
     }
 
-    case LangParser::MUTIVAR: {
+    case LangParser::VARS: {
       _localctx = _tracker.createInstance<LangParser::MutiVariableDeclarationDefContext>(_localctx);
       enterOuterAlt(_localctx, 2);
       setState(259);
-      match(LangParser::MUTIVAR);
+      match(LangParser::VARS);
       setState(261);
       _errHandler->sync(this);
 
@@ -2378,8 +2378,8 @@ std::any LangParser::FunctionDeclarationDefContext::accept(tree::ParseTreeVisito
 //----------------- MultiReturnFunctionDeclarationDefContext
 //------------------------------------------------------------------
 
-tree::TerminalNode *LangParser::MultiReturnFunctionDeclarationDefContext::MUTIVAR() {
-  return getToken(LangParser::MUTIVAR, 0);
+tree::TerminalNode *LangParser::MultiReturnFunctionDeclarationDefContext::VARS() {
+  return getToken(LangParser::VARS, 0);
 }
 
 LangParser::QualifiedIdentifierContext *
@@ -2486,7 +2486,7 @@ LangParser::FunctionDeclarationContext *LangParser::functionDeclaration() {
         match(LangParser::GLOBAL);
       }
       setState(307);
-      match(LangParser::MUTIVAR);
+      match(LangParser::VARS);
       setState(308);
       qualifiedIdentifier();
       setState(309);
@@ -2731,8 +2731,8 @@ std::any LangParser::ClassEmptyMemberContext::accept(tree::ParseTreeVisitor *vis
 //----------------- MultiReturnClassMethodMemberContext
 //------------------------------------------------------------------
 
-tree::TerminalNode *LangParser::MultiReturnClassMethodMemberContext::MUTIVAR() {
-  return getToken(LangParser::MUTIVAR, 0);
+tree::TerminalNode *LangParser::MultiReturnClassMethodMemberContext::VARS() {
+  return getToken(LangParser::VARS, 0);
 }
 
 tree::TerminalNode *LangParser::MultiReturnClassMethodMemberContext::IDENTIFIER() {
@@ -2869,7 +2869,7 @@ LangParser::ClassMemberContext *LangParser::classMember() {
         match(LangParser::STATIC);
       }
       setState(355);
-      match(LangParser::MUTIVAR);
+      match(LangParser::VARS);
       setState(356);
       match(LangParser::IDENTIFIER);
       setState(357);
@@ -5474,8 +5474,8 @@ LangParser::TypeContext *LangParser::LambdaExprDefContext::type() {
   return getRuleContext<LangParser::TypeContext>(0);
 }
 
-tree::TerminalNode *LangParser::LambdaExprDefContext::MUTIVAR() {
-  return getToken(LangParser::MUTIVAR, 0);
+tree::TerminalNode *LangParser::LambdaExprDefContext::VARS() {
+  return getToken(LangParser::VARS, 0);
 }
 
 LangParser::ParameterListContext *LangParser::LambdaExprDefContext::parameterList() {
@@ -5548,9 +5548,9 @@ LangParser::LambdaExpressionContext *LangParser::lambdaExpression() {
       break;
     }
 
-    case LangParser::MUTIVAR: {
+    case LangParser::VARS: {
       setState(565);
-      match(LangParser::MUTIVAR);
+      match(LangParser::VARS);
       break;
     }
 

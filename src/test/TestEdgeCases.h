@@ -107,7 +107,7 @@ inline void registerEdgeCases(TestRunner &runner) {
                  "16\n16\ntrue\n2\n2.5");
 
   // 回归测试
-  std::string multiVarScript = "mutivar ";
+  std::string multiVarScript = "vars ";
   for (int i = 0; i < 200; ++i) {
     if (i > 0)
       multiVarScript += ", ";

@@ -1029,7 +1029,7 @@ inline void registerGenericLoop(TestRunner &runner) {
 
   runner.addTest("Generic For - Multiple Values First Null",
                  R"(
-            mutivar iter(any s, int c) {
+            vars iter(any s, int c) {
                 if (c < 2) {
                     return c + 1, "val" .. (c + 1);
                 }

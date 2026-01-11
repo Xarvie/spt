@@ -20,7 +20,7 @@ public:
     MAP = 10,
     FUNCTION = 11,
     COROUTINE = 12,
-    MUTIVAR = 13,
+    VARS = 13,
     IF = 14,
     ELSE = 15,
     WHILE = 16,
@@ -638,7 +638,7 @@ public:
   public:
     MutiVariableDeclarationDefContext(VariableDeclarationContext *ctx);
 
-    antlr4::tree::TerminalNode *MUTIVAR();
+    antlr4::tree::TerminalNode *VARS();
     std::vector<antlr4::tree::TerminalNode *> IDENTIFIER();
     antlr4::tree::TerminalNode *IDENTIFIER(size_t i);
     std::vector<antlr4::tree::TerminalNode *> GLOBAL();
@@ -711,7 +711,7 @@ public:
   public:
     MultiReturnFunctionDeclarationDefContext(FunctionDeclarationContext *ctx);
 
-    antlr4::tree::TerminalNode *MUTIVAR();
+    antlr4::tree::TerminalNode *VARS();
     QualifiedIdentifierContext *qualifiedIdentifier();
     antlr4::tree::TerminalNode *OP();
     antlr4::tree::TerminalNode *CP();
@@ -803,7 +803,7 @@ public:
   public:
     MultiReturnClassMethodMemberContext(ClassMemberContext *ctx);
 
-    antlr4::tree::TerminalNode *MUTIVAR();
+    antlr4::tree::TerminalNode *VARS();
     antlr4::tree::TerminalNode *IDENTIFIER();
     antlr4::tree::TerminalNode *OP();
     antlr4::tree::TerminalNode *CP();
@@ -1540,7 +1540,7 @@ public:
     antlr4::tree::TerminalNode *ARROW();
     BlockStatementContext *blockStatement();
     TypeContext *type();
-    antlr4::tree::TerminalNode *MUTIVAR();
+    antlr4::tree::TerminalNode *VARS();
     ParameterListContext *parameterList();
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;

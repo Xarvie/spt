@@ -400,12 +400,12 @@ void registerFunctions(TestRunner &runner) {
        )",
                  "10\n25");
 
-  runner.runTest("mutivar Function",
+  runner.runTest("vars Function",
                  R"(
-            mutivar returnAB(int a, int b) {
+            vars returnAB(int a, int b) {
                 return a, b;
             }
-            mutivar a, b = returnAB(1, 2);
+            vars a, b = returnAB(1, 2);
             print(a, b);
        )",
                  "1 2");
@@ -1370,7 +1370,7 @@ void registerEdgeCases(TestRunner &runner) {
                  "16\n16\ntrue\n2\n2.5");
 
   // 回归测试
-  std::string multiVarScript = "mutivar ";
+  std::string multiVarScript = "vars ";
   for (int i = 0; i < 200; ++i) {
     if (i > 0)
       multiVarScript += ", ";
@@ -1747,9 +1747,9 @@ void registerBuiltinFunctions(TestRunner &runner) {
               return a/b;
             }
 
-            mutivar ok2, result2 = pcall(divide, 10, 0);
+            vars ok2, result2 = pcall(divide, 10, 0);
             print(ok2, result2);
-            mutivar ok, result = pcall(divide, 10, 1);
+            vars ok, result = pcall(divide, 10, 1);
             print(ok, result);
        )",
                  "false division by zero\ntrue 10");

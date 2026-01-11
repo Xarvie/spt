@@ -14,7 +14,7 @@ LIST: 'list';           // list 容器类型
 MAP: 'map';             // map 容器类型
 FUNCTION: 'function';   // function 类型 (用于 lambda 定义和类型提示)
 COROUTINE: 'coro'; // 协程类型
-MUTIVAR: 'mutivar';     // 多返回值
+VARS: 'vars';     // 多返回值
 
 // 控制流
 IF: 'if';

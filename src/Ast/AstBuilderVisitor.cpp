@@ -380,19 +380,19 @@ std::any AstBuilderVisitor::visitMutiVariableDeclarationDef(
     auto commaNodes = ctx->COMMA();
 
     if (idNodes.empty()) {
-      throw std::runtime_error("mutivar 声明至少需要一个变量名");
+      throw std::runtime_error("vars 声明至少需要一个变量名");
     }
 
     size_t currentGlobalIdx = 0;
     size_t currentConstIdx = 0;
     size_t currentCommaIdx = 0;
 
-    size_t previousDelimiterIndex = ctx->MUTIVAR()->getSymbol()->getTokenIndex();
+    size_t previousDelimiterIndex = ctx->VARS()->getSymbol()->getTokenIndex();
 
     for (size_t i = 0; i < idNodes.size(); ++i) {
       antlr4::tree::TerminalNode *idNode = idNodes[i];
       if (!idNode)
-        throw std::runtime_error("mutivar 声明中的 IDENTIFIER 节点为空");
+        throw std::runtime_error("vars 声明中的 IDENTIFIER 节点为空");
       size_t idTokenIndex = idNode->getSymbol()->getTokenIndex();
 
       bool is_global = false;
@@ -432,7 +432,7 @@ std::any AstBuilderVisitor::visitMutiVariableDeclarationDef(
       if (i < commaNodes.size()) {
         antlr4::tree::TerminalNode *commaNode = commaNodes[i];
         if (!commaNode) {
-          throw std::runtime_error("mutivar 声明中的 COMMA 节点为空");
+          throw std::runtime_error("vars 声明中的 COMMA 节点为空");
         }
         previousDelimiterIndex = commaNode->getSymbol()->getTokenIndex();
       } else {
@@ -443,7 +443,7 @@ std::any AstBuilderVisitor::visitMutiVariableDeclarationDef(
 
     if (ctx->ASSIGN()) {
       if (!ctx->expression()) {
-        throw std::runtime_error("内部错误: mutivar 声明中 '=' 后缺少初始化表达式");
+        throw std::runtime_error("内部错误: vars 声明中 '=' 后缺少初始化表达式");
       }
       std::any initResult = visit(ctx->expression());
       AstNode *initRaw =
@@ -451,11 +451,11 @@ std::any AstBuilderVisitor::visitMutiVariableDeclarationDef(
       initializer = dynamic_cast<Expression *>(initRaw);
       if (!initializer && initResult.has_value()) {
         delete initRaw;
-        throw std::runtime_error("mutivar 初始化器必须是表达式");
+        throw std::runtime_error("vars 初始化器必须是表达式");
       }
       if (!initializer) {
 
-        throw std::runtime_error("访问 mutivar 初始化表达式失败");
+        throw std::runtime_error("访问 vars 初始化表达式失败");
       }
     }
 
@@ -742,11 +742,11 @@ std::any AstBuilderVisitor::visitMultiReturnFunctionDeclarationDef(
 
   try {
 
-    if (!ctx->MUTIVAR())
+    if (!ctx->VARS())
       throw std::runtime_error("AstBuilderVisitor::"
                                "visitMultiReturnFunctionDeclarationDefnullptr");
 
-    returnType = new MultiReturnType(getSourceLocation(ctx->MUTIVAR()));
+    returnType = new MultiReturnType(getSourceLocation(ctx->VARS()));
     if (!returnType)
       throw std::runtime_error("AstBuilderVisitor::"
                                "visitMultiReturnFunctionDeclarationDefnullptr");
@@ -900,11 +900,11 @@ std::any AstBuilderVisitor::visitMultiReturnClassMethodMember(
 
   try {
 
-    if (!ctx->MUTIVAR())
+    if (!ctx->VARS())
       throw std::runtime_error("AstBuilderVisitor::"
                                "visitMultiReturnClassMethodMembernullptr");
 
-    returnType = new MultiReturnType(getSourceLocation(ctx->MUTIVAR()));
+    returnType = new MultiReturnType(getSourceLocation(ctx->VARS()));
     if (!returnType)
       throw std::runtime_error("AstBuilderVisitor::"
                                "visitMultiReturnClassMethodMembernullptr");
@@ -996,13 +996,13 @@ std::any AstBuilderVisitor::visitLambdaExprDef(LangParser::LambdaExprDefContext 
       returnType = safeAnyCastRawPtr<AstType>(returnTypeResult, "visitLambdaExprDef > type");
       if (!returnType)
         throw std::runtime_error("Lambda 返回类型访问失败");
-    } else if (ctx->MUTIVAR()) {
+    } else if (ctx->VARS()) {
 
-      returnType = new MultiReturnType(getSourceLocation(ctx->MUTIVAR()));
+      returnType = new MultiReturnType(getSourceLocation(ctx->VARS()));
       if (!returnType)
         throw std::runtime_error("AstBuilderVisitor::visitLambdaExprDefnullptr");
     } else {
-      throw std::runtime_error("Lambda 表达式缺少返回类型或 mutivar 关键字");
+      throw std::runtime_error("Lambda 表达式缺少返回类型或 vars 关键字");
     }
 
     if (!ctx->blockStatement())

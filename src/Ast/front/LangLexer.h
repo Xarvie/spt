@@ -20,7 +20,7 @@ public:
     MAP = 10,
     FUNCTION = 11,
     COROUTINE = 12,
-    MUTIVAR = 13,
+    VARS = 13,
     IF = 14,
     ELSE = 15,
     WHILE = 16,

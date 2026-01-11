@@ -115,12 +115,12 @@ inline void registerFunctions(TestRunner &runner) {
        )",
                  "10\n25");
 
-  runner.addTest("mutivar Function",
+  runner.addTest("vars Function",
                  R"(
-            mutivar returnAB(int a, int b) {
+            vars returnAB(int a, int b) {
                 return a, b;
             }
-            mutivar a, b = returnAB(1, 2);
+            vars a, b = returnAB(1, 2);
             print(a, b);
        )",
                  "1 2");

@@ -755,7 +755,7 @@ public:
   virtual ~VariableDeclNode() override;
 };
 
-// 用于存储 mutivar 声明中每个变量的信息
+// 用于存储 vars 声明中每个变量的信息
 struct MultiDeclVariableInfo {
   std::string name;
   bool isGlobal = false; // 从解析器获取
@@ -765,7 +765,7 @@ struct MultiDeclVariableInfo {
       : name(std::move(n)), isGlobal(isG), isConst(isC) {}
 };
 
-// 代表 "mutivar a, b = expr;" 语句的 AST 节点
+// 代表 "vars a, b = expr;" 语句的 AST 节点
 class MutiVariableDeclarationNode : public Declaration {
 public:
   std::vector<MultiDeclVariableInfo> variables; // 存储所有声明的变量 (现在不含 location)

@@ -171,9 +171,9 @@ inline void registerBuiltinFunctions(TestRunner &runner) {
               return a/b;
             }
 
-            mutivar ok2, result2 = pcall(divide, 10, 0);
+            vars ok2, result2 = pcall(divide, 10, 0);
             print(ok2, result2);
-            mutivar ok, result = pcall(divide, 10, 1);
+            vars ok, result = pcall(divide, 10, 1);
             print(ok, result);
        )",
                  "false division by zero\ntrue 10");

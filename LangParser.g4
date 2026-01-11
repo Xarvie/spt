@@ -88,7 +88,7 @@ variableDeclaration
     :
     //语言支持多个声明
     GLOBAL? CONST? declaration_item (ASSIGN expression)? #variableDeclarationDef
-    | MUTIVAR GLOBAL? CONST? IDENTIFIER (COMMA GLOBAL? CONST? IDENTIFIER)* (ASSIGN expression)? #mutiVariableDeclarationDef
+    | VARS GLOBAL? CONST? IDENTIFIER (COMMA GLOBAL? CONST? IDENTIFIER)* (ASSIGN expression)? #mutiVariableDeclarationDef
     ;
 
 /** 辅助规则: 单个声明项 (类型/auto + 标识符) */
@@ -99,7 +99,7 @@ declaration_item
 /** 函数声明/定义 (支持 global 和 qualifiedIdentifier, 仅支持单一返回类型或 void) */
 functionDeclaration
      : GLOBAL? type qualifiedIdentifier OP parameterList? CP blockStatement #functionDeclarationDef
-     | GLOBAL? MUTIVAR qualifiedIdentifier OP parameterList? CP blockStatement #multiReturnFunctionDeclarationDef
+     | GLOBAL? VARS qualifiedIdentifier OP parameterList? CP blockStatement #multiReturnFunctionDeclarationDef
      ;
 
 /** 类声明/定义 */
@@ -113,7 +113,7 @@ classMember
     : STATIC? CONST? declaration_item (ASSIGN expression)? #classFieldMember
     // 静态或实例方法声明
     | STATIC? type IDENTIFIER OP parameterList? CP blockStatement #classMethodMember
-    | STATIC? MUTIVAR IDENTIFIER OP parameterList? CP blockStatement #multiReturnClassMethodMember // <<< 使用 MUTIVAR 关键字
+    | STATIC? VARS IDENTIFIER OP parameterList? CP blockStatement #multiReturnClassMethodMember // <<< 使用 VARS 关键字
     // 空成员 (允许只有分号)
     | SEMICOLON #classEmptyMember
     ;
@@ -260,7 +260,7 @@ atomexp
 
 /** Lambda/匿名函数表达式: function (parameterList?) -> type { body } */
 lambdaExpression
- : FUNCTION OP parameterList? CP ARROW (type | MUTIVAR) blockStatement #lambdaExprDef
+ : FUNCTION OP parameterList? CP ARROW (type | VARS) blockStatement #lambdaExprDef
  ;
 
 /** List 字面量: [elem1, elem2, ...] */
