@@ -3,6 +3,7 @@
 #include "NativeBinding.h"
 #include "Object.h"
 #include "VM.h"
+#include <algorithm>
 
 namespace spt {
 
@@ -59,7 +60,17 @@ void GC::writeBarrier(GCObject *, GCObject *) {}
 
 void GC::addRoot(RootVisitor visitor) { roots_.push_back(std::move(visitor)); }
 
-void GC::removeRoot(RootVisitor) {}
+void GC::removeRoot(RootVisitor visitor) {
+
+  auto it = std::find_if(roots_.begin(), roots_.end(), [&visitor](const RootVisitor &v) {
+    return visitor.target_type() == v.target_type() &&
+           visitor.target<void (*)(Value &)>() == v.target<void (*)(Value &)>();
+  });
+
+  if (it != roots_.end()) {
+    roots_.erase(it);
+  }
+}
 
 void GC::markRoots() {
 
@@ -76,6 +87,9 @@ void GC::markRoots() {
   }
 
   for (auto &visitor : roots_) {
+
+    Value tempValue = Value::nil();
+    visitor(tempValue);
   }
 
   if (vm_->hasError_) {
@@ -332,16 +346,19 @@ void GC::freeObject(GCObject *obj) {
   case ValueType::Map: {
     MapObject *map = static_cast<MapObject *>(obj);
 
-    bytesAllocated_ -=
-        sizeof(MapObject) + (map->entries.bucket_count() * sizeof(std::pair<Value, Value>));
+    bytesAllocated_ -= sizeof(MapObject) + (map->entries.size() * sizeof(std::pair<Value, Value>));
     delete map;
     break;
   }
-  case ValueType::Closure:
-    bytesAllocated_ -= sizeof(Closure);
-    delete static_cast<Closure *>(obj);
+  case ValueType::Closure: {
+    Closure *closure = static_cast<Closure *>(obj);
+
+    bytesAllocated_ -= sizeof(Closure) + (closure->upvalues.capacity() * sizeof(UpValue *));
+    delete closure;
     break;
+  }
   case ValueType::Class:
+
     bytesAllocated_ -= sizeof(ClassObject);
     delete static_cast<ClassObject *>(obj);
     break;
@@ -449,7 +466,7 @@ void GC::invokeGCMethod(Instance *instance) {
 
   fiber->push(Value::object(instance));
 
-  InterpretResult result = vm_->call(closure, 0);
+  InterpretResult result = vm_->call(closure, 1);
 
   if (result != InterpretResult::OK) {
     fiber->stackTop = savedStackTop;

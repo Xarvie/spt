@@ -1,6 +1,7 @@
 #include "Value.h"
 #include "NativeBinding.h"
 #include "Object.h"
+#include <cmath>
 
 namespace spt {
 
@@ -93,6 +94,10 @@ bool Value::equals(const Value &other) const {
   case ValueType::Int:
     return as.integer == other.as.integer;
   case ValueType::Float:
+
+    if (std::isnan(as.number) && std::isnan(other.as.number)) {
+      return true;
+    }
     return as.number == other.as.number;
   case ValueType::String:
     if (as.gc && other.as.gc) {
@@ -114,6 +119,10 @@ size_t Value::hash() const noexcept {
   case ValueType::Int:
     return as.integer;
   case ValueType::Float:
+
+    if (std::isnan(as.number)) {
+      return 0x7FF8000000000001ULL;
+    }
     return std::hash<double>()(as.number);
   case ValueType::String:
     if (as.gc) {

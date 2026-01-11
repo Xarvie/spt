@@ -4,6 +4,7 @@
 #include "Object.h"
 #include "VM.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -278,7 +279,8 @@ static Value stringToUpper(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
   std::string result = static_cast<StringObject *>(receiver.asGC())->data;
-  std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+  std::transform(result.begin(), result.end(), result.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
   return Value::object(vm->allocateString(result));
 }
 
@@ -286,7 +288,8 @@ static Value stringToLower(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
   std::string result = static_cast<StringObject *>(receiver.asGC())->data;
-  std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+  std::transform(result.begin(), result.end(), result.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return Value::object(vm->allocateString(result));
 }
 
@@ -387,8 +390,9 @@ static Value fiberTry(VM *vm, Value receiver, int argc, Value *argv) {
   }
   FiberObject *fiber = static_cast<FiberObject *>(receiver.asGC());
 
-  vm->fiberCall(fiber, (argc > 0) ? argv[0] : Value::nil(), true);
-  return fiber->hasError ? fiber->error : Value::nil();
+  Value result = vm->fiberCall(fiber, (argc > 0) ? argv[0] : Value::nil(), true);
+
+  return fiber->hasError ? fiber->error : result;
 }
 
 static const MethodEntry fiberMethods[] = {

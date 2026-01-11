@@ -7,6 +7,7 @@
 #include "VMDispatch.h"
 #include <algorithm>
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdarg>
 #include <cstdlib>
@@ -95,7 +96,16 @@ void VM::registerBuiltinFunctions() {
         if (v.isInt()) {
           return v;
         } else if (v.isFloat()) {
-          return Value::integer(static_cast<int64_t>(v.asFloat()));
+          double val = v.asFloat();
+
+          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+              std::isinf(val)) {
+            this->throwError(Value::object(this->allocateString("toInt: value out of range")));
+            return Value::nil();
+          }
+          return Value::integer(static_cast<int64_t>(val));
         } else if (v.isString()) {
           StringObject *str = static_cast<StringObject *>(v.asGC());
           char *endptr = nullptr;
@@ -193,6 +203,11 @@ void VM::registerBuiltinFunctions() {
         Value v = args[0];
         if (v.isInt()) {
           int64_t val = v.asInt();
+
+          if (val == INT64_MIN) {
+
+            return Value::number(static_cast<double>(INT64_MAX) + 1.0);
+          }
           return Value::integer(val < 0 ? -val : val);
         } else if (v.isFloat()) {
           return Value::number(std::abs(v.asFloat()));
@@ -210,7 +225,15 @@ void VM::registerBuiltinFunctions() {
         if (v.isInt()) {
           return v;
         } else if (v.isFloat()) {
-          return Value::integer(static_cast<int64_t>(std::floor(v.asFloat())));
+          double val = std::floor(v.asFloat());
+
+          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+              std::isinf(val)) {
+            return Value::number(val);
+          }
+          return Value::integer(static_cast<int64_t>(val));
         }
         return Value::integer(0);
       },
@@ -225,7 +248,15 @@ void VM::registerBuiltinFunctions() {
         if (v.isInt()) {
           return v;
         } else if (v.isFloat()) {
-          return Value::integer(static_cast<int64_t>(std::ceil(v.asFloat())));
+          double val = std::ceil(v.asFloat());
+
+          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+              std::isinf(val)) {
+            return Value::number(val);
+          }
+          return Value::integer(static_cast<int64_t>(val));
         }
         return Value::integer(0);
       },
@@ -240,7 +271,16 @@ void VM::registerBuiltinFunctions() {
         if (v.isInt()) {
           return v;
         } else if (v.isFloat()) {
-          return Value::integer(static_cast<int64_t>(std::round(v.asFloat())));
+          double val = std::round(v.asFloat());
+
+          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+              std::isinf(val)) {
+
+            return Value::number(val);
+          }
+          return Value::integer(static_cast<int64_t>(val));
         }
         return Value::integer(0);
       },
@@ -252,6 +292,11 @@ void VM::registerBuiltinFunctions() {
         if (argc < 1)
           return Value::number(0.0);
         Value v = args[0];
+
+        if (!v.isNumber()) {
+          vm->throwError(Value::object(vm->allocateString("sqrt: argument must be a number")));
+          return Value::nil();
+        }
         double val = v.isInt() ? static_cast<double>(v.asInt()) : v.asFloat();
         return Value::number(std::sqrt(val));
       },
@@ -262,6 +307,11 @@ void VM::registerBuiltinFunctions() {
       [](VM *vm, Value receiver, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::number(0.0);
+
+        if (!args[0].isNumber() || !args[1].isNumber()) {
+          vm->throwError(Value::object(vm->allocateString("pow: arguments must be numbers")));
+          return Value::nil();
+        }
         double base = args[0].isInt() ? static_cast<double>(args[0].asInt()) : args[0].asFloat();
         double exp = args[1].isInt() ? static_cast<double>(args[1].asInt()) : args[1].asFloat();
         return Value::number(std::pow(base, exp));
@@ -278,6 +328,10 @@ void VM::registerBuiltinFunctions() {
         if (a.isInt() && b.isInt()) {
           return Value::integer(std::min(a.asInt(), b.asInt()));
         }
+        if (!a.isNumber() || !b.isNumber()) {
+          vm->throwError(Value::object(vm->allocateString("min: arguments must be numbers")));
+          return Value::nil();
+        }
         double va = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
         double vb = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
         return Value::number(std::min(va, vb));
@@ -293,6 +347,10 @@ void VM::registerBuiltinFunctions() {
         Value b = args[1];
         if (a.isInt() && b.isInt()) {
           return Value::integer(std::max(a.asInt(), b.asInt()));
+        }
+        if (!a.isNumber() || !b.isNumber()) {
+          vm->throwError(Value::object(vm->allocateString("max: arguments must be numbers")));
+          return Value::nil();
         }
         double va = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
         double vb = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
@@ -403,7 +461,8 @@ void VM::registerBuiltinFunctions() {
 
         FiberObject *fiber = currentFiber_;
         int savedFrameCount = fiber->frameCount;
-        Value *savedStackTop = fiber->stackTop;
+
+        size_t savedStackTopOffset = fiber->stackTop - fiber->stack.data();
         UpValue *savedOpenUpvalues = fiber->openUpvalues;
         int savedDeferTop = fiber->deferTop;
         bool savedHasError = this->hasError_;
@@ -415,7 +474,7 @@ void VM::registerBuiltinFunctions() {
         ProtectedCallContext ctx;
         ctx.fiber = fiber;
         ctx.frameCount = savedFrameCount;
-        ctx.stackTop = savedStackTop;
+        ctx.stackTop = fiber->stackTop;
         ctx.openUpvalues = savedOpenUpvalues;
         ctx.active = true;
         this->pcallStack_.push_back(ctx);
@@ -508,7 +567,8 @@ void VM::registerBuiltinFunctions() {
         }
 
         this->pcallStack_.pop_back();
-        fiber->stackTop = savedStackTop;
+
+        fiber->stackTop = fiber->stack.data() + savedStackTopOffset;
 
         if (result == InterpretResult::OK && !this->hasError_) {
           std::vector<Value> multiResult;
@@ -521,7 +581,7 @@ void VM::registerBuiltinFunctions() {
           this->errorValue_ = savedErrorValue;
           return Value::nil();
         } else {
-          this->closeUpvalues(savedStackTop);
+          this->closeUpvalues(fiber->stack.data() + savedStackTopOffset);
 
           while (fiber->frameCount > savedFrameCount) {
 
@@ -1329,13 +1389,19 @@ InterpretResult VM::run() {
       return InterpretResult::RUNTIME_ERROR;
     }
 
+    int64_t left = b.asInt();
     int64_t right = c.asInt();
+
     if (right == 0) {
       runtimeError("Modulo by zero");
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    slots[A] = Value::integer(b.asInt() % right);
+    if (left == INT64_MIN && right == -1) {
+      slots[A] = Value::integer(0);
+    } else {
+      slots[A] = Value::integer(left % right);
+    }
     SPT_DISPATCH();
   }
 
@@ -1345,7 +1411,14 @@ InterpretResult VM::run() {
     Value b = slots[B];
 
     if (b.isInt()) {
-      slots[A] = Value::integer(-b.asInt());
+      int64_t val = b.asInt();
+
+      if (val == INT64_MIN) {
+
+        slots[A] = Value::number(-static_cast<double>(val));
+      } else {
+        slots[A] = Value::integer(-val);
+      }
     } else if (b.isFloat()) {
       slots[A] = Value::number(-b.asFloat());
     } else {
@@ -1401,10 +1474,51 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
-  SPT_BW_BINARY_OP(OP_SHL, <<)
-  SPT_BW_BINARY_OP(OP_SHR, >>)
-
 #undef SPT_BW_BINARY_OP
+
+  SPT_OPCODE(OP_SHL) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = slots[B];
+    Value c = slots[C];
+
+    if (!b.isInt() || !c.isInt()) {
+      runtimeError("Operands must be integers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    int64_t shiftAmount = c.asInt();
+
+    if (shiftAmount < 0 || shiftAmount >= 64) {
+      runtimeError("Shift amount must be between 0 and 63");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    slots[A] = Value::integer(b.asInt() << shiftAmount);
+    SPT_DISPATCH();
+  }
+
+  SPT_OPCODE(OP_SHR) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+    Value b = slots[B];
+    Value c = slots[C];
+
+    if (!b.isInt() || !c.isInt()) {
+      runtimeError("Operands must be integers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    int64_t shiftAmount = c.asInt();
+
+    if (shiftAmount < 0 || shiftAmount >= 64) {
+      runtimeError("Shift amount must be between 0 and 63");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    slots[A] = Value::integer(b.asInt() >> shiftAmount);
+    SPT_DISPATCH();
+  }
 
   SPT_OPCODE(OP_JMP) {
     int32_t sBx = GETARG_sBx(instruction);
@@ -1816,16 +1930,16 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      for (int i = totalArgsProvided - 1; i >= 0; --i) {
-        slots[A + 1 + i] = slots[A + i];
-      }
-
       int newSlotsBase = frame->slotsBase + A + (dropThis ? 2 : 1);
       int neededStack = newSlotsBase + proto->maxStackSize;
 
       fiber->ensureStack(neededStack);
       fiber->ensureFrames(1);
       REFRESH_CACHE();
+
+      for (int i = totalArgsProvided - 1; i >= 0; --i) {
+        slots[A + 1 + i] = slots[A + i];
+      }
 
       Value *newSlots = stackBase + newSlotsBase;
       Value *targetStackTop = newSlots + proto->maxStackSize;
@@ -2083,6 +2197,11 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     Value deferClosure = slots[A];
 
+    if (!deferClosure.isClosure()) {
+      runtimeError("defer requires a function");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
     fiber->ensureDefers(1);
 
     fiber->deferStack[fiber->deferTop++] = deferClosure;
@@ -2147,6 +2266,10 @@ InterpretResult VM::run() {
       equal = (a.asInt() == sB);
     } else if (a.isFloat()) {
       equal = (a.asFloat() == static_cast<double>(sB));
+    } else {
+
+      runtimeError("Cannot compare %s with integer", a.typeName());
+      return InterpretResult::RUNTIME_ERROR;
     }
     if (equal != (C != 0)) {
       frame->ip++;
@@ -2164,6 +2287,10 @@ InterpretResult VM::run() {
       result = (a.asInt() < sB);
     } else if (a.isFloat()) {
       result = (a.asFloat() < static_cast<double>(sB));
+    } else {
+
+      runtimeError("Cannot compare %s with integer", a.typeName());
+      return InterpretResult::RUNTIME_ERROR;
     }
     if (result != (C != 0)) {
       frame->ip++;
@@ -2181,6 +2308,10 @@ InterpretResult VM::run() {
       result = (a.asInt() <= sB);
     } else if (a.isFloat()) {
       result = (a.asFloat() <= static_cast<double>(sB));
+    } else {
+
+      runtimeError("Cannot compare %s with integer", a.typeName());
+      return InterpretResult::RUNTIME_ERROR;
     }
     if (result != (C != 0)) {
       frame->ip++;
@@ -2375,6 +2506,7 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
       frameSlots[A] = arg;
     } else {
 
+      fiber->ensureStack(1);
       *fiber->stackTop++ = arg;
     }
   }
@@ -2560,13 +2692,19 @@ void VM::throwError(Value errorValue) {
 }
 
 void VM::runtimeError(const char *format, ...) {
-  char buffer[512];
   va_list args;
   va_start(args, format);
-  vsnprintf(buffer, sizeof(buffer), format, args);
+
+  va_list args_copy;
+  va_copy(args_copy, args);
+  int size = vsnprintf(nullptr, 0, format, args_copy);
+  va_end(args_copy);
+
+  std::vector<char> buffer(size + 1);
+  vsnprintf(buffer.data(), buffer.size(), format, args);
   va_end(args);
 
-  std::string message = buffer;
+  std::string message = buffer.data();
   message += "\n----------------\nCall stack:";
 
   FiberObject *fiber = currentFiber_;

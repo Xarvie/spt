@@ -32,37 +32,55 @@ static Value buildDebugInfo(VM *vm, StringObject *str, DebugInfo info) {
 }
 
 static Value debugGetInfo(VM *vm, Value receiver, int argc, Value *argv) {
+
   if (argc < 1 || !(argv[0].isClosure() || argv[0].isNativeFunc())) {
-    vm->throwError(Value::object(vm->allocateString("error arg 1 need function")));
+    vm->throwError(Value::object(vm->allocateString("debug.getInfo: arg 1 must be a function")));
     return Value::nil();
   }
-  if (argc == 2 && !argv[1].isString()) {
-    vm->throwError(Value::object(vm->allocateString("error arg 2 need string")));
+
+  if (argc < 2) {
+    vm->throwError(
+        Value::object(vm->allocateString("debug.getInfo: arg 2 (what string) is required")));
     return Value::nil();
   }
+
+  if (!argv[1].isString()) {
+    vm->throwError(Value::object(vm->allocateString("debug.getInfo: arg 2 must be a string")));
+    return Value::nil();
+  }
+
   StringObject *str = static_cast<StringObject *>(argv[1].asGC());
   DebugInfo info;
   if (!vm->getInfo(&argv[0], str->data.c_str(), &info)) {
-    vm->throwError(Value::object(vm->allocateString("error vm error")));
+    vm->throwError(Value::object(vm->allocateString("debug.getInfo: vm error")));
     return Value::nil();
   }
   return buildDebugInfo(vm, str, info);
 }
 
 static Value debugGetStack(VM *vm, Value receiver, int argc, Value *argv) {
+
   if (argc < 1 || !argv[0].isNumber()) {
-    vm->throwError(Value::object(vm->allocateString("error arg 1 need number")));
+    vm->throwError(Value::object(vm->allocateString("debug.getStack: arg 1 must be a number")));
     return Value::nil();
   }
-  if (argc == 2 && !argv[1].isString()) {
-    vm->throwError(Value::object(vm->allocateString("error arg 2 need string")));
+
+  if (argc < 2) {
+    vm->throwError(
+        Value::object(vm->allocateString("debug.getStack: arg 2 (what string) is required")));
     return Value::nil();
   }
+
+  if (!argv[1].isString()) {
+    vm->throwError(Value::object(vm->allocateString("debug.getStack: arg 2 must be a string")));
+    return Value::nil();
+  }
+
   int f = static_cast<int>(argv[0].asNumber());
   StringObject *str = static_cast<StringObject *>(argv[1].asGC());
   DebugInfo info;
   if (!vm->getStack(f, str->data.c_str(), &info)) {
-    vm->throwError(Value::object(vm->allocateString("error vm error")));
+    vm->throwError(Value::object(vm->allocateString("debug.getStack: vm error")));
     return Value::nil();
   }
   return buildDebugInfo(vm, str, info);
