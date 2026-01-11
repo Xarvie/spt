@@ -640,6 +640,7 @@ void Compiler::compileWhileStatement(WhileStatementNode *stmt) {
   cg_->emitAsBx(OpCode::OP_JMP, 0, -loopJump - 1);
 
   cg_->patchJump(exitJump);
+  cg_->patchContinues(loopStart);
   cg_->patchBreaks();
   cg_->endLoop();
 }
