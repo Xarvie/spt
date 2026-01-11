@@ -153,22 +153,8 @@ struct Value {
   // ========================================================================
   std::string toString() const;
 
-  bool toBool() const {
-    if (type == ValueType::Nil)
-      return false;
-    if (type == ValueType::Bool)
-      return as.boolean;
-    return true;
-  }
-
-  // 真值性（Lua 风格：只有 nil 和 false 为假）
-  bool isTruthy() const {
-    if (type == ValueType::Nil)
-      return false;
-    if (type == ValueType::Bool)
-      return as.boolean;
-    return true;
-  }
+  // 真值性（python 风格： nil , false , 0 , 0.0 和空字符串为假）
+  bool isTruthy() const;
 
   // ========================================================================
   // 类型信息
@@ -218,6 +204,21 @@ struct MapObject : GCObject {
   void set(const Value &key, const Value &value);
   bool has(const Value &key) const;
 };
+
+// ============================================================================
+// Value::isTruthy 内联实现
+// ============================================================================
+inline bool Value::isTruthy() const {
+  if (type == ValueType::Nil)
+    return false;
+  if (type == ValueType::Bool)
+    return as.boolean;
+  if (type == ValueType::Int)
+    return as.integer != 0;
+  if (type == ValueType::Float)
+    return as.number != 0.0;
+  return true;
+}
 
 } // namespace spt
 
