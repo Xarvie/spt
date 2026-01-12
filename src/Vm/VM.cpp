@@ -603,7 +603,157 @@ void VM::registerBuiltinFunctions() {
         }
       },
       -1);
+  registerNative(
+      "apply",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        if (argc < 1) {
+          this->throwError(Value::object(this->allocateString(
+              "apply: expected at least 1 argument (fn, [args], [receiver])")));
+          return Value::nil();
+        }
 
+        Value func = args[0];
+        Value argsList = (argc >= 2) ? args[1] : Value::nil();
+        Value funcReceiver = (argc >= 3) ? args[2] : Value::nil();
+
+        if (!func.isClosure() && !func.isNativeFunc()) {
+          this->throwError(
+              Value::object(this->allocateString("apply: first argument must be a function")));
+          return Value::nil();
+        }
+
+        if (!argsList.isNil() && !argsList.isList()) {
+          this->throwError(
+              Value::object(this->allocateString("apply: second argument must be a list or nil")));
+          return Value::nil();
+        }
+
+        std::vector<Value> funcArgs;
+        bool hasReceiver = !funcReceiver.isNil();
+
+        if (argsList.isList()) {
+          ListObject *argList = static_cast<ListObject *>(argsList.asGC());
+          if (hasReceiver) {
+            funcArgs.reserve(argList->elements.size() + 1);
+            funcArgs.push_back(funcReceiver);
+            funcArgs.insert(funcArgs.end(), argList->elements.begin(), argList->elements.end());
+          } else {
+            funcArgs = argList->elements;
+          }
+        } else {
+          if (hasReceiver) {
+            funcArgs.push_back(funcReceiver);
+          }
+        }
+
+        int funcArgCount = static_cast<int>(funcArgs.size());
+        FiberObject *fiber = currentFiber_;
+
+        Value *callBase = fiber->stackTop;
+        *fiber->stackTop++ = func;
+        for (int i = 0; i < funcArgCount; ++i) {
+          *fiber->stackTop++ = funcArgs[i];
+        }
+
+        Value result = Value::nil();
+
+        if (func.isClosure()) {
+          Closure *closure = static_cast<Closure *>(func.asGC());
+          const Prototype *proto = closure->proto;
+
+          if (!proto->isVararg && funcArgCount != proto->numParams) {
+            fiber->stackTop = callBase;
+            this->throwError(Value::object(
+                this->allocateString("apply: function expects " + std::to_string(proto->numParams) +
+                                     " arguments, got " + std::to_string(funcArgCount))));
+            return Value::nil();
+          }
+
+          if (fiber->frameCount >= FiberObject::MAX_FRAMES) {
+            fiber->stackTop = callBase;
+            this->throwError(Value::object(this->allocateString("apply: stack overflow")));
+            return Value::nil();
+          }
+
+          int slotsBaseOffset = static_cast<int>((callBase + 1) - fiber->stack.data());
+
+          fiber->ensureStack(proto->maxStackSize);
+          fiber->ensureFrames(1);
+
+          Value *newSlots = fiber->stack.data() + slotsBaseOffset;
+          for (Value *p = fiber->stackTop; p < newSlots + proto->maxStackSize; ++p) {
+            *p = Value::nil();
+          }
+          fiber->stackTop = newSlots + proto->maxStackSize;
+
+          CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
+          newFrame->closure = closure;
+          newFrame->ip = proto->code.data();
+          newFrame->expectedResults = 1;
+          newFrame->slotsBase = slotsBaseOffset;
+          newFrame->returnBase = 0;
+          newFrame->deferBase = fiber->deferTop;
+
+          int savedExitFrameCount = this->exitFrameCount_;
+          this->exitFrameCount_ = fiber->frameCount;
+
+          InterpretResult runResult = this->run();
+
+          this->exitFrameCount_ = savedExitFrameCount;
+
+          if (runResult == InterpretResult::OK && !this->hasError_) {
+            if (this->hasNativeMultiReturn_) {
+              if (!this->nativeMultiReturn_.empty()) {
+                result = this->nativeMultiReturn_[0];
+              }
+              this->hasNativeMultiReturn_ = false;
+            } else {
+              result = this->lastModuleResult_;
+            }
+          }
+
+        } else if (func.isNativeFunc()) {
+          NativeFunction *native = static_cast<NativeFunction *>(func.asGC());
+
+          int expectedArity = native->arity;
+          int argsToCheck = funcArgCount;
+          Value actualReceiver = native->receiver;
+          Value *actualArgs = funcArgCount > 0 ? funcArgs.data() : nullptr;
+
+          if (hasReceiver) {
+            actualReceiver = funcReceiver;
+            argsToCheck = funcArgCount - 1;
+            actualArgs = funcArgCount > 1 ? funcArgs.data() + 1 : nullptr;
+          }
+
+          if (expectedArity != -1 && argsToCheck != expectedArity) {
+            fiber->stackTop = callBase;
+            this->throwError(Value::object(this->allocateString(
+                "apply: native function expects " + std::to_string(expectedArity) +
+                " arguments, got " + std::to_string(argsToCheck))));
+            return Value::nil();
+          }
+
+          this->hasNativeMultiReturn_ = false;
+          Value nativeResult = native->function(this, actualReceiver, argsToCheck, actualArgs);
+
+          if (!this->hasError_) {
+            if (this->hasNativeMultiReturn_) {
+              if (!this->nativeMultiReturn_.empty()) {
+                result = this->nativeMultiReturn_[0];
+              }
+              this->hasNativeMultiReturn_ = false;
+            } else {
+              result = nativeResult;
+            }
+          }
+
+          fiber->stackTop = callBase;
+        }
+
+        return result;
+      },
+      -1);
   registerNative(
       "isInt",
       [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isInt()); }, 1);

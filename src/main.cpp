@@ -60,6 +60,9 @@
 
 #include "test/TestShortCircuitDiagnostics.h"
 
+// Apply 测试
+#include "test/TestApply.h"
+
 // =========================================================
 // 主函数
 // =========================================================
@@ -119,6 +122,9 @@ int main(int argc, char *argv[]) {
   registerGCDebugTests(runner); // 需要调试输出时启用
 
   registerShortCircuitDiagnostics(runner);
+
+  registerApply(runner);
+
 #else
   // =====================================================
   // 快速测试 / 单项测试
