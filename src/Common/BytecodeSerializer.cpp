@@ -311,13 +311,15 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
     case OpMode::iABC:
       out << std::setw(4) << a << " " << std::setw(4) << b << " " << std::setw(4) << c;
 
-      if (op == OpCode::OP_GETFIELD || op == OpCode::OP_SETFIELD) {
-
+      if (op == OpCode::OP_GETFIELD) {
         if (c < proto.constants.size()) {
           comment << "; key=" << constantToString(proto.constants[c]);
         }
+      } else if (op == OpCode::OP_SETFIELD) {
+        if (b < proto.constants.size()) {
+          comment << "; key=" << constantToString(proto.constants[b]);
+        }
       } else if (op == OpCode::OP_INVOKE) {
-
         if (c < proto.constants.size()) {
           comment << "; method=" << constantToString(proto.constants[c]);
         }
