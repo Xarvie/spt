@@ -58,8 +58,6 @@
 // GC 垃圾回收测试
 #include "test/TestGC.h"
 
-#include "TestUnpack.h"
-
 #include "test/TestShortCircuitDiagnostics.h"
 
 // =========================================================
@@ -121,8 +119,6 @@ int main(int argc, char *argv[]) {
   registerGCDebugTests(runner); // 需要调试输出时启用
 
   registerShortCircuitDiagnostics(runner);
-
-  registerUnpackTests(runner);
 #else
   // =====================================================
   // 快速测试 / 单项测试

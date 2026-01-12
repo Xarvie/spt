@@ -16,19 +16,6 @@ static int tryResolveLocalSlot(CodeGen *cg, Expression *expr) {
   return -1;
 }
 
-static bool isSpreadableCall(Expression *expr) {
-  auto *call = dynamic_cast<FunctionCallNode *>(expr);
-  if (!call)
-    return false;
-  if (auto *id = dynamic_cast<IdentifierNode *>(call->functionExpr)) {
-    if (id->name == "unpack") {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 Compiler::Compiler(const std::string &moduleName, const std::string &source)
     : moduleName_(moduleName), source_(source), cg_(std::make_unique<CodeGen>(moduleName)) {}
 
@@ -316,29 +303,12 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
     cg_->emitABC(OpCode::OP_MOVE, funcSlot, dest, 0);
   }
 
-  bool hasSpread = argCount > 0 && isSpreadableCall(node->arguments.back());
-
-  if (hasSpread) {
-
-    for (int i = 0; i < argCount - 1; ++i) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(node->arguments[i], argSlot);
-    }
-
-    int spreadSlot = cg_->allocSlot();
-    auto *spreadCall = static_cast<FunctionCallNode *>(node->arguments.back());
-    compileFunctionCall(spreadCall, spreadSlot, -1);
-
-    cg_->emitABC(OpCode::OP_CALL, funcSlot, 0, nResults + 1);
-  } else {
-
-    for (auto *arg : node->arguments) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(arg, argSlot);
-    }
-
-    cg_->emitABC(OpCode::OP_CALL, funcSlot, argCount + 1, nResults + 1);
+  for (auto *arg : node->arguments) {
+    int argSlot = cg_->allocSlot();
+    compileExpression(arg, argSlot);
   }
+
+  cg_->emitABC(OpCode::OP_CALL, funcSlot, argCount + 1, nResults + 1);
 
   if (nResults > 0 && dest != funcSlot) {
     for (int i = 0; i < nResults; ++i) {
@@ -372,29 +342,12 @@ void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &
   int base = cg_->allocSlot();
   compileExpression(receiverExpr, base);
 
-  bool hasSpread = argCount > 0 && isSpreadableCall(arguments.back());
-
-  if (hasSpread) {
-
-    for (int i = 0; i < argCount - 1; ++i) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(arguments[i], argSlot);
-    }
-
-    int spreadSlot = cg_->allocSlot();
-    auto *spreadCall = static_cast<FunctionCallNode *>(arguments.back());
-    compileFunctionCall(spreadCall, spreadSlot, -1);
-
-    cg_->emitABC(OpCode::OP_INVOKE, base, 0, methodIdx);
-  } else {
-
-    for (int i = 0; i < argCount; ++i) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(arguments[i], argSlot);
-    }
-
-    cg_->emitABC(OpCode::OP_INVOKE, base, totalArgs, methodIdx);
+  for (int i = 0; i < argCount; ++i) {
+    int argSlot = cg_->allocSlot();
+    compileExpression(arguments[i], argSlot);
   }
+
+  cg_->emitABC(OpCode::OP_INVOKE, base, totalArgs, methodIdx);
 
   if (nResults > 0 && dest != base) {
     for (int i = 0; i < nResults; ++i) {
@@ -420,29 +373,12 @@ void Compiler::compileMethodInvokeFallback(Expression *receiverExpr, const std::
   cg_->emitABC(OpCode::OP_GETINDEX, methodSlot, receiverSlot, keySlot);
   cg_->freeSlots(1);
 
-  bool hasSpread = argCount > 0 && isSpreadableCall(arguments.back());
-
-  if (hasSpread) {
-
-    for (int i = 0; i < argCount - 1; ++i) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(arguments[i], argSlot);
-    }
-
-    int spreadSlot = cg_->allocSlot();
-    auto *spreadCall = static_cast<FunctionCallNode *>(arguments.back());
-    compileFunctionCall(spreadCall, spreadSlot, -1);
-
-    cg_->emitABC(OpCode::OP_CALL, methodSlot, 0, nResults + 1);
-  } else {
-
-    for (int i = 0; i < argCount; ++i) {
-      int argSlot = cg_->allocSlot();
-      compileExpression(arguments[i], argSlot);
-    }
-
-    cg_->emitABC(OpCode::OP_CALL, methodSlot, argCount + 2, nResults + 1);
+  for (int i = 0; i < argCount; ++i) {
+    int argSlot = cg_->allocSlot();
+    compileExpression(arguments[i], argSlot);
   }
+
+  cg_->emitABC(OpCode::OP_CALL, methodSlot, argCount + 2, nResults + 1);
 
   if (nResults > 0 && dest != methodSlot) {
     for (int i = 0; i < nResults; ++i) {
@@ -959,17 +895,6 @@ void Compiler::compileReturn(ReturnStatementNode *stmt) {
   if (stmt->returnValue.empty()) {
     cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
   } else if (stmt->returnValue.size() == 1) {
-
-    if (isSpreadableCall(stmt->returnValue[0])) {
-      int slot = cg_->allocSlot();
-      auto *spreadCall = static_cast<FunctionCallNode *>(stmt->returnValue[0]);
-      compileFunctionCall(spreadCall, slot, -1);
-
-      cg_->emitABC(OpCode::OP_RETURN, slot, 0, 0);
-      cg_->freeSlots(1);
-      return;
-    }
-
     int localSlot = tryResolveLocalSlot(cg_.get(), stmt->returnValue[0]);
 
     if (localSlot != -1) {
@@ -982,30 +907,12 @@ void Compiler::compileReturn(ReturnStatementNode *stmt) {
     }
 
   } else {
-
-    bool hasSpread = isSpreadableCall(stmt->returnValue.back());
-
-    if (hasSpread) {
-      int numFixed = static_cast<int>(stmt->returnValue.size()) - 1;
-      int base = cg_->allocSlots(numFixed + 1);
-
-      for (int i = 0; i < numFixed; ++i) {
-        compileExpression(stmt->returnValue[i], base + i);
-      }
-
-      auto *spreadCall = static_cast<FunctionCallNode *>(stmt->returnValue.back());
-      compileFunctionCall(spreadCall, base + numFixed, -1);
-
-      cg_->emitABC(OpCode::OP_RETURN, base, 0, 0);
-      cg_->freeSlots(numFixed + 1);
-    } else {
-      int base = cg_->allocSlots(static_cast<int>(stmt->returnValue.size()));
-      for (size_t i = 0; i < stmt->returnValue.size(); ++i) {
-        compileExpression(stmt->returnValue[i], base + static_cast<int>(i));
-      }
-      cg_->emitABC(OpCode::OP_RETURN, base, static_cast<uint8_t>(stmt->returnValue.size() + 1), 0);
-      cg_->freeSlots(static_cast<int>(stmt->returnValue.size()));
+    int base = cg_->allocSlots(static_cast<int>(stmt->returnValue.size()));
+    for (size_t i = 0; i < stmt->returnValue.size(); ++i) {
+      compileExpression(stmt->returnValue[i], base + static_cast<int>(i));
     }
+    cg_->emitABC(OpCode::OP_RETURN, base, static_cast<uint8_t>(stmt->returnValue.size() + 1), 0);
+    cg_->freeSlots(static_cast<int>(stmt->returnValue.size()));
   }
 }
 

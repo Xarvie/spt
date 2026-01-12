@@ -723,89 +723,6 @@ void VM::registerBuiltinFunctions() {
         return Value::nil();
       },
       1);
-
-  registerNative(
-      "unpack",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
-        if (argc < 1) {
-          vm->throwError(
-              Value::object(vm->allocateString("unpack: expected at least 1 argument (list)")));
-          return Value::nil();
-        }
-
-        Value listVal = args[0];
-        if (!listVal.isList()) {
-          vm->throwError(
-              Value::object(vm->allocateString("unpack: first argument must be a list")));
-          return Value::nil();
-        }
-
-        ListObject *list = static_cast<ListObject *>(listVal.asGC());
-        const int64_t len = static_cast<int64_t>(list->elements.size());
-
-        if (len == 0) {
-
-          vm->setNativeMultiReturn({});
-          return Value::nil();
-        }
-
-        int64_t startIdx = 0;
-        if (argc >= 2) {
-          if (!args[1].isInt()) {
-            vm->throwError(
-                Value::object(vm->allocateString("unpack: start index must be an integer")));
-            return Value::nil();
-          }
-          startIdx = args[1].asInt();
-        }
-
-        int64_t endIdx = len - 1;
-        if (argc >= 3) {
-          if (!args[2].isInt()) {
-            vm->throwError(
-                Value::object(vm->allocateString("unpack: end index must be an integer")));
-            return Value::nil();
-          }
-          endIdx = args[2].asInt();
-        }
-
-        if (startIdx < 0) {
-          startIdx = len + startIdx;
-        }
-        if (endIdx < 0) {
-          endIdx = len + endIdx;
-        }
-
-        startIdx = std::max(int64_t(0), std::min(startIdx, len - 1));
-        endIdx = std::max(int64_t(-1), std::min(endIdx, len - 1));
-
-        if (startIdx > endIdx || endIdx < 0) {
-
-          vm->setNativeMultiReturn({});
-          return Value::nil();
-        }
-
-        const int64_t count = endIdx - startIdx + 1;
-
-        constexpr int64_t MAX_UNPACK_COUNT = 10000;
-        if (count > MAX_UNPACK_COUNT) {
-          vm->throwError(
-              Value::object(vm->allocateString("unpack: result count exceeds maximum limit (" +
-                                               std::to_string(MAX_UNPACK_COUNT) + ")")));
-          return Value::nil();
-        }
-
-        std::vector<Value> results;
-        results.reserve(static_cast<size_t>(count));
-
-        for (int64_t i = startIdx; i <= endIdx; ++i) {
-          results.push_back(list->elements[static_cast<size_t>(i)]);
-        }
-
-        vm->setNativeMultiReturn(results);
-        return Value::nil();
-      },
-      -1);
 }
 
 InterpretResult VM::interpret(const CompiledChunk &chunk) {
@@ -1809,18 +1726,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    int argCount;
+    int argCount = B - 1;
     int expectedResults = C - 1;
-
-    if (B == 0) {
-
-      Value *argsStart = &slots[A + 1];
-      argCount = static_cast<int>(STACK_TOP - argsStart);
-      if (argCount < 0)
-        argCount = 0;
-    } else {
-      argCount = B - 1;
-    }
 
     Value callee = slots[A];
 
@@ -1902,12 +1809,9 @@ InterpretResult VM::run() {
         int returnCount = static_cast<int>(nativeMultiReturn_.size());
 
         if (expectedResults == -1) {
-
           for (int i = 0; i < returnCount; ++i) {
             slots[A + i] = nativeMultiReturn_[i];
           }
-
-          STACK_TOP = &slots[A + returnCount];
         } else if (expectedResults > 0) {
           for (int i = 0; i < returnCount && i < expectedResults; ++i) {
             slots[A + i] = nativeMultiReturn_[i];
@@ -1956,19 +1860,8 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
     Value receiver = slots[A];
-    int totalArgs;
-    int userArgCount;
-
-    if (B == 0) {
-      Value *argsStart = &slots[A + 1];
-      totalArgs = static_cast<int>(STACK_TOP - &slots[A]);
-      userArgCount = totalArgs - 1;
-      if (userArgCount < 0)
-        userArgCount = 0;
-    } else {
-      totalArgs = B;
-      userArgCount = totalArgs - 1;
-    }
+    int totalArgs = B;
+    int userArgCount = totalArgs - 1;
 
     const auto &methodNameConst = frame->closure->proto->constants[C];
     if (!std::holds_alternative<std::string>(methodNameConst)) {
@@ -2138,7 +2031,7 @@ InterpretResult VM::run() {
       Closure *closure = static_cast<Closure *>(method.asGC());
       const Prototype *proto = closure->proto;
 
-      int totalArgsProvided = totalArgs;
+      int totalArgsProvided = B;
       bool dropThis = false;
 
       if (proto->needsReceiver) {
@@ -2256,15 +2149,7 @@ InterpretResult VM::run() {
       REFRESH_CACHE();
     }
 
-    int returnCount;
-
-    if (B == 0) {
-      returnCount = static_cast<int>(STACK_TOP - &slots[A]);
-      if (returnCount < 0)
-        returnCount = 0;
-    } else {
-      returnCount = B - 1;
-    }
+    int returnCount = (B >= 1) ? B - 1 : 0;
 
     Value *returnValues = slots + A;
     int expectedResults = frame->expectedResults;
