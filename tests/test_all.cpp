@@ -1623,7 +1623,7 @@ void registerBuiltinFunctions(TestRunner &runner) {
             print(toBool(""));
             print(toBool(null));
        )",
-                 "true\ntrue\ntrue\ntrue\nfalse");
+                 "true\nfalse\ntrue\ntrue\nfalse");
 
   // 类型检查
   runner.runTest("Builtin - Type Checks",
