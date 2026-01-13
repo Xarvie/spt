@@ -3242,6 +3242,24 @@ int VM::getLine(const Prototype *proto, size_t instruction) {
   return line;
 }
 
+size_t VM::getCurrentInstruction(const CallFrame &frame) const {
+  const Prototype *proto = frame.closure->proto;
+  size_t instruction = frame.ip - proto->code.data();
+
+  if (instruction > 0) {
+    instruction--;
+
+    if (instruction > 0) {
+      OpCode prevOp = GET_OPCODE(proto->code[instruction - 1]);
+      if (prevOp == OpCode::OP_INVOKE) {
+        instruction--;
+      }
+    }
+  }
+
+  return instruction;
+}
+
 std::string VM::getStackTrace() {
   std::string trace = "Call stack:";
   FiberObject *fiber = currentFiber_;
@@ -3249,7 +3267,9 @@ std::string VM::getStackTrace() {
   for (int i = fiber->frameCount - 1; i >= 0; --i) {
     CallFrame &frame = fiber->frames[i];
     const Prototype *proto = frame.closure->proto;
-    size_t instruction = frame.ip - proto->code.data() - 1;
+
+    size_t instruction = getCurrentInstruction(frame);
+
     int line = getLine(proto, instruction);
     trace += "\n  [line " + std::to_string(line) + "] in ";
     trace += proto->name.empty() ? "<script>" : proto->name + "()";
@@ -3381,7 +3401,8 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
       out_info->lastLineDefined = proto->lastLineDefined;
       break;
     case 'l': {
-      size_t instruction = frame.ip - proto->code.data() - 1;
+
+      size_t instruction = getCurrentInstruction(frame);
       out_info->currentLine = getLine(proto, instruction);
     } break;
     }

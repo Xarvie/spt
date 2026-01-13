@@ -154,6 +154,7 @@ private:
   // === 错误处理 ===
   void runtimeError(const char *format, ...);
   int getLine(const Prototype *proto, size_t instruction);
+  size_t getCurrentInstruction(const CallFrame &frame) const;
   std::string getStackTrace();
 
   // === 原生函数多返回值支持 ===

@@ -312,39 +312,36 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
       out << std::setw(4) << a << " " << std::setw(4) << b << " " << std::setw(4) << c;
 
       if (op == OpCode::OP_GETFIELD) {
-        if (c < proto.constants.size()) {
+        if (c < static_cast<int>(proto.constants.size())) {
           comment << "; key=" << constantToString(proto.constants[c]);
         }
       } else if (op == OpCode::OP_SETFIELD) {
-        if (b < proto.constants.size()) {
+        if (b < static_cast<int>(proto.constants.size())) {
           comment << "; key=" << constantToString(proto.constants[b]);
         }
-      } else if (op == OpCode::OP_INVOKE) {
-        if (c < proto.constants.size()) {
-          comment << "; method=" << constantToString(proto.constants[c]);
-        }
       }
+
       break;
 
     case OpMode::iABx:
       out << std::setw(4) << a << " " << std::setw(9) << bx;
 
       if (op == OpCode::OP_LOADK) {
-        if (bx < proto.constants.size()) {
+        if (bx < static_cast<int>(proto.constants.size())) {
           comment << "; " << constantToString(proto.constants[bx]);
         }
       } else if (op == OpCode::OP_NEWCLASS) {
-        if (bx < proto.constants.size()) {
+        if (bx < static_cast<int>(proto.constants.size())) {
           comment << "; class_name=" << constantToString(proto.constants[bx]);
         }
       } else if (op == OpCode::OP_CLOSURE) {
-        if (bx < proto.protos.size()) {
+        if (bx < static_cast<int>(proto.protos.size())) {
 
           const auto &sub = proto.protos[bx];
           comment << "; " << (sub.name.empty() ? "<anonymous>" : sub.name);
         }
       } else if (op == OpCode::OP_DEFER) {
-        if (bx < proto.protos.size()) {
+        if (bx < static_cast<int>(proto.protos.size())) {
           const auto &sub = proto.protos[bx];
           comment << "; " << (sub.name.empty() ? "<anonymous>" : sub.name);
         }
@@ -363,8 +360,23 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
       } else if (op == OpCode::OP_FORLOOP) {
         int dest = static_cast<int>(i) + sbx + 1;
         comment << "; to [" << dest << "]";
+      } else if (op == OpCode::OP_TFORLOOP) {
+        int dest = static_cast<int>(i) + sbx + 1;
+        comment << "; exit to [" << dest << "]";
       } else if (op == OpCode::OP_LOADI) {
         comment << "; " << sbx;
+      }
+      break;
+
+    case OpMode::iWide:
+      out << std::setw(4) << a << " " << std::setw(4) << b << " " << std::setw(4) << c;
+
+      if (i + 1 < proto.code.size()) {
+        Instruction nextInst = proto.code[i + 1];
+        int methodIdx = GETARG_Ax(nextInst);
+        if (methodIdx < static_cast<int>(proto.constants.size())) {
+          comment << "; method=" << constantToString(proto.constants[methodIdx]);
+        }
       }
       break;
     }
@@ -374,6 +386,18 @@ void BytecodeDumper::dumpPrototype(const Prototype &proto, const std::string &pr
       out << "\t" << commentStr;
     }
     out << "\n";
+
+    if (mode == OpMode::iWide) {
+      ++i;
+
+      if (i < proto.code.size()) {
+        Instruction nextInst = proto.code[i];
+        int ax = GETARG_Ax(nextInst);
+        out << prefix << "\t" << "[" << std::setw(3) << i << "] " << "[" << std::setw(3)
+            << getLine(proto, static_cast<int>(i)) << "] " << std::setw(14) << std::left
+            << "(INVOKE.Ax)" << " " << std::setw(14) << ax << "\n";
+      }
+    }
   }
 
   if (!proto.constants.empty()) {
@@ -412,6 +436,9 @@ int BytecodeDumper::getLine(const Prototype &proto, int pc) {
   if (proto.lineInfo.empty())
     return 0;
 
+  if (proto.absLineInfo.empty())
+    return 0;
+
   int line = proto.absLineInfo.front().line;
   auto abs_line_info = std::lower_bound(proto.absLineInfo.begin(), proto.absLineInfo.end(), pc,
                                         [](const auto &lhs, int p) { return lhs.pc < p; });
@@ -434,6 +461,10 @@ int BytecodeDumper::getLine(const Prototype &proto, int pc) {
 
 BytecodeDumper::OpMode BytecodeDumper::getOpMode(OpCode op) {
   switch (op) {
+
+  case OpCode::OP_INVOKE:
+    return OpMode::iWide;
+
   case OpCode::OP_LOADK:
   case OpCode::OP_NEWCLASS:
   case OpCode::OP_CLOSURE:
@@ -444,6 +475,7 @@ BytecodeDumper::OpMode BytecodeDumper::getOpMode(OpCode op) {
   case OpCode::OP_JMP:
   case OpCode::OP_FORPREP:
   case OpCode::OP_FORLOOP:
+  case OpCode::OP_TFORLOOP:
   case OpCode::OP_LOADI:
     return OpMode::iAsBx;
 
@@ -494,6 +526,8 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "MUL";
   case OpCode::OP_DIV:
     return "DIV";
+  case OpCode::OP_IDIV:
+    return "IDIV";
   case OpCode::OP_MOD:
     return "MOD";
   case OpCode::OP_UNM:
@@ -549,6 +583,10 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "FORLOOP";
   case OpCode::OP_LOADI:
     return "LOADI";
+  case OpCode::OP_TFORCALL:
+    return "TFORCALL";
+  case OpCode::OP_TFORLOOP:
+    return "TFORLOOP";
   default:
     return "UNKNOWN";
   }

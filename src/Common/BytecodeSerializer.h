@@ -82,7 +82,12 @@ private:
   static std::string constantToString(const ConstantValue &val);
 
   // 辅助函数：获取指令格式 (用于决定如何打印操作数)
-  enum class OpMode { iABC, iABx, iAsBx };
+  enum class OpMode {
+    iABC,  // 标准 ABC 格式
+    iABx,  // A + Bx 格式
+    iAsBx, // A + sBx (有符号) 格式
+    iWide  // 宽指令格式 (占用两条指令，如 OP_INVOKE)
+  };
   static OpMode getOpMode(OpCode op);
 
   // 辅助函数：计算行号 (复用 VM 中的逻辑)
