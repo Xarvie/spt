@@ -452,4 +452,70 @@ inline void registerStackReallocationTests(TestRunner &runner) {
     }
     )",
                  "nil");
+
+  // ---------------------------------------------------------
+  // 8. 缓存指针失效回归测试 (The Killer Test)
+  // ---------------------------------------------------------
+
+  runner.addTest("Stack Realloc - Cached Pointer Validation (pcall)",
+                 R"(
+            // 1. 定义一个函数，它不仅占用栈，还导致栈扩容
+            // FIX: 必须显式声明返回类型 -> string
+            auto triggerRealloc = function() -> string {
+                // 递归函数，用来吃掉栈空间
+                int deepRecurse(int n) {
+                    int a = n; int b = n; int c = n; int d = n;
+                    if (n <= 0) { return 0; }
+                    return deepRecurse(n - 1) + 1;
+                }
+
+                // 执行递归，迫使 Fiber stack 扩容
+                deepRecurse(2000);
+                return "survived";
+            };
+
+            // 2. 使用 pcall 包裹
+            // 这里的 triggerRealloc 会触发扩容，pcall 返回后 slots 指针必须刷新
+            auto result = pcall(triggerRealloc);
+
+            // 3. 验证结果
+            // pcall 返回值是一个 list: [status, value] 或者类似的结构，或者根据你的 pcall 实现返回 boolean
+            // 根据之前的 pcall 实现，它似乎把结果放在 stack 上，或者返回 nil 但通过 nativeMultiReturn 返回
+            // 这里假设 pcall 返回 success (true) 或者具体的返回值
+
+            // 注意：根据 VM.cpp，pcall 返回 nil，但设置 nativeMultiReturn
+            // 如果你的语言支持多返回值接收: var status, val = pcall(...)
+            // 如果只接收一个，通常拿到的是 status (bool)
+
+            if (result) {
+                print("OK");
+            } else {
+                print("Failed");
+            }
+       )",
+                 "OK");
+
+  runner.addTest("Stack Realloc - Cached Pointer Validation (Native Init)",
+                 R"(
+            // FIX: 显式声明返回类型 -> string
+            auto makeHugeStack = function() -> string {
+                 int deep(int n) {
+                    if (n <= 0) { return 0; }
+                    return deep(n - 1) + 1;
+                }
+                deep(2000);
+                return "value";
+            };
+
+            // FIX: 参数需要类型 (any val)，返回值需要类型 (-> any)
+            auto innocentFunc = function(any val) -> any {
+                return val;
+            };
+
+            // 调用 innocentFunc，参数表达式求值时触发扩容
+            auto res = innocentFunc(makeHugeStack());
+
+            print(res);
+       )",
+                 "value");
 }

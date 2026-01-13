@@ -96,36 +96,28 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
-  // === 容量管理 ===
   void ensureStack(int needed) {
     size_t used = stackTop - stack.data();
     size_t required = used + static_cast<size_t>(needed);
 
     if (required <= stack.size()) {
-      return; // 空间足够
+      return;
     }
 
-    // 按 2 倍扩容
     size_t newSize = stack.size() * 2;
     while (newSize < required) {
       newSize *= 2;
     }
 
-    // 记录旧基地址
     Value *oldBase = stack.data();
 
-    // 扩容
     stack.resize(newSize);
 
-    // 获取新基地址
     Value *newBase = stack.data();
 
-    // 指针修复
     if (oldBase != newBase) {
-      // 1. 更新 stackTop
-      stackTop = newBase + (stackTop - oldBase);
+      stackTop = newBase + used;
 
-      // 2. 修复 UpValue 指针（通过外部函数，因为 UpValue 是不完整类型）
       if (openUpvalues != nullptr) {
         fixUpvaluePointers(oldBase, newBase);
       }
@@ -148,10 +140,9 @@ struct FiberObject : GCObject {
     size_t required = static_cast<size_t>(frameCount + needed);
 
     if (required <= frames.size()) {
-      return; // 空间足够
+      return;
     }
 
-    // 按 2 倍扩容
     size_t newSize = frames.size() * 2;
     if (newSize < DEFAULT_FRAMES_SIZE) {
       newSize = DEFAULT_FRAMES_SIZE;
@@ -161,7 +152,6 @@ struct FiberObject : GCObject {
     }
 
     frames.resize(newSize);
-    // 无需指针修复，因为通过索引访问帧
   }
 
   void fixUpvaluePointers(Value *oldBase, Value *newBase);
