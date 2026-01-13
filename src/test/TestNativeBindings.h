@@ -79,7 +79,15 @@ inline void registerNativeBindingTests(TestRunner &runner) {
         print(scaled.z);
       )",
                        "2\n4\n6", registerVector3);
-
+  runner.addNativeTest("Native - Vector3 Scale",
+                       R"(
+        auto v = Vector3(1.0, 2.0, 3.0);
+        vars x, y, z = v.xyz();
+        print(x);
+        print(y);
+        print(z);
+      )",
+                       "1\n2\n3", registerVector3);
   // Counter 基础测试
   runner.addNativeTest("Native - Counter Basic",
                        R"(

@@ -165,6 +165,19 @@ inline void registerClasses(TestRunner &runner) {
        )",
                  "30\n25");
 
+  runner.addTest("Method Returning Values",
+                 R"(
+            class Calculator {
+                vars values(Calculator this) {
+                    return 1,2;
+                }
+            }
+            Calculator calc = new Calculator();
+            print(calc.values());
+
+       )",
+                 "1 2");
+
   runner.addTest("Nested Object Access",
                  R"(
             class Inner {

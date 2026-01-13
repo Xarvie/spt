@@ -65,6 +65,7 @@ public:
   void emitABC(OpCode op, uint8_t a, uint8_t b, uint8_t c);
   void emitABx(OpCode op, uint8_t a, uint32_t bx);
   void emitAsBx(OpCode op, uint8_t a, int32_t sbx);
+  void emitAx(OpCode op, uint32_t ax);
 
   // === 跳转控制 (High Level) ===
   int emitJump(OpCode op, int32_t offset = 0);

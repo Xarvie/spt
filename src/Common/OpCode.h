@@ -66,7 +66,18 @@ enum class OpCode : uint8_t {
 
   /* --- 函数调用 --- */
   OP_CALL,   /* A B C   | R[A], ... := R[A](R[A+1], ... ,R[A+B-1])   */
-  OP_INVOKE, /* A B C   | R[A] := R[A].K[C](R[A+1], ...)             */
+           //  OP_INVOKE, /* A B C   | R[A] := R[A].K[C](R[A+1], ...)             */
+           /* ** OP_INVOKE (宽指令)
+            ** 格式: A B C
+            ** Word 1: [ C(8) | B(8) | k(1) | A(8) | OP_INVOKE(7) ]
+            ** Word 2: [           Ax(25)            | (ignored)(7) ]  <-- 存储方法名常量索引
+            **
+            ** A: 接收者(Receiver)寄存器，也是返回值起始位置
+            ** B: 参数个数 + 1 (0表示变长，目前 invoke 暂不支持变长参数)
+            ** C: 期望返回值个数 + 1
+            ** Ax: 方法名在常量表中的索引
+            */
+  OP_INVOKE,
   OP_RETURN, /* A B     | return R[A], ... ,R[A+B-2]                 */
 
   /* --- 模块系统 --- */
@@ -163,3 +174,10 @@ enum class OpCode : uint8_t {
 #define GETARG_C(i) (((i) >> POS_C) & 0xFF)
 #define GETARG_Bx(i) (((i) >> POS_Bx) & 0x1FFFF)
 #define GETARG_sBx(i) (static_cast<int>(GETARG_Bx(i) - (0x1FFFF >> 1)))
+
+#define POS_Ax POS_A
+#define SIZE_Ax (SIZE_A + SIZE_B + SIZE_C + 1) // 25 bits (也就是除了 OpCode 7bit 外的全部空间)
+
+#define GETARG_Ax(i) (((i) >> POS_Ax) & 0x1FFFFFF)
+#define MAKE_Ax(op, ax)                                                                            \
+  ((static_cast<uint32_t>(op) & 0x7F) | ((static_cast<uint32_t>(ax) & 0x1FFFFFF) << POS_Ax))

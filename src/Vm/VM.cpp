@@ -1875,9 +1875,16 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    int argCount = B - 1;
-    int expectedResults = C - 1;
 
+    int argCount;
+
+    if (B == 0) {
+      argCount = static_cast<int>(fiber->stackTop - (slots + A + 1));
+    } else {
+      argCount = B - 1;
+    }
+
+    int expectedResults = C - 1;
     Value callee = slots[A];
 
     if (callee.isClosure()) {
@@ -1955,9 +1962,13 @@ InterpretResult VM::run() {
         int returnCount = static_cast<int>(nativeMultiReturn_.size());
 
         if (expectedResults == -1) {
+
+          fiber->ensureStack(returnCount);
+
           for (int i = 0; i < returnCount; ++i) {
             slots[A + i] = nativeMultiReturn_[i];
           }
+          STACK_TOP = slots + A + returnCount;
         } else if (expectedResults > 0) {
           for (int i = 0; i < returnCount && i < expectedResults; ++i) {
             slots[A + i] = nativeMultiReturn_[i];
@@ -1966,18 +1977,22 @@ InterpretResult VM::run() {
             slots[A + i] = Value::nil();
           }
         } else {
-          if (returnCount > 0) {
-            slots[A] = nativeMultiReturn_[0];
-          }
         }
 
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
       } else {
-        slots[A] = result;
+        if (expectedResults != 0) {
+          slots[A] = result;
+          if (expectedResults == -1) {
+            STACK_TOP = slots + A + 1;
+          } else {
+            for (int i = 1; i < expectedResults; ++i)
+              slots[A + i] = Value::nil();
+          }
+        }
       }
     } else if (callee.isNativeClass()) {
-
       NativeClassObject *nativeClass = static_cast<NativeClassObject *>(callee.asGC());
 
       if (!nativeClass->hasConstructor()) {
@@ -1989,11 +2004,18 @@ InterpretResult VM::run() {
       NativeInstance *instance = createNativeInstance(nativeClass, argCount, argsStart);
 
       if (!instance) {
-
         return InterpretResult::RUNTIME_ERROR;
       }
 
       slots[A] = Value::object(instance);
+
+      if (expectedResults > 1) {
+        for (int i = 1; i < expectedResults; ++i)
+          slots[A + i] = Value::nil();
+      } else if (expectedResults == -1) {
+        STACK_TOP = slots + A + 1;
+      }
+
     } else {
       runtimeError("Attempt to call a non-function value of type '%s'", callee.typeName());
       return InterpretResult::RUNTIME_ERROR;
@@ -2005,11 +2027,20 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    Value receiver = slots[A];
-    int totalArgs = B;
-    int userArgCount = totalArgs - 1;
 
-    const auto &methodNameConst = frame->closure->proto->constants[C];
+    uint32_t nextInst = *frame->ip++;
+    uint32_t methodIdx = GETARG_Ax(nextInst);
+
+    Value receiver = slots[A];
+
+    int userArgCount;
+    if (B == 0) {
+      userArgCount = static_cast<int>(fiber->stackTop - (slots + A + 1));
+    } else {
+      userArgCount = B - 1;
+    }
+
+    const auto &methodNameConst = frame->closure->proto->constants[methodIdx];
     if (!std::holds_alternative<std::string>(methodNameConst)) {
       runtimeError("OP_INVOKE: method name constant must be string");
       return InterpretResult::RUNTIME_ERROR;
@@ -2021,27 +2052,55 @@ InterpretResult VM::run() {
 
     if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
       Value directResult;
+
+      hasNativeMultiReturn_ = false;
+      nativeMultiReturn_.clear();
+
       if (StdlibDispatcher::invokeMethod(this, receiver, methodName, userArgCount, argsStart,
                                          directResult)) {
-
         if (yieldPending_) {
           yieldPending_ = false;
           return InterpretResult::OK;
         }
-
         if (fiber != currentFiber_) {
-
           fiber = currentFiber_;
           frame = &fiber->frames[fiber->frameCount - 1];
           REFRESH_SLOTS();
-          SPT_DISPATCH();
         }
         REFRESH_CACHE();
         if (hasError_) {
           return InterpretResult::RUNTIME_ERROR;
         }
 
-        slots[A] = directResult;
+        int expectedResults = C - 1;
+
+        if (hasNativeMultiReturn_) {
+          int returnCount = static_cast<int>(nativeMultiReturn_.size());
+          if (expectedResults == -1) {
+
+            for (int i = 0; i < returnCount; ++i) {
+              slots[A + i] = nativeMultiReturn_[i];
+            }
+            STACK_TOP = slots + A + returnCount;
+          } else if (expectedResults > 0) {
+
+            for (int i = 0; i < expectedResults; ++i) {
+              slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
+            }
+          }
+          hasNativeMultiReturn_ = false;
+          nativeMultiReturn_.clear();
+        } else {
+
+          slots[A] = directResult;
+          if (expectedResults == -1) {
+            STACK_TOP = slots + A + 1;
+          } else if (expectedResults > 1) {
+            for (int i = 1; i < expectedResults; ++i) {
+              slots[A + i] = Value::nil();
+            }
+          }
+        }
         SPT_DISPATCH();
       }
 
@@ -2080,9 +2139,7 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isNativeInstance()) {
-
       NativeInstance *instance = static_cast<NativeInstance *>(receiver.asGC());
-
       if (!instance->nativeClass) {
         runtimeError("Native instance has no class information");
         return InterpretResult::RUNTIME_ERROR;
@@ -2090,12 +2147,14 @@ InterpretResult VM::run() {
 
       const NativeMethodDesc *nativeMethod = instance->nativeClass->findMethod(methodName);
       if (nativeMethod) {
-
         if (nativeMethod->arity != -1 && userArgCount != nativeMethod->arity) {
           runtimeError("Native method '%s' expects %d arguments, got %d", methodName.c_str(),
                        nativeMethod->arity, userArgCount);
           return InterpretResult::RUNTIME_ERROR;
         }
+
+        hasNativeMultiReturn_ = false;
+        nativeMultiReturn_.clear();
 
         Value result = nativeMethod->function(this, instance, userArgCount, argsStart);
 
@@ -2103,17 +2162,43 @@ InterpretResult VM::run() {
           yieldPending_ = false;
           return InterpretResult::OK;
         }
-
         if (fiber != currentFiber_) {
           fiber = currentFiber_;
         }
         REFRESH_CACHE();
-
         if (hasError_) {
           return InterpretResult::RUNTIME_ERROR;
         }
 
-        slots[A] = result;
+        int expectedResults = C - 1;
+
+        if (hasNativeMultiReturn_) {
+          int returnCount = static_cast<int>(nativeMultiReturn_.size());
+          if (expectedResults == -1) {
+
+            for (int i = 0; i < returnCount; ++i) {
+              slots[A + i] = nativeMultiReturn_[i];
+            }
+            STACK_TOP = slots + A + returnCount;
+          } else if (expectedResults > 0) {
+
+            for (int i = 0; i < expectedResults; ++i) {
+              slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
+            }
+          }
+          hasNativeMultiReturn_ = false;
+          nativeMultiReturn_.clear();
+        } else {
+
+          slots[A] = result;
+          if (expectedResults == -1) {
+            STACK_TOP = slots + A + 1;
+          } else if (expectedResults > 1) {
+            for (int i = 1; i < expectedResults; ++i) {
+              slots[A + i] = Value::nil();
+            }
+          }
+        }
         SPT_DISPATCH();
       }
 
@@ -2128,20 +2213,18 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isClass()) {
-      ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
 
+      ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
       auto itStatic = klass->statics.find(methodName);
       if (itStatic != klass->statics.end()) {
         method = itStatic->second;
       }
-
       if (method.isNil()) {
         auto it = klass->methods.find(methodName);
         if (it != klass->methods.end()) {
           method = it->second;
         }
       }
-
       if (method.isNil()) {
         runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
@@ -2149,12 +2232,10 @@ InterpretResult VM::run() {
     } else if (receiver.isNativeClass()) {
 
       NativeClassObject *nativeClass = static_cast<NativeClassObject *>(receiver.asGC());
-
       auto it = nativeClass->statics.find(methodName);
       if (it != nativeClass->statics.end()) {
         method = it->second;
       }
-
       NativeClassObject *base = nativeClass->baseClass;
       while (method.isNil() && base) {
         auto baseIt = base->statics.find(methodName);
@@ -2164,7 +2245,6 @@ InterpretResult VM::run() {
         }
         base = base->baseClass;
       }
-
       if (method.isNil()) {
         runtimeError("Native class '%s' has no static method '%s'", nativeClass->name.c_str(),
                      methodName.c_str());
@@ -2180,7 +2260,7 @@ InterpretResult VM::run() {
       Closure *closure = static_cast<Closure *>(method.asGC());
       const Prototype *proto = closure->proto;
 
-      int totalArgsProvided = B;
+      int totalArgsProvided = userArgCount + 1;
       bool dropThis = false;
 
       if (proto->needsReceiver) {
@@ -2211,14 +2291,19 @@ InterpretResult VM::run() {
       fiber->ensureFrames(1);
       REFRESH_CACHE();
 
-      for (int i = totalArgsProvided - 1; i >= 0; --i) {
-        slots[A + 1 + i] = slots[A + i];
+      int argsPushed;
+      if (dropThis) {
+
+        newSlotsBase = frame->slotsBase + A + 1;
+        argsPushed = userArgCount;
+      } else {
+
+        newSlotsBase = frame->slotsBase + A;
+        argsPushed = totalArgsProvided;
       }
 
       Value *newSlots = stackBase + newSlotsBase;
       Value *targetStackTop = newSlots + proto->maxStackSize;
-
-      int argsPushed = dropThis ? (totalArgsProvided - 1) : totalArgsProvided;
 
       for (Value *p = newSlots + argsPushed; p < targetStackTop; ++p) {
         *p = Value::nil();
@@ -2229,16 +2314,16 @@ InterpretResult VM::run() {
       CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
       newFrame->closure = closure;
       newFrame->ip = proto->code.data();
-      newFrame->expectedResults = 1;
+      newFrame->expectedResults = C - 1;
       newFrame->slotsBase = newSlotsBase;
       newFrame->returnBase = frame->slotsBase + A;
       newFrame->deferBase = fiber->deferTop;
 
       frame = newFrame;
       slots = stackBase + frame->slotsBase;
+
     } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
-
       protect(method);
 
       if (native->arity != -1 && userArgCount != native->arity) {
@@ -2273,12 +2358,31 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
+      int expectedResults = C - 1;
+
       if (hasNativeMultiReturn_) {
-        slots[A] = nativeMultiReturn_.empty() ? Value::nil() : nativeMultiReturn_[0];
+        int returnCount = static_cast<int>(nativeMultiReturn_.size());
+        if (expectedResults == -1) {
+          for (int i = 0; i < returnCount; ++i)
+            slots[A + i] = nativeMultiReturn_[i];
+          STACK_TOP = slots + A + returnCount;
+        } else {
+          for (int i = 0; i < expectedResults; ++i) {
+            slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
+          }
+        }
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
       } else {
-        slots[A] = result;
+        if (expectedResults != 0) {
+          slots[A] = result;
+          if (expectedResults == -1)
+            STACK_TOP = slots + A + 1;
+          else {
+            for (int i = 1; i < expectedResults; ++i)
+              slots[A + i] = Value::nil();
+          }
+        }
       }
     } else {
       runtimeError("'%s.%s' is not callable", receiver.typeName(), methodName.c_str());
@@ -2348,6 +2452,14 @@ InterpretResult VM::run() {
 
     if (isModuleExit) {
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
+
+      if (!pcallStack_.empty()) {
+        nativeMultiReturn_.clear();
+        for (int i = 0; i < returnCount; ++i) {
+          nativeMultiReturn_.push_back(returnValues[i]);
+        }
+        hasNativeMultiReturn_ = true;
+      }
       return InterpretResult::OK;
     }
 
@@ -2867,19 +2979,34 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
 
     CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
 
-    const uint32_t *prevIP = frame->ip - 1;
-    uint32_t instruction = *prevIP;
-    OpCode op = GET_OPCODE(instruction);
+    const uint32_t *prevIP1 = frame->ip - 1;
+    uint32_t inst1 = *prevIP1;
+    OpCode op1 = GET_OPCODE(inst1);
 
-    if (op == OpCode::OP_CALL || op == OpCode::OP_INVOKE) {
-      uint8_t A = GETARG_A(instruction);
+    bool isWideInvoke = false;
+    uint32_t inst2 = 0;
 
+    if (frame->ip >= frame->closure->proto->code.data() + 2) {
+      const uint32_t *prevIP2 = frame->ip - 2;
+      inst2 = *prevIP2;
+      if (GET_OPCODE(inst2) == OpCode::OP_INVOKE) {
+        isWideInvoke = true;
+      }
+    }
+
+    if (op1 == OpCode::OP_CALL) {
+
+      uint8_t A = GETARG_A(inst1);
+      Value *frameSlots = fiber->stack.data() + frame->slotsBase;
+      frameSlots[A] = arg;
+    } else if (isWideInvoke) {
+
+      uint8_t A = GETARG_A(inst2);
       Value *frameSlots = fiber->stack.data() + frame->slotsBase;
       frameSlots[A] = arg;
     } else {
-
-      fiber->ensureStack(1);
-      *fiber->stackTop++ = arg;
+      runtimeError("Critical VM Error: Cannot resume fiber. Unknown yield origin opcode at ip-%d",
+                   (int)(frame->ip - frame->closure->proto->code.data()));
     }
   }
 

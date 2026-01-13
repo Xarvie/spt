@@ -137,6 +137,27 @@ inline void registerVector3(VM *vm) {
           },
           1)
 
+      // 方法: xyz (返回 x, y, z 三个值 - 多返回值)
+      .method(
+          "xyz",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            Vector3 *v = inst->as<Vector3>();
+            vm->setNativeMultiReturn(
+                {Value::number(v->x), Value::number(v->y), Value::number(v->z)});
+            return Value::number(v->x); // 第一个返回值
+          },
+          0)
+
+      // 方法: xy (返回 x, y 两个值 - 多返回值)
+      .method(
+          "xy",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            Vector3 *v = inst->as<Vector3>();
+            vm->setNativeMultiReturn({Value::number(v->x), Value::number(v->y)});
+            return Value::number(v->x);
+          },
+          0)
+
       // 静态方法: zero
       .staticMethod(
           "zero",
@@ -225,6 +246,16 @@ inline void registerCounter(VM *vm) {
           [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
             inst->as<Counter>()->reset();
             return Value::nil();
+          },
+          0)
+
+      // 方法: state (返回 value, step 两个值 - 多返回值)
+      .method(
+          "state",
+          [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
+            Counter *c = inst->as<Counter>();
+            vm->setNativeMultiReturn({Value::integer(c->value), Value::integer(c->step)});
+            return Value::integer(c->value);
           },
           0)
 

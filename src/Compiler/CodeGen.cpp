@@ -252,6 +252,8 @@ void CodeGen::emitAsBx(OpCode op, uint8_t a, int32_t sbx) {
   emit(MAKE_AsBx(static_cast<uint8_t>(op), a, sbx));
 }
 
+void CodeGen::emitAx(OpCode op, uint32_t ax) { emit(MAKE_Ax(static_cast<uint8_t>(op), ax)); }
+
 int CodeGen::emitJump(OpCode op, int32_t offset) {
   int pc = currentPc();
   emitAsBx(op, 0, offset);

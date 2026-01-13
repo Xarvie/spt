@@ -303,12 +303,25 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
     cg_->emitABC(OpCode::OP_MOVE, funcSlot, dest, 0);
   }
 
-  for (auto *arg : node->arguments) {
+  bool useMultiret = false;
+  for (int i = 0; i < argCount; ++i) {
     int argSlot = cg_->allocSlot();
-    compileExpression(arg, argSlot);
+    Expression *arg = node->arguments[i];
+
+    if (i == argCount - 1) {
+      if (auto *call = dynamic_cast<FunctionCallNode *>(arg)) {
+        compileFunctionCall(call, argSlot, -1);
+        useMultiret = true;
+      } else {
+        compileExpression(arg, argSlot);
+      }
+    } else {
+      compileExpression(arg, argSlot);
+    }
   }
 
-  cg_->emitABC(OpCode::OP_CALL, funcSlot, argCount + 1, nResults + 1);
+  int b = useMultiret ? 0 : (argCount + 1);
+  cg_->emitABC(OpCode::OP_CALL, funcSlot, b, nResults + 1);
 
   if (nResults > 0 && dest != funcSlot) {
     for (int i = 0; i < nResults; ++i) {
@@ -330,24 +343,50 @@ void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &
   cg_->setLineGetter(receiverExpr);
 
   int argCount = static_cast<int>(arguments.size());
-  int totalArgs = 1 + argCount;
 
   int methodIdx = cg_->addStringConstant(methodName);
 
-  if (methodIdx > 255) {
-    compileMethodInvokeFallback(receiverExpr, methodName, methodIdx, arguments, dest, nResults);
-    return;
-  }
+  int base;
+  bool allocatedBase;
+  if (nResults == -1) {
+    base = dest;
+    allocatedBase = false;
 
-  int base = cg_->allocSlot();
+    if (cg_->current()->currentStackTop <= dest) {
+      cg_->current()->currentStackTop = dest + 1;
+      if (cg_->current()->currentStackTop > cg_->current()->maxStack) {
+        cg_->current()->maxStack = cg_->current()->currentStackTop;
+      }
+    }
+  } else {
+    base = cg_->allocSlot();
+    allocatedBase = true;
+  }
   compileExpression(receiverExpr, base);
+
+  bool useMultiret = false;
 
   for (int i = 0; i < argCount; ++i) {
     int argSlot = cg_->allocSlot();
-    compileExpression(arguments[i], argSlot);
+    Expression *arg = arguments[i];
+
+    if (i == argCount - 1) {
+      if (auto *call = dynamic_cast<FunctionCallNode *>(arg)) {
+        compileFunctionCall(call, argSlot, -1);
+        useMultiret = true;
+      } else {
+        compileExpression(arg, argSlot);
+      }
+    } else {
+      compileExpression(arg, argSlot);
+    }
   }
 
-  cg_->emitABC(OpCode::OP_INVOKE, base, totalArgs, methodIdx);
+  int b = useMultiret ? 0 : (argCount + 1);
+
+  cg_->emitABC(OpCode::OP_INVOKE, base, b, nResults + 1);
+
+  cg_->emitAx(OpCode::OP_MOVE, methodIdx);
 
   if (nResults > 0 && dest != base) {
     for (int i = 0; i < nResults; ++i) {
@@ -355,7 +394,7 @@ void Compiler::compileMethodInvoke(Expression *receiverExpr, const std::string &
     }
   }
 
-  cg_->freeSlots(totalArgs);
+  cg_->freeSlots((allocatedBase ? 1 : 0) + argCount);
 }
 
 void Compiler::compileMethodInvokeFallback(Expression *receiverExpr, const std::string &methodName,

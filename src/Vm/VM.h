@@ -133,6 +133,8 @@ public:
   // === 错误处理（公开供 Fiber 使用）===
   void throwError(Value errorValue);
 
+  void setNativeMultiReturn(std::initializer_list<Value> values);
+
 private:
   // === 核心执行循环 ===
   InterpretResult run();
@@ -156,7 +158,6 @@ private:
 
   // === 原生函数多返回值支持 ===
   void setNativeMultiReturn(const std::vector<Value> &values);
-  void setNativeMultiReturn(std::initializer_list<Value> values);
 
   // === Fiber 内部操作 ===
   // 初始化 fiber 准备首次运行
