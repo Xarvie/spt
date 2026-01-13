@@ -587,7 +587,7 @@ void VM::registerBuiltinFunctions() {
 
             CallFrame *currentFrame = &fiber->frames[fiber->frameCount - 1];
 
-            this->invokeDefers(currentFrame);
+            this->invokeDefers(currentFrame->deferBase);
 
             fiber->frameCount--;
           }
@@ -1375,10 +1375,9 @@ InterpretResult VM::run() {
       NativeInstance *instance = createNativeInstance(nativeClass, C, argsStart);
 
       if (!instance) {
-
         return InterpretResult::RUNTIME_ERROR;
       }
-
+      REFRESH_SLOTS();
       slots[A] = Value::object(instance);
       SPT_DISPATCH();
     }
@@ -1944,14 +1943,11 @@ InterpretResult VM::run() {
       }
 
       if (fiber != currentFiber_) {
-
         fiber = currentFiber_;
-        frame = &fiber->frames[fiber->frameCount - 1];
-        REFRESH_SLOTS();
-        SPT_DISPATCH();
       }
+      REFRESH_CACHE();
 
-      if (hasError_ && !pcallStack_.empty()) {
+      if (hasError_) {
         return InterpretResult::RUNTIME_ERROR;
       }
 
@@ -2040,6 +2036,11 @@ InterpretResult VM::run() {
           REFRESH_SLOTS();
           SPT_DISPATCH();
         }
+        REFRESH_CACHE();
+        if (hasError_) {
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
         slots[A] = directResult;
         SPT_DISPATCH();
       }
@@ -2105,12 +2106,10 @@ InterpretResult VM::run() {
 
         if (fiber != currentFiber_) {
           fiber = currentFiber_;
-          frame = &fiber->frames[fiber->frameCount - 1];
-          REFRESH_SLOTS();
-          SPT_DISPATCH();
         }
+        REFRESH_CACHE();
 
-        if (hasError_ && !pcallStack_.empty()) {
+        if (hasError_) {
           return InterpretResult::RUNTIME_ERROR;
         }
 
@@ -2251,9 +2250,14 @@ InterpretResult VM::run() {
       hasNativeMultiReturn_ = false;
       nativeMultiReturn_.clear();
 
+      FiberObject *callFiber = currentFiber_;
       Value result = native->function(this, receiver, userArgCount, argsStart);
 
-      unprotect(1);
+      if (currentFiber_ != callFiber) {
+        callFiber->stackTop--;
+      } else {
+        unprotect(1);
+      }
 
       if (yieldPending_) {
         yieldPending_ = false;
@@ -2261,14 +2265,11 @@ InterpretResult VM::run() {
       }
 
       if (fiber != currentFiber_) {
-
         fiber = currentFiber_;
-        frame = &fiber->frames[fiber->frameCount - 1];
-        REFRESH_SLOTS();
-        SPT_DISPATCH();
       }
+      REFRESH_CACHE();
 
-      if (hasError_ && !pcallStack_.empty()) {
+      if (hasError_) {
         return InterpretResult::RUNTIME_ERROR;
       }
 
@@ -2291,7 +2292,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     if (fiber->deferTop > frame->deferBase) {
-      invokeDefers(frame);
+      invokeDefers(frame->deferBase);
 
       if (hasError_)
         return InterpretResult::RUNTIME_ERROR;
@@ -2729,7 +2730,7 @@ InterpretResult VM::run() {
       if (hasError_)
         return InterpretResult::RUNTIME_ERROR;
 
-      REFRESH_SLOTS();
+      REFRESH_CACHE();
       Value *dest = &slots[A + 3];
 
       if (hasNativeMultiReturn_) {
@@ -2915,17 +2916,17 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
   return returnValue;
 }
 
-void VM::invokeDefers(CallFrame *frame) {
+void VM::invokeDefers(int targetDeferBase) {
   FiberObject *fiber = currentFiber_;
 
-  while (fiber->deferTop > frame->deferBase) {
-
+  while (fiber->deferTop > targetDeferBase) {
     Value deferVal = fiber->deferStack[--fiber->deferTop];
 
     if (deferVal.isClosure()) {
       Closure *closure = static_cast<Closure *>(deferVal.asGC());
-
+      protect(Value::object(closure));
       call(closure, 0);
+      unprotect(1);
     }
 
     if (hasError_)
@@ -3065,36 +3066,29 @@ void VM::throwError(Value errorValue) {
 void VM::runtimeError(const char *format, ...) {
   va_list args;
   va_start(args, format);
-
   va_list args_copy;
   va_copy(args_copy, args);
   int size = vsnprintf(nullptr, 0, format, args_copy);
   va_end(args_copy);
-
   std::vector<char> buffer(size + 1);
   vsnprintf(buffer.data(), buffer.size(), format, args);
   va_end(args);
-
   std::string message = buffer.data();
-  message += "\n----------------\nCall stack:";
 
-  FiberObject *fiber = currentFiber_;
-  for (int i = fiber->frameCount - 1; i >= 0; --i) {
-    CallFrame &frame = fiber->frames[i];
-    const Prototype *proto = frame.closure->proto;
-    size_t instruction = frame.ip - proto->code.data() - 1;
-    int line = getLine(proto, instruction);
-    message += "\n  [line " + std::to_string(line) + "] in ";
-    message += proto->name.empty() ? "<script>" : proto->name + "()";
+  if (pcallStack_.empty()) {
+    std::string fullMessage = message;
+    fullMessage += "\n----------------\nCall stack:";
+    fullMessage += getStackTrace();
+
+    if (errorHandler_) {
+      errorHandler_(fullMessage, 0);
+    } else {
+      fprintf(stderr, "\n[Runtime Error]\n%s\n\n", fullMessage.c_str());
+    }
   }
 
-  if (errorHandler_) {
-    errorHandler_(message, 0);
-  } else {
-    fprintf(stderr, "\n[Runtime Error]\n%s\n\n", message.c_str());
-  }
-
-  resetStack();
+  hasError_ = true;
+  errorValue_ = Value::object(allocateString(message));
 }
 
 int VM::getLine(const Prototype *proto, size_t instruction) {

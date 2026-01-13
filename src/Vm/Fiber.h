@@ -67,7 +67,7 @@ struct FiberObject : GCObject {
   // === 配置 ===
   static constexpr size_t DEFAULT_STACK_SIZE = 64;
   static constexpr size_t DEFAULT_FRAMES_SIZE = 8;
-  static constexpr int MAX_FRAMES = 64;
+  static constexpr int MAX_FRAMES = 256;
 
   // === 构造 ===
   FiberObject() {

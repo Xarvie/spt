@@ -8,6 +8,7 @@
 #include <string>
 #include <type_traits>
 #include <typeinfo>
+#include <utility>
 #include <vector>
 
 namespace spt {
@@ -45,8 +46,10 @@ struct NativePropertyDesc {
 
   NativePropertyDesc() : isReadOnly(true) {}
 
-  NativePropertyDesc(const std::string &n, NativePropertyGetter g, NativePropertySetter s = nullptr)
-      : name(n), getter(std::move(g)), setter(std::move(s)), isReadOnly(s == nullptr) {}
+  NativePropertyDesc(std::string n, NativePropertyGetter g, NativePropertySetter s = nullptr)
+      : name(std::move(n)), getter(std::move(g)), setter(std::move(s)) {
+    isReadOnly = !static_cast<bool>(setter);
+  }
 };
 
 // ============================================================================

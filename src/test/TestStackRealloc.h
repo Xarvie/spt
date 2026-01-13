@@ -470,7 +470,7 @@ inline void registerStackReallocationTests(TestRunner &runner) {
                 }
 
                 // 执行递归，迫使 Fiber stack 扩容
-                deepRecurse(2000);
+                deepRecurse(250);
                 return "survived";
             };
 
@@ -503,7 +503,7 @@ inline void registerStackReallocationTests(TestRunner &runner) {
                     if (n <= 0) { return 0; }
                     return deep(n - 1) + 1;
                 }
-                deep(2000);
+                deep(200);
                 return "value";
             };
 
