@@ -963,8 +963,7 @@ void Compiler::compileForEach(ForEachStatementNode *stmt) {
 }
 
 void Compiler::compileReturn(ReturnStatementNode *stmt) {
-  // auto opcode = cg_->current()->proto.useDefer ? OpCode::OP_RETURN : OpCode::OP_RETURN_NDEF;
-  auto opcode = OpCode::OP_RETURN;
+  auto opcode = cg_->current()->proto.useDefer ? OpCode::OP_RETURN : OpCode::OP_RETURN_NDEF;
   if (stmt->returnValue.empty()) {
     cg_->emitABC(opcode, 0, 1, 0);
   } else if (stmt->returnValue.size() == 1) {
