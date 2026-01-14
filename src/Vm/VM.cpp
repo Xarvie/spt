@@ -23,7 +23,7 @@ VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
   if (config.stackSize > FiberObject::DEFAULT_STACK_SIZE) {
     mainFiber_->checkStack(config.stackSize);
   }
-  mainFiber_->stackTop = mainFiber_->stack; // 指向基址
+  mainFiber_->stackTop = mainFiber_->stack;
   currentFiber_ = mainFiber_;
 
   ModuleManagerConfig moduleConfig;
@@ -523,8 +523,8 @@ void VM::registerBuiltinFunctions() {
             newFrame->closure = closure;
             newFrame->ip = proto->code.data();
             newFrame->expectedResults = -1;
-            newFrame->slotsBase = slotsBaseOffset;
-            newFrame->returnBase = 0;
+            newFrame->slots = newSlots;
+            newFrame->returnTo = callBase;
             newFrame->deferBase = fiber->deferTop;
 
             int savedExitFrameCount = this->exitFrameCount_;
@@ -692,8 +692,8 @@ void VM::registerBuiltinFunctions() {
           newFrame->closure = closure;
           newFrame->ip = proto->code.data();
           newFrame->expectedResults = 1;
-          newFrame->slotsBase = slotsBaseOffset;
-          newFrame->returnBase = 0;
+          newFrame->slots = newSlots;
+          newFrame->returnTo = callBase;
           newFrame->deferBase = fiber->deferTop;
 
           int savedExitFrameCount = this->exitFrameCount_;
@@ -898,9 +898,9 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
   CallFrame *frame = &currentFiber_->frames[currentFiber_->frameCount++];
   frame->closure = mainClosure;
   frame->ip = mainClosure->proto->code.data();
-  frame->slotsBase = slotsBaseOffset;
+  frame->slots = currentFiber_->stack + slotsBaseOffset;
   frame->expectedResults = 1;
-  frame->returnBase = 0;
+  frame->returnTo = nullptr;
   frame->deferBase = currentFiber_->deferTop;
 
   return run();
@@ -936,8 +936,8 @@ InterpretResult VM::call(Closure *closure, int argCount) {
   newFrame->closure = closure;
   newFrame->ip = closure->proto->code.data();
   newFrame->expectedResults = 1;
-  newFrame->slotsBase = slotsBaseOffset;
-  newFrame->returnBase = 0;
+  newFrame->slots = argsStart;
+  newFrame->returnTo = nullptr;
   newFrame->deferBase = fiber->deferTop;
 
   int savedExitFrameCount = exitFrameCount_;
@@ -964,9 +964,9 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
   CallFrame *frame = &fiber->frames[fiber->frameCount++];
   frame->closure = mainClosure;
   frame->ip = mainClosure->proto->code.data();
-  frame->slotsBase = frameStartOffset;
+  frame->slots = fiber->stack + frameStartOffset;
   frame->expectedResults = 0;
-  frame->returnBase = 0;
+  frame->returnTo = nullptr;
   frame->deferBase = fiber->deferTop;
 
   Value *frameStart = fiber->stack + frameStartOffset;
@@ -1006,8 +1006,7 @@ InterpretResult VM::run() {
   FiberObject *fiber = currentFiber_;
   CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
 
-  Value *stackBase = fiber->stack;
-  Value *slots = stackBase + frame->slotsBase;
+  Value *slots = frame->slots;
   uint32_t instruction;
 
 #if SPT_USE_COMPUTED_GOTO
@@ -1021,15 +1020,13 @@ InterpretResult VM::run() {
 
 #define REFRESH_CACHE()                                                                            \
   do {                                                                                             \
-    stackBase = fiber->stack;                                                                      \
     frame = &fiber->frames[fiber->frameCount - 1];                                                 \
-    slots = stackBase + frame->slotsBase;                                                          \
+    slots = frame->slots;                                                                          \
   } while (0)
 
 #define REFRESH_SLOTS()                                                                            \
   do {                                                                                             \
-    stackBase = fiber->stack;                                                                      \
-    slots = stackBase + frame->slotsBase;                                                          \
+    slots = frame->slots;                                                                          \
   } while (0)
 
   SPT_DISPATCH_LOOP_BEGIN()
@@ -1420,14 +1417,15 @@ InterpretResult VM::run() {
           return InterpretResult::RUNTIME_ERROR;
         }
 
-        int newSlotsBase = frame->slotsBase + B;
-        int neededStack = newSlotsBase + proto->maxStackSize;
+        Value *newSlots = slots + B;
+        int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
 
         fiber->ensureStack(neededStack);
         fiber->ensureFrames(1);
         REFRESH_CACHE();
+        newSlots = slots + B;
 
-        Value *argsStart = stackBase + newSlotsBase;
+        Value *argsStart = newSlots;
         Value *targetStackTop = argsStart + proto->maxStackSize;
 
         for (Value *p = argsStart + providedArgs; p < targetStackTop; ++p) {
@@ -1440,13 +1438,13 @@ InterpretResult VM::run() {
         newFrame->closure = closure;
         newFrame->ip = proto->code.data();
         newFrame->expectedResults = 0;
-        newFrame->slotsBase = newSlotsBase;
-        newFrame->returnBase = frame->slotsBase + A;
+        newFrame->slots = newSlots;
+        newFrame->returnTo = slots + A;
 
         newFrame->deferBase = fiber->deferTop;
 
         frame = newFrame;
-        slots = stackBase + frame->slotsBase;
+        slots = frame->slots;
 
       } else if (initializer.isNativeFunc()) {
         NativeFunction *native = static_cast<NativeFunction *>(initializer.asGC());
@@ -1906,14 +1904,15 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      int newSlotsBase = frame->slotsBase + A + 1;
-      int neededStack = newSlotsBase + proto->maxStackSize;
+      Value *newSlots = slots + A + 1;
+      int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
 
       fiber->ensureStack(neededStack);
       fiber->ensureFrames(1);
       REFRESH_CACHE();
+      newSlots = slots + A + 1;
 
-      Value *argsStart = stackBase + newSlotsBase;
+      Value *argsStart = newSlots;
       Value *targetStackTop = argsStart + proto->maxStackSize;
 
       for (Value *p = argsStart + argCount; p < targetStackTop; ++p) {
@@ -1926,12 +1925,12 @@ InterpretResult VM::run() {
       newFrame->closure = closure;
       newFrame->ip = proto->code.data();
       newFrame->expectedResults = expectedResults;
-      newFrame->slotsBase = newSlotsBase;
-      newFrame->returnBase = frame->slotsBase + A;
+      newFrame->slots = newSlots;
+      newFrame->returnTo = slots + A;
       newFrame->deferBase = fiber->deferTop;
 
       frame = newFrame;
-      slots = stackBase + frame->slotsBase;
+      slots = frame->slots;
 
     } else if (callee.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
@@ -2288,8 +2287,8 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      int newSlotsBase = frame->slotsBase + A + (dropThis ? 2 : 1);
-      int neededStack = newSlotsBase + proto->maxStackSize;
+      Value *newSlots = slots + A + (dropThis ? 2 : 1);
+      int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
 
       fiber->ensureStack(neededStack);
       fiber->ensureFrames(1);
@@ -2298,15 +2297,14 @@ InterpretResult VM::run() {
       int argsPushed;
       if (dropThis) {
 
-        newSlotsBase = frame->slotsBase + A + 1;
+        newSlots = slots + A + 1;
         argsPushed = userArgCount;
       } else {
 
-        newSlotsBase = frame->slotsBase + A;
+        newSlots = slots + A;
         argsPushed = totalArgsProvided;
       }
 
-      Value *newSlots = stackBase + newSlotsBase;
       Value *targetStackTop = newSlots + proto->maxStackSize;
 
       for (Value *p = newSlots + argsPushed; p < targetStackTop; ++p) {
@@ -2319,12 +2317,12 @@ InterpretResult VM::run() {
       newFrame->closure = closure;
       newFrame->ip = proto->code.data();
       newFrame->expectedResults = C - 1;
-      newFrame->slotsBase = newSlotsBase;
-      newFrame->returnBase = frame->slotsBase + A;
+      newFrame->slots = newSlots;
+      newFrame->returnTo = slots + A;
       newFrame->deferBase = fiber->deferTop;
 
       frame = newFrame;
-      slots = stackBase + frame->slotsBase;
+      slots = frame->slots;
 
     } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
@@ -2418,7 +2416,7 @@ InterpretResult VM::run() {
 
     Value *destSlot = nullptr;
     if (!isRootFrame && !isModuleExit) {
-      destSlot = stackBase + frame->returnBase;
+      destSlot = frame->returnTo;
     }
 
     closeUpvalues(slots);
@@ -2468,7 +2466,7 @@ InterpretResult VM::run() {
     }
 
     frame = &fiber->frames[FRAME_COUNT - 1];
-    slots = stackBase + frame->slotsBase;
+    slots = frame->slots;
 
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
@@ -2818,15 +2816,15 @@ InterpretResult VM::run() {
       newFrame->closure = closure;
       newFrame->ip = proto->code.data();
 
-      newFrame->slotsBase = static_cast<int>(top - fiber->stack) + 1;
+      newFrame->slots = top + 1;
 
-      newFrame->returnBase = frame->slotsBase + A + 3;
+      newFrame->returnTo = slots + A + 3;
       newFrame->expectedResults = C;
       newFrame->deferBase = fiber->deferTop;
 
       frame = newFrame;
 
-      Value *newStackStart = fiber->stack + newFrame->slotsBase;
+      Value *newStackStart = newFrame->slots;
       Value *newStackEnd = newStackStart + proto->maxStackSize;
       while (fiber->stackTop < newStackEnd) {
         *fiber->stackTop++ = Value::nil();
@@ -2913,7 +2911,6 @@ void VM::initFiberForCall(FiberObject *fiber, Value arg) {
   fiber->openUpvalues = nullptr;
 
   const Prototype *proto = fiber->closure->proto;
-
   fiber->ensureStack(proto->maxStackSize);
   fiber->ensureFrames(1);
 
@@ -2922,9 +2919,9 @@ void VM::initFiberForCall(FiberObject *fiber, Value arg) {
   CallFrame *frame = &fiber->frames[fiber->frameCount++];
   frame->closure = fiber->closure;
   frame->ip = proto->code.data();
-  frame->slotsBase = 0;
+  frame->slots = fiber->stack;
   frame->expectedResults = 1;
-  frame->returnBase = 0;
+  frame->returnTo = nullptr;
   frame->deferBase = fiber->deferTop;
 
   Value *frameStart = fiber->stack;
@@ -3001,12 +2998,12 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
     if (op1 == OpCode::OP_CALL) {
 
       uint8_t A = GETARG_A(inst1);
-      Value *frameSlots = fiber->stack + frame->slotsBase;
+      Value *frameSlots = frame->slots;
       frameSlots[A] = arg;
     } else if (isWideInvoke) {
 
       uint8_t A = GETARG_A(inst2);
-      Value *frameSlots = fiber->stack + frame->slotsBase;
+      Value *frameSlots = frame->slots;
       frameSlots[A] = arg;
     } else {
       runtimeError("Critical VM Error: Cannot resume fiber. Unknown yield origin opcode at ip-%d",

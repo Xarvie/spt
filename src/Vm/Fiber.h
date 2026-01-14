@@ -15,11 +15,13 @@ struct UpValue;
 // ============================================================================
 struct CallFrame {
   Closure *closure = nullptr;
-  const Instruction *ip = nullptr; // 指令指针
-  int slotsBase = 0;               // 栈帧基址（相对于栈底的偏移量索引）
-  int expectedResults = 1;         // 期望返回值数量 (-1 表示全部)
-  int returnBase = 0;              // 返回值存放位置（相对于栈底的偏移量索引）
-  int deferBase = 0;               // 记录进入该帧时的 defer 栈顶位置
+  const Instruction *ip = nullptr;
+
+  Value *slots = nullptr;    // 指向当前帧的第一个寄存器 (对应 Lua 的 base)
+  Value *returnTo = nullptr; // 指向返回值应该写入的位置 (对应 Lua 的 firstResult)
+
+  int expectedResults = 1;
+  int deferBase = 0;
 };
 
 // ============================================================================
@@ -113,47 +115,68 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
-  // 扩容
   void checkStack(int needed) {
-    // 计算剩余空间
+    // 1. 检查剩余空间是否足够
+    // stackLast 指向分配内存的末尾，stackTop 指向当前栈顶
     if (stackLast - stackTop >= needed) {
-      return; // 空间足够，无需操作
+      return;
     }
 
-    // 需要扩容
+    // 2. 计算新容量
     size_t used = stackTop - stack;
     size_t required = used + needed;
 
-    size_t newSize = stackSize * 2;
+    size_t newSize = stackSize;
+    if (newSize == 0)
+      newSize = DEFAULT_STACK_SIZE;
+
     while (newSize < required) {
       newSize *= 2;
     }
 
+    // 3. 分配新内存并保留旧指针
     Value *oldStack = stack;
-
-    // 1. 分配新内存
     Value *newStack = new Value[newSize];
 
+    // 4. 迁移数据
     for (size_t i = 0; i < used; ++i) {
       newStack[i] = oldStack[i];
     }
-    // 初始化新区域为 nil
+    // 初始化新增区域为 nil
     for (size_t i = used; i < newSize; ++i) {
       newStack[i] = Value::nil();
     }
 
-    // 释放旧内存
-    delete[] oldStack;
-
-    // 更新指针
+    // 5. 更新 Fiber 主状态指针
     stack = newStack;
     stackSize = newSize;
     stackTop = stack + used;
     stackLast = stack + newSize;
 
-    // 修复 UpValues
+    // 6. 修复 Open UpValues (闭包引用的栈变量)
+    // oldStack 尚未释放，指针运算 (uv->location - oldStack) 是安全的
     if (openUpvalues != nullptr) {
       fixUpvaluePointers(oldStack, newStack);
+    }
+
+    // 7. 修复 CallFrames (调用帧中的指针)
+    for (int i = 0; i < frameCount; ++i) {
+      CallFrame &frame = frames[i];
+
+      // 修复 slots 指针
+      if (frame.slots) {
+        frame.slots = newStack + (frame.slots - oldStack);
+      }
+
+      // 修复 returnTo 指针
+      if (frame.returnTo) {
+        frame.returnTo = newStack + (frame.returnTo - oldStack);
+      }
+    }
+
+    // 8. 释放
+    if (oldStack) {
+      delete[] oldStack;
     }
   }
 
@@ -204,8 +227,6 @@ struct FiberObject : GCObject {
 
   // === 辅助方法：根据 slotsBase 获取实际的 slots 指针 ===
   Value *getSlots(int slotsBase) { return stack + slotsBase; }
-
-  Value *getSlots(const CallFrame &frame) { return stack + frame.slotsBase; }
 
   // === 重置===
   void reset() {
