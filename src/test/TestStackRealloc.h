@@ -459,8 +459,6 @@ inline void registerStackReallocationTests(TestRunner &runner) {
 
   runner.addTest("Stack Realloc - Cached Pointer Validation (pcall)",
                  R"(
-            // 1. 定义一个函数，它不仅占用栈，还导致栈扩容
-            // FIX: 必须显式声明返回类型 -> string
             auto triggerRealloc = function() -> string {
                 // 递归函数，用来吃掉栈空间
                 int deepRecurse(int n) {
@@ -474,18 +472,7 @@ inline void registerStackReallocationTests(TestRunner &runner) {
                 return "survived";
             };
 
-            // 2. 使用 pcall 包裹
-            // 这里的 triggerRealloc 会触发扩容，pcall 返回后 slots 指针必须刷新
             auto result = pcall(triggerRealloc);
-
-            // 3. 验证结果
-            // pcall 返回值是一个 list: [status, value] 或者类似的结构，或者根据你的 pcall 实现返回 boolean
-            // 根据之前的 pcall 实现，它似乎把结果放在 stack 上，或者返回 nil 但通过 nativeMultiReturn 返回
-            // 这里假设 pcall 返回 success (true) 或者具体的返回值
-
-            // 注意：根据 VM.cpp，pcall 返回 nil，但设置 nativeMultiReturn
-            // 如果你的语言支持多返回值接收: var status, val = pcall(...)
-            // 如果只接收一个，通常拿到的是 status (bool)
 
             if (result) {
                 print("OK");
@@ -497,7 +484,6 @@ inline void registerStackReallocationTests(TestRunner &runner) {
 
   runner.addTest("Stack Realloc - Cached Pointer Validation (Native Init)",
                  R"(
-            // FIX: 显式声明返回类型 -> string
             auto makeHugeStack = function() -> string {
                  int deep(int n) {
                     if (n <= 0) { return 0; }
@@ -507,7 +493,6 @@ inline void registerStackReallocationTests(TestRunner &runner) {
                 return "value";
             };
 
-            // FIX: 参数需要类型 (any val)，返回值需要类型 (-> any)
             auto innocentFunc = function(any val) -> any {
                 return val;
             };
@@ -518,4 +503,51 @@ inline void registerStackReallocationTests(TestRunner &runner) {
             print(res);
        )",
                  "value");
+
+  // ---------------------------------------------------------
+  // 9. OP_TFORCALL 专用测试 (验证 ensureFrames 及指针修复)
+  // ---------------------------------------------------------
+
+  runner.addTest("Stack Realloc - TForCall Frame Expansion",
+                 R"(
+            // 1. 定义一个简单的迭代器函数
+            // 每次 TFORCALL 调用它时，都会尝试压入一个新的 CallFrame
+            auto iter = function(any s, int i) -> any {
+                if (i < 5) { return i + 1; }
+                return null;
+            };
+
+            // 2. 递归函数：用于吃掉 CallFrames 空间
+            int eatFrames(int depth) {
+                if (depth > 0) {
+                    return eatFrames(depth - 1);
+                }
+
+                // 3. 在栈深处执行 for 循环
+                // 当我们处于 frames 数组的边界（如 frameCount == 8）时：
+                // OP_TFORCALL 执行 -> 需要压入 iter 的帧 -> 必须调用 ensureFrames(1)
+                // 如果没调用 -> 越界写入 -> Crash/UB
+                // 如果调用了但没刷新缓存 -> 这是一个悬垂指针 -> Crash
+                int sum = 0;
+                for (auto i : iter, null, 0) {
+                    sum = sum + i;
+                }
+                return sum;
+            }
+
+            int total = 0;
+            // 4. 扫描深度范围
+            // 默认 DEFAULT_FRAMES_SIZE 是 8。
+            // 我们测试 4 到 20 层，肯定能覆盖 8 和 16 这两个扩容边界。
+            for (int d = 4; d <= 20; d = d + 1) {
+                total = total + eatFrames(d);
+            }
+
+            // 验证逻辑:
+            // 单次循环 sum = 1+2+3+4+5 = 15
+            // 深度循环从 4 到 20，共 17 次调用
+            // 总和 = 15 * 17 = 255
+            print(total);
+       )",
+                 "255");
 }
