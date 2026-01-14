@@ -325,6 +325,7 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
 
     int b = useMultiret ? 0 : (argCount + 1);
     cg_->emitABC(OpCode::OP_CALL_SELF, argsStart, b, nResults + 1);
+    cg_->freeSlots(argCount - 1);
   } else {
     compileExpression(node->functionExpr, dest);
     int funcSlot = dest;
