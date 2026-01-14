@@ -42,14 +42,18 @@ struct FiberObject : GCObject {
   // === 执行状态 ===
   FiberState state = FiberState::NEW;
 
+  // === Value 栈 ===
   Value *stack = nullptr;     // 栈底指针 (Lua: L->stack)
   Value *stackTop = nullptr;  // 当前栈顶指针 (Lua: L->top)
   Value *stackLast = nullptr; // 栈内存的极限位置 (Lua: L->stack_last)
   size_t stackSize = 0;       // 当前栈总容量 (为了方便计算)
 
-  std::vector<CallFrame> frames;
-  int frameCount = 0;
+  // === 调用帧栈 (手动管理) ===
+  CallFrame *frames = nullptr; // 帧数组指针
+  int framesCapacity = 0;      // 帧数组总容量
+  int frameCount = 0;          // 当前使用的帧数
 
+  // === Defer 栈 ===
   std::vector<Value> deferStack;
   int deferTop = 0; // 指向 deferStack 的下一个可用位置
 
@@ -77,18 +81,27 @@ struct FiberObject : GCObject {
   FiberObject() {
     type = ValueType::Fiber;
 
-    // 分配初始栈内存
+    // 分配初始 Value 栈内存
     stackSize = DEFAULT_STACK_SIZE;
     stack = new Value[stackSize];
     stackTop = stack;
-    stackLast = stack + stackSize; // 指向末尾
+    stackLast = stack + stackSize;
 
     // 初始化栈内容为 nil
     for (size_t i = 0; i < stackSize; ++i) {
       stack[i] = Value::nil();
     }
 
-    frames.resize(DEFAULT_FRAMES_SIZE);
+    // 分配初始帧数组
+    framesCapacity = DEFAULT_FRAMES_SIZE;
+    frames = new CallFrame[framesCapacity];
+    frameCount = 0;
+
+    // 初始化帧数组（CallFrame 有默认值，但显式初始化更安全）
+    for (int i = 0; i < framesCapacity; ++i) {
+      frames[i] = CallFrame{};
+    }
+
     deferStack.resize(16);
     deferTop = 0;
     error = Value::nil();
@@ -96,9 +109,16 @@ struct FiberObject : GCObject {
   }
 
   ~FiberObject() {
+    // 释放 Value 栈
     if (stack) {
       delete[] stack;
       stack = nullptr;
+    }
+
+    // 释放帧数组
+    if (frames) {
+      delete[] frames;
+      frames = nullptr;
     }
   }
 
@@ -115,9 +135,9 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
+  // === Value 栈扩容 ===
   void checkStack(int needed) {
     // 1. 检查剩余空间是否足够
-    // stackLast 指向分配内存的末尾，stackTop 指向当前栈顶
     if (stackLast - stackTop >= needed) {
       return;
     }
@@ -154,7 +174,6 @@ struct FiberObject : GCObject {
     stackLast = stack + newSize;
 
     // 6. 修复 Open UpValues (闭包引用的栈变量)
-    // oldStack 尚未释放，指针运算 (uv->location - oldStack) 是安全的
     if (openUpvalues != nullptr) {
       fixUpvaluePointers(oldStack, newStack);
     }
@@ -174,7 +193,7 @@ struct FiberObject : GCObject {
       }
     }
 
-    // 8. 释放
+    // 8. 释放旧栈
     if (oldStack) {
       delete[] oldStack;
     }
@@ -182,33 +201,50 @@ struct FiberObject : GCObject {
 
   void ensureStack(int needed) { checkStack(needed); }
 
+  // === Defer 栈扩容 ===
   void ensureDefers(int needed) {
     if (deferTop + needed <= (int)deferStack.size()) {
       return;
     }
     size_t newSize = deferStack.size() * 2;
-    while (newSize < deferTop + needed) {
+    while (newSize < static_cast<size_t>(deferTop + needed)) {
       newSize *= 2;
     }
     deferStack.resize(newSize);
   }
 
+  // === 帧栈扩容 (手动管理) ===
   void ensureFrames(int needed) {
-    size_t required = static_cast<size_t>(frameCount + needed);
+    int required = frameCount + needed;
 
-    if (required <= frames.size()) {
+    if (required <= framesCapacity) {
       return;
     }
 
-    size_t newSize = frames.size() * 2;
-    if (newSize < DEFAULT_FRAMES_SIZE) {
-      newSize = DEFAULT_FRAMES_SIZE;
+    int newCapacity = framesCapacity;
+    if (newCapacity == 0) {
+      newCapacity = DEFAULT_FRAMES_SIZE;
     }
-    while (newSize < required) {
-      newSize *= 2;
+    while (newCapacity < required) {
+      newCapacity *= 2;
     }
 
-    frames.resize(newSize);
+    CallFrame *newFrames = new CallFrame[newCapacity];
+
+    for (int i = 0; i < frameCount; ++i) {
+      newFrames[i] = frames[i];
+    }
+
+    for (int i = frameCount; i < newCapacity; ++i) {
+      newFrames[i] = CallFrame{};
+    }
+
+    if (frames) {
+      delete[] frames;
+    }
+
+    frames = newFrames;
+    framesCapacity = newCapacity;
   }
 
   void fixUpvaluePointers(Value *oldBase, Value *newBase);
@@ -228,10 +264,10 @@ struct FiberObject : GCObject {
   // === 辅助方法：根据 slotsBase 获取实际的 slots 指针 ===
   Value *getSlots(int slotsBase) { return stack + slotsBase; }
 
-  // === 重置===
+  // === 重置 ===
   void reset() {
     state = FiberState::NEW;
-    stackTop = stack; // 直接重置指针
+    stackTop = stack;
     frameCount = 0;
     deferTop = 0;
     openUpvalues = nullptr;

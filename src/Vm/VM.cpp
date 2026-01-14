@@ -2803,8 +2803,10 @@ InterpretResult VM::run() {
       size_t currentSize = fiber->stackTop - fiber->stack;
       if (currentSize + 3 + proto->maxStackSize >= fiber->stackSize) {
         fiber->ensureStack(proto->maxStackSize + 3);
+        REFRESH_SLOTS();
         base = &slots[A];
       }
+      fiber->ensureFrames(1);
 
       Value *top = fiber->stackTop;
       top[0] = base[0];

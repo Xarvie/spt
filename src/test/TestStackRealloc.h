@@ -550,4 +550,48 @@ inline void registerStackReallocationTests(TestRunner &runner) {
             print(total);
        )",
                  "255");
+
+  runner.addTest("Stack Realloc - TForCall Base Pointer Validity",
+                 R"(
+            // 1. 定义一个"胖"迭代器
+            // 通过定义大量局部变量，使其 maxStackSize 变得很大 (例如 > 50)
+            // 这样 OP_TFORCALL 在检查栈时，会发现空间不足，强制扩容
+            auto fatIter = function(any s, int i) -> any {
+                // 占位变量，撑大栈帧
+                int a0=0; int a1=0; int a2=0; int a3=0; int a4=0;
+                int b0=0; int b1=0; int b2=0; int b3=0; int b4=0;
+                int c0=0; int c1=0; int c2=0; int c3=0; int c4=0;
+                int d0=0; int d1=0; int d2=0; int d3=0; int d4=0;
+                int e0=0; int e1=0; int e2=0; int e3=0; int e4=0;
+                int f0=0; int f1=0; int f2=0; int f3=0; int f4=0;
+
+                if (i < 1) { return i + 1; }
+                return null;
+            };
+
+            // 2. 探测函数
+            // 它的栈帧很小，容易通过 OP_CALL 的检查而不触发扩容
+            int probe(int depth) {
+                if (depth > 0) {
+                    return probe(depth - 1);
+                }
+
+                // 3. 危险区域
+                int count = 0;
+                for (auto i : fatIter, null, 0) {
+                    count = count + 1;
+                }
+                return count;
+            }
+
+            // 4. 扫描触发点
+            int total = 0;
+            // 扫描范围稍微大一点，确保命中 DEFAULT_STACK_SIZE 的倍数
+            for (int d = 0; d < 100; d = d + 1) {
+                total = total + probe(d);
+            }
+
+            print("Survival: " + (total > 0));
+       )",
+                 "Survival: true");
 }
