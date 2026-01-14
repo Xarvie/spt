@@ -40,8 +40,10 @@ struct FiberObject : GCObject {
   // === 执行状态 ===
   FiberState state = FiberState::NEW;
 
-  std::vector<Value> stack;
-  Value *stackTop = nullptr;
+  Value *stack = nullptr;     // 栈底指针 (Lua: L->stack)
+  Value *stackTop = nullptr;  // 当前栈顶指针 (Lua: L->top)
+  Value *stackLast = nullptr; // 栈内存的极限位置 (Lua: L->stack_last)
+  size_t stackSize = 0;       // 当前栈总容量 (为了方便计算)
 
   std::vector<CallFrame> frames;
   int frameCount = 0;
@@ -72,15 +74,30 @@ struct FiberObject : GCObject {
   // === 构造 ===
   FiberObject() {
     type = ValueType::Fiber;
-    stack.resize(DEFAULT_STACK_SIZE);
-    stackTop = stack.data();
-    frames.resize(DEFAULT_FRAMES_SIZE);
 
+    // 分配初始栈内存
+    stackSize = DEFAULT_STACK_SIZE;
+    stack = new Value[stackSize];
+    stackTop = stack;
+    stackLast = stack + stackSize; // 指向末尾
+
+    // 初始化栈内容为 nil
+    for (size_t i = 0; i < stackSize; ++i) {
+      stack[i] = Value::nil();
+    }
+
+    frames.resize(DEFAULT_FRAMES_SIZE);
     deferStack.resize(16);
     deferTop = 0;
-
     error = Value::nil();
     yieldValue = Value::nil();
+  }
+
+  ~FiberObject() {
+    if (stack) {
+      delete[] stack;
+      stack = nullptr;
+    }
   }
 
   // === 状态查询 ===
@@ -96,33 +113,51 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
-  void ensureStack(int needed) {
-    size_t used = stackTop - stack.data();
-    size_t required = used + static_cast<size_t>(needed);
-
-    if (required <= stack.size()) {
-      return;
+  // 扩容
+  void checkStack(int needed) {
+    // 计算剩余空间
+    if (stackLast - stackTop >= needed) {
+      return; // 空间足够，无需操作
     }
 
-    size_t newSize = stack.size() * 2;
+    // 需要扩容
+    size_t used = stackTop - stack;
+    size_t required = used + needed;
+
+    size_t newSize = stackSize * 2;
     while (newSize < required) {
       newSize *= 2;
     }
 
-    Value *oldBase = stack.data();
+    Value *oldStack = stack;
 
-    stack.resize(newSize);
+    // 1. 分配新内存
+    Value *newStack = new Value[newSize];
 
-    Value *newBase = stack.data();
+    for (size_t i = 0; i < used; ++i) {
+      newStack[i] = oldStack[i];
+    }
+    // 初始化新区域为 nil
+    for (size_t i = used; i < newSize; ++i) {
+      newStack[i] = Value::nil();
+    }
 
-    if (oldBase != newBase) {
-      stackTop = newBase + used;
+    // 释放旧内存
+    delete[] oldStack;
 
-      if (openUpvalues != nullptr) {
-        fixUpvaluePointers(oldBase, newBase);
-      }
+    // 更新指针
+    stack = newStack;
+    stackSize = newSize;
+    stackTop = stack + used;
+    stackLast = stack + newSize;
+
+    // 修复 UpValues
+    if (openUpvalues != nullptr) {
+      fixUpvaluePointers(oldStack, newStack);
     }
   }
+
+  void ensureStack(int needed) { checkStack(needed); }
 
   void ensureDefers(int needed) {
     if (deferTop + needed <= (int)deferStack.size()) {
@@ -133,7 +168,6 @@ struct FiberObject : GCObject {
       newSize *= 2;
     }
     deferStack.resize(newSize);
-    // deferStack 存的是 Value (副本)，不需要像 stack 那样修复指针
   }
 
   void ensureFrames(int needed) {
@@ -156,7 +190,7 @@ struct FiberObject : GCObject {
 
   void fixUpvaluePointers(Value *oldBase, Value *newBase);
 
-  size_t stackUsed() const { return stackTop - stack.data(); }
+  size_t stackUsed() const { return stackTop - stack; }
 
   // === 便捷栈操作 ===
   void push(Value val) {
@@ -169,15 +203,14 @@ struct FiberObject : GCObject {
   Value peek(int distance = 0) const { return stackTop[-1 - distance]; }
 
   // === 辅助方法：根据 slotsBase 获取实际的 slots 指针 ===
-  Value *getSlots(int slotsBase) { return stack.data() + slotsBase; }
+  Value *getSlots(int slotsBase) { return stack + slotsBase; }
 
-  Value *getSlots(const CallFrame &frame) { return stack.data() + frame.slotsBase; }
+  Value *getSlots(const CallFrame &frame) { return stack + frame.slotsBase; }
 
   // === 重置===
   void reset() {
     state = FiberState::NEW;
-    stackTop = stack.data();
-    // 不清空 frames，只重置计数（保留预分配的内存）
+    stackTop = stack; // 直接重置指针
     frameCount = 0;
     deferTop = 0;
     openUpvalues = nullptr;

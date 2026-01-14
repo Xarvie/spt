@@ -266,7 +266,7 @@ void GC::traceReferences() {
       if (fiber->closure) {
         markObject(fiber->closure);
       }
-      for (Value *slot = fiber->stack.data(); slot < fiber->stackTop; ++slot) {
+      for (Value *slot = fiber->stack; slot < fiber->stackTop; ++slot) {
         markValue(*slot);
       }
       for (int i = 0; i < fiber->frameCount; ++i) {
@@ -429,7 +429,7 @@ void GC::freeObject(GCObject *obj) {
     break;
   case ValueType::Fiber: {
     FiberObject *fiber = static_cast<FiberObject *>(obj);
-    bytesAllocated_ -= sizeof(FiberObject) + (fiber->stack.capacity() * sizeof(Value)) +
+    bytesAllocated_ -= sizeof(FiberObject) + (fiber->stackSize * sizeof(Value)) +
                        (fiber->frames.capacity() * sizeof(CallFrame)) +
                        (fiber->deferStack.capacity() * sizeof(Value));
     delete fiber;
