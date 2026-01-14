@@ -66,6 +66,9 @@
 // 多返回值测试
 #include "TestMultiReturn.h"
 
+// 编译测试
+#include "TestCompiler.h"
+
 // =========================================================
 // 主函数
 // =========================================================
@@ -131,6 +134,7 @@ int main(int argc, char *argv[]) {
   registerMultiReturnTests(runner);
   registerNativeMultiReturnTests(runner);
 
+  registerCompilerTest(runner);
 #else
   // =====================================================
   // 快速测试 / 单项测试
