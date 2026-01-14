@@ -29,6 +29,42 @@ void *GC::allocateRaw(size_t size) {
 
 void GC::deallocate(GCObject *obj) { freeObject(obj); }
 
+Closure *GC::allocateClosure(const Prototype *proto) {
+  size_t count = proto->upvalues.size();
+
+  size_t size = sizeof(Closure) + sizeof(UpValue *) * count;
+
+  void *ptr = allocateRaw(size);
+
+  Closure *closure = static_cast<Closure *>(ptr);
+
+  closure->type = ValueType::Closure;
+  closure->marked = false;
+  closure->next = objects_;
+  objects_ = closure;
+
+  closure->proto = proto;
+  closure->upvalueCount = static_cast<int>(count);
+
+  if (count > 0) {
+    std::memset(closure->upvalues, 0, count * sizeof(UpValue *));
+  }
+
+  objectCount_++;
+  if (objectCount_ > stats_.peakObjectCount) {
+    stats_.peakObjectCount = objectCount_;
+  }
+
+  updateTypeStats(ValueType::Closure, true);
+
+  if (GCDebug::enabled && GCDebug::logAllocations) {
+    fprintf(stderr, "[GC] alloc Closure @%p size=%zu (uv=%zu) total=%zu #%zu\n", (void *)closure,
+            size, count, bytesAllocated_, objectCount_);
+  }
+
+  return closure;
+}
+
 void GC::collect() {
   if (!enabled_ || inFinalizer_)
     return;
@@ -167,8 +203,10 @@ void GC::traceReferences() {
     switch (obj->type) {
     case ValueType::Closure: {
       auto *closure = static_cast<Closure *>(obj);
-      for (auto *uv : closure->upvalues) {
-        markObject(uv);
+      for (int i = 0; i < closure->upvalueCount; ++i) {
+        if (closure->upvalues[i]) {
+          markObject(closure->upvalues[i]);
+        }
       }
       break;
     }
@@ -368,8 +406,9 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::Closure: {
     Closure *closure = static_cast<Closure *>(obj);
-    bytesAllocated_ -= sizeof(Closure) + (closure->upvalues.capacity() * sizeof(UpValue *));
-    delete closure;
+    size_t size = sizeof(Closure) + sizeof(UpValue *) * closure->upvalueCount;
+    bytesAllocated_ -= size;
+    ::operator delete(closure);
     break;
   }
   case ValueType::Class:

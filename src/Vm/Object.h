@@ -26,12 +26,12 @@ struct UpValue : GCObject {
 // 闭包对象
 // ============================================================================
 struct Closure : GCObject {
-  const Prototype *proto; // 函数原型
-  std::vector<UpValue *> upvalues;
+  const Prototype *proto;
+  int upvalueCount;
+  UpValue *upvalues[];
 
-  Closure() { type = ValueType::Closure; }
+  Closure() = delete;
 };
-
 // ============================================================================
 // 类对象
 // ============================================================================

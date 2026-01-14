@@ -11,6 +11,7 @@ class VM;
 struct GCObject;
 struct Instance;
 struct NativeInstance;
+struct Closure;
 
 // ============================================================================
 // GC 调试控制 - 全局开关
@@ -87,6 +88,8 @@ public:
   template <typename T, typename... Args> T *allocate(Args &&...args);
   void *allocateRaw(size_t size);
   void deallocate(GCObject *obj);
+
+  Closure *allocateClosure(const Prototype *proto);
 
   // === 内存跟踪 ===
   void trackAllocation(size_t bytes) { bytesAllocated_ += bytes; }

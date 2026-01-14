@@ -1474,7 +1474,7 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_GETUPVAL) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
-    if (B >= frame->closure->upvalues.size()) {
+    if (B >= frame->closure->upvalueCount) {
       runtimeError("Invalid upvalue index: %d", B);
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1486,7 +1486,7 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_SETUPVAL) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
-    if (B >= frame->closure->upvalues.size()) {
+    if (B >= frame->closure->upvalueCount) {
       runtimeError("Invalid upvalue index: %d", B);
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1499,15 +1499,17 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint32_t Bx = GETARG_Bx(instruction);
     const Prototype &proto = frame->closure->proto->protos[Bx];
+
     Closure *closure = allocateClosure(&proto);
     protect(Value::object(closure));
 
     for (size_t i = 0; i < proto.numUpvalues; ++i) {
       const auto &uvDesc = proto.upvalues[i];
       if (uvDesc.isLocal) {
-        closure->upvalues.push_back(captureUpvalue(&slots[uvDesc.index]));
+
+        closure->upvalues[i] = captureUpvalue(&slots[uvDesc.index]);
       } else {
-        closure->upvalues.push_back(frame->closure->upvalues[uvDesc.index]);
+        closure->upvalues[i] = frame->closure->upvalues[uvDesc.index];
       }
     }
 
@@ -3302,11 +3304,7 @@ StringObject *VM::allocateString(const std::string &str) {
   return strObj;
 }
 
-Closure *VM::allocateClosure(const Prototype *proto) {
-  Closure *closure = gc_.allocate<Closure>();
-  closure->proto = proto;
-  return closure;
-}
+Closure *VM::allocateClosure(const Prototype *proto) { return gc_.allocateClosure(proto); }
 
 ClassObject *VM::allocateClass(const std::string &name) {
   ClassObject *klass = gc_.allocate<ClassObject>();
