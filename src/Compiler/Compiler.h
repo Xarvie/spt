@@ -96,6 +96,9 @@ private:
   void compileImportNamed(ImportNamedNode *node);
   void compileExport(VariableDeclNode *decl);
 
+  // === 预处理 ===
+  bool checkPresenceDefer(BlockNode *block);
+
 private:
   std::string moduleName_;
   std::string source_;

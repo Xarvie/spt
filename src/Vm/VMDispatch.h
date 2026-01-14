@@ -115,8 +115,10 @@ namespace spt {
   SPT_DISPATCH_TABLE_ENTRY(OP_LE)                                                                  \
   SPT_DISPATCH_TABLE_ENTRY(OP_TEST)                                                                \
   SPT_DISPATCH_TABLE_ENTRY(OP_CALL)                                                                \
+  SPT_DISPATCH_TABLE_ENTRY(OP_CALL_SELF)                                                           \
   SPT_DISPATCH_TABLE_ENTRY(OP_INVOKE)                                                              \
   SPT_DISPATCH_TABLE_ENTRY(OP_RETURN)                                                              \
+  SPT_DISPATCH_TABLE_ENTRY(OP_RETURN_NDEF)                                                         \
   SPT_DISPATCH_TABLE_ENTRY(OP_IMPORT)                                                              \
   SPT_DISPATCH_TABLE_ENTRY(OP_IMPORT_FROM)                                                         \
   SPT_DISPATCH_TABLE_ENTRY(OP_DEFER)                                                               \

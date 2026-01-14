@@ -25,7 +25,7 @@ CodeGen::~CodeGen() {
 }
 
 void CodeGen::beginFunction(const std::string &source, const std::string &name, int numParams,
-                            bool isVararg, ILineGetter *lineGetter) {
+                            bool isVararg, bool useDefer, ILineGetter *lineGetter) {
   auto *fs = new FunctionState();
   fs->enclosing = current_;
   fs->proto.name = name;
@@ -33,6 +33,7 @@ void CodeGen::beginFunction(const std::string &source, const std::string &name, 
   fs->proto.short_src = std::filesystem::path(source).filename().string();
   fs->proto.numParams = static_cast<uint8_t>(numParams);
   fs->proto.isVararg = isVararg;
+  fs->proto.useDefer = useDefer;
   fs->lastLine = fs->proto.lineDefined = lineGetter->getLine();
   fs->proto.absLineInfo.push_back({0, fs->lastLine});
   fs->lineGetter = lineGetter;

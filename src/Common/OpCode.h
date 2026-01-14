@@ -65,20 +65,22 @@ enum class OpCode : uint8_t {
   OP_TEST, /* A C     | if (not R[A] == C) then pc++               */
 
   /* --- 函数调用 --- */
-  OP_CALL,   /* A B C   | R[A], ... := R[A](R[A+1], ... ,R[A+B-1])   */
-           //  OP_INVOKE, /* A B C   | R[A] := R[A].K[C](R[A+1], ...)             */
-           /* ** OP_INVOKE (宽指令)
-            ** 格式: A B C
-            ** Word 1: [ C(8) | B(8) | k(1) | A(8) | OP_INVOKE(7) ]
-            ** Word 2: [           Ax(25)            | (ignored)(7) ]  <-- 存储方法名常量索引
-            **
-            ** A: 接收者(Receiver)寄存器，也是返回值起始位置
-            ** B: 参数个数 + 1 (0表示变长，目前 invoke 暂不支持变长参数)
-            ** C: 期望返回值个数 + 1
-            ** Ax: 方法名在常量表中的索引
-            */
+  OP_CALL,      /* A B C   | R[A], ... := R[A](R[A+1], ... ,R[A+B-1])   */
+  OP_CALL_SELF, /* A B C   | R[A], ... := SELF(R[A], ... ,R[A+B-2])   */
+  //  OP_INVOKE, /* A B C   | R[A] := R[A].K[C](R[A+1], ...)             */
+  /* ** OP_INVOKE (宽指令)
+   ** 格式: A B C
+   ** Word 1: [ C(8) | B(8) | k(1) | A(8) | OP_INVOKE(7) ]
+   ** Word 2: [           Ax(25)            | (ignored)(7) ]  <-- 存储方法名常量索引
+   **
+   ** A: 接收者(Receiver)寄存器，也是返回值起始位置
+   ** B: 参数个数 + 1 (0表示变长，目前 invoke 暂不支持变长参数)
+   ** C: 期望返回值个数 + 1
+   ** Ax: 方法名在常量表中的索引
+   */
   OP_INVOKE,
-  OP_RETURN, /* A B     | return R[A], ... ,R[A+B-2]                 */
+  OP_RETURN,      /* A B     | return R[A], ... ,R[A+B-2]                 */
+  OP_RETURN_NDEF, /* A B     | return R[A], ... ,R[A+B-2]                 */
 
   /* --- 模块系统 --- */
   OP_IMPORT,      /* A Bx    | R[A] := import(K[Bx])  导入模块              */
@@ -88,15 +90,15 @@ enum class OpCode : uint8_t {
 
   /* --- 优化指令 --- */
   OP_ADDI, /* iABC R[A] = R[B] + sC (C视为有符号8位整数) */
-  OP_EQK, /* iABC if (R[A] == K[B]) != C then pc++ B: 常量表索引(0-255), C:期望结果(0或1) */
-  OP_EQI, /* iABC if (R[A] == sB) != C then pc++  */
-  OP_LTI, /* iABC if (R[A] < sB) != C then pc++   */
-  OP_LEI, /* iABC: if (R[A] <= sB) != C then pc++ A: 寄存器, B: 有符号8位立即数, C: 期望结果*/
+  OP_EQK,  /* iABC if (R[A] == K[B]) != C then pc++ B: 常量表索引(0-255), C:期望结果(0或1) */
+  OP_EQI,  /* iABC if (R[A] == sB) != C then pc++  */
+  OP_LTI,  /* iABC if (R[A] < sB) != C then pc++   */
+  OP_LEI,  /* iABC: if (R[A] <= sB) != C then pc++ A: 寄存器, B: 有符号8位立即数, C: 期望结果*/
 
   OP_FORPREP, /* A sBx | R[A] -= R[A+2]; pc += sBx      初始化：预减 Step，跳转到循环尾部首次检查 */
   OP_FORLOOP, /* A sBx | R[A] += R[A+2]; if R[A] <= R[A+1] then pc += sBx 循环尾：步进 + 检查 + 回跳
                */
-  OP_LOADI, /* A sBx | R[A] := sBx  加载17位有符号立即数 (用于优化小整数加载) */
+  OP_LOADI,   /* A sBx | R[A] := sBx  加载17位有符号立即数 (用于优化小整数加载) */
 
   /* ** OP_TFORCALL
   ** 格式: A C

@@ -67,6 +67,7 @@ struct Prototype {
   uint8_t maxStackSize = 0;   // 最大栈深度
   bool isVararg = false;      // 是否可变参数
   bool needsReceiver = false; // 是否需要"this"
+  bool useDefer = false;      // 使用defer
 
   std::vector<Instruction> code;        // 指令序列
   std::vector<ConstantValue> constants; // 常量表

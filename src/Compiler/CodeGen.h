@@ -18,7 +18,7 @@ public:
   // === 模块与函数管理 ===
   // 开始编译一个新函数（或主模块）
   void beginFunction(const std::string &source, const std::string &name, int numParams,
-                     bool isVararg, ILineGetter *lineGetter);
+                     bool isVararg, bool useDefer, ILineGetter *lineGetter);
   // 结束当前函数编译，返回原型
   Prototype endFunction();
 

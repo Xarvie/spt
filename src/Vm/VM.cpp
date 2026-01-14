@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 
 namespace spt {
 
@@ -2026,6 +2027,64 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+  SPT_OPCODE(OP_CALL_SELF) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    uint8_t C = GETARG_C(instruction);
+
+    int argCount;
+
+    if (B == 0) {
+      argCount = static_cast<int>(fiber->stackTop - (slots + A));
+    } else {
+      argCount = B - 1;
+    }
+
+    int expectedResults = C - 1;
+    Closure *closure = frame->closure;
+    const Prototype *proto = closure->proto;
+
+    if (argCount != proto->numParams && !proto->isVararg) {
+      runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
+                   proto->numParams, argCount);
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+      runtimeError("Stack overflow");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    Value *newSlots = slots + A;
+    int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
+
+    fiber->ensureStack(neededStack);
+    fiber->ensureFrames(1);
+    REFRESH_CACHE();
+    newSlots = slots + A;
+
+    Value *argsStart = newSlots;
+    Value *targetStackTop = argsStart + proto->maxStackSize;
+
+    for (Value *p = argsStart + argCount; p < targetStackTop; ++p) {
+      *p = Value::nil();
+    }
+
+    STACK_TOP = targetStackTop;
+
+    CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
+    newFrame->closure = closure;
+    newFrame->ip = proto->code.data();
+    newFrame->expectedResults = expectedResults;
+    newFrame->slots = newSlots;
+    newFrame->returnTo = slots + A;
+    newFrame->deferBase = fiber->deferTop;
+
+    frame = newFrame;
+    slots = frame->slots;
+    SPT_DISPATCH();
+  }
+
   SPT_OPCODE(OP_INVOKE) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
@@ -2487,6 +2546,89 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+  SPT_OPCODE(OP_RETURN_NDEF) {
+    uint8_t A = GETARG_A(instruction);
+    uint8_t B = GETARG_B(instruction);
+    int returnCount = (B >= 1) ? B - 1 : 0;
+
+    Value *returnValues = slots + A;
+    int expectedResults = frame->expectedResults;
+
+    bool isRootFrame = (FRAME_COUNT == 1);
+    bool isModuleExit = (exitFrameCount_ > 0 && FRAME_COUNT == exitFrameCount_);
+
+    Value *destSlot = nullptr;
+    if (!isRootFrame && !isModuleExit) {
+      destSlot = frame->returnTo;
+    }
+
+    closeUpvalues(slots);
+
+    FRAME_COUNT--;
+
+    if (isRootFrame) {
+      lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
+
+      if (!pcallStack_.empty()) {
+        nativeMultiReturn_.clear();
+        for (int i = 0; i < returnCount; ++i) {
+          nativeMultiReturn_.push_back(returnValues[i]);
+        }
+        hasNativeMultiReturn_ = true;
+      }
+
+      fiber->state = FiberState::DONE;
+
+      fiber->yieldValue = (returnCount > 0) ? returnValues[0] : Value::nil();
+      lastModuleResult_ = fiber->yieldValue;
+
+      if (fiber->caller) {
+        FiberObject *caller = fiber->caller;
+        fiber->caller = nullptr;
+        currentFiber_ = caller;
+        caller->state = FiberState::RUNNING;
+
+        return InterpretResult::OK;
+      }
+
+      unprotect(1);
+      return InterpretResult::OK;
+    }
+
+    if (isModuleExit) {
+      lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
+
+      if (!pcallStack_.empty()) {
+        nativeMultiReturn_.clear();
+        for (int i = 0; i < returnCount; ++i) {
+          nativeMultiReturn_.push_back(returnValues[i]);
+        }
+        hasNativeMultiReturn_ = true;
+      }
+      return InterpretResult::OK;
+    }
+
+    frame = &fiber->frames[FRAME_COUNT - 1];
+    slots = frame->slots;
+
+    if (expectedResults == -1) {
+      for (int i = 0; i < returnCount; ++i) {
+        destSlot[i] = returnValues[i];
+      }
+      STACK_TOP = destSlot + returnCount;
+    } else {
+      for (int i = 0; i < expectedResults; ++i) {
+        if (i < returnCount) {
+          destSlot[i] = returnValues[i];
+        } else {
+          destSlot[i] = Value::nil();
+        }
+      }
+      STACK_TOP = slots + frame->closure->proto->maxStackSize;
+    }
+
+    SPT_DISPATCH();
+  }
   SPT_OPCODE(OP_IMPORT) {
     uint8_t A = GETARG_A(instruction);
     uint32_t Bx = GETARG_Bx(instruction);
@@ -2587,6 +2729,10 @@ InterpretResult VM::run() {
 
     if (!deferClosure.isClosure()) {
       runtimeError("defer requires a function");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    if (!frame->closure->proto->useDefer) {
+      runtimeError("compiler error because defer was not used");
       return InterpretResult::RUNTIME_ERROR;
     }
 

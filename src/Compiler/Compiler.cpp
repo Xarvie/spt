@@ -30,7 +30,8 @@ CompiledChunk Compiler::compile(AstNode *ast) {
 }
 
 CompiledChunk Compiler::compileModule(BlockNode *block) {
-  cg_->beginFunction(source_, moduleName_, 0, false, block);
+  bool useDefer = checkPresenceDefer(block);
+  cg_->beginFunction(source_, moduleName_, 0, false, useDefer, block);
 
   int envSlot = cg_->allocSlot();
 
@@ -125,11 +126,10 @@ void Compiler::compileStatement(Statement *stmt) {
 }
 
 void Compiler::compileDefer(DeferStatementNode *node) {
-
-  cg_->beginFunction(source_, "<defer>", 0, false, node);
+  bool useDefer = checkPresenceDefer(node->body);
+  cg_->beginFunction(source_, "<defer>", 0, false, useDefer, node);
 
   if (node->body) {
-
     compileBlock(node->body);
   }
 
@@ -243,7 +243,8 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   cg_->markInitialized();
 
   int numParams = static_cast<int>(node->params.size());
-  cg_->beginFunction(source_, node->name, numParams, node->isVariadic, node);
+  bool useDefer = checkPresenceDefer(node->body);
+  cg_->beginFunction(source_, node->name, numParams, node->isVariadic, useDefer, node);
 
   if (!node->params.empty() && node->params[0]->name == "this") {
     cg_->current()->proto.needsReceiver = true;
@@ -292,47 +293,78 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
     return;
   }
 
-  compileExpression(node->functionExpr, dest);
-
-  int funcSlot = dest;
-  int argsStart = dest + 1;
+  int argsStart = 0;
   int argCount = static_cast<int>(node->arguments.size());
 
-  if (cg_->current()->currentStackTop > argsStart) {
-    funcSlot = cg_->allocSlot();
-    cg_->emitABC(OpCode::OP_MOVE, funcSlot, dest, 0);
-  }
+  auto *identNode = dynamic_cast<IdentifierNode *>(node->functionExpr);
+  bool callSelf = identNode && identNode->name == cg_->current()->proto.name &&
+                  cg_->current()->proto.name != "main";
+  if (callSelf) {
+    argsStart = dest;
+    cg_->setLineGetter(node->functionExpr);
+    if (argCount > 1) {
+      cg_->allocSlots(argCount - 1);
+    }
 
-  bool useMultiret = false;
-  for (int i = 0; i < argCount; ++i) {
-    int argSlot = cg_->allocSlot();
-    Expression *arg = node->arguments[i];
+    bool useMultiret = false;
+    for (int i = 0; i < argCount; ++i) {
+      int argSlot = argsStart + i;
+      Expression *arg = node->arguments[i];
 
-    if (i == argCount - 1) {
-      if (auto *call = dynamic_cast<FunctionCallNode *>(arg)) {
-        compileFunctionCall(call, argSlot, -1);
-        useMultiret = true;
+      if (i == argCount - 1) {
+        if (auto *call = dynamic_cast<FunctionCallNode *>(arg)) {
+          compileFunctionCall(call, argSlot, -1);
+          useMultiret = true;
+        } else {
+          compileExpression(arg, argSlot);
+        }
       } else {
         compileExpression(arg, argSlot);
       }
-    } else {
-      compileExpression(arg, argSlot);
     }
-  }
 
-  int b = useMultiret ? 0 : (argCount + 1);
-  cg_->emitABC(OpCode::OP_CALL, funcSlot, b, nResults + 1);
-
-  if (nResults > 0 && dest != funcSlot) {
-    for (int i = 0; i < nResults; ++i) {
-      cg_->emitABC(OpCode::OP_MOVE, dest + i, funcSlot + i, 0);
-    }
-  }
-
-  if (funcSlot != dest) {
-    cg_->freeSlots(argCount + 1);
+    int b = useMultiret ? 0 : (argCount + 1);
+    cg_->emitABC(OpCode::OP_CALL_SELF, argsStart, b, nResults + 1);
   } else {
-    cg_->freeSlots(argCount);
+    compileExpression(node->functionExpr, dest);
+    int funcSlot = dest;
+    argsStart = dest + 1;
+
+    if (cg_->current()->currentStackTop > argsStart + callSelf) {
+      funcSlot = cg_->allocSlot();
+      cg_->emitABC(OpCode::OP_MOVE, funcSlot, dest, 0);
+    }
+
+    bool useMultiret = false;
+    for (int i = 0; i < argCount; ++i) {
+      int argSlot = cg_->allocSlot();
+      Expression *arg = node->arguments[i];
+
+      if (i == argCount - 1) {
+        if (auto *call = dynamic_cast<FunctionCallNode *>(arg)) {
+          compileFunctionCall(call, argSlot, -1);
+          useMultiret = true;
+        } else {
+          compileExpression(arg, argSlot);
+        }
+      } else {
+        compileExpression(arg, argSlot);
+      }
+    }
+
+    int b = useMultiret ? 0 : (argCount + 1);
+    cg_->emitABC(OpCode::OP_CALL, funcSlot, b, nResults + 1);
+
+    if (nResults > 0 && dest != funcSlot) {
+      for (int i = 0; i < nResults; ++i) {
+        cg_->emitABC(OpCode::OP_MOVE, dest + i, funcSlot + i, 0);
+      }
+    }
+    if (funcSlot != dest) {
+      cg_->freeSlots(argCount + 1);
+    } else {
+      cg_->freeSlots(argCount);
+    }
   }
 }
 
@@ -446,8 +478,8 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       int tempSlot = cg_->allocSlot();
 
       int numParams = static_cast<int>(func->params.size());
-
-      cg_->beginFunction(source_, func->name, numParams, func->isVariadic, func);
+      bool useDefer = checkPresenceDefer(func->body);
+      cg_->beginFunction(source_, func->name, numParams, func->isVariadic, useDefer, func);
 
       if (!func->params.empty() && func->params[0]->name == "this") {
         cg_->current()->proto.needsReceiver = true;
@@ -931,17 +963,19 @@ void Compiler::compileForEach(ForEachStatementNode *stmt) {
 }
 
 void Compiler::compileReturn(ReturnStatementNode *stmt) {
+  // auto opcode = cg_->current()->proto.useDefer ? OpCode::OP_RETURN : OpCode::OP_RETURN_NDEF;
+  auto opcode = OpCode::OP_RETURN;
   if (stmt->returnValue.empty()) {
-    cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
+    cg_->emitABC(opcode, 0, 1, 0);
   } else if (stmt->returnValue.size() == 1) {
     int localSlot = tryResolveLocalSlot(cg_.get(), stmt->returnValue[0]);
 
     if (localSlot != -1) {
-      cg_->emitABC(OpCode::OP_RETURN, localSlot, 2, 0);
+      cg_->emitABC(opcode, localSlot, 2, 0);
     } else {
       int slot = cg_->allocSlot();
       compileExpression(stmt->returnValue[0], slot);
-      cg_->emitABC(OpCode::OP_RETURN, slot, 2, 0);
+      cg_->emitABC(opcode, slot, 2, 0);
       cg_->freeSlots(1);
     }
 
@@ -950,7 +984,7 @@ void Compiler::compileReturn(ReturnStatementNode *stmt) {
     for (size_t i = 0; i < stmt->returnValue.size(); ++i) {
       compileExpression(stmt->returnValue[i], base + static_cast<int>(i));
     }
-    cg_->emitABC(OpCode::OP_RETURN, base, static_cast<uint8_t>(stmt->returnValue.size() + 1), 0);
+    cg_->emitABC(opcode, base, static_cast<uint8_t>(stmt->returnValue.size() + 1), 0);
     cg_->freeSlots(static_cast<int>(stmt->returnValue.size()));
   }
 }
@@ -1489,7 +1523,8 @@ void Compiler::compileMapLiteral(LiteralMapNode *node, int dest) {
 
 void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
   int numParams = static_cast<int>(lambda->params.size());
-  cg_->beginFunction(source_, "<lambda>", numParams, lambda->isVariadic, lambda);
+  bool useDefer = checkPresenceDefer(lambda->body);
+  cg_->beginFunction(source_, "<lambda>", numParams, lambda->isVariadic, useDefer, lambda);
 
   if (!lambda->params.empty() && lambda->params[0]->name == "this") {
     cg_->current()->proto.needsReceiver = true;
@@ -1762,5 +1797,85 @@ void Compiler::compileImportNamed(ImportNamedNode *node) {
     cg_->markInitialized();
   }
 }
+
+static bool useDefer_Block(BlockNode *block);
+static bool useDefer_Stmt(Statement *stmt);
+
+static bool useDefer_IfStmt(IfStatementNode *ifStmt) {
+  if (ifStmt->thenBlock && useDefer_Block(ifStmt->thenBlock)) {
+    return true;
+  }
+
+  for (auto *else_if_clause : ifStmt->elseIfClauses) {
+    if (useDefer_Block(else_if_clause->body)) {
+      return true;
+    }
+  }
+
+  return ifStmt->elseBlock && useDefer_Block(ifStmt->elseBlock);
+}
+
+static bool useDefer_While(WhileStatementNode *whileStmt) {
+  return useDefer_Block(whileStmt->body);
+}
+
+static bool useDefer_For(ForCStyleStatementNode *forStmt) {
+  for (auto *stmt : forStmt->updateActions) {
+    if (useDefer_Stmt(stmt)) {
+      return true;
+    }
+  }
+  return useDefer_Block(forStmt->body);
+}
+
+static bool useDefer_ForEach(ForEachStatementNode *forStmt) {
+  return useDefer_Block(forStmt->body);
+}
+
+static bool useDefer_Stmt(Statement *stmt) {
+  switch (stmt->nodeType) {
+  case NodeType::BLOCK:
+    if (useDefer_Block(static_cast<BlockNode *>(stmt))) {
+      return true;
+    }
+    break;
+  case NodeType::IF_STATEMENT:
+    if (useDefer_IfStmt(static_cast<IfStatementNode *>(stmt))) {
+      return true;
+    }
+    break;
+  case NodeType::WHILE_STATEMENT:
+    if (useDefer_While(static_cast<WhileStatementNode *>(stmt))) {
+      return true;
+    }
+    break;
+  case NodeType::FOR_CSTYLE_STATEMENT:
+    if (useDefer_For(static_cast<ForCStyleStatementNode *>(stmt))) {
+      return true;
+    }
+    break;
+  case NodeType::FOR_EACH_STATEMENT:
+    if (useDefer_ForEach(static_cast<ForEachStatementNode *>(stmt))) {
+      return true;
+    }
+    break;
+  case NodeType::DEFER_STATEMENT:
+    return true;
+  default:
+    break;
+  }
+  return false;
+}
+
+static bool useDefer_Block(BlockNode *block) {
+  for (auto *stmt : block->statements) {
+    if (useDefer_Stmt(stmt)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool Compiler::checkPresenceDefer(BlockNode *block) { return useDefer_Block(block); }
 
 } // namespace spt

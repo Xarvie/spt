@@ -556,10 +556,14 @@ std::string BytecodeDumper::opCodeToString(OpCode op) {
     return "TEST";
   case OpCode::OP_CALL:
     return "CALL";
+  case OpCode::OP_CALL_SELF:
+    return "CALL_SELF";
   case OpCode::OP_INVOKE:
     return "INVOKE";
   case OpCode::OP_RETURN:
     return "RETURN";
+  case OpCode::OP_RETURN_NDEF:
+    return "RETURN_NDEF";
   case OpCode::OP_IMPORT:
     return "IMPORT";
   case OpCode::OP_IMPORT_FROM:
