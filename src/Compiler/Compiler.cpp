@@ -299,6 +299,7 @@ void Compiler::compileFunctionCall(FunctionCallNode *node, int dest, int nResult
   auto *identNode = dynamic_cast<IdentifierNode *>(node->functionExpr);
   bool callSelf = identNode && identNode->name == cg_->current()->proto.name &&
                   cg_->current()->proto.name != "main";
+  callSelf = false;
   if (callSelf) {
     argsStart = dest;
     cg_->setLineGetter(node->functionExpr);
