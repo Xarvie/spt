@@ -17,10 +17,16 @@ static inline double valueToNum(const Value &v) {
 }
 
 InterpretResult VM::run() {
+
   FiberObject *fiber = currentFiber_;
   CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
 
+  Value *stackBase = fiber->stack;
+  Value *stackLimit = fiber->stackLast;
   Value *slots = frame->slots;
+
+  const ConstantValue *k = frame->closure->proto->constants.data();
+
   uint32_t instruction;
 
 #if SPT_USE_COMPUTED_GOTO
@@ -32,16 +38,54 @@ InterpretResult VM::run() {
 #define FRAMES fiber->frames
 #define FRAME_COUNT fiber->frameCount
 
-#define REFRESH_CACHE()                                                                            \
+#define RESTORE_POINTERS()                                                                         \
   do {                                                                                             \
+                                                                                                   \
+    fiber = currentFiber_;                                                                         \
+                                                                                                   \
+    stackBase = fiber->stack;                                                                      \
+    stackLimit = fiber->stackLast;                                                                 \
+                                                                                                   \
     frame = &fiber->frames[fiber->frameCount - 1];                                                 \
+                                                                                                   \
     slots = frame->slots;                                                                          \
+                                                                                                   \
+    k = frame->closure->proto->constants.data();                                                   \
   } while (0)
 
-#define REFRESH_SLOTS()                                                                            \
+#define RESTORE_SLOTS_ONLY()                                                                       \
   do {                                                                                             \
+    stackBase = fiber->stack;                                                                      \
+    stackLimit = fiber->stackLast;                                                                 \
+    frame = &fiber->frames[fiber->frameCount - 1];                                                 \
     slots = frame->slots;                                                                          \
+    k = frame->closure->proto->constants.data();                                                   \
   } while (0)
+
+#define PROTECT(action)                                                                            \
+  do {                                                                                             \
+    action;                                                                                        \
+    RESTORE_POINTERS();                                                                            \
+  } while (0)
+
+#define PROTECT_LIGHT(action)                                                                      \
+  do {                                                                                             \
+    action;                                                                                        \
+    RESTORE_SLOTS_ONLY();                                                                          \
+  } while (0)
+
+#define HALF_PROTECT(action)                                                                       \
+  do {                                                                                             \
+    frame->ip = ip;                                                                                \
+    action;                                                                                        \
+  } while (0)
+
+#define REFRESH_CACHE() RESTORE_POINTERS()
+#define REFRESH_SLOTS() RESTORE_SLOTS_ONLY()
+
+  (void)stackBase;
+  (void)stackLimit;
+  (void)k;
 
   SPT_DISPATCH_LOOP_BEGIN()
 
@@ -55,7 +99,8 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_LOADK) {
     uint8_t A = GETARG_A(instruction);
     uint32_t Bx = GETARG_Bx(instruction);
-    const auto &constant = frame->closure->proto->constants[Bx];
+
+    const auto &constant = k[Bx];
     Value value;
     std::visit(
         [&](auto &&arg) {
@@ -69,7 +114,10 @@ InterpretResult VM::run() {
           } else if constexpr (std::is_same_v<T, double>) {
             value = Value::number(arg);
           } else if constexpr (std::is_same_v<T, std::string>) {
-            value = Value::object(allocateString(arg));
+
+            StringObject *str;
+            PROTECT(str = allocateString(arg));
+            value = Value::object(str);
           }
         },
         constant);
@@ -99,7 +147,9 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_NEWLIST) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
-    ListObject *list = allocateList(B);
+
+    ListObject *list;
+    PROTECT(list = allocateList(B));
     slots[A] = Value::object(list);
     SPT_DISPATCH();
   }
@@ -107,7 +157,9 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_NEWMAP) {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
-    MapObject *map = allocateMap(B);
+
+    MapObject *map;
+    PROTECT(map = allocateMap(B));
     slots[A] = Value::object(map);
     SPT_DISPATCH();
   }
@@ -176,7 +228,8 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
     Value object = slots[B];
-    const auto &keyConst = frame->closure->proto->constants[C];
+
+    const auto &keyConst = k[C];
 
     if (!std::holds_alternative<std::string>(keyConst)) {
       runtimeError("GETFIELD requires string key constant");
@@ -187,7 +240,10 @@ InterpretResult VM::run() {
 
     if (object.isList() || object.isMap() || object.isString() || object.isFiber()) {
       Value result;
-      if (StdlibDispatcher::getProperty(this, object, fieldName, result)) {
+      bool success;
+
+      PROTECT(success = StdlibDispatcher::getProperty(this, object, fieldName, result));
+      if (success) {
         slots[A] = result;
         SPT_DISPATCH();
       }
@@ -235,14 +291,18 @@ InterpretResult VM::run() {
       if (instance->nativeClass) {
         const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
         if (prop && prop->getter) {
-          slots[A] = prop->getter(this, instance);
+
+          Value getterResult;
+          PROTECT(getterResult = prop->getter(this, instance));
+          slots[A] = getterResult;
           SPT_DISPATCH();
         }
 
         const NativeMethodDesc *nativeMethod = instance->nativeClass->findMethod(fieldName);
         if (nativeMethod) {
 
-          NativeFunction *boundMethod = gc_.allocate<NativeFunction>();
+          NativeFunction *boundMethod;
+          PROTECT(boundMethod = gc_.allocate<NativeFunction>());
           boundMethod->name = fieldName;
           boundMethod->arity = nativeMethod->arity;
           boundMethod->receiver = object;
@@ -310,7 +370,8 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
     Value object = slots[A];
-    const auto &keyConst = frame->closure->proto->constants[B];
+
+    const auto &keyConst = k[B];
     Value value = slots[C];
 
     if (!std::holds_alternative<std::string>(keyConst)) {
@@ -320,7 +381,11 @@ InterpretResult VM::run() {
 
     const std::string &fieldName = std::get<std::string>(keyConst);
 
-    StringObject *fieldNameStr = allocateString(fieldName);
+    StringObject *fieldNameStr;
+    PROTECT(fieldNameStr = allocateString(fieldName));
+
+    object = slots[A];
+    value = slots[C];
 
     if (object.isInstance()) {
       auto *instance = static_cast<Instance *>(object.asGC());
@@ -337,7 +402,8 @@ InterpretResult VM::run() {
                          instance->nativeClass->name.c_str());
             return InterpretResult::RUNTIME_ERROR;
           }
-          prop->setter(this, instance, value);
+
+          PROTECT(prop->setter(this, instance, value));
           SPT_DISPATCH();
         }
       }
@@ -348,7 +414,12 @@ InterpretResult VM::run() {
       klass->methods[fieldNameStr] = value;
     } else if (object.isMap()) {
       auto *map = static_cast<MapObject *>(object.asGC());
-      StringObject *key = allocateString(fieldName);
+
+      StringObject *key;
+      PROTECT(key = allocateString(fieldName));
+
+      map = static_cast<MapObject *>(slots[A].asGC());
+      value = slots[C];
       map->set(Value::object(key), value);
     } else {
       runtimeError("Cannot set field '%s' on type: %s", fieldName.c_str(), object.typeName());
@@ -360,13 +431,16 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_NEWCLASS) {
     uint8_t A = GETARG_A(instruction);
     uint32_t Bx = GETARG_Bx(instruction);
-    const auto &nameConst = frame->closure->proto->constants[Bx];
+
+    const auto &nameConst = k[Bx];
     if (!std::holds_alternative<std::string>(nameConst)) {
       runtimeError("Class name must be string constant");
       return InterpretResult::RUNTIME_ERROR;
     }
     const std::string &className = std::get<std::string>(nameConst);
-    ClassObject *klass = allocateClass(className);
+
+    ClassObject *klass;
+    PROTECT(klass = allocateClass(className));
     slots[A] = Value::object(klass);
     SPT_DISPATCH();
   }
@@ -387,12 +461,13 @@ InterpretResult VM::run() {
       }
 
       Value *argsStart = &slots[B + 1];
-      NativeInstance *instance = createNativeInstance(nativeClass, C, argsStart);
+
+      NativeInstance *instance;
+      PROTECT(instance = createNativeInstance(nativeClass, C, argsStart));
 
       if (!instance) {
         return InterpretResult::RUNTIME_ERROR;
       }
-      REFRESH_SLOTS();
       slots[A] = Value::object(instance);
       SPT_DISPATCH();
     }
@@ -403,7 +478,11 @@ InterpretResult VM::run() {
     }
 
     auto *klass = static_cast<ClassObject *>(classValue.asGC());
-    Instance *instance = allocateInstance(klass);
+
+    Instance *instance;
+    PROTECT(instance = allocateInstance(klass));
+
+    klass = static_cast<ClassObject *>(slots[B].asGC());
     Value instanceVal = Value::object(instance);
 
     slots[A] = instanceVal;
@@ -462,6 +541,8 @@ InterpretResult VM::run() {
         frame = newFrame;
         slots = frame->slots;
 
+        k = frame->closure->proto->constants.data();
+
       } else if (initializer.isNativeFunc()) {
         NativeFunction *native = static_cast<NativeFunction *>(initializer.asGC());
 
@@ -471,7 +552,8 @@ InterpretResult VM::run() {
         }
 
         Value *argsStart = &slots[B + 1];
-        native->function(this, instanceVal, C, argsStart);
+
+        PROTECT(native->function(this, instanceVal, C, argsStart));
       } else {
         runtimeError("init method must be a function");
         return InterpretResult::RUNTIME_ERROR;
@@ -516,7 +598,8 @@ InterpretResult VM::run() {
     uint32_t Bx = GETARG_Bx(instruction);
     const Prototype &proto = frame->closure->proto->protos[Bx];
 
-    Closure *closure = allocateClosure(&proto);
+    Closure *closure;
+    PROTECT(closure = allocateClosure(&proto));
     protect(Value::object(closure));
 
     for (size_t i = 0; i < proto.numUpvalues; ++i) {
@@ -556,7 +639,9 @@ InterpretResult VM::run() {
     } else if (b.isString() || c.isString()) {
       std::string s1 = b.toString();
       std::string s2 = c.toString();
-      StringObject *result = allocateString(s1 + s2);
+
+      StringObject *result;
+      PROTECT(result = allocateString(s1 + s2));
       slots[A] = Value::object(result);
     } else {
       runtimeError("Operands must be numbers or strings");
@@ -949,6 +1034,8 @@ InterpretResult VM::run() {
       frame = newFrame;
       slots = frame->slots;
 
+      k = frame->closure->proto->constants.data();
+
     } else if (callee.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
 
@@ -962,17 +1049,14 @@ InterpretResult VM::run() {
       nativeMultiReturn_.clear();
 
       Value *argsStart = &slots[A + 1];
-      Value result = native->function(this, native->receiver, argCount, argsStart);
+
+      Value result;
+      PROTECT(result = native->function(this, native->receiver, argCount, argsStart));
 
       if (yieldPending_) {
         yieldPending_ = false;
         return InterpretResult::OK;
       }
-
-      if (fiber != currentFiber_) {
-        fiber = currentFiber_;
-      }
-      REFRESH_CACHE();
 
       if (hasError_) {
         return InterpretResult::RUNTIME_ERROR;
@@ -984,6 +1068,8 @@ InterpretResult VM::run() {
         if (expectedResults == -1) {
 
           fiber->ensureStack(returnCount);
+
+          RESTORE_SLOTS_ONLY();
 
           for (int i = 0; i < returnCount; ++i) {
             slots[A + i] = nativeMultiReturn_[i];
@@ -1098,6 +1184,8 @@ InterpretResult VM::run() {
 
     frame = newFrame;
     slots = frame->slots;
+
+    k = frame->closure->proto->constants.data();
     SPT_DISPATCH();
   }
 
@@ -1118,7 +1206,7 @@ InterpretResult VM::run() {
       userArgCount = B - 1;
     }
 
-    const auto &methodNameConst = frame->closure->proto->constants[methodIdx];
+    const auto &methodNameConst = k[methodIdx];
     if (!std::holds_alternative<std::string>(methodNameConst)) {
       runtimeError("OP_INVOKE: method name constant must be string");
       return InterpretResult::RUNTIME_ERROR;
@@ -1134,18 +1222,16 @@ InterpretResult VM::run() {
       hasNativeMultiReturn_ = false;
       nativeMultiReturn_.clear();
 
-      if (StdlibDispatcher::invokeMethod(this, receiver, methodName, userArgCount, argsStart,
-                                         directResult)) {
+      bool invokeSuccess;
+
+      PROTECT(invokeSuccess = StdlibDispatcher::invokeMethod(
+                  this, receiver, methodName, userArgCount, argsStart, directResult));
+      if (invokeSuccess) {
         if (yieldPending_) {
           yieldPending_ = false;
           return InterpretResult::OK;
         }
-        if (fiber != currentFiber_) {
-          fiber = currentFiber_;
-          frame = &fiber->frames[fiber->frameCount - 1];
-          REFRESH_SLOTS();
-        }
-        REFRESH_CACHE();
+
         if (hasError_) {
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -1182,8 +1268,15 @@ InterpretResult VM::run() {
         SPT_DISPATCH();
       }
 
+      receiver = slots[A];
+      argsStart = &slots[A + 1];
+
       Value propertyValue;
-      if (StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue)) {
+      bool getPropSuccess;
+
+      PROTECT(getPropSuccess =
+                  StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue));
+      if (getPropSuccess) {
         if (propertyValue.isNativeFunc()) {
           method = propertyValue;
         } else {
@@ -1193,7 +1286,11 @@ InterpretResult VM::run() {
         }
       } else if (receiver.isMap()) {
         MapObject *map = static_cast<MapObject *>(receiver.asGC());
-        StringObject *key = allocateString(methodName);
+
+        StringObject *key;
+        PROTECT(key = allocateString(methodName));
+
+        map = static_cast<MapObject *>(slots[A].asGC());
         method = map->get(Value::object(key));
       }
 
@@ -1234,16 +1331,14 @@ InterpretResult VM::run() {
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
 
-        Value result = nativeMethod->function(this, instance, userArgCount, argsStart);
+        Value result;
+        PROTECT(result = nativeMethod->function(this, instance, userArgCount, argsStart));
 
         if (yieldPending_) {
           yieldPending_ = false;
           return InterpretResult::OK;
         }
-        if (fiber != currentFiber_) {
-          fiber = currentFiber_;
-        }
-        REFRESH_CACHE();
+
         if (hasError_) {
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -1399,6 +1494,8 @@ InterpretResult VM::run() {
       frame = newFrame;
       slots = frame->slots;
 
+      k = frame->closure->proto->constants.data();
+
     } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
       protect(method);
@@ -1412,8 +1509,10 @@ InterpretResult VM::run() {
       hasNativeMultiReturn_ = false;
       nativeMultiReturn_.clear();
 
+      argsStart = &slots[A + 1];
       FiberObject *callFiber = currentFiber_;
-      Value result = native->function(this, receiver, userArgCount, argsStart);
+      Value result;
+      PROTECT(result = native->function(this, receiver, userArgCount, argsStart));
 
       if (currentFiber_ != callFiber) {
         callFiber->stackTop--;
@@ -1425,11 +1524,6 @@ InterpretResult VM::run() {
         yieldPending_ = false;
         return InterpretResult::OK;
       }
-
-      if (fiber != currentFiber_) {
-        fiber = currentFiber_;
-      }
-      REFRESH_CACHE();
 
       if (hasError_) {
         return InterpretResult::RUNTIME_ERROR;
@@ -1543,6 +1637,8 @@ InterpretResult VM::run() {
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
 
+    k = frame->closure->proto->constants.data();
+
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
         destSlot[i] = returnValues[i];
@@ -1627,6 +1723,8 @@ InterpretResult VM::run() {
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
 
+    k = frame->closure->proto->constants.data();
+
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
         destSlot[i] = returnValues[i];
@@ -1648,7 +1746,8 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_IMPORT) {
     uint8_t A = GETARG_A(instruction);
     uint32_t Bx = GETARG_Bx(instruction);
-    const auto &moduleNameConst = frame->closure->proto->constants[Bx];
+
+    const auto &moduleNameConst = k[Bx];
 
     if (!std::holds_alternative<std::string>(moduleNameConst)) {
       runtimeError("Module name must be a string constant");
@@ -1658,22 +1757,26 @@ InterpretResult VM::run() {
     const std::string &moduleName = std::get<std::string>(moduleNameConst);
     const char *currentPath = frame->closure->proto->source.c_str();
 
-    Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
+    Value exportsTable;
+    PROTECT(exportsTable = moduleManager_->loadModule(moduleName, currentPath));
 
     if (FRAME_COUNT == 0 || hasError_) {
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    frame = &FRAMES[FRAME_COUNT - 1];
-    REFRESH_SLOTS();
-
     if (exportsTable.isMap()) {
       MapObject *errorCheck = static_cast<MapObject *>(exportsTable.asGC());
-      StringObject *errorKey = allocateString("error");
+
+      StringObject *errorKey;
+      PROTECT(errorKey = allocateString("error"));
+
+      errorCheck = static_cast<MapObject *>(exportsTable.asGC());
       Value errorFlag = errorCheck->get(Value::object(errorKey));
 
       if (errorFlag.isBool() && errorFlag.asBool()) {
-        StringObject *msgKey = allocateString("message");
+        StringObject *msgKey;
+        PROTECT(msgKey = allocateString("message"));
+        errorCheck = static_cast<MapObject *>(exportsTable.asGC());
         Value msgVal = errorCheck->get(Value::object(msgKey));
         const char *errorMsg = msgVal.isString()
                                    ? static_cast<StringObject *>(msgVal.asGC())->c_str()
@@ -1691,8 +1794,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    const auto &moduleNameConst = frame->closure->proto->constants[B];
-    const auto &symbolNameConst = frame->closure->proto->constants[C];
+
+    const auto &moduleNameConst = k[B];
+    const auto &symbolNameConst = k[C];
 
     if (!std::holds_alternative<std::string>(moduleNameConst) ||
         !std::holds_alternative<std::string>(symbolNameConst)) {
@@ -1704,23 +1808,25 @@ InterpretResult VM::run() {
     const std::string &symbolName = std::get<std::string>(symbolNameConst);
     const char *currentPath = frame->closure->proto->source.c_str();
 
-    Value exportsTable = moduleManager_->loadModule(moduleName, currentPath);
+    Value exportsTable;
+    PROTECT(exportsTable = moduleManager_->loadModule(moduleName, currentPath));
 
     if (FRAME_COUNT == 0 || hasError_) {
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    frame = &FRAMES[FRAME_COUNT - 1];
-    REFRESH_SLOTS();
-
     if (exportsTable.isMap()) {
       MapObject *exports = static_cast<MapObject *>(exportsTable.asGC());
 
-      StringObject *errorKey = allocateString("error");
+      StringObject *errorKey;
+      PROTECT(errorKey = allocateString("error"));
+      exports = static_cast<MapObject *>(exportsTable.asGC());
       Value errorFlag = exports->get(Value::object(errorKey));
 
       if (errorFlag.isBool() && errorFlag.asBool()) {
-        StringObject *msgKey = allocateString("message");
+        StringObject *msgKey;
+        PROTECT(msgKey = allocateString("message"));
+        exports = static_cast<MapObject *>(exportsTable.asGC());
         Value msgVal = exports->get(Value::object(msgKey));
         const char *errorMsg = msgVal.isString()
                                    ? static_cast<StringObject *>(msgVal.asGC())->c_str()
@@ -1729,7 +1835,9 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      StringObject *symKey = allocateString(symbolName);
+      StringObject *symKey;
+      PROTECT(symKey = allocateString(symbolName));
+      exports = static_cast<MapObject *>(exportsTable.asGC());
       Value symbolValue = exports->get(Value::object(symKey));
       slots[A] = symbolValue;
     } else {
@@ -1780,7 +1888,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(instruction);
     uint8_t B = GETARG_B(instruction);
     uint8_t C = GETARG_C(instruction);
-    const auto &constant = frame->closure->proto->constants[B];
+
+    const auto &constant = k[B];
     Value kVal;
     std::visit(
         [&](auto &&arg) {
@@ -1794,7 +1903,10 @@ InterpretResult VM::run() {
           } else if constexpr (std::is_same_v<T, double>) {
             kVal = Value::number(arg);
           } else if constexpr (std::is_same_v<T, std::string>) {
-            kVal = Value::object(allocateString(arg));
+
+            StringObject *str;
+            PROTECT(str = allocateString(arg));
+            kVal = Value::object(str);
           }
         },
         constant);
@@ -1995,6 +2107,7 @@ InterpretResult VM::run() {
       }
 
       REFRESH_CACHE();
+
     }
 
     else if (funcVal.isNativeFunc()) {
@@ -2003,12 +2116,12 @@ InterpretResult VM::run() {
       nativeMultiReturn_.clear();
       hasNativeMultiReturn_ = false;
 
-      Value result = native->function(this, Value::nil(), 2, &base[1]);
+      Value result;
+      PROTECT(result = native->function(this, Value::nil(), 2, &base[1]));
 
       if (hasError_)
         return InterpretResult::RUNTIME_ERROR;
 
-      REFRESH_CACHE();
       Value *dest = &slots[A + 3];
 
       if (hasNativeMultiReturn_) {
@@ -2058,7 +2171,13 @@ InterpretResult VM::run() {
 #undef STACK_TOP
 #undef FRAMES
 #undef FRAME_COUNT
+#undef REFRESH_CACHE
 #undef REFRESH_SLOTS
+#undef RESTORE_POINTERS
+#undef RESTORE_SLOTS_ONLY
+#undef PROTECT
+#undef PROTECT_LIGHT
+#undef HALF_PROTECT
 }
 
 } // namespace spt
