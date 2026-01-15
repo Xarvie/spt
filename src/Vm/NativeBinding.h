@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
@@ -360,8 +361,10 @@ public:
 
   NativeClassBuilder &method(const std::string &name, NativeMethodFn fn, int arity = -1);
 
-  template <typename RetT, typename... Args, RetT (T::*Method)(Args...)>
-  NativeClassBuilder &method(const std::string &name) {
+  template <auto Method> NativeClassBuilder &method(const std::string &name) {
+    using Traits = MethodTraits_<decltype(Method)>;
+    constexpr size_t arity = Traits::Arity;
+
     return method(
         name,
         [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
@@ -369,40 +372,54 @@ public:
             return Value::nil();
           }
           T *obj = inst->as<T>();
-          if constexpr (std::is_void_v<RetT>) {
-            (obj->*Method)(native_detail::ValueConverter<Args>::from(argv)...);
-            return Value::nil();
-          } else {
-            RetT result = (obj->*Method)(native_detail::ValueConverter<Args>::from(argv)...);
-            return native_detail::ValueConverter<RetT>::to(vm, result);
-          }
+          return invokeMethod_<Method, Traits>(vm, obj, argv, std::make_index_sequence<arity>{});
         },
-        sizeof...(Args));
+        static_cast<int>(arity));
   }
 
-  template <void (T::*Method)()> NativeClassBuilder &method(const std::string &name) {
-    return method(
-        name,
-        [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
-          if (!inst || !inst->isValid()) {
-            return Value::nil();
-          }
-          T *obj = inst->as<T>();
-          (obj->*Method)();
-          return Value::nil();
-        },
-        0);
+private:
+  // 从成员函数指针提取返回类型和参数类型
+  template <typename MemFnPtr> struct MethodTraits_;
+
+  template <typename RetT, typename... Args> struct MethodTraits_<RetT (T:: *)(Args...)> {
+    using ReturnType = RetT;
+    using ArgsTuple = std::tuple<Args...>;
+    static constexpr size_t Arity = sizeof...(Args);
+  };
+
+  template <typename RetT, typename... Args> struct MethodTraits_<RetT (T:: *)(Args...) const> {
+    using ReturnType = RetT;
+    using ArgsTuple = std::tuple<Args...>;
+    static constexpr size_t Arity = sizeof...(Args);
+  };
+
+  // 展开参数元组并调用成员函数
+  template <auto Method, typename Traits, size_t... Is>
+  static Value invokeMethod_(VM *vm, T *obj, Value *argv, std::index_sequence<Is...>) {
+    using RetT = typename Traits::ReturnType;
+    using ArgsTuple = typename Traits::ArgsTuple;
+
+    if constexpr (std::is_void_v<RetT>) {
+      (obj->*Method)(
+          native_detail::ValueConverter<std::tuple_element_t<Is, ArgsTuple>>::from(argv[Is])...);
+      return Value::nil();
+    } else {
+      RetT result = (obj->*Method)(
+          native_detail::ValueConverter<std::tuple_element_t<Is, ArgsTuple>>::from(argv[Is])...);
+      return native_detail::ValueConverter<RetT>::to(vm, result);
+    }
   }
 
+public:
   // === 属性注册 ===
   NativeClassBuilder &propertyReadOnly(const std::string &name, NativePropertyGetter getter);
   NativeClassBuilder &property(const std::string &name, NativePropertyGetter getter,
                                NativePropertySetter setter);
 
-  template <typename MemberT, MemberT T::*Member>
+  template <typename MemberT, MemberT T:: *Member>
   NativeClassBuilder &memberProperty(const std::string &name);
 
-  template <typename MemberT, MemberT T::*Member>
+  template <typename MemberT, MemberT T:: *Member>
   NativeClassBuilder &memberPropertyReadOnly(const std::string &name);
 
   // === 静态成员 ===
@@ -529,7 +546,7 @@ NativeClassBuilder<T> &NativeClassBuilder<T>::property(const std::string &name,
 }
 
 template <typename T>
-template <typename MemberT, MemberT T::*Member>
+template <typename MemberT, MemberT T:: *Member>
 NativeClassBuilder<T> &NativeClassBuilder<T>::memberProperty(const std::string &name) {
   StringObject *nameStr = vm_->allocateString(name);
   class_->properties[nameStr] = NativePropertyDesc(
@@ -552,7 +569,7 @@ NativeClassBuilder<T> &NativeClassBuilder<T>::memberProperty(const std::string &
 }
 
 template <typename T>
-template <typename MemberT, MemberT T::*Member>
+template <typename MemberT, MemberT T:: *Member>
 NativeClassBuilder<T> &NativeClassBuilder<T>::memberPropertyReadOnly(const std::string &name) {
   StringObject *nameStr = vm_->allocateString(name);
   class_->properties[nameStr] = NativePropertyDesc(
