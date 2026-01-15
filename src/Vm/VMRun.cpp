@@ -285,7 +285,7 @@ InterpretResult VM::run() {
       for (const auto &pair : map->entries) {
         if (pair.first.isString()) {
           StringObject *keyStr = static_cast<StringObject *>(pair.first.asGC());
-          if (keyStr->data == fieldName) {
+          if (keyStr->view() == fieldName) {
             result = pair.second;
             break;
           }
@@ -320,9 +320,11 @@ InterpretResult VM::run() {
 
     const std::string &fieldName = std::get<std::string>(keyConst);
 
+    StringObject *fieldNameStr = allocateString(fieldName);
+
     if (object.isInstance()) {
       auto *instance = static_cast<Instance *>(object.asGC());
-      instance->setField(fieldName, value);
+      instance->setField(fieldNameStr, value);
     } else if (object.isNativeInstance()) {
 
       auto *instance = static_cast<NativeInstance *>(object.asGC());
@@ -340,10 +342,10 @@ InterpretResult VM::run() {
         }
       }
 
-      instance->fields[fieldName] = value;
+      instance->fields[fieldNameStr] = value;
     } else if (object.isClass()) {
       auto *klass = static_cast<ClassObject *>(object.asGC());
-      klass->methods[fieldName] = value;
+      klass->methods[fieldNameStr] = value;
     } else if (object.isMap()) {
       auto *map = static_cast<MapObject *>(object.asGC());
       StringObject *key = allocateString(fieldName);
@@ -1674,7 +1676,7 @@ InterpretResult VM::run() {
         StringObject *msgKey = allocateString("message");
         Value msgVal = errorCheck->get(Value::object(msgKey));
         const char *errorMsg = msgVal.isString()
-                                   ? static_cast<StringObject *>(msgVal.asGC())->data.c_str()
+                                   ? static_cast<StringObject *>(msgVal.asGC())->c_str()
                                    : "Module load failed";
         runtimeError("Import error: %s", errorMsg);
         return InterpretResult::RUNTIME_ERROR;
@@ -1721,7 +1723,7 @@ InterpretResult VM::run() {
         StringObject *msgKey = allocateString("message");
         Value msgVal = exports->get(Value::object(msgKey));
         const char *errorMsg = msgVal.isString()
-                                   ? static_cast<StringObject *>(msgVal.asGC())->data.c_str()
+                                   ? static_cast<StringObject *>(msgVal.asGC())->c_str()
                                    : "Module load failed";
         runtimeError("Import error: %s", errorMsg);
         return InterpretResult::RUNTIME_ERROR;

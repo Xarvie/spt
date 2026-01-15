@@ -2,7 +2,7 @@
 
 #include "../Common/OpCode.h"
 #include "../Common/Types.h"
-#include "Fiber.h" // Fiber 定义了 CallFrame
+#include "Fiber.h"
 #include "GC.h"
 #include "Module.h"
 #include "Object.h"
@@ -18,38 +18,42 @@ namespace spt {
 
 struct NativeClassObject;
 struct NativeInstance;
+class StringPool;
+struct SymbolTable;
 
-// 执行结果
+// 执行结果状态码
 enum class InterpretResult { OK, COMPILE_ERROR, RUNTIME_ERROR };
 
 // ============================================================================
-// Protected call 上下文 - 用于 pcall 的错误恢复
+// Protected Call (受保护调用) 上下文 - 用于 pcall 的错误恢复
 // ============================================================================
+// 类似于 try-catch 的底层实现，用于在发生错误时恢复到调用前的状态
 struct ProtectedCallContext {
-  FiberObject *fiber;    // pcall 时的 fiber
-  int frameCount;        // 进入 pcall 时的帧数
-  Value *stackTop;       // 进入 pcall 时的栈顶
-  UpValue *openUpvalues; // 进入 pcall 时的开放 upvalue 链表
-  bool active = false;
+  FiberObject *fiber;    // 发起 pcall 时的纤程
+  int frameCount;        // 进入 pcall 时的调用栈深度
+  Value *stackTop;       // 进入 pcall 时的栈顶位置
+  UpValue *openUpvalues; // 进入 pcall 时的开放 upvalue 链表头部
+  bool active = false;   // 此上下文是否处于激活状态
 };
 
-// 虚拟机配置
+// 虚拟机配置参数
 struct VMConfig {
-  size_t stackSize = 256 * 1024;      // 栈大小（每个 fiber）
-  size_t heapSize = 64 * 1024 * 1024; // 堆大小
-  bool enableGC = true;
-  bool debugMode = false;
-  bool enableHotReload = true;
-  std::vector<std::string> modulePaths;
+  size_t stackSize = 256 * 1024;        // 栈大小（每个纤程独立）
+  size_t heapSize = 64 * 1024 * 1024;   // 堆内存上限
+  bool enableGC = true;                 // 是否启用垃圾回收
+  bool debugMode = false;               // 是否开启调试模式
+  bool enableHotReload = true;          // 是否开启代码热更新
+  std::vector<std::string> modulePaths; // 模块搜索路径
 };
 
 // ============================================================================
-// 虚拟机
+// VM - 虚拟机核心类
 // ============================================================================
 class SPT_API_CLASS VM {
 public:
   friend class GC;
   friend class ModuleManager;
+  friend class StringPool;
   template <typename T> friend class NativeClassBuilder;
 
   using ErrorHandler = std::function<void(const std::string &, int line)>;
@@ -58,23 +62,31 @@ public:
   explicit VM(const VMConfig &config = {});
   ~VM();
 
-  // === 执行 ===
-  InterpretResult interpret(const CompiledChunk &chunk);
-  InterpretResult call(Closure *closure, int argCount);
+  // === 执行接口 ===
+  InterpretResult interpret(const CompiledChunk &chunk); // 解释执行一段字节码块
+  InterpretResult call(Closure *closure, int argCount);  // 调用一个闭包对象
 
   // === 热更新 ===
+  // 重新加载指定模块的代码块而不重启 VM
   bool hotReload(const std::string &moduleName, const CompiledChunk &newChunk);
 
   ModuleManager *moduleManager() { return moduleManager_.get(); }
 
   InterpretResult executeModule(const CompiledChunk &chunk);
 
-  // === 全局环境 ===
+  // === 全局环境管理 ===
+  // 推荐使用 StringObject* 键（实现 O(1) 的快速查找）
+  void defineGlobal(StringObject *name, Value value); // 定义全局变量
+  Value getGlobal(StringObject *name);                // 获取全局变量
+  void setGlobal(StringObject *name, Value value);    // 设置全局变量值
+
+  // 遗留 API，使用 std::string（内部会自动进行字符串驻留）
   void defineGlobal(const std::string &name, Value value);
   Value getGlobal(const std::string &name);
   void setGlobal(const std::string &name, Value value);
 
   // === 原生函数注册 ===
+  // 将 C++ 函数注册到脚本环境中
   void registerNative(const std::string &name, NativeFn fn, int arity, uint8_t flags = FUNC_NONE);
 
   // === 模块系统 ===
@@ -86,19 +98,23 @@ public:
 
   void setPrintHandler(PrintHandler handler) { printHandler_ = std::move(handler); }
 
-  // === 调试 ===
-  void dumpStack() const;
-  void dumpGlobals() const;
+  // === 调试与内省 ===
+  void dumpStack() const;   // 打印当前栈信息
+  void dumpGlobals() const; // 打印所有全局变量
   int getInfo(Value *f, const char *what, DebugInfo *out_info);
   int getStack(int f, const char *what, DebugInfo *out_info);
 
   // === GC 控制 ===
   GC &gc() { return gc_; }
 
-  void collectGarbage();
+  void collectGarbage(); // 强制执行一次垃圾回收
 
-  // === 对象创建 ===
+  // === 对象创建 (分配器) ===
+  // 字符串创建：始终使用驻留池
+  StringObject *allocateString(std::string_view str);
   StringObject *allocateString(const std::string &str);
+  StringObject *allocateString(const char *str);
+
   Closure *allocateClosure(const Prototype *proto);
   ClassObject *allocateClass(const std::string &name);
   Instance *allocateInstance(ClassObject *klass);
@@ -106,104 +122,97 @@ public:
   MapObject *allocateMap(int capacity);
   FiberObject *allocateFiber(Closure *closure);
 
+  // 原生 C++ 绑定对象创建
   NativeClassObject *allocateNativeClass(const std::string &name);
   NativeInstance *allocateNativeInstance(NativeClassObject *nativeClass);
-
   NativeInstance *createNativeInstance(NativeClassObject *nativeClass, int argc, Value *argv);
 
   Value getLastModuleResult() const { return lastModuleResult_; }
 
-  // === 栈保护（通过当前 fiber）===
+  // === 栈保护 (防止 GC 意外回收正在构造中的对象) ===
   void protect(Value value);
   void unprotect(int count = 1);
 
-  // === Fiber 访问 ===
-  FiberObject *currentFiber() const { return currentFiber_; }
+  // === Fiber (纤程) 访问 ===
+  FiberObject *currentFiber() const { return currentFiber_; } // 获取当前运行的纤程
 
-  FiberObject *mainFiber() const { return mainFiber_; }
+  FiberObject *mainFiber() const { return mainFiber_; } // 获取主纤程
 
-  // === Fiber 操作（供原生函数使用）===
-  // 调用 fiber，返回 yield 或 return 的值
-  Value fiberCall(FiberObject *fiber, Value arg, bool isTry);
-  // 从当前 fiber yield
-  void fiberYield(Value value);
-  // 中止当前 fiber
-  void fiberAbort(Value error);
+  // === Fiber 操作 ===
+  Value fiberCall(FiberObject *fiber, Value arg, bool isTry); // 调用纤程
+  void fiberYield(Value value);                               // 纤程挂起/产出
+  void fiberAbort(Value error);                               // 中止纤程并抛错
 
-  // === 错误处理（公开供 Fiber 使用）===
-  void throwError(Value errorValue);
-
+  // === 错误处理 ===
+  void throwError(Value errorValue); // 抛出脚本异常
   void setNativeMultiReturn(std::initializer_list<Value> values);
 
 private:
-  // === 核心执行循环 ===
+  // === 核心指令执行循环 ===
   InterpretResult run();
 
-  // === 内置函数注册 ===
+  // === 注册内置基础函数 ===
   void registerBuiltinFunctions();
 
   void resetStack();
 
-  // === UpValue 管理 ===
-  UpValue *captureUpvalue(Value *local);
-  void closeUpvalues(Value *last);
+  // === UpValue (闭包变量) 管理 ===
+  UpValue *captureUpvalue(Value *local); // 捕获一个局部变量为 UpValue
+  void closeUpvalues(Value *last);       // 当变量离开作用域时关闭 UpValue
 
-  // === 运算 ===
+  // === 运算与比较 ===
   bool valuesEqual(Value a, Value b);
 
-  // === 错误处理 ===
+  // === 运行时错误处理 ===
   void runtimeError(const char *format, ...);
   int getLine(const Prototype *proto, size_t instruction);
   size_t getCurrentInstruction(const CallFrame &frame) const;
-  std::string getStackTrace();
+  std::string getStackTrace(); // 生成当前的调用栈追踪字符串
 
   // === 原生函数多返回值支持 ===
   void setNativeMultiReturn(const std::vector<Value> &values);
 
-  // === Fiber 内部操作 ===
-  // 初始化 fiber 准备首次运行
+  // === Fiber 内部私有操作 ===
   void initFiberForCall(FiberObject *fiber, Value arg);
-  // 切换到指定 fiber
   void switchToFiber(FiberObject *fiber);
-
-  void invokeDefers(int targetDeferBase);
+  void invokeDefers(int targetDeferBase); // 调用 defer 延迟执行语句（如果语言支持）
 
 private:
   VMConfig config_;
 
-  // === Fiber 相关（核心变更）===
-  FiberObject *mainFiber_ = nullptr;    // 主 fiber（VM 启动时创建）
-  FiberObject *currentFiber_ = nullptr; // 当前执行的 fiber
+  // === 纤程管理 ===
+  FiberObject *mainFiber_ = nullptr;
+  FiberObject *currentFiber_ = nullptr;
 
-  // === 全局变量 ===
-  ankerl::unordered_dense::map<std::string, Value> globals_;
+  // === 字符串驻留与符号表 ===
+  std::unique_ptr<StringPool> stringPool_;
+  std::unique_ptr<SymbolTable> symbols_;
 
-  // === 字符串驻留 ===
-  ankerl::unordered_dense::map<std::string, StringObject *> strings_;
+  // === 全局变量表 - 使用 StringObject* 作为键提高性能 ===
+  StringMap<Value> globals_;
 
-  // === 模块缓存 ===
+  // === 模块缓存与加载 ===
   ankerl::unordered_dense::map<std::string, CompiledChunk> modules_;
   Value lastModuleResult_;
-
   std::unique_ptr<ModuleManager> moduleManager_;
 
-  // === pcall 错误状态 ===
+  // === pcall 错误处理状态栈 ===
   std::vector<ProtectedCallContext> pcallStack_;
   bool hasError_ = false;
   Value errorValue_;
 
   // === 模块执行控制 ===
-  int exitFrameCount_ = 0;    // run() 应该在 frameCount 降到此值时返回
-  bool yieldPending_ = false; // yield 后需要退出 run()
+  int exitFrameCount_ = 0;
+  bool yieldPending_ = false;
 
-  // === 原生函数多返回值支持 ===
+  // === 原生函数多返回值暂存 ===
   std::vector<Value> nativeMultiReturn_;
   bool hasNativeMultiReturn_ = false;
 
-  // GC
+  // 垃圾回收器
   GC gc_;
 
-  // 回调
+  // 错误与打印回调
   ErrorHandler errorHandler_;
   PrintHandler printHandler_;
 };

@@ -133,7 +133,7 @@ static Value listJoin(VM *vm, Value receiver, int argc, Value *argv) {
   ListObject *list = static_cast<ListObject *>(receiver.asGC());
   std::string sep = "";
   if (argc >= 1 && argv[0].isString())
-    sep = static_cast<StringObject *>(argv[0].asGC())->data;
+    sep = static_cast<StringObject *>(argv[0].asGC())->str();
   std::string result;
   for (size_t i = 0; i < list->elements.size(); ++i) {
     if (i > 0)
@@ -225,7 +225,7 @@ static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::object(vm->allocateString(""));
   int64_t start = argv[0].asInt();
   int64_t end = argv[1].asInt();
-  int64_t len = str->data.size();
+  int64_t len = static_cast<int64_t>(str->length);
   if (start < 0)
     start = std::max(int64_t(0), len + start);
   if (end < 0)
@@ -234,7 +234,8 @@ static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
   end = std::clamp(end, int64_t(0), len);
   if (end <= start)
     return Value::object(vm->allocateString(""));
-  return Value::object(vm->allocateString(str->data.substr(start, end - start)));
+  std::string_view sv = str->view();
+  return Value::object(vm->allocateString(sv.substr(start, end - start)));
 }
 
 static Value stringIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
@@ -242,8 +243,10 @@ static Value stringIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::integer(-1);
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
   StringObject *sub = static_cast<StringObject *>(argv[0].asGC());
-  size_t pos = str->data.find(sub->data);
-  return Value::integer((pos == std::string::npos) ? -1 : static_cast<int64_t>(pos));
+  std::string_view strView = str->view();
+  std::string_view subView = sub->view();
+  size_t pos = strView.find(subView);
+  return Value::integer((pos == std::string_view::npos) ? -1 : static_cast<int64_t>(pos));
 }
 
 static Value stringContains(VM *vm, Value receiver, int argc, Value *argv) {
@@ -251,7 +254,9 @@ static Value stringContains(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::boolean(false);
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
   StringObject *sub = static_cast<StringObject *>(argv[0].asGC());
-  return Value::boolean(str->data.find(sub->data) != std::string::npos);
+  std::string_view strView = str->view();
+  std::string_view subView = sub->view();
+  return Value::boolean(strView.find(subView) != std::string_view::npos);
 }
 
 static Value stringStartsWith(VM *vm, Value receiver, int argc, Value *argv) {
@@ -259,9 +264,11 @@ static Value stringStartsWith(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::boolean(false);
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
   StringObject *prefix = static_cast<StringObject *>(argv[0].asGC());
-  if (prefix->data.size() > str->data.size())
+  if (prefix->length > str->length)
     return Value::boolean(false);
-  return Value::boolean(str->data.compare(0, prefix->data.size(), prefix->data) == 0);
+  std::string_view strView = str->view();
+  std::string_view prefixView = prefix->view();
+  return Value::boolean(strView.compare(0, prefixView.size(), prefixView) == 0);
 }
 
 static Value stringEndsWith(VM *vm, Value receiver, int argc, Value *argv) {
@@ -269,16 +276,18 @@ static Value stringEndsWith(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::boolean(false);
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
   StringObject *suffix = static_cast<StringObject *>(argv[0].asGC());
-  if (suffix->data.size() > str->data.size())
+  if (suffix->length > str->length)
     return Value::boolean(false);
-  return Value::boolean(str->data.compare(str->data.size() - suffix->data.size(),
-                                          suffix->data.size(), suffix->data) == 0);
+  std::string_view strView = str->view();
+  std::string_view suffixView = suffix->view();
+  return Value::boolean(
+      strView.compare(strView.size() - suffixView.size(), suffixView.size(), suffixView) == 0);
 }
 
 static Value stringToUpper(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
-  std::string result = static_cast<StringObject *>(receiver.asGC())->data;
+  std::string result = static_cast<StringObject *>(receiver.asGC())->str();
   std::transform(result.begin(), result.end(), result.begin(),
                  [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
   return Value::object(vm->allocateString(result));
@@ -287,7 +296,7 @@ static Value stringToUpper(VM *vm, Value receiver, int argc, Value *argv) {
 static Value stringToLower(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
-  std::string result = static_cast<StringObject *>(receiver.asGC())->data;
+  std::string result = static_cast<StringObject *>(receiver.asGC())->str();
   std::transform(result.begin(), result.end(), result.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return Value::object(vm->allocateString(result));
@@ -296,7 +305,7 @@ static Value stringToLower(VM *vm, Value receiver, int argc, Value *argv) {
 static Value stringTrim(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
-  const std::string &data = static_cast<StringObject *>(receiver.asGC())->data;
+  std::string data = static_cast<StringObject *>(receiver.asGC())->str();
   size_t start = data.find_first_not_of(" \t\n\r\f\v");
   if (start == std::string::npos)
     return Value::object(vm->allocateString(""));
@@ -309,21 +318,22 @@ static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::nil();
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
   std::string delimiter =
-      (argc >= 1 && argv[0].isString()) ? static_cast<StringObject *>(argv[0].asGC())->data : "";
+      (argc >= 1 && argv[0].isString()) ? static_cast<StringObject *>(argv[0].asGC())->str() : "";
   ListObject *result = vm->allocateList(0);
   vm->protect(Value::object(result));
 
+  std::string strData = str->str();
   if (delimiter.empty()) {
-    for (char c : str->data)
+    for (char c : strData)
       result->elements.push_back(Value::object(vm->allocateString(std::string(1, c))));
   } else {
     size_t start = 0, end;
-    while ((end = str->data.find(delimiter, start)) != std::string::npos) {
+    while ((end = strData.find(delimiter, start)) != std::string::npos) {
       result->elements.push_back(
-          Value::object(vm->allocateString(str->data.substr(start, end - start))));
+          Value::object(vm->allocateString(strData.substr(start, end - start))));
       start = end + delimiter.length();
     }
-    result->elements.push_back(Value::object(vm->allocateString(str->data.substr(start))));
+    result->elements.push_back(Value::object(vm->allocateString(strData.substr(start))));
   }
   vm->unprotect(1);
   return Value::object(result);
@@ -339,13 +349,15 @@ static Value stringReplace(VM *vm, Value receiver, int argc, Value *argv) {
   StringObject *str = static_cast<StringObject *>(receiver.asGC());
   StringObject *oldStr = static_cast<StringObject *>(argv[0].asGC());
   StringObject *newStr = static_cast<StringObject *>(argv[1].asGC());
-  if (oldStr->data.empty())
+  if (oldStr->length == 0)
     return receiver;
-  std::string result = str->data;
+  std::string result = str->str();
+  std::string oldData = oldStr->str();
+  std::string newData = newStr->str();
   size_t pos = 0;
-  while ((pos = result.find(oldStr->data, pos)) != std::string::npos) {
-    result.replace(pos, oldStr->data.length(), newStr->data);
-    pos += newStr->data.length();
+  while ((pos = result.find(oldData, pos)) != std::string::npos) {
+    result.replace(pos, oldData.length(), newData);
+    pos += newData.length();
   }
   return Value::object(vm->allocateString(result));
 }
@@ -415,12 +427,16 @@ static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance,
 
   const NativeMethodDesc *method = instance->nativeClass->findMethod(fieldName);
   if (method) {
+
+    vm->protect(Value::object(instance));
     outValue = createBoundNativeMethod(vm, instance, fieldName, *method);
+    vm->unprotect(1);
     return true;
   }
 
-  if (instance->hasField(fieldName)) {
-    outValue = instance->getField(fieldName);
+  auto it = instance->fields.find(std::string_view(fieldName));
+  if (it != instance->fields.end()) {
+    outValue = it->second;
     return true;
   }
 
@@ -447,7 +463,11 @@ static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance,
     return true;
   }
 
-  instance->setField(fieldName, value);
+  vm->protect(Value::object(instance));
+  vm->protect(value);
+  StringObject *nameStr = vm->allocateString(fieldName);
+  instance->setField(nameStr, value);
+  vm->unprotect(2);
   return true;
 }
 
@@ -531,7 +551,7 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fiel
   if (object.isString()) {
     StringObject *str = static_cast<StringObject *>(object.asGC());
     if (fieldName == "length") {
-      outValue = Value::integer(str->data.size());
+      outValue = Value::integer(str->length);
       return true;
     }
     for (const MethodEntry *m = stringMethods; m->name != nullptr; ++m) {

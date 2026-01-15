@@ -54,7 +54,9 @@ void SptFiber::load(VM *vm) {
     native->name = name;
     native->function = fn;
     native->arity = arity;
-    fiberClass->statics[name] = Value::object(native);
+
+    StringObject *nameStr = vm->allocateString(name);
+    fiberClass->statics[nameStr] = Value::object(native);
   };
 
   addStatic("create", fiberCreate, 1);

@@ -6,7 +6,7 @@
 namespace spt {
 static Value buildDebugInfo(VM *vm, StringObject *str, DebugInfo info) {
   auto map_object = vm->allocateMap(5);
-  for (char c : str->data) {
+  for (char c : str->view()) {
     switch (c) {
     case 'n': {
       map_object->set(Value::object(vm->allocateString("name")),
@@ -51,7 +51,7 @@ static Value debugGetInfo(VM *vm, Value receiver, int argc, Value *argv) {
 
   StringObject *str = static_cast<StringObject *>(argv[1].asGC());
   DebugInfo info;
-  if (!vm->getInfo(&argv[0], str->data.c_str(), &info)) {
+  if (!vm->getInfo(&argv[0], str->c_str(), &info)) {
     vm->throwError(Value::object(vm->allocateString("debug.getInfo: vm error")));
     return Value::nil();
   }
@@ -79,7 +79,7 @@ static Value debugGetStack(VM *vm, Value receiver, int argc, Value *argv) {
   int f = static_cast<int>(argv[0].asNumber());
   StringObject *str = static_cast<StringObject *>(argv[1].asGC());
   DebugInfo info;
-  if (!vm->getStack(f, str->data.c_str(), &info)) {
+  if (!vm->getStack(f, str->c_str(), &info)) {
     vm->throwError(Value::object(vm->allocateString("debug.getStack: vm error")));
     return Value::nil();
   }

@@ -61,8 +61,8 @@ void VM::registerBuiltinFunctions() {
           StringObject *str = static_cast<StringObject *>(v.asGC());
           char *endptr = nullptr;
           errno = 0;
-          long long result = std::strtoll(str->data.c_str(), &endptr, 10);
-          if (endptr == str->data.c_str() || errno == ERANGE) {
+          long long result = std::strtoll(str->c_str(), &endptr, 10);
+          if (endptr == str->c_str() || errno == ERANGE) {
             return Value::integer(0);
           }
           return Value::integer(static_cast<int64_t>(result));
@@ -87,8 +87,8 @@ void VM::registerBuiltinFunctions() {
           StringObject *str = static_cast<StringObject *>(v.asGC());
           char *endptr = nullptr;
           errno = 0;
-          double result = std::strtod(str->data.c_str(), &endptr);
-          if (endptr == str->data.c_str() || errno == ERANGE) {
+          double result = std::strtod(str->c_str(), &endptr);
+          if (endptr == str->c_str() || errno == ERANGE) {
             return Value::number(0.0);
           }
           return Value::number(result);
@@ -134,7 +134,7 @@ void VM::registerBuiltinFunctions() {
         Value v = args[0];
         if (v.isString()) {
           StringObject *str = static_cast<StringObject *>(v.asGC());
-          return Value::integer(static_cast<int64_t>(str->data.size()));
+          return Value::integer(static_cast<int64_t>(str->length));
         } else if (v.isList()) {
           ListObject *list = static_cast<ListObject *>(v.asGC());
           return Value::integer(static_cast<int64_t>(list->elements.size()));
@@ -328,9 +328,9 @@ void VM::registerBuiltinFunctions() {
         if (argc < 1 || !args[0].isString())
           return Value::integer(0);
         StringObject *str = static_cast<StringObject *>(args[0].asGC());
-        if (str->data.empty())
+        if (str->length == 0)
           return Value::integer(0);
-        return Value::integer(static_cast<int64_t>(static_cast<unsigned char>(str->data[0])));
+        return Value::integer(static_cast<int64_t>(static_cast<unsigned char>(str->chars()[0])));
       },
       1);
 
@@ -371,7 +371,7 @@ void VM::registerBuiltinFunctions() {
         if (!args[0].isTruthy()) {
           std::string msg = "Assertion failed";
           if (argc >= 2 && args[1].isString()) {
-            msg = static_cast<StringObject *>(args[1].asGC())->data;
+            msg = static_cast<StringObject *>(args[1].asGC())->str();
           }
           this->runtimeError("%s", msg.c_str());
         }

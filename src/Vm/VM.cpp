@@ -4,6 +4,7 @@
 #include "NativeBinding.h"
 #include "SptDebug.hpp"
 #include "SptStdlibs.h"
+#include "StringPool.h"
 #include "VMDispatch.h"
 #include <algorithm>
 #include <cerrno>
@@ -19,6 +20,12 @@ namespace spt {
 
 VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
   globals_.reserve(256);
+
+  stringPool_ = std::make_unique<StringPool>(&gc_);
+  gc_.setStringPool(stringPool_.get());
+
+  symbols_ = std::make_unique<SymbolTable>();
+  symbols_->initialize(*stringPool_);
 
   mainFiber_ = gc_.allocate<FiberObject>();
   if (config.stackSize > FiberObject::DEFAULT_STACK_SIZE) {
@@ -46,7 +53,6 @@ VM::~VM() {
   mainFiber_ = nullptr;
 
   globals_.clear();
-  strings_.clear();
   modules_.clear();
 
   pcallStack_.clear();
@@ -237,7 +243,6 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
     }
 
     if (isTry) {
-
       fiber->state = FiberState::ERROR;
       fiber->error =
           Value::object(allocateString(std::string("Cannot call fiber that is ") + state));
@@ -255,7 +260,6 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
   if (fiber->isNew()) {
     initFiberForCall(fiber, arg);
   } else {
-
     fiber->state = FiberState::RUNNING;
 
     CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
@@ -276,12 +280,10 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
     }
 
     if (op1 == OpCode::OP_CALL) {
-
       uint8_t A = GETARG_A(inst1);
       Value *frameSlots = frame->slots;
       frameSlots[A] = arg;
     } else if (isWideInvoke) {
-
       uint8_t A = GETARG_A(inst2);
       Value *frameSlots = frame->slots;
       frameSlots[A] = arg;
@@ -310,11 +312,9 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
   if (fiber->state == FiberState::DONE || fiber->state == FiberState::SUSPENDED) {
     returnValue = fiber->yieldValue;
   } else if (fiber->state == FiberState::ERROR) {
-
     if (fiber->hasError && !isTry) {
       throwError(fiber->error);
     }
-
     return Value::nil();
   }
 
@@ -374,12 +374,10 @@ void VM::fiberAbort(Value error) {
 
   FiberObject *caller = fiber->caller;
   if (caller) {
-
     currentFiber_ = caller;
     caller->state = FiberState::RUNNING;
     yieldPending_ = true;
   } else {
-
     throwError(error);
   }
 }
@@ -422,14 +420,30 @@ void VM::closeUpvalues(Value *last) {
   }
 }
 
-void VM::defineGlobal(const std::string &name, Value value) { globals_[name] = value; }
+void VM::defineGlobal(StringObject *name, Value value) { globals_[name] = value; }
 
-Value VM::getGlobal(const std::string &name) {
+Value VM::getGlobal(StringObject *name) {
   auto it = globals_.find(name);
   return (it != globals_.end()) ? it->second : Value::nil();
 }
 
-void VM::setGlobal(const std::string &name, Value value) { globals_[name] = value; }
+void VM::setGlobal(StringObject *name, Value value) { globals_[name] = value; }
+
+void VM::defineGlobal(const std::string &name, Value value) {
+  StringObject *nameStr = allocateString(name);
+  globals_[nameStr] = value;
+}
+
+Value VM::getGlobal(const std::string &name) {
+
+  auto it = globals_.find(std::string_view(name));
+  return (it != globals_.end()) ? it->second : Value::nil();
+}
+
+void VM::setGlobal(const std::string &name, Value value) {
+  StringObject *nameStr = allocateString(name);
+  globals_[nameStr] = value;
+}
 
 void VM::registerNative(const std::string &name, NativeFn fn, int arity, uint8_t flags) {
   NativeFunction *native = gc_.allocate<NativeFunction>();
@@ -463,7 +477,7 @@ void VM::throwError(Value errorValue) {
   } else {
     std::string errorMsg;
     if (errorValue.isString()) {
-      errorMsg = static_cast<StringObject *>(errorValue.asGC())->data;
+      errorMsg = static_cast<StringObject *>(errorValue.asGC())->str();
     } else {
       errorMsg = "error: " + errorValue.toString();
     }
@@ -570,17 +584,14 @@ void VM::setNativeMultiReturn(std::initializer_list<Value> values) {
   nativeMultiReturn_.insert(nativeMultiReturn_.end(), values.begin(), values.end());
 }
 
-StringObject *VM::allocateString(const std::string &str) {
-  auto it = strings_.find(str);
-  if (it != strings_.end()) {
-    return it->second;
-  }
+StringObject *VM::allocateString(std::string_view str) { return stringPool_->intern(str); }
 
-  StringObject *strObj = gc_.allocate<StringObject>();
-  strObj->data = str;
-  strObj->hash = static_cast<uint32_t>(std::hash<std::string>{}(str));
-  strings_[str] = strObj;
-  return strObj;
+StringObject *VM::allocateString(const std::string &str) {
+  return stringPool_->intern(std::string_view(str));
+}
+
+StringObject *VM::allocateString(const char *str) {
+  return stringPool_->intern(std::string_view(str));
 }
 
 Closure *VM::allocateClosure(const Prototype *proto) { return gc_.allocateClosure(proto); }
@@ -628,8 +639,8 @@ void VM::dumpStack() const {
 
 void VM::dumpGlobals() const {
   printf("\n=== Globals ===\n");
-  for (const auto &[name, value] : globals_) {
-    printf("  %-20s = %s\n", name.c_str(), value.toString().c_str());
+  for (const auto &[nameStr, value] : globals_) {
+    printf("  %-20s = %s\n", nameStr->c_str(), value.toString().c_str());
   }
   printf("===============\n\n");
 }
@@ -678,7 +689,6 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
       out_info->lastLineDefined = proto->lastLineDefined;
       break;
     case 'l': {
-
       size_t instruction = getCurrentInstruction(frame);
       out_info->currentLine = getLine(proto, instruction);
     } break;
@@ -690,7 +700,7 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
 bool VM::hotReload(const std::string &moduleName, const CompiledChunk &newChunk) {
   modules_[moduleName] = newChunk;
 
-  for (auto &[name, value] : globals_) {
+  for (auto &[nameStr, value] : globals_) {
     if (value.isClass()) {
       auto *klass = static_cast<ClassObject *>(value.asGC());
       klass->methods.clear();

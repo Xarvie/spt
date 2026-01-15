@@ -2,10 +2,13 @@
 #include "Fiber.h"
 #include "NativeBinding.h"
 #include "Object.h"
+#include "StringPool.h"
 #include "VM.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <new>
 
 namespace spt {
 
@@ -31,11 +34,9 @@ void GC::deallocate(GCObject *obj) { freeObject(obj); }
 
 Closure *GC::allocateClosure(const Prototype *proto) {
   size_t count = proto->upvalues.size();
-
   size_t size = sizeof(Closure) + sizeof(UpValue *) * count;
 
   void *ptr = allocateRaw(size);
-
   Closure *closure = static_cast<Closure *>(ptr);
 
   closure->type = ValueType::Closure;
@@ -63,6 +64,47 @@ Closure *GC::allocateClosure(const Prototype *proto) {
   }
 
   return closure;
+}
+
+StringObject *GC::allocateString(std::string_view sv, uint32_t hash) {
+  collectIfNeeded();
+
+  size_t totalSize = StringObject::allocationSize(sv.size());
+
+  void *mem = ::operator new(totalSize);
+  bytesAllocated_ += totalSize;
+  objectCount_++;
+
+  if (bytesAllocated_ > stats_.peakBytesAllocated) {
+    stats_.peakBytesAllocated = bytesAllocated_;
+  }
+  if (objectCount_ > stats_.peakObjectCount) {
+    stats_.peakObjectCount = objectCount_;
+  }
+
+  StringObject *str = static_cast<StringObject *>(mem);
+
+  str->next = objects_;
+  str->type = ValueType::String;
+  str->marked = false;
+
+  str->hash = hash;
+  str->length = static_cast<uint32_t>(sv.size());
+
+  char *chars = str->chars();
+  std::memcpy(chars, sv.data(), sv.size());
+  chars[sv.size()] = '\0';
+
+  objects_ = str;
+
+  updateTypeStats(ValueType::String, true);
+
+  if (GCDebug::enabled && GCDebug::logAllocations) {
+    fprintf(stderr, "[GC] alloc String @%p size=%zu len=%zu hash=%08x total=%zu #%zu\n",
+            (void *)str, totalSize, sv.size(), hash, bytesAllocated_, objectCount_);
+  }
+
+  return str;
 }
 
 void GC::collect() {
@@ -141,7 +183,10 @@ void GC::markRoots() {
     markObject(vm_->currentFiber());
   }
 
-  for (auto &[name, val] : vm_->globals_) {
+  for (auto &[nameStr, val] : vm_->globals_) {
+
+    markObject(const_cast<StringObject *>(nameStr));
+
     markValue(val);
   }
 
@@ -170,6 +215,52 @@ void GC::markRoots() {
   for (NativeInstance *instance : nativeFinalizerQueue_) {
     markObject(instance);
   }
+
+  const SymbolTable &syms = vm_->symbols();
+  auto markSymbol = [this](StringObject *s) {
+    if (s)
+      markObject(s);
+  };
+
+  markSymbol(syms.init);
+  markSymbol(syms.gc);
+  markSymbol(syms.str);
+  markSymbol(syms.len);
+  markSymbol(syms.push);
+  markSymbol(syms.pop);
+  markSymbol(syms.length);
+  markSymbol(syms.size);
+  markSymbol(syms.get);
+  markSymbol(syms.set);
+  markSymbol(syms.has);
+  markSymbol(syms.keys);
+  markSymbol(syms.values);
+  markSymbol(syms.clear);
+  markSymbol(syms.slice);
+  markSymbol(syms.indexOf);
+  markSymbol(syms.contains);
+  markSymbol(syms.join);
+  markSymbol(syms.split);
+  markSymbol(syms.trim);
+  markSymbol(syms.toUpper);
+  markSymbol(syms.toLower);
+  markSymbol(syms.replace);
+  markSymbol(syms.startsWith);
+  markSymbol(syms.endsWith);
+  markSymbol(syms.find);
+  markSymbol(syms.insert);
+  markSymbol(syms.removeAt);
+  markSymbol(syms.remove);
+  markSymbol(syms.create);
+  markSymbol(syms.yield);
+  markSymbol(syms.current);
+  markSymbol(syms.abort);
+  markSymbol(syms.suspend);
+  markSymbol(syms.call);
+  markSymbol(syms.tryCall);
+  markSymbol(syms.isDone);
+  markSymbol(syms.error);
+  markSymbol(syms.Fiber);
 }
 
 void GC::markObject(GCObject *obj) {
@@ -201,6 +292,10 @@ void GC::traceReferences() {
     grayStack_.pop_back();
 
     switch (obj->type) {
+    case ValueType::String:
+
+      break;
+
     case ValueType::Closure: {
       auto *closure = static_cast<Closure *>(obj);
       for (int i = 0; i < closure->upvalueCount; ++i) {
@@ -210,6 +305,7 @@ void GC::traceReferences() {
       }
       break;
     }
+
     case ValueType::List: {
       auto *list = static_cast<ListObject *>(obj);
       for (auto &elem : list->elements) {
@@ -217,6 +313,7 @@ void GC::traceReferences() {
       }
       break;
     }
+
     case ValueType::Map: {
       auto *map = static_cast<MapObject *>(obj);
       for (auto &[k, v] : map->entries) {
@@ -227,22 +324,30 @@ void GC::traceReferences() {
       }
       break;
     }
+
     case ValueType::Object: {
       auto *instance = static_cast<Instance *>(obj);
       markObject(instance->klass);
-      for (auto &[name, value] : instance->fields) {
+
+      for (auto &[nameStr, value] : instance->fields) {
+        markObject(const_cast<StringObject *>(nameStr));
         Value v = value;
         markValue(v);
       }
       break;
     }
+
     case ValueType::Class: {
       auto *klass = static_cast<ClassObject *>(obj);
-      for (auto &[name, method] : klass->methods) {
+
+      for (auto &[nameStr, method] : klass->methods) {
+        markObject(const_cast<StringObject *>(nameStr));
         Value v = method;
         markValue(v);
       }
-      for (auto &[name, val] : klass->statics) {
+
+      for (auto &[nameStr, val] : klass->statics) {
+        markObject(const_cast<StringObject *>(nameStr));
         Value v = val;
         markValue(v);
       }
@@ -251,16 +356,19 @@ void GC::traceReferences() {
       }
       break;
     }
+
     case ValueType::Upvalue: {
       auto *uv = static_cast<UpValue *>(obj);
       markValue(*uv->location);
       break;
     }
+
     case ValueType::NativeFunc: {
       auto *native = static_cast<NativeFunction *>(obj);
       markValue(native->receiver);
       break;
     }
+
     case ValueType::Fiber: {
       auto *fiber = static_cast<FiberObject *>(obj);
       if (fiber->closure) {
@@ -291,105 +399,102 @@ void GC::traceReferences() {
       }
       break;
     }
+
     case ValueType::NativeClass: {
       auto *nativeClass = static_cast<NativeClassObject *>(obj);
       if (nativeClass->baseClass) {
         markObject(nativeClass->baseClass);
       }
-      for (auto &[name, val] : nativeClass->statics) {
+
+      for (auto &[nameStr, method] : nativeClass->methods) {
+        markObject(const_cast<StringObject *>(nameStr));
+      }
+
+      for (auto &[nameStr, prop] : nativeClass->properties) {
+        markObject(const_cast<StringObject *>(nameStr));
+      }
+
+      for (auto &[nameStr, val] : nativeClass->statics) {
+        markObject(const_cast<StringObject *>(nameStr));
         Value v = val;
         markValue(v);
       }
       break;
     }
+
     case ValueType::NativeObject: {
       auto *nativeInstance = static_cast<NativeInstance *>(obj);
       if (nativeInstance->nativeClass) {
         markObject(nativeInstance->nativeClass);
       }
-      for (auto &[name, value] : nativeInstance->fields) {
-        Value v = value;
+
+      for (auto &[nameStr, val] : nativeInstance->fields) {
+        markObject(const_cast<StringObject *>(nameStr));
+        Value v = val;
         markValue(v);
       }
       break;
     }
+
     default:
       break;
     }
   }
 }
 
-void GC::sweep() {
-  GCObject **pointer = &objects_;
-  size_t sweptCount = 0;
+void GC::removeWhiteStrings() {
 
-  while (*pointer) {
-    if ((*pointer)->marked) {
-      (*pointer)->marked = false;
-      pointer = &((*pointer)->next);
+  if (stringPool_) {
+    stringPool_->removeWhiteStrings();
+  }
+}
+
+void GC::sweep() {
+  GCObject **obj = &objects_;
+  while (*obj) {
+    if ((*obj)->marked) {
+      (*obj)->marked = false;
+      obj = &(*obj)->next;
     } else {
-      GCObject *unreached = *pointer;
+      GCObject *unreached = *obj;
+      *obj = unreached->next;
 
       if (unreached->type == ValueType::Object) {
         Instance *instance = static_cast<Instance *>(unreached);
         if (instance->klass && instance->klass->hasFinalizer() && !instance->isFinalized) {
-          instance->marked = true;
           finalizerQueue_.push_back(instance);
-          pointer = &((*pointer)->next);
+          instance->marked = true;
+          continue;
+        }
+      } else if (unreached->type == ValueType::NativeObject) {
+        NativeInstance *instance = static_cast<NativeInstance *>(unreached);
+        if (!instance->isDestroyed) {
+          nativeFinalizerQueue_.push_back(instance);
+          instance->marked = true;
           continue;
         }
       }
 
-      if (unreached->type == ValueType::NativeObject) {
-        NativeInstance *nativeInstance = static_cast<NativeInstance *>(unreached);
-        if (nativeInstance->ownership == OwnershipMode::OwnedByVM && nativeInstance->nativeClass &&
-            nativeInstance->nativeClass->hasDestructor() && !nativeInstance->isDestroyed &&
-            nativeInstance->data) {
-          nativeInstance->marked = true;
-          nativeFinalizerQueue_.push_back(nativeInstance);
-          pointer = &((*pointer)->next);
-          continue;
-        }
-      }
-
-      *pointer = unreached->next;
-
-      if (GCDebug::enabled && GCDebug::logFrees) {
-        fprintf(stderr, "[GC] free %s @%p\n", typeName(unreached->type), (void *)unreached);
-      }
-
-      updateTypeStats(unreached->type, false);
       freeObject(unreached);
-      sweptCount++;
     }
-  }
-
-  if (GCDebug::enabled && GCDebug::verboseMarking) {
-    fprintf(stderr, "[GC] swept %zu objects\n", sweptCount);
-  }
-}
-
-void GC::removeWhiteStrings() {
-  size_t removed = 0;
-  for (auto it = vm_->strings_.begin(); it != vm_->strings_.end();) {
-    if (!it->second->marked) {
-      it = vm_->strings_.erase(it);
-      removed++;
-    } else {
-      ++it;
-    }
-  }
-  if (GCDebug::enabled && GCDebug::verboseMarking && removed > 0) {
-    fprintf(stderr, "[GC] removed %zu interned strings\n", removed);
   }
 }
 
 void GC::freeObject(GCObject *obj) {
+  if (GCDebug::enabled && GCDebug::logFrees) {
+    fprintf(stderr, "[GC] free %s @%p\n", typeName(obj->type), (void *)obj);
+  }
+
+  updateTypeStats(obj->type, false);
+
   switch (obj->type) {
   case ValueType::String: {
     StringObject *str = static_cast<StringObject *>(obj);
-    bytesAllocated_ -= sizeof(StringObject) + str->data.capacity();
-    delete str;
+
+    size_t totalSize = str->allocationSize();
+    bytesAllocated_ -= totalSize;
+
+    ::operator delete(str);
     break;
   }
   case ValueType::List: {
@@ -400,7 +505,7 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::Map: {
     MapObject *map = static_cast<MapObject *>(obj);
-    bytesAllocated_ -= sizeof(MapObject) + (map->entries.size() * sizeof(std::pair<Value, Value>));
+    bytesAllocated_ -= sizeof(MapObject);
     delete map;
     break;
   }
@@ -411,22 +516,30 @@ void GC::freeObject(GCObject *obj) {
     ::operator delete(closure);
     break;
   }
-  case ValueType::Class:
+  case ValueType::Class: {
+    ClassObject *klass = static_cast<ClassObject *>(obj);
     bytesAllocated_ -= sizeof(ClassObject);
-    delete static_cast<ClassObject *>(obj);
+    delete klass;
     break;
-  case ValueType::Object:
+  }
+  case ValueType::Object: {
+    Instance *instance = static_cast<Instance *>(obj);
     bytesAllocated_ -= sizeof(Instance);
-    delete static_cast<Instance *>(obj);
+    delete instance;
     break;
-  case ValueType::NativeFunc:
+  }
+  case ValueType::NativeFunc: {
+    NativeFunction *native = static_cast<NativeFunction *>(obj);
     bytesAllocated_ -= sizeof(NativeFunction);
-    delete static_cast<NativeFunction *>(obj);
+    delete native;
     break;
-  case ValueType::Upvalue:
+  }
+  case ValueType::Upvalue: {
+    UpValue *upvalue = static_cast<UpValue *>(obj);
     bytesAllocated_ -= sizeof(UpValue);
-    delete static_cast<UpValue *>(obj);
+    delete upvalue;
     break;
+  }
   case ValueType::Fiber: {
     FiberObject *fiber = static_cast<FiberObject *>(obj);
     bytesAllocated_ -= sizeof(FiberObject) + (fiber->stackSize * sizeof(Value)) +
@@ -651,10 +764,11 @@ void GC::dumpObjects() const {
     switch (obj->type) {
     case ValueType::String: {
       auto *str = static_cast<StringObject *>(obj);
-      if (str->data.length() <= 40) {
-        fprintf(stderr, " \"%s\"", str->data.c_str());
+      std::string_view sv = str->view();
+      if (sv.length() <= 40) {
+        fprintf(stderr, " \"%.*s\"", static_cast<int>(sv.length()), sv.data());
       } else {
-        fprintf(stderr, " \"%.40s...\"", str->data.c_str());
+        fprintf(stderr, " \"%.40s...\"", sv.data());
       }
       break;
     }

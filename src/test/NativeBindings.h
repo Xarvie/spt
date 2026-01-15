@@ -287,7 +287,7 @@ inline void registerStringBuffer(VM *vm) {
       .constructor([](VM *vm, int argc, Value *argv) -> void * {
         if (argc > 0 && argv[0].isString()) {
           StringObject *str = static_cast<StringObject *>(argv[0].asGC());
-          return new StringBuffer(str->data);
+          return new StringBuffer(str->str());
         }
         return new StringBuffer();
       })
@@ -303,7 +303,7 @@ inline void registerStringBuffer(VM *vm) {
           [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
             if (argc > 0 && argv[0].isString()) {
               StringObject *str = static_cast<StringObject *>(argv[0].asGC());
-              inst->as<StringBuffer>()->append(str->data);
+              inst->as<StringBuffer>()->append(str->str());
             }
             return Value::object(inst); // 返回 this 支持链式调用
           },

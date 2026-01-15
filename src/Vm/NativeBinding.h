@@ -96,9 +96,9 @@ struct NativeClassObject : GCObject {
   NativeDestructorFn destructor;
   OwnershipMode defaultOwnership;
 
-  ankerl::unordered_dense::map<std::string, NativeMethodDesc> methods;
-  ankerl::unordered_dense::map<std::string, NativePropertyDesc> properties;
-  ankerl::unordered_dense::map<std::string, Value> statics;
+  StringMap<NativeMethodDesc> methods;
+  StringMap<NativePropertyDesc> properties;
+  StringMap<Value> statics;
 
   size_t instanceDataSize = 0;
   bool allowInheritance = true;
@@ -116,7 +116,7 @@ struct NativeClassObject : GCObject {
     return false;
   }
 
-  const NativeMethodDesc *findMethod(const std::string &methodName) const {
+  const NativeMethodDesc *findMethod(StringObject *methodName) const {
     auto it = methods.find(methodName);
     if (it != methods.end())
       return &it->second;
@@ -125,7 +125,25 @@ struct NativeClassObject : GCObject {
     return nullptr;
   }
 
-  const NativePropertyDesc *findProperty(const std::string &propName) const {
+  const NativeMethodDesc *findMethod(std::string_view methodName) const {
+    auto it = methods.find(methodName);
+    if (it != methods.end())
+      return &it->second;
+    if (baseClass)
+      return baseClass->findMethod(methodName);
+    return nullptr;
+  }
+
+  const NativePropertyDesc *findProperty(StringObject *propName) const {
+    auto it = properties.find(propName);
+    if (it != properties.end())
+      return &it->second;
+    if (baseClass)
+      return baseClass->findProperty(propName);
+    return nullptr;
+  }
+
+  const NativePropertyDesc *findProperty(std::string_view propName) const {
     auto it = properties.find(propName);
     if (it != properties.end())
       return &it->second;
@@ -148,7 +166,7 @@ struct NativeInstance : GCObject {
   void *data;
   OwnershipMode ownership;
   bool isDestroyed = false;
-  ankerl::unordered_dense::map<std::string, Value> fields;
+  StringMap<Value> fields;
 
   NativeInstance() : nativeClass(nullptr), data(nullptr), ownership(OwnershipMode::OwnedByVM) {
     type = ValueType::NativeObject;
@@ -186,14 +204,21 @@ struct NativeInstance : GCObject {
 
   bool isValid() const { return data != nullptr && !isDestroyed; }
 
-  Value getField(const std::string &name) const {
+  Value getField(StringObject *name) const {
     auto it = fields.find(name);
     return (it != fields.end()) ? it->second : Value::nil();
   }
 
-  void setField(const std::string &name, const Value &value) { fields[name] = value; }
+  void setField(StringObject *name, const Value &value) { fields[name] = value; }
 
-  bool hasField(const std::string &name) const { return fields.find(name) != fields.end(); }
+  bool hasField(StringObject *name) const { return fields.find(name) != fields.end(); }
+
+  Value getField(std::string_view name) const {
+    auto it = fields.find(name);
+    return (it != fields.end()) ? it->second : Value::nil();
+  }
+
+  bool hasField(std::string_view name) const { return fields.find(name) != fields.end(); }
 };
 
 // ============================================================================
@@ -230,29 +255,36 @@ template <> struct ValueConverter<float> {
     return static_cast<float>(v.isNumber() ? v.asNumber() : 0.0);
   }
 
-  static Value to(VM *vm, float value) { return Value::number(static_cast<double>(value)); }
+  static Value to(VM *vm, float value) { return Value::number(value); }
 };
 
 template <> struct ValueConverter<bool> {
-  static bool from(const Value &v) { return v.isTruthy(); }
+  static bool from(const Value &v) { return v.isBool() ? v.asBool() : false; }
 
   static Value to(VM *vm, bool value) { return Value::boolean(value); }
 };
 
 template <> struct ValueConverter<std::string> {
-  static inline std::string from(const Value &v) {
-    if (!v.isString())
-      return "";
-    return static_cast<StringObject *>(v.asGC())->data;
+  static std::string from(const Value &v) {
+    if (v.isString()) {
+      return v.asString()->str();
+    }
+    return "";
   }
 
   static Value to(VM *vm, const std::string &value);
 };
 
+template <> struct ValueConverter<Value> {
+  static Value from(const Value &v) { return v; }
+
+  static Value to(VM *vm, const Value &value) { return value; }
+};
+
 } // namespace native_detail
 
 // ============================================================================
-// NativeBindingRegistry - 原生类的中央注册表
+// NativeBindingRegistry - 全局原生类注册表
 // ============================================================================
 
 class NativeBindingRegistry {
@@ -262,66 +294,41 @@ public:
     return registry;
   }
 
-  void registerClass(TypeId typeId, NativeClassObject *klass) {
-    typeIdToClass_[typeId] = klass;
-    nameToClass_[klass->name] = klass;
+  void registerClass(TypeId typeId, NativeClassObject *nativeClass) {
+    typeToClass_[typeId] = nativeClass;
   }
 
   NativeClassObject *findClass(TypeId typeId) const {
-    auto it = typeIdToClass_.find(typeId);
-    return (it != typeIdToClass_.end()) ? it->second : nullptr;
-  }
-
-  NativeClassObject *findClassByName(const std::string &name) const {
-    auto it = nameToClass_.find(name);
-    return (it != nameToClass_.end()) ? it->second : nullptr;
-  }
-
-  void clear() {
-    typeIdToClass_.clear();
-    nameToClass_.clear();
+    auto it = typeToClass_.find(typeId);
+    return (it != typeToClass_.end()) ? it->second : nullptr;
   }
 
 private:
   NativeBindingRegistry() = default;
-  ankerl::unordered_dense::map<TypeId, NativeClassObject *> typeIdToClass_;
-  ankerl::unordered_dense::map<std::string, NativeClassObject *> nameToClass_;
+  ankerl::unordered_dense::map<TypeId, NativeClassObject *> typeToClass_;
 };
 
 // ============================================================================
-// NativeClassBuilder - 用于注册原生类的流式 API
+// NativeClassBuilder - 流式 API 构建原生类
 // ============================================================================
 
 template <typename T> class NativeClassBuilder {
 public:
-  explicit NativeClassBuilder(VM *vm, const std::string &name);
+  NativeClassBuilder(VM *vm, const std::string &name);
 
-  NativeClassBuilder &inherits(NativeClassObject *base) {
-    class_->baseClass = base;
-    return *this;
-  }
-
-  NativeClassBuilder &doc(const std::string &documentation) {
-    class_->documentation = documentation;
+  // === 基类设置 ===
+  template <typename Base> NativeClassBuilder &extends() {
+    NativeClassObject *baseClass = NativeBindingRegistry::instance().findClass(getTypeId<Base>());
+    if (baseClass) {
+      class_->baseClass = baseClass;
+    }
     return *this;
   }
 
   // === 构造函数注册 ===
-
-  template <typename = std::enable_if_t<std::is_default_constructible_v<T>>>
-  NativeClassBuilder &defaultConstructor() {
-    class_->constructor = [](VM *vm, int argc, Value *argv) -> void * { return new T(); };
-    return *this;
-  }
-
-  NativeClassBuilder &constructor(NativeConstructorFn ctor) {
-    class_->constructor = std::move(ctor);
-    return *this;
-  }
-
-  template <typename... Args> NativeClassBuilder &constructorArgs() {
+  template <typename... Args> NativeClassBuilder &constructor() {
     class_->constructor = [](VM *vm, int argc, Value *argv) -> void * {
-      if (argc < static_cast<int>(sizeof...(Args))) {
+      if (argc != sizeof...(Args)) {
         return nullptr;
       }
       return constructWithArgs<Args...>(argv, std::index_sequence_for<Args...>{});
@@ -329,8 +336,14 @@ public:
     return *this;
   }
 
-  NativeClassBuilder &destructor(NativeDestructorFn dtor) {
-    class_->destructor = std::move(dtor);
+  NativeClassBuilder &constructor(NativeConstructorFn fn) {
+    class_->constructor = std::move(fn);
+    return *this;
+  }
+
+  // === 析构函数注册 ===
+  NativeClassBuilder &destructor(NativeDestructorFn fn) {
+    class_->destructor = std::move(fn);
     return *this;
   }
 
@@ -340,30 +353,35 @@ public:
   }
 
   // === 方法注册 ===
-
-  NativeClassBuilder &method(const std::string &name, NativeMethodFn fn, int arity = -1) {
-    class_->methods[name] = NativeMethodDesc(name, std::move(fn), arity);
+  NativeClassBuilder &method(StringObject *name, NativeMethodFn fn, int arity = -1) {
+    class_->methods[name] = NativeMethodDesc(name->str(), std::move(fn), arity);
     return *this;
   }
 
-  // Bug #8 修复: 添加有效性检查
-  template <Value (T::*Method)(VM *)> NativeClassBuilder &method(const std::string &name) {
-    class_->methods[name] = NativeMethodDesc(
+  NativeClassBuilder &method(const std::string &name, NativeMethodFn fn, int arity = -1);
+
+  template <typename RetT, typename... Args, RetT (T::*Method)(Args...)>
+  NativeClassBuilder &method(const std::string &name) {
+    return method(
         name,
         [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
           if (!inst || !inst->isValid()) {
             return Value::nil();
           }
           T *obj = inst->as<T>();
-          return (obj->*Method)(vm);
+          if constexpr (std::is_void_v<RetT>) {
+            (obj->*Method)(native_detail::ValueConverter<Args>::from(argv)...);
+            return Value::nil();
+          } else {
+            RetT result = (obj->*Method)(native_detail::ValueConverter<Args>::from(argv)...);
+            return native_detail::ValueConverter<RetT>::to(vm, result);
+          }
         },
-        0);
-    return *this;
+        sizeof...(Args));
   }
 
-  // Bug #8 修复: 添加有效性检查
-  template <void (T::*Method)()> NativeClassBuilder &methodVoid(const std::string &name) {
-    class_->methods[name] = NativeMethodDesc(
+  template <void (T::*Method)()> NativeClassBuilder &method(const std::string &name) {
+    return method(
         name,
         [](VM *vm, NativeInstance *inst, int argc, Value *argv) -> Value {
           if (!inst || !inst->isValid()) {
@@ -374,71 +392,24 @@ public:
           return Value::nil();
         },
         0);
-    return *this;
   }
 
   // === 属性注册 ===
-
-  NativeClassBuilder &propertyReadOnly(const std::string &name, NativePropertyGetter getter) {
-    class_->properties[name] = NativePropertyDesc(name, std::move(getter), nullptr);
-    return *this;
-  }
-
+  NativeClassBuilder &propertyReadOnly(const std::string &name, NativePropertyGetter getter);
   NativeClassBuilder &property(const std::string &name, NativePropertyGetter getter,
-                               NativePropertySetter setter) {
-    class_->properties[name] = NativePropertyDesc(name, std::move(getter), std::move(setter));
-    return *this;
-  }
+                               NativePropertySetter setter);
 
-  // Bug #10 修复: 添加有效性检查
   template <typename MemberT, MemberT T::*Member>
-  NativeClassBuilder &memberProperty(const std::string &name) {
-    class_->properties[name] = NativePropertyDesc(
-        name,
-        [](VM *vm, NativeInstance *inst) -> Value {
-          if (!inst || !inst->isValid()) {
-            return Value::nil();
-          }
-          T *obj = inst->as<T>();
-          return native_detail::ValueConverter<MemberT>::to(vm, obj->*Member);
-        },
-        [](VM *vm, NativeInstance *inst, Value value) {
-          if (!inst || !inst->isValid()) {
-            return;
-          }
-          T *obj = inst->as<T>();
-          obj->*Member = native_detail::ValueConverter<MemberT>::from(value);
-        });
-    return *this;
-  }
+  NativeClassBuilder &memberProperty(const std::string &name);
 
-  // Bug #10 修复: 添加有效性检查
   template <typename MemberT, MemberT T::*Member>
-  NativeClassBuilder &memberPropertyReadOnly(const std::string &name) {
-    class_->properties[name] = NativePropertyDesc(
-        name,
-        [](VM *vm, NativeInstance *inst) -> Value {
-          if (!inst || !inst->isValid()) {
-            return Value::nil();
-          }
-          T *obj = inst->as<T>();
-          return native_detail::ValueConverter<MemberT>::to(vm, obj->*Member);
-        },
-        nullptr);
-    return *this;
-  }
+  NativeClassBuilder &memberPropertyReadOnly(const std::string &name);
 
   // === 静态成员 ===
-
   NativeClassBuilder &staticMethod(const std::string &name, NativeFn fn, int arity = -1);
-
-  NativeClassBuilder &staticValue(const std::string &name, Value value) {
-    class_->statics[name] = value;
-    return *this;
-  }
+  NativeClassBuilder &staticValue(const std::string &name, Value value);
 
   // === 配置 ===
-
   NativeClassBuilder &ownership(OwnershipMode mode) {
     class_->defaultOwnership = mode;
     return *this;
@@ -450,7 +421,6 @@ public:
   }
 
   // === 完成构建 ===
-
   NativeClassObject *build();
 
   NativeClassObject *get() { return class_; }
@@ -476,7 +446,6 @@ NativeInstance *wrapNativeObject(VM *vm, T *obj,
 template <typename T, typename... Args> NativeInstance *createNativeObject(VM *vm, Args &&...args);
 
 template <typename T> T *getNativeObject(const Value &value);
-
 template <typename T> bool isNativeObject(const Value &value);
 
 // ============================================================================
@@ -535,13 +504,86 @@ NativeClassBuilder<T>::NativeClassBuilder(VM *vm, const std::string &name) : vm_
 }
 
 template <typename T>
+NativeClassBuilder<T> &NativeClassBuilder<T>::method(const std::string &name, NativeMethodFn fn,
+                                                     int arity) {
+  StringObject *nameStr = vm_->allocateString(name);
+  class_->methods[nameStr] = NativeMethodDesc(name, std::move(fn), arity);
+  return *this;
+}
+
+template <typename T>
+NativeClassBuilder<T> &NativeClassBuilder<T>::propertyReadOnly(const std::string &name,
+                                                               NativePropertyGetter getter) {
+  StringObject *nameStr = vm_->allocateString(name);
+  class_->properties[nameStr] = NativePropertyDesc(name, std::move(getter), nullptr);
+  return *this;
+}
+
+template <typename T>
+NativeClassBuilder<T> &NativeClassBuilder<T>::property(const std::string &name,
+                                                       NativePropertyGetter getter,
+                                                       NativePropertySetter setter) {
+  StringObject *nameStr = vm_->allocateString(name);
+  class_->properties[nameStr] = NativePropertyDesc(name, std::move(getter), std::move(setter));
+  return *this;
+}
+
+template <typename T>
+template <typename MemberT, MemberT T::*Member>
+NativeClassBuilder<T> &NativeClassBuilder<T>::memberProperty(const std::string &name) {
+  StringObject *nameStr = vm_->allocateString(name);
+  class_->properties[nameStr] = NativePropertyDesc(
+      name,
+      [](VM *vm, NativeInstance *inst) -> Value {
+        if (!inst || !inst->isValid()) {
+          return Value::nil();
+        }
+        T *obj = inst->as<T>();
+        return native_detail::ValueConverter<MemberT>::to(vm, obj->*Member);
+      },
+      [](VM *vm, NativeInstance *inst, Value value) {
+        if (!inst || !inst->isValid()) {
+          return;
+        }
+        T *obj = inst->as<T>();
+        obj->*Member = native_detail::ValueConverter<MemberT>::from(value);
+      });
+  return *this;
+}
+
+template <typename T>
+template <typename MemberT, MemberT T::*Member>
+NativeClassBuilder<T> &NativeClassBuilder<T>::memberPropertyReadOnly(const std::string &name) {
+  StringObject *nameStr = vm_->allocateString(name);
+  class_->properties[nameStr] = NativePropertyDesc(
+      name,
+      [](VM *vm, NativeInstance *inst) -> Value {
+        if (!inst || !inst->isValid()) {
+          return Value::nil();
+        }
+        T *obj = inst->as<T>();
+        return native_detail::ValueConverter<MemberT>::to(vm, obj->*Member);
+      },
+      nullptr);
+  return *this;
+}
+
+template <typename T>
 NativeClassBuilder<T> &NativeClassBuilder<T>::staticMethod(const std::string &name, NativeFn fn,
                                                            int arity) {
   NativeFunction *native = vm_->gc().allocate<NativeFunction>();
   native->name = name;
   native->function = std::move(fn);
   native->arity = arity;
-  class_->statics[name] = Value::object(native);
+  StringObject *nameStr = vm_->allocateString(name);
+  class_->statics[nameStr] = Value::object(native);
+  return *this;
+}
+
+template <typename T>
+NativeClassBuilder<T> &NativeClassBuilder<T>::staticValue(const std::string &name, Value value) {
+  StringObject *nameStr = vm_->allocateString(name);
+  class_->statics[nameStr] = value;
   return *this;
 }
 

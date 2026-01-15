@@ -12,6 +12,8 @@ struct GCObject;
 struct Instance;
 struct NativeInstance;
 struct Closure;
+struct StringObject;
+class StringPool;
 
 // ============================================================================
 // GC 调试控制 - 全局开关
@@ -23,7 +25,6 @@ struct GCDebug {
   static inline bool logFrees = false;       // 记录每次释放
   static inline bool verboseMarking = false; // 详细标记过程
 
-  // 便捷方法
   static void enableAll() {
     enabled = logCollections = logAllocations = logFrees = verboseMarking = true;
   }
@@ -32,7 +33,7 @@ struct GCDebug {
     enabled = logCollections = logAllocations = logFrees = verboseMarking = false;
   }
 
-  static void enableBasic() { // 推荐：只开启基本信息
+  static void enableBasic() {
     enabled = logCollections = true;
     logAllocations = logFrees = verboseMarking = false;
   }
@@ -91,8 +92,11 @@ public:
 
   Closure *allocateClosure(const Prototype *proto);
 
+  StringObject *allocateString(std::string_view sv, uint32_t hash);
+
   // === 内存跟踪 ===
   void trackAllocation(size_t bytes) { bytesAllocated_ += bytes; }
+
   void trackDeallocation(size_t bytes) {
     bytesAllocated_ = (bytes <= bytesAllocated_) ? bytesAllocated_ - bytes : 0;
   }
@@ -100,6 +104,7 @@ public:
   // === 回收控制 ===
   void collect();
   void collectIfNeeded();
+
   void setEnabled(bool enabled) { enabled_ = enabled; }
 
   // === 写屏障 (增量 GC 预留) ===
@@ -107,19 +112,21 @@ public:
 
   // === 基本统计 ===
   size_t bytesAllocated() const { return bytesAllocated_; }
+
   size_t threshold() const { return threshold_; }
+
   size_t objectCount() const { return objectCount_; }
 
   // === 调试统计 ===
   const GCStats &stats() const { return stats_; }
 
   void resetStats();
-  void dumpStats() const;   // 打印统计摘要
-  void dumpObjects() const; // 打印所有活跃对象
+  void dumpStats() const;
+  void dumpObjects() const;
 
   // === 泄露检测 ===
   void markCheckpoint();
-  void checkLeaks() const; // 检查自检查点以来的泄露
+  void checkLeaks() const;
   size_t leakedObjectCount() const;
   size_t leakedBytes() const;
 
@@ -128,6 +135,8 @@ public:
   void addRoot(RootVisitor visitor);
   void removeRoot(RootVisitor visitor);
   void markObject(GCObject *obj);
+
+  void setStringPool(StringPool *pool) { stringPool_ = pool; }
 
 private:
   void markRoots();
@@ -149,6 +158,7 @@ private:
 private:
   VM *vm_;
   GCConfig config_;
+  StringPool *stringPool_ = nullptr;
 
   GCObject *objects_ = nullptr;
   std::vector<GCObject *> grayStack_;

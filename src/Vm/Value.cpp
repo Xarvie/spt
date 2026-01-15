@@ -16,7 +16,11 @@ std::string Value::toString() const {
   case ValueType::Float:
     return std::to_string(as.number);
   case ValueType::String:
-    return as.gc ? static_cast<StringObject *>(as.gc)->data : "";
+
+    if (as.gc) {
+      return static_cast<StringObject *>(as.gc)->str();
+    }
+    return "";
   case ValueType::List:
     return "<list>";
   case ValueType::Map:
@@ -99,10 +103,7 @@ bool Value::equals(const Value &other) const {
     }
     return as.number == other.as.number;
   case ValueType::String:
-    if (as.gc && other.as.gc) {
-      return static_cast<StringObject *>(as.gc)->data ==
-             static_cast<StringObject *>(other.as.gc)->data;
-    }
+
     return as.gc == other.as.gc;
   default:
     return as.gc == other.as.gc;
@@ -116,19 +117,20 @@ size_t Value::hash() const noexcept {
   case ValueType::Bool:
     return as.boolean ? 1 : 0;
   case ValueType::Int:
-    return as.integer;
+    return static_cast<size_t>(as.integer);
   case ValueType::Float:
-
     if (std::isnan(as.number)) {
       return 0x7FF8000000000001ULL;
     }
     return std::hash<double>()(as.number);
   case ValueType::String:
+
     if (as.gc) {
-      return std::hash<std::string>()(static_cast<StringObject *>(as.gc)->data);
+      return static_cast<StringObject *>(as.gc)->hash;
     }
     return 0;
   default:
+
     return std::hash<void *>()(as.gc);
   }
 }
