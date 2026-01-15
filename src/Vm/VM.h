@@ -138,6 +138,8 @@ public:
 
   FiberObject *mainFiber() const { return mainFiber_; } // 获取主纤程
 
+  const SymbolTable &symbols() const { return *symbols_; }
+
   // === Fiber 操作 ===
   Value fiberCall(FiberObject *fiber, Value arg, bool isTry); // 调用纤程
   void fiberYield(Value value);                               // 纤程挂起/产出
