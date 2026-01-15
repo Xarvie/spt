@@ -1914,13 +1914,14 @@ InterpretResult VM::run() {
       newSlots = slots + A + 1;
 
       Value *argsStart = newSlots;
-      Value *targetStackTop = argsStart + proto->maxStackSize;
 
-      for (Value *p = argsStart + argCount; p < targetStackTop; ++p) {
-        *p = Value::nil();
+      int numParams = proto->numParams;
+
+      for (int i = argCount; i < numParams; ++i) {
+        argsStart[i] = Value::nil();
       }
 
-      STACK_TOP = targetStackTop;
+      fiber->stackTop = argsStart + proto->maxStackSize;
 
       CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
       newFrame->closure = closure;
@@ -2064,13 +2065,13 @@ InterpretResult VM::run() {
     newSlots = slots + A;
 
     Value *argsStart = newSlots;
-    Value *targetStackTop = argsStart + proto->maxStackSize;
+    int numParams = proto->numParams;
 
-    for (Value *p = argsStart + argCount; p < targetStackTop; ++p) {
-      *p = Value::nil();
+    for (int i = argCount; i < numParams; ++i) {
+      argsStart[i] = Value::nil();
     }
 
-    STACK_TOP = targetStackTop;
+    STACK_TOP = argsStart + proto->maxStackSize;
 
     CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
     newFrame->closure = closure;
