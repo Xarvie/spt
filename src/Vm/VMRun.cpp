@@ -21,22 +21,33 @@ InterpretResult VM::run() {
   FiberObject *fiber = currentFiber_;
   CallFrame *frame = &fiber->frames[fiber->frameCount - 1];
 
-  Value *stackBase = fiber->stack;
-  Value *stackLimit = fiber->stackLast;
+  const uint32_t *ip = frame->ip;
   Value *slots = frame->slots;
 
   const ConstantValue *k = frame->closure->proto->constants.data();
 
-  uint32_t instruction;
+  Value *stackBase = fiber->stack;
+  Value *stackLimit = fiber->stackLast;
+
+  int trap = 0;
 
 #if SPT_USE_COMPUTED_GOTO
   SPT_DEFINE_DISPATCH_TABLE()
+  uint32_t inst;
 #endif
 
 #define FIBER fiber
 #define STACK_TOP fiber->stackTop
 #define FRAMES fiber->frames
 #define FRAME_COUNT fiber->frameCount
+
+#define UPDATE_BASE() (slots = frame->slots)
+
+#define SAVE_PC() (frame->ip = ip)
+
+#define LOAD_PC() (ip = frame->ip)
+
+#define UPDATE_TRAP() (trap = (yieldPending_ || hasError_))
 
 #define RESTORE_POINTERS()                                                                         \
   do {                                                                                             \
@@ -64,6 +75,7 @@ InterpretResult VM::run() {
 
 #define PROTECT(action)                                                                            \
   do {                                                                                             \
+    SAVE_PC();                                                                                     \
     action;                                                                                        \
     RESTORE_POINTERS();                                                                            \
   } while (0)
@@ -76,29 +88,40 @@ InterpretResult VM::run() {
 
 #define HALF_PROTECT(action)                                                                       \
   do {                                                                                             \
-    frame->ip = ip;                                                                                \
+    SAVE_PC();                                                                                     \
     action;                                                                                        \
   } while (0)
 
 #define REFRESH_CACHE() RESTORE_POINTERS()
 #define REFRESH_SLOTS() RESTORE_SLOTS_ONLY()
 
+#define VM_FETCH()                                                                                 \
+  do {                                                                                             \
+    if (trap) {                                                                                    \
+      if (yieldPending_ || hasError_) {                                                            \
+      }                                                                                            \
+      UPDATE_TRAP();                                                                               \
+    }                                                                                              \
+    inst = *ip++;                                                                                  \
+  } while (0)
+
   (void)stackBase;
   (void)stackLimit;
   (void)k;
+  (void)trap;
 
   SPT_DISPATCH_LOOP_BEGIN()
 
   SPT_OPCODE(OP_MOVE) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
     slots[A] = slots[B];
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_LOADK) {
-    uint8_t A = GETARG_A(instruction);
-    uint32_t Bx = GETARG_Bx(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint32_t Bx = GETARG_Bx(inst);
 
     const auto &constant = k[Bx];
     Value value;
@@ -114,7 +137,6 @@ InterpretResult VM::run() {
           } else if constexpr (std::is_same_v<T, double>) {
             value = Value::number(arg);
           } else if constexpr (std::is_same_v<T, std::string>) {
-
             StringObject *str;
             PROTECT(str = allocateString(arg));
             value = Value::object(str);
@@ -126,18 +148,18 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_LOADBOOL) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     slots[A] = Value::boolean(B != 0);
     if (C != 0)
-      frame->ip++;
+      ip++;
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_LOADNIL) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
     for (int i = 0; i <= B; ++i) {
       slots[A + i] = Value::nil();
     }
@@ -145,8 +167,8 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_NEWLIST) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
 
     ListObject *list;
     PROTECT(list = allocateList(B));
@@ -155,8 +177,8 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_NEWMAP) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
 
     MapObject *map;
     PROTECT(map = allocateMap(B));
@@ -165,20 +187,22 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_GETINDEX) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value container = slots[B];
     Value index = slots[C];
 
     if (container.isList()) {
       auto *list = static_cast<ListObject *>(container.asGC());
       if (!index.isInt()) {
+        SAVE_PC();
         runtimeError("List index must be integer");
         return InterpretResult::RUNTIME_ERROR;
       }
       int64_t idx = index.asInt();
       if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
+        SAVE_PC();
         runtimeError("List index out of range");
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -187,6 +211,7 @@ InterpretResult VM::run() {
       auto *map = static_cast<MapObject *>(container.asGC());
       slots[A] = map->get(index);
     } else {
+      SAVE_PC();
       runtimeError("Cannot index type: %s", container.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -194,9 +219,9 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_SETINDEX) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value container = slots[A];
     Value index = slots[B];
     Value value = slots[C];
@@ -204,11 +229,13 @@ InterpretResult VM::run() {
     if (container.isList()) {
       auto *list = static_cast<ListObject *>(container.asGC());
       if (!index.isInt()) {
+        SAVE_PC();
         runtimeError("List index must be integer");
         return InterpretResult::RUNTIME_ERROR;
       }
       int64_t idx = index.asInt();
       if (idx < 0 || idx >= static_cast<int64_t>(list->elements.size())) {
+        SAVE_PC();
         runtimeError("List index out of range");
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -217,6 +244,7 @@ InterpretResult VM::run() {
       auto *map = static_cast<MapObject *>(container.asGC());
       map->set(index, value);
     } else {
+      SAVE_PC();
       runtimeError("Cannot index-assign to type: %s", container.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -224,14 +252,15 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_GETFIELD) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value object = slots[B];
 
     const auto &keyConst = k[C];
 
     if (!std::holds_alternative<std::string>(keyConst)) {
+      SAVE_PC();
       runtimeError("GETFIELD requires string key constant");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -248,6 +277,7 @@ InterpretResult VM::run() {
         SPT_DISPATCH();
       }
       if (!object.isMap()) {
+        SAVE_PC();
         runtimeError("Type '%s' has no property '%s'", object.typeName(), fieldName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -359,6 +389,7 @@ InterpretResult VM::run() {
       }
       slots[A] = result;
     } else {
+      SAVE_PC();
       runtimeError("Cannot get field '%s' from type: %s", fieldName.c_str(), object.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -366,15 +397,16 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_SETFIELD) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value object = slots[A];
 
     const auto &keyConst = k[B];
     Value value = slots[C];
 
     if (!std::holds_alternative<std::string>(keyConst)) {
+      SAVE_PC();
       runtimeError("SETFIELD requires string key constant");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -398,6 +430,7 @@ InterpretResult VM::run() {
         const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
         if (prop) {
           if (prop->isReadOnly || !prop->setter) {
+            SAVE_PC();
             runtimeError("Property '%s' is read-only on native class '%s'", fieldName.c_str(),
                          instance->nativeClass->name.c_str());
             return InterpretResult::RUNTIME_ERROR;
@@ -422,6 +455,7 @@ InterpretResult VM::run() {
       value = slots[C];
       map->set(Value::object(key), value);
     } else {
+      SAVE_PC();
       runtimeError("Cannot set field '%s' on type: %s", fieldName.c_str(), object.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -429,11 +463,12 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_NEWCLASS) {
-    uint8_t A = GETARG_A(instruction);
-    uint32_t Bx = GETARG_Bx(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint32_t Bx = GETARG_Bx(inst);
 
     const auto &nameConst = k[Bx];
     if (!std::holds_alternative<std::string>(nameConst)) {
+      SAVE_PC();
       runtimeError("Class name must be string constant");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -446,9 +481,9 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_NEWOBJ) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
 
     Value classValue = slots[B];
 
@@ -456,6 +491,7 @@ InterpretResult VM::run() {
       NativeClassObject *nativeClass = static_cast<NativeClassObject *>(classValue.asGC());
 
       if (!nativeClass->hasConstructor()) {
+        SAVE_PC();
         runtimeError("Native class '%s' has no constructor", nativeClass->name.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -473,11 +509,12 @@ InterpretResult VM::run() {
     }
 
     if (!classValue.isClass()) {
+      SAVE_PC();
       runtimeError("Cannot instantiate non-class type '%s'", classValue.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    auto *klass = static_cast<ClassObject *>(classValue.asGC());
+    ClassObject *klass = static_cast<ClassObject *>(classValue.asGC());
 
     Instance *instance;
     PROTECT(instance = allocateInstance(klass));
@@ -503,11 +540,13 @@ InterpretResult VM::run() {
         }
 
         if (!proto->isVararg && providedArgs != proto->numParams) {
+          SAVE_PC();
           runtimeError("init expects %d arguments, got %d", proto->numParams, providedArgs);
           return InterpretResult::RUNTIME_ERROR;
         }
 
         if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+          SAVE_PC();
           runtimeError("Stack overflow");
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -529,24 +568,26 @@ InterpretResult VM::run() {
 
         STACK_TOP = targetStackTop;
 
+        SAVE_PC();
+
         CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
         newFrame->closure = closure;
         newFrame->ip = proto->code.data();
         newFrame->expectedResults = 0;
         newFrame->slots = newSlots;
         newFrame->returnTo = slots + A;
-
         newFrame->deferBase = fiber->deferTop;
 
         frame = newFrame;
         slots = frame->slots;
-
         k = frame->closure->proto->constants.data();
+        LOAD_PC();
 
       } else if (initializer.isNativeFunc()) {
         NativeFunction *native = static_cast<NativeFunction *>(initializer.asGC());
 
         if (native->arity != -1 && C != native->arity) {
+          SAVE_PC();
           runtimeError("Native init expects %d arguments, got %d", native->arity, C);
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -555,11 +596,13 @@ InterpretResult VM::run() {
 
         PROTECT(native->function(this, instanceVal, C, argsStart));
       } else {
+        SAVE_PC();
         runtimeError("init method must be a function");
         return InterpretResult::RUNTIME_ERROR;
       }
     } else {
       if (C > 0) {
+        SAVE_PC();
         runtimeError("Class '%s' has no init method but arguments were provided.",
                      klass->name.c_str());
         return InterpretResult::RUNTIME_ERROR;
@@ -570,9 +613,10 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_GETUPVAL) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
     if (B >= frame->closure->upvalueCount) {
+      SAVE_PC();
       runtimeError("Invalid upvalue index: %d", B);
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -582,9 +626,10 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_SETUPVAL) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
     if (B >= frame->closure->upvalueCount) {
+      SAVE_PC();
       runtimeError("Invalid upvalue index: %d", B);
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -594,8 +639,8 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_CLOSURE) {
-    uint8_t A = GETARG_A(instruction);
-    uint32_t Bx = GETARG_Bx(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint32_t Bx = GETARG_Bx(inst);
     const Prototype &proto = frame->closure->proto->protos[Bx];
 
     Closure *closure;
@@ -605,7 +650,6 @@ InterpretResult VM::run() {
     for (size_t i = 0; i < proto.numUpvalues; ++i) {
       const auto &uvDesc = proto.upvalues[i];
       if (uvDesc.isLocal) {
-
         closure->upvalues[i] = captureUpvalue(&slots[uvDesc.index]);
       } else {
         closure->upvalues[i] = frame->closure->upvalues[uvDesc.index];
@@ -618,15 +662,15 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_CLOSE_UPVALUE) {
-    uint8_t A = GETARG_A(instruction);
+    uint8_t A = GETARG_A(inst);
     closeUpvalues(&slots[A]);
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_ADD) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
@@ -644,6 +688,7 @@ InterpretResult VM::run() {
       PROTECT(result = allocateString(s1 + s2));
       slots[A] = Value::object(result);
     } else {
+      SAVE_PC();
       runtimeError("Operands must be numbers or strings");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -651,9 +696,9 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_SUB) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
@@ -664,6 +709,7 @@ InterpretResult VM::run() {
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
       slots[A] = Value::number(left - right);
     } else {
+      SAVE_PC();
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -671,9 +717,9 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_MUL) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
@@ -684,6 +730,7 @@ InterpretResult VM::run() {
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
       slots[A] = Value::number(left * right);
     } else {
+      SAVE_PC();
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -691,13 +738,14 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_DIV) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
     if (!b.isNumber() || !c.isNumber()) {
+      SAVE_PC();
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -706,6 +754,7 @@ InterpretResult VM::run() {
     double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
 
     if (right == 0.0) {
+      SAVE_PC();
       runtimeError("Division by zero");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -719,13 +768,14 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_IDIV) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
     if (!b.isNumber() || !c.isNumber()) {
+      SAVE_PC();
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -734,6 +784,7 @@ InterpretResult VM::run() {
     double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
 
     if (right == 0.0) {
+      SAVE_PC();
       runtimeError("Division by zero");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -753,13 +804,14 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_MOD) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
     if (!b.isInt() || !c.isInt()) {
+      SAVE_PC();
       runtimeError("Modulo requires integer operands");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -768,6 +820,7 @@ InterpretResult VM::run() {
     int64_t right = c.asInt();
 
     if (right == 0) {
+      SAVE_PC();
       runtimeError("Modulo by zero");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -781,15 +834,14 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_UNM) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
     Value b = slots[B];
 
     if (b.isInt()) {
       int64_t val = b.asInt();
 
       if (val == INT64_MIN) {
-
         slots[A] = Value::number(-static_cast<double>(val));
       } else {
         slots[A] = Value::integer(-val);
@@ -797,6 +849,7 @@ InterpretResult VM::run() {
     } else if (b.isFloat()) {
       slots[A] = Value::number(-b.asFloat());
     } else {
+      SAVE_PC();
       runtimeError("Operand must be a number");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -805,13 +858,14 @@ InterpretResult VM::run() {
 
 #define SPT_BW_BINARY_OP(opName, op)                                                               \
   SPT_OPCODE(opName) {                                                                             \
-    uint8_t A = GETARG_A(instruction);                                                             \
-    uint8_t B = GETARG_B(instruction);                                                             \
-    uint8_t C = GETARG_C(instruction);                                                             \
+    uint8_t A = GETARG_A(inst);                                                                    \
+    uint8_t B = GETARG_B(inst);                                                                    \
+    uint8_t C = GETARG_C(inst);                                                                    \
     Value b = slots[B];                                                                            \
     Value c = slots[C];                                                                            \
                                                                                                    \
     if (!b.isInt() || !c.isInt()) {                                                                \
+      SAVE_PC();                                                                                   \
       runtimeError("Operands must be integers");                                                   \
       return InterpretResult::RUNTIME_ERROR;                                                       \
     }                                                                                              \
@@ -821,13 +875,15 @@ InterpretResult VM::run() {
 
   SPT_BW_BINARY_OP(OP_BAND, &)
   SPT_BW_BINARY_OP(OP_BOR, |)
+
   SPT_OPCODE(OP_BXOR) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
     if (!b.isInt() || !c.isInt()) {
+      SAVE_PC();
       runtimeError("Operands must be integers");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -836,13 +892,14 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_BNOT) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
     Value b = slots[B];
 
     if (b.isInt()) {
       slots[A] = Value::integer(~b.asInt());
     } else {
+      SAVE_PC();
       runtimeError("Operand must be a integer");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -852,13 +909,14 @@ InterpretResult VM::run() {
 #undef SPT_BW_BINARY_OP
 
   SPT_OPCODE(OP_SHL) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
     if (!b.isInt() || !c.isInt()) {
+      SAVE_PC();
       runtimeError("Operands must be integers");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -866,6 +924,7 @@ InterpretResult VM::run() {
     int64_t shiftAmount = c.asInt();
 
     if (shiftAmount < 0 || shiftAmount >= 64) {
+      SAVE_PC();
       runtimeError("Shift amount must be between 0 and 63");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -874,13 +933,14 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_SHR) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
 
     if (!b.isInt() || !c.isInt()) {
+      SAVE_PC();
       runtimeError("Operands must be integers");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -888,6 +948,7 @@ InterpretResult VM::run() {
     int64_t shiftAmount = c.asInt();
 
     if (shiftAmount < 0 || shiftAmount >= 64) {
+      SAVE_PC();
       runtimeError("Shift amount must be between 0 and 63");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -896,26 +957,26 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_JMP) {
-    int32_t sBx = GETARG_sBx(instruction);
-    frame->ip += sBx;
+    int32_t sBx = GETARG_sBx(inst);
+    ip += sBx;
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_EQ) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     bool equal = valuesEqual(slots[A], slots[B]);
     if (equal != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_LT) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value a = slots[A];
     Value b = slots[B];
 
@@ -928,20 +989,21 @@ InterpretResult VM::run() {
 
       result = left < right;
     } else {
+      SAVE_PC();
       runtimeError("Cannot compare non-numeric types");
       return InterpretResult::RUNTIME_ERROR;
     }
 
     if (result != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_LE) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
     Value a = slots[A];
     Value b = slots[B];
 
@@ -954,30 +1016,31 @@ InterpretResult VM::run() {
 
       result = left <= right;
     } else {
+      SAVE_PC();
       runtimeError("Cannot compare non-numeric types");
       return InterpretResult::RUNTIME_ERROR;
     }
 
     if (result != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_TEST) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t C = GETARG_C(inst);
     bool isTruthy = slots[A].isTruthy();
     if (isTruthy != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_CALL) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
 
     int argCount;
 
@@ -995,12 +1058,14 @@ InterpretResult VM::run() {
       const Prototype *proto = closure->proto;
 
       if (argCount != proto->numParams && !proto->isVararg) {
+        SAVE_PC();
         runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
                      proto->numParams, argCount);
         return InterpretResult::RUNTIME_ERROR;
       }
 
       if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+        SAVE_PC();
         runtimeError("Stack overflow");
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1023,6 +1088,8 @@ InterpretResult VM::run() {
 
       fiber->stackTop = argsStart + proto->maxStackSize;
 
+      SAVE_PC();
+
       CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
       newFrame->closure = closure;
       newFrame->ip = proto->code.data();
@@ -1033,13 +1100,14 @@ InterpretResult VM::run() {
 
       frame = newFrame;
       slots = frame->slots;
-
       k = frame->closure->proto->constants.data();
+      LOAD_PC();
 
     } else if (callee.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
 
       if (native->arity != -1 && argCount != native->arity) {
+        SAVE_PC();
         runtimeError("Native function '%s' expects %d arguments, got %d", native->name.c_str(),
                      native->arity, argCount);
         return InterpretResult::RUNTIME_ERROR;
@@ -1102,6 +1170,7 @@ InterpretResult VM::run() {
       NativeClassObject *nativeClass = static_cast<NativeClassObject *>(callee.asGC());
 
       if (!nativeClass->hasConstructor()) {
+        SAVE_PC();
         runtimeError("Native class '%s' has no constructor", nativeClass->name.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1123,6 +1192,7 @@ InterpretResult VM::run() {
       }
 
     } else {
+      SAVE_PC();
       runtimeError("Attempt to call a non-function value of type '%s'", callee.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1130,9 +1200,9 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_CALL_SELF) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
 
     int argCount;
 
@@ -1147,12 +1217,14 @@ InterpretResult VM::run() {
     const Prototype *proto = closure->proto;
 
     if (argCount != proto->numParams && !proto->isVararg) {
+      SAVE_PC();
       runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
                    proto->numParams, argCount);
       return InterpretResult::RUNTIME_ERROR;
     }
 
     if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+      SAVE_PC();
       runtimeError("Stack overflow");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1174,6 +1246,8 @@ InterpretResult VM::run() {
 
     STACK_TOP = argsStart + proto->maxStackSize;
 
+    SAVE_PC();
+
     CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
     newFrame->closure = closure;
     newFrame->ip = proto->code.data();
@@ -1184,17 +1258,18 @@ InterpretResult VM::run() {
 
     frame = newFrame;
     slots = frame->slots;
-
     k = frame->closure->proto->constants.data();
+    LOAD_PC();
+
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_INVOKE) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
 
-    uint32_t nextInst = *frame->ip++;
+    uint32_t nextInst = *ip++;
     uint32_t methodIdx = GETARG_Ax(nextInst);
 
     Value receiver = slots[A];
@@ -1208,6 +1283,7 @@ InterpretResult VM::run() {
 
     const auto &methodNameConst = k[methodIdx];
     if (!std::holds_alternative<std::string>(methodNameConst)) {
+      SAVE_PC();
       runtimeError("OP_INVOKE: method name constant must be string");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1280,6 +1356,7 @@ InterpretResult VM::run() {
         if (propertyValue.isNativeFunc()) {
           method = propertyValue;
         } else {
+          SAVE_PC();
           runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
                        methodName.c_str());
           return InterpretResult::RUNTIME_ERROR;
@@ -1295,6 +1372,7 @@ InterpretResult VM::run() {
       }
 
       if (method.isNil()) {
+        SAVE_PC();
         runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1310,12 +1388,14 @@ InterpretResult VM::run() {
       }
 
       if (method.isNil()) {
+        SAVE_PC();
         runtimeError("Instance has no method '%s'", methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isNativeInstance()) {
       NativeInstance *instance = static_cast<NativeInstance *>(receiver.asGC());
       if (!instance->nativeClass) {
+        SAVE_PC();
         runtimeError("Native instance has no class information");
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1323,6 +1403,7 @@ InterpretResult VM::run() {
       const NativeMethodDesc *nativeMethod = instance->nativeClass->findMethod(methodName);
       if (nativeMethod) {
         if (nativeMethod->arity != -1 && userArgCount != nativeMethod->arity) {
+          SAVE_PC();
           runtimeError("Native method '%s' expects %d arguments, got %d", methodName.c_str(),
                        nativeMethod->arity, userArgCount);
           return InterpretResult::RUNTIME_ERROR;
@@ -1381,6 +1462,7 @@ InterpretResult VM::run() {
       }
 
       if (method.isNil()) {
+        SAVE_PC();
         runtimeError("Native instance of '%s' has no method '%s'",
                      instance->nativeClass->name.c_str(), methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
@@ -1399,6 +1481,7 @@ InterpretResult VM::run() {
         }
       }
       if (method.isNil()) {
+        SAVE_PC();
         runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1419,11 +1502,13 @@ InterpretResult VM::run() {
         base = base->baseClass;
       }
       if (method.isNil()) {
+        SAVE_PC();
         runtimeError("Native class '%s' has no static method '%s'", nativeClass->name.c_str(),
                      methodName.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else {
+      SAVE_PC();
       runtimeError("Cannot invoke method '%s' on type '%s'", methodName.c_str(),
                    receiver.typeName());
       return InterpretResult::RUNTIME_ERROR;
@@ -1438,6 +1523,7 @@ InterpretResult VM::run() {
 
       if (proto->needsReceiver) {
         if (!proto->isVararg && totalArgsProvided != proto->numParams) {
+          SAVE_PC();
           runtimeError("Method '%s' expects %d arguments (including 'this'), got %d",
                        methodName.c_str(), proto->numParams, totalArgsProvided);
           return InterpretResult::RUNTIME_ERROR;
@@ -1445,6 +1531,7 @@ InterpretResult VM::run() {
         dropThis = false;
       } else {
         if (!proto->isVararg && totalArgsProvided != (proto->numParams + 1)) {
+          SAVE_PC();
           runtimeError("Method '%s' expects %d arguments, got %d", methodName.c_str(),
                        proto->numParams, totalArgsProvided - 1);
           return InterpretResult::RUNTIME_ERROR;
@@ -1453,6 +1540,7 @@ InterpretResult VM::run() {
       }
 
       if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+        SAVE_PC();
         runtimeError("Stack overflow");
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1483,6 +1571,8 @@ InterpretResult VM::run() {
 
       STACK_TOP = targetStackTop;
 
+      SAVE_PC();
+
       CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
       newFrame->closure = closure;
       newFrame->ip = proto->code.data();
@@ -1493,14 +1583,15 @@ InterpretResult VM::run() {
 
       frame = newFrame;
       slots = frame->slots;
-
       k = frame->closure->proto->constants.data();
+      LOAD_PC();
 
     } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
       protect(method);
 
       if (native->arity != -1 && userArgCount != native->arity) {
+        SAVE_PC();
         runtimeError("Native method '%s' expects %d arguments, got %d", native->name.c_str(),
                      native->arity, userArgCount);
         return InterpretResult::RUNTIME_ERROR;
@@ -1556,6 +1647,7 @@ InterpretResult VM::run() {
         }
       }
     } else {
+      SAVE_PC();
       runtimeError("'%s.%s' is not callable", receiver.typeName(), methodName.c_str());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1564,9 +1656,11 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_RETURN) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+
     if (fiber->deferTop > frame->deferBase) {
+      SAVE_PC();
       invokeDefers(frame->deferBase);
 
       if (hasError_)
@@ -1636,8 +1730,8 @@ InterpretResult VM::run() {
 
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
-
     k = frame->closure->proto->constants.data();
+    LOAD_PC();
 
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
@@ -1659,8 +1753,8 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_RETURN_NDEF) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
     int returnCount = (B >= 1) ? B - 1 : 0;
 
     Value *returnValues = slots + A;
@@ -1722,8 +1816,8 @@ InterpretResult VM::run() {
 
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
-
     k = frame->closure->proto->constants.data();
+    LOAD_PC();
 
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
@@ -1743,13 +1837,15 @@ InterpretResult VM::run() {
 
     SPT_DISPATCH();
   }
+
   SPT_OPCODE(OP_IMPORT) {
-    uint8_t A = GETARG_A(instruction);
-    uint32_t Bx = GETARG_Bx(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint32_t Bx = GETARG_Bx(inst);
 
     const auto &moduleNameConst = k[Bx];
 
     if (!std::holds_alternative<std::string>(moduleNameConst)) {
+      SAVE_PC();
       runtimeError("Module name must be a string constant");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1781,6 +1877,7 @@ InterpretResult VM::run() {
         const char *errorMsg = msgVal.isString()
                                    ? static_cast<StringObject *>(msgVal.asGC())->c_str()
                                    : "Module load failed";
+        SAVE_PC();
         runtimeError("Import error: %s", errorMsg);
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1791,15 +1888,16 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_IMPORT_FROM) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
 
     const auto &moduleNameConst = k[B];
     const auto &symbolNameConst = k[C];
 
     if (!std::holds_alternative<std::string>(moduleNameConst) ||
         !std::holds_alternative<std::string>(symbolNameConst)) {
+      SAVE_PC();
       runtimeError("Module and symbol names must be string constants");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1831,6 +1929,7 @@ InterpretResult VM::run() {
         const char *errorMsg = msgVal.isString()
                                    ? static_cast<StringObject *>(msgVal.asGC())->c_str()
                                    : "Module load failed";
+        SAVE_PC();
         runtimeError("Import error: %s", errorMsg);
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1848,14 +1947,16 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_DEFER) {
-    uint8_t A = GETARG_A(instruction);
+    uint8_t A = GETARG_A(inst);
     Value deferClosure = slots[A];
 
     if (!deferClosure.isClosure()) {
+      SAVE_PC();
       runtimeError("defer requires a function");
       return InterpretResult::RUNTIME_ERROR;
     }
     if (!frame->closure->proto->useDefer) {
+      SAVE_PC();
       runtimeError("compiler error because defer was not used");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1868,9 +1969,9 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_ADDI) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    int8_t sC = static_cast<int8_t>(GETARG_C(instruction));
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    int8_t sC = static_cast<int8_t>(GETARG_C(inst));
     Value b = slots[B];
 
     if (b.isInt()) {
@@ -1878,6 +1979,7 @@ InterpretResult VM::run() {
     } else if (b.isFloat()) {
       slots[A] = Value::number(b.asFloat() + sC);
     } else {
+      SAVE_PC();
       runtimeError("ADDI requires numeric operand");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1885,9 +1987,9 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_EQK) {
-    uint8_t A = GETARG_A(instruction);
-    uint8_t B = GETARG_B(instruction);
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
 
     const auto &constant = k[B];
     Value kVal;
@@ -1913,15 +2015,15 @@ InterpretResult VM::run() {
 
     bool equal = valuesEqual(slots[A], kVal);
     if (equal != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_EQI) {
-    uint8_t A = GETARG_A(instruction);
-    int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    int8_t sB = static_cast<int8_t>(GETARG_B(inst));
+    uint8_t C = GETARG_C(inst);
     Value a = slots[A];
     bool equal = false;
     if (a.isInt()) {
@@ -1929,20 +2031,20 @@ InterpretResult VM::run() {
     } else if (a.isFloat()) {
       equal = (a.asFloat() == static_cast<double>(sB));
     } else {
-
+      SAVE_PC();
       runtimeError("Cannot compare %s with integer", a.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
     if (equal != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_LTI) {
-    uint8_t A = GETARG_A(instruction);
-    int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    int8_t sB = static_cast<int8_t>(GETARG_B(inst));
+    uint8_t C = GETARG_C(inst);
     Value a = slots[A];
     bool result = false;
     if (a.isInt()) {
@@ -1950,20 +2052,20 @@ InterpretResult VM::run() {
     } else if (a.isFloat()) {
       result = (a.asFloat() < static_cast<double>(sB));
     } else {
-
+      SAVE_PC();
       runtimeError("Cannot compare %s with integer", a.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
     if (result != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_LEI) {
-    uint8_t A = GETARG_A(instruction);
-    int8_t sB = static_cast<int8_t>(GETARG_B(instruction));
-    uint8_t C = GETARG_C(instruction);
+    uint8_t A = GETARG_A(inst);
+    int8_t sB = static_cast<int8_t>(GETARG_B(inst));
+    uint8_t C = GETARG_C(inst);
     Value a = slots[A];
     bool result = false;
     if (a.isInt()) {
@@ -1971,25 +2073,26 @@ InterpretResult VM::run() {
     } else if (a.isFloat()) {
       result = (a.asFloat() <= static_cast<double>(sB));
     } else {
-
+      SAVE_PC();
       runtimeError("Cannot compare %s with integer", a.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
     if (result != (C != 0)) {
-      frame->ip++;
+      ip++;
     }
     SPT_DISPATCH();
   }
 
 #define CHECK_NUM(val, msg)                                                                        \
   if (!val.isNumber()) {                                                                           \
+    SAVE_PC();                                                                                     \
     runtimeError(msg);                                                                             \
     return InterpretResult::RUNTIME_ERROR;                                                         \
   }
 
   SPT_OPCODE(OP_FORPREP) {
-    uint8_t A = GETARG_A(instruction);
-    int32_t sBx = GETARG_sBx(instruction);
+    uint8_t A = GETARG_A(inst);
+    int32_t sBx = GETARG_sBx(inst);
 
     Value &idx = slots[A];
     Value limit = slots[A + 1];
@@ -2007,13 +2110,13 @@ InterpretResult VM::run() {
       idx = Value::number(nIdx - nStep);
     }
 
-    frame->ip += sBx;
+    ip += sBx;
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_FORLOOP) {
-    uint8_t A = GETARG_A(instruction);
-    int32_t sBx = GETARG_sBx(instruction);
+    uint8_t A = GETARG_A(inst);
+    int32_t sBx = GETARG_sBx(inst);
 
     Value &idx = slots[A];
     Value limit = slots[A + 1];
@@ -2032,10 +2135,10 @@ InterpretResult VM::run() {
 
       if (iStep > 0) {
         if (iIdx <= iLimit)
-          frame->ip += sBx;
+          ip += sBx;
       } else {
         if (iIdx >= iLimit)
-          frame->ip += sBx;
+          ip += sBx;
       }
     } else {
       double nStep = valueToNum(step);
@@ -2046,10 +2149,10 @@ InterpretResult VM::run() {
 
       if (nStep > 0) {
         if (nIdx <= nLimit)
-          frame->ip += sBx;
+          ip += sBx;
       } else {
         if (nIdx >= nLimit)
-          frame->ip += sBx;
+          ip += sBx;
       }
     }
 
@@ -2057,15 +2160,15 @@ InterpretResult VM::run() {
   }
 
   SPT_OPCODE(OP_LOADI) {
-    uint8_t A = GETARG_A(instruction);
-    int32_t sBx = GETARG_sBx(instruction);
+    uint8_t A = GETARG_A(inst);
+    int32_t sBx = GETARG_sBx(inst);
     slots[A] = Value::integer(sBx);
     SPT_DISPATCH();
   }
 
   SPT_OPCODE(OP_TFORCALL) {
-    const uint8_t A = GETARG_A(instruction);
-    const uint8_t C = GETARG_C(instruction);
+    const uint8_t A = GETARG_A(inst);
+    const uint8_t C = GETARG_C(inst);
 
     Value *base = &slots[A];
     Value funcVal = base[0];
@@ -2088,6 +2191,8 @@ InterpretResult VM::run() {
       top[2] = base[2];
       fiber->stackTop += 3;
 
+      SAVE_PC();
+
       CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
       newFrame->closure = closure;
       newFrame->ip = proto->code.data();
@@ -2106,7 +2211,9 @@ InterpretResult VM::run() {
         *fiber->stackTop++ = Value::nil();
       }
 
-      REFRESH_CACHE();
+      slots = frame->slots;
+      k = frame->closure->proto->constants.data();
+      LOAD_PC();
 
     }
 
@@ -2139,6 +2246,7 @@ InterpretResult VM::run() {
         }
       }
     } else {
+      SAVE_PC();
       runtimeError("attempt to iterate over a non-function value");
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -2148,7 +2256,7 @@ InterpretResult VM::run() {
 
   SPT_OPCODE(OP_TFORLOOP) {
 
-    const uint8_t A = GETARG_A(instruction);
+    const uint8_t A = GETARG_A(inst);
 
     Value *var1 = &slots[A + 3];
 
@@ -2158,13 +2266,15 @@ InterpretResult VM::run() {
 
     } else {
 
-      const int32_t sBx = GETARG_sBx(instruction);
-      frame->ip += sBx;
+      const int32_t sBx = GETARG_sBx(inst);
+      ip += sBx;
     }
 
     SPT_DISPATCH();
   }
+
 #undef CHECK_NUM
+
   SPT_DISPATCH_LOOP_END()
 
 #undef FIBER
@@ -2178,6 +2288,11 @@ InterpretResult VM::run() {
 #undef PROTECT
 #undef PROTECT_LIGHT
 #undef HALF_PROTECT
+#undef VM_FETCH
+#undef UPDATE_BASE
+#undef SAVE_PC
+#undef LOAD_PC
+#undef UPDATE_TRAP
 }
 
 } // namespace spt

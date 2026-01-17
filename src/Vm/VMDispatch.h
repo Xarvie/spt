@@ -30,8 +30,8 @@ namespace spt {
 
 #define SPT_DISPATCH()                                                                             \
   do {                                                                                             \
-    instruction = *reinterpret_cast<const uint32_t *>(frame->ip++);                                \
-    goto *dispatch_table[static_cast<uint8_t>(GET_OPCODE(instruction))];                           \
+    VM_FETCH();                                                                                    \
+    goto *dispatch_table[static_cast<uint8_t>(GET_OPCODE(inst))];                                  \
   } while (0)
 
 #define SPT_DISPATCH_LOOP_BEGIN() SPT_DISPATCH();
@@ -54,18 +54,13 @@ namespace spt {
 
 #define SPT_DISPATCH_LOOP_BEGIN()                                                                  \
   for (;;) {                                                                                       \
-    uint32_t instruction = *reinterpret_cast<const uint32_t *>(frame->ip++);                       \
-    OpCode opcode = GET_OPCODE(instruction);                                                       \
-    uint8_t A = GETARG_A(instruction);                                                             \
-    uint8_t B = GETARG_B(instruction);                                                             \
-    uint8_t C = GETARG_C(instruction);                                                             \
-    uint32_t Bx = GETARG_Bx(instruction);                                                          \
-    int32_t sBx = GETARG_sBx(instruction);                                                         \
-    switch (opcode) {
+    uint32_t inst;                                                                                 \
+    VM_FETCH();                                                                                    \
+    switch (GET_OPCODE(inst)) {
 
 #define SPT_DISPATCH_LOOP_END()                                                                    \
   default:                                                                                         \
-    runtimeError("Unknown opcode: %d", static_cast<int>(opcode));                                  \
+    runtimeError("Unknown opcode: %d", static_cast<int>(GET_OPCODE(inst)));                        \
     return InterpretResult::RUNTIME_ERROR;                                                         \
     }                                                                                              \
     }
