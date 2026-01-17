@@ -3,6 +3,7 @@
 #include "Fiber.h"
 #include "NativeBinding.h"
 #include "SptStdlibs.h"
+#include "StringPool.h"
 #include "VMDispatch.h"
 #include <algorithm>
 #include <cmath>
@@ -230,7 +231,6 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
     Value object = slots[B];
-
     Value keyVal = k[C];
 
     if (!keyVal.isString()) {
@@ -239,8 +239,7 @@ InterpretResult VM::run() {
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    StringObject *strObj = static_cast<StringObject *>(keyVal.asGC());
-    std::string_view fieldName = strObj->view();
+    StringObject *fieldName = keyVal.asString();
 
     if (object.isList() || object.isMap() || object.isString() || object.isFiber()) {
       Value result;
@@ -253,25 +252,31 @@ InterpretResult VM::run() {
       }
       if (!object.isMap()) {
         SAVE_PC();
-        runtimeError("Type '%s' has no property '%s'", object.typeName(), strObj->c_str());
+        runtimeError("Type '%s' has no property '%s'", object.typeName(), fieldName->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     }
 
     if (object.isInstance()) {
       auto *instance = static_cast<Instance *>(object.asGC());
+
       Value result = instance->getField(fieldName);
       if (result.isNil() && instance->klass) {
+
         auto it = instance->klass->methods.find(fieldName);
         if (it != instance->klass->methods.end()) {
           result = it->second;
         }
       }
       slots[A] = result;
-    } else if (object.isClass()) {
-      auto *klass = static_cast<ClassObject *>(object.asGC());
+      SPT_DISPATCH();
+    }
 
-      if (klass->name == "Fiber" && fieldName == "current") {
+    if (object.isClass()) {
+      auto *klass = static_cast<ClassObject *>(object.asGC());
+      const SymbolTable &syms = this->symbols();
+
+      if (klass->name == "Fiber" && fieldName == syms.current) {
         slots[A] = Value::object(currentFiber_);
         SPT_DISPATCH();
       }
@@ -279,12 +284,15 @@ InterpretResult VM::run() {
       auto it = klass->methods.find(fieldName);
       if (it != klass->methods.end()) {
         slots[A] = it->second;
-      } else {
-        auto itStatic = klass->statics.find(fieldName);
-        slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
+        SPT_DISPATCH();
       }
-    } else if (object.isNativeInstance()) {
 
+      auto itStatic = klass->statics.find(fieldName);
+      slots[A] = (itStatic != klass->statics.end()) ? itStatic->second : Value::nil();
+      SPT_DISPATCH();
+    }
+
+    if (object.isNativeInstance()) {
       auto *instance = static_cast<NativeInstance *>(object.asGC());
 
       auto fieldIt = instance->fields.find(fieldName);
@@ -296,7 +304,6 @@ InterpretResult VM::run() {
       if (instance->nativeClass) {
         const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
         if (prop && prop->getter) {
-
           Value getterResult;
           PROTECT(getterResult = prop->getter(this, instance));
           slots[A] = getterResult;
@@ -305,13 +312,11 @@ InterpretResult VM::run() {
 
         const NativeMethodDesc *nativeMethod = instance->nativeClass->findMethod(fieldName);
         if (nativeMethod) {
-
           NativeFunction *boundMethod;
           PROTECT(boundMethod = gc_.allocate<NativeFunction>());
-          boundMethod->name = fieldName;
+          boundMethod->name = fieldName->view();
           boundMethod->arity = nativeMethod->arity;
           boundMethod->receiver = object;
-
           boundMethod->function = [nativeMethod](VM *vm, Value receiver, int argc,
                                                  Value *args) -> Value {
             NativeInstance *inst = static_cast<NativeInstance *>(receiver.asGC());
@@ -323,8 +328,10 @@ InterpretResult VM::run() {
       }
 
       slots[A] = Value::nil();
-    } else if (object.isNativeClass()) {
+      SPT_DISPATCH();
+    }
 
+    if (object.isNativeClass()) {
       auto *nativeClass = static_cast<NativeClassObject *>(object.asGC());
 
       auto it = nativeClass->statics.find(fieldName);
@@ -344,31 +351,27 @@ InterpretResult VM::run() {
       }
 
       slots[A] = Value::nil();
-    } else if (object.isMap()) {
+      SPT_DISPATCH();
+    }
+
+    if (object.isMap()) {
       auto *map = static_cast<MapObject *>(object.asGC());
-      Value result = Value::nil();
-      for (const auto &pair : map->entries) {
-        if (pair.first.isString()) {
-          StringObject *keyStr = static_cast<StringObject *>(pair.first.asGC());
-          if (keyStr->view() == fieldName) {
-            result = pair.second;
-            break;
-          }
-        }
-      }
+
+      Value result = map->get(Value::object(fieldName));
       if (result.isNil()) {
+
         auto it = globals_.find(fieldName);
         if (it != globals_.end()) {
           result = it->second;
         }
       }
       slots[A] = result;
-    } else {
-      SAVE_PC();
-      runtimeError("Cannot get field '%s' from type: %s", strObj->c_str(), object.typeName());
-      return InterpretResult::RUNTIME_ERROR;
+      SPT_DISPATCH();
     }
-    SPT_DISPATCH();
+
+    SAVE_PC();
+    runtimeError("Cannot get field '%s' from type: %s", fieldName->c_str(), object.typeName());
+    return InterpretResult::RUNTIME_ERROR;
   }
 
   SPT_OPCODE(OP_SETFIELD) {
@@ -1249,15 +1252,13 @@ InterpretResult VM::run() {
       runtimeError("OP_INVOKE: method name constant must be string");
       return InterpretResult::RUNTIME_ERROR;
     }
-    StringObject *methodStrObj = methodNameVal.asString();
-    std::string_view methodName = methodStrObj->view();
+    StringObject *methodName = methodNameVal.asString();
 
     Value method = Value::nil();
     Value *argsStart = &slots[A + 1];
 
     if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
       Value directResult;
-
       hasNativeMultiReturn_ = false;
       nativeMultiReturn_.clear();
 
@@ -1280,13 +1281,11 @@ InterpretResult VM::run() {
         if (hasNativeMultiReturn_) {
           int returnCount = static_cast<int>(nativeMultiReturn_.size());
           if (expectedResults == -1) {
-
             for (int i = 0; i < returnCount; ++i) {
               slots[A + i] = nativeMultiReturn_[i];
             }
             STACK_TOP = slots + A + returnCount;
           } else if (expectedResults > 0) {
-
             for (int i = 0; i < expectedResults; ++i) {
               slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
             }
@@ -1294,7 +1293,6 @@ InterpretResult VM::run() {
           hasNativeMultiReturn_ = false;
           nativeMultiReturn_.clear();
         } else {
-
           slots[A] = directResult;
           if (expectedResults == -1) {
             STACK_TOP = slots + A + 1;
@@ -1312,7 +1310,6 @@ InterpretResult VM::run() {
 
       Value propertyValue;
       bool getPropSuccess;
-
       PROTECT(getPropSuccess =
                   StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue));
       if (getPropSuccess) {
@@ -1321,29 +1318,29 @@ InterpretResult VM::run() {
         } else {
           SAVE_PC();
           runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
-                       methodStrObj->c_str());
+                       methodName->c_str());
           return InterpretResult::RUNTIME_ERROR;
         }
       } else if (receiver.isMap()) {
-        MapObject *map = static_cast<MapObject *>(receiver.asGC());
 
-        StringObject *key;
-        PROTECT(key = allocateString(methodName));
-
-        map = static_cast<MapObject *>(slots[A].asGC());
-        method = map->get(Value::object(key));
+        auto *map = static_cast<MapObject *>(slots[A].asGC());
+        method = map->get(Value::object(methodName));
       }
 
       if (method.isNil()) {
         SAVE_PC();
-        runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodStrObj->c_str());
+        runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-    } else if (receiver.isInstance()) {
-      Instance *instance = static_cast<Instance *>(receiver.asGC());
+    }
+
+    else if (receiver.isInstance()) {
+      auto *instance = static_cast<Instance *>(receiver.asGC());
+
       method = instance->getField(methodName);
 
       if (method.isNil() && instance->klass) {
+
         auto it = instance->klass->methods.find(methodName);
         if (it != instance->klass->methods.end()) {
           method = it->second;
@@ -1352,11 +1349,11 @@ InterpretResult VM::run() {
 
       if (method.isNil()) {
         SAVE_PC();
-        runtimeError("Instance has no method '%s'", methodStrObj->c_str());
+        runtimeError("Instance has no method '%s'", methodName->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isNativeInstance()) {
-      NativeInstance *instance = static_cast<NativeInstance *>(receiver.asGC());
+      auto *instance = static_cast<NativeInstance *>(receiver.asGC());
       if (!instance->nativeClass) {
         SAVE_PC();
         runtimeError("Native instance has no class information");
@@ -1367,7 +1364,7 @@ InterpretResult VM::run() {
       if (nativeMethod) {
         if (nativeMethod->arity != -1 && userArgCount != nativeMethod->arity) {
           SAVE_PC();
-          runtimeError("Native method '%s' expects %d arguments, got %d", methodStrObj->c_str(),
+          runtimeError("Native method '%s' expects %d arguments, got %d", methodName->c_str(),
                        nativeMethod->arity, userArgCount);
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -1382,23 +1379,19 @@ InterpretResult VM::run() {
           yieldPending_ = false;
           return InterpretResult::OK;
         }
-
         if (hasError_) {
           return InterpretResult::RUNTIME_ERROR;
         }
 
         int expectedResults = C - 1;
-
         if (hasNativeMultiReturn_) {
           int returnCount = static_cast<int>(nativeMultiReturn_.size());
           if (expectedResults == -1) {
-
             for (int i = 0; i < returnCount; ++i) {
               slots[A + i] = nativeMultiReturn_[i];
             }
             STACK_TOP = slots + A + returnCount;
           } else if (expectedResults > 0) {
-
             for (int i = 0; i < expectedResults; ++i) {
               slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
             }
@@ -1406,7 +1399,6 @@ InterpretResult VM::run() {
           hasNativeMultiReturn_ = false;
           nativeMultiReturn_.clear();
         } else {
-
           slots[A] = result;
           if (expectedResults == -1) {
             STACK_TOP = slots + A + 1;
@@ -1427,12 +1419,14 @@ InterpretResult VM::run() {
       if (method.isNil()) {
         SAVE_PC();
         runtimeError("Native instance of '%s' has no method '%s'",
-                     instance->nativeClass->name.c_str(), methodStrObj->c_str());
+                     instance->nativeClass->name.c_str(), methodName->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-    } else if (receiver.isClass()) {
+    }
 
-      ClassObject *klass = static_cast<ClassObject *>(receiver.asGC());
+    else if (receiver.isClass()) {
+      auto *klass = static_cast<ClassObject *>(receiver.asGC());
+
       auto itStatic = klass->statics.find(methodName);
       if (itStatic != klass->statics.end()) {
         method = itStatic->second;
@@ -1445,16 +1439,19 @@ InterpretResult VM::run() {
       }
       if (method.isNil()) {
         SAVE_PC();
-        runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodStrObj->c_str());
+        runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodName->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
-    } else if (receiver.isNativeClass()) {
+    }
 
-      NativeClassObject *nativeClass = static_cast<NativeClassObject *>(receiver.asGC());
+    else if (receiver.isNativeClass()) {
+      auto *nativeClass = static_cast<NativeClassObject *>(receiver.asGC());
+
       auto it = nativeClass->statics.find(methodName);
       if (it != nativeClass->statics.end()) {
         method = it->second;
       }
+
       NativeClassObject *base = nativeClass->baseClass;
       while (method.isNil() && base) {
         auto baseIt = base->statics.find(methodName);
@@ -1467,12 +1464,12 @@ InterpretResult VM::run() {
       if (method.isNil()) {
         SAVE_PC();
         runtimeError("Native class '%s' has no static method '%s'", nativeClass->name.c_str(),
-                     methodStrObj->c_str());
+                     methodName->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else {
       SAVE_PC();
-      runtimeError("Cannot invoke method '%s' on type '%s'", methodStrObj->c_str(),
+      runtimeError("Cannot invoke method '%s' on type '%s'", methodName->c_str(),
                    receiver.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1488,14 +1485,14 @@ InterpretResult VM::run() {
         if (!proto->isVararg && totalArgsProvided != proto->numParams) {
           SAVE_PC();
           runtimeError("Method '%s' expects %d arguments (including 'this'), got %d",
-                       methodStrObj->c_str(), proto->numParams, totalArgsProvided);
+                       methodName->c_str(), proto->numParams, totalArgsProvided);
           return InterpretResult::RUNTIME_ERROR;
         }
         dropThis = false;
       } else {
         if (!proto->isVararg && totalArgsProvided != (proto->numParams + 1)) {
           SAVE_PC();
-          runtimeError("Method '%s' expects %d arguments, got %d", methodStrObj->c_str(),
+          runtimeError("Method '%s' expects %d arguments, got %d", methodName->c_str(),
                        proto->numParams, totalArgsProvided - 1);
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -1611,7 +1608,7 @@ InterpretResult VM::run() {
       }
     } else {
       SAVE_PC();
-      runtimeError("'%s.%s' is not callable", receiver.typeName(), methodStrObj->c_str());
+      runtimeError("'%s.%s' is not callable", receiver.typeName(), methodName->c_str());
       return InterpretResult::RUNTIME_ERROR;
     }
 

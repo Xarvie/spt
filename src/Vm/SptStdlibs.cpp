@@ -2,6 +2,7 @@
 #include "Fiber.h"
 #include "NativeBinding.h"
 #include "Object.h"
+#include "StringPool.h"
 #include "VM.h"
 #include <algorithm>
 #include <cctype>
@@ -11,45 +12,22 @@
 
 namespace spt {
 
-static Value createBoundNative(VM *vm, Value receiver, std::string_view name, NativeFn fn,
-                               int arity) {
+static Value createBoundNative(VM *vm, Value receiver, StringObject *name,
+                               BuiltinMethodDesc::MethodFn fn, int arity) {
   NativeFunction *native = vm->gc().allocate<NativeFunction>();
-  native->name = name;
-  native->function = fn;
+  native->name = name->view();
   native->arity = arity;
   native->receiver = receiver;
-  return Value::object(native);
-}
-
-static Value createBoundNativeMethod(VM *vm, NativeInstance *instance, std::string_view name,
-                                     const NativeMethodDesc &methodDesc) {
-
-  NativeFunction *native = vm->gc().allocate<NativeFunction>();
-  native->name = name;
-  native->arity = methodDesc.arity;
-  native->receiver = Value::object(instance);
-
-  NativeMethodFn methodFn = methodDesc.function;
-  native->function = [methodFn](VM *vm, Value receiver, int argc, Value *argv) -> Value {
-    if (!receiver.isNativeInstance()) {
-      vm->throwError(Value::object(vm->allocateString("Invalid receiver for native method")));
-      return Value::nil();
-    }
-    NativeInstance *inst = static_cast<NativeInstance *>(receiver.asGC());
-    if (!inst->isValid()) {
-      vm->throwError(Value::object(vm->allocateString("Native instance has been destroyed")));
-      return Value::nil();
-    }
-    return methodFn(vm, inst, argc, argv);
+  native->function = [fn](VM *vm, Value recv, int argc, Value *argv) -> Value {
+    return fn(vm, recv, argc, argv);
   };
-
   return Value::object(native);
 }
 
 static Value listPush(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList())
     return Value::nil();
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
+  auto *list = static_cast<ListObject *>(receiver.asGC());
   if (argc >= 1)
     list->elements.push_back(argv[0]);
   return Value::nil();
@@ -58,7 +36,7 @@ static Value listPush(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listPop(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList())
     return Value::nil();
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
+  auto *list = static_cast<ListObject *>(receiver.asGC());
   if (list->elements.empty())
     return Value::nil();
   Value result = list->elements.back();
@@ -69,7 +47,7 @@ static Value listPop(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listInsert(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 2)
     return Value::nil();
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
+  auto *list = static_cast<ListObject *>(receiver.asGC());
   if (!argv[0].isInt())
     return Value::nil();
   int64_t idx = argv[0].asInt();
@@ -91,7 +69,7 @@ static Value listClear(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listRemoveAt(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 1)
     return Value::nil();
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
+  auto *list = static_cast<ListObject *>(receiver.asGC());
   if (!argv[0].isInt())
     return Value::nil();
   int64_t idx = argv[0].asInt();
@@ -105,11 +83,10 @@ static Value listRemoveAt(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listSlice(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 2)
     return Value::nil();
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
+  auto *list = static_cast<ListObject *>(receiver.asGC());
   if (!argv[0].isInt() || !argv[1].isInt())
     return Value::nil();
-  int64_t start = argv[0].asInt();
-  int64_t end = argv[1].asInt();
+  int64_t start = argv[0].asInt(), end = argv[1].asInt();
   int64_t len = list->elements.size();
   if (start < 0)
     start = std::max(int64_t(0), len + start);
@@ -119,7 +96,7 @@ static Value listSlice(VM *vm, Value receiver, int argc, Value *argv) {
   end = std::clamp(end, int64_t(0), len);
   if (end <= start)
     return Value::object(vm->allocateList(0));
-  ListObject *result = vm->allocateList(0);
+  auto *result = vm->allocateList(0);
   vm->protect(Value::object(result));
   for (int64_t i = start; i < end; ++i)
     result->elements.push_back(list->elements[i]);
@@ -130,10 +107,9 @@ static Value listSlice(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listJoin(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList())
     return Value::object(vm->allocateString(""));
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
-  std::string sep = "";
-  if (argc >= 1 && argv[0].isString())
-    sep = static_cast<StringObject *>(argv[0].asGC())->str();
+  auto *list = static_cast<ListObject *>(receiver.asGC());
+  std::string sep =
+      (argc >= 1 && argv[0].isString()) ? static_cast<StringObject *>(argv[0].asGC())->str() : "";
   std::string result;
   for (size_t i = 0; i < list->elements.size(); ++i) {
     if (i > 0)
@@ -146,22 +122,20 @@ static Value listJoin(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 1)
     return Value::integer(-1);
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
-  for (size_t i = 0; i < list->elements.size(); ++i) {
+  auto *list = static_cast<ListObject *>(receiver.asGC());
+  for (size_t i = 0; i < list->elements.size(); ++i)
     if (list->elements[i].equals(argv[0]))
       return Value::integer(i);
-  }
   return Value::integer(-1);
 }
 
 static Value listContains(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 1)
     return Value::boolean(false);
-  ListObject *list = static_cast<ListObject *>(receiver.asGC());
-  for (const auto &elem : list->elements) {
+  auto *list = static_cast<ListObject *>(receiver.asGC());
+  for (const auto &elem : list->elements)
     if (elem.equals(argv[0]))
       return Value::boolean(true);
-  }
   return Value::boolean(false);
 }
 
@@ -181,8 +155,8 @@ static Value mapClear(VM *vm, Value receiver, int argc, Value *argv) {
 static Value mapKeys(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap())
     return Value::nil();
-  MapObject *map = static_cast<MapObject *>(receiver.asGC());
-  ListObject *result = vm->allocateList(0);
+  auto *map = static_cast<MapObject *>(receiver.asGC());
+  auto *result = vm->allocateList(0);
   vm->protect(Value::object(result));
   for (const auto &entry : map->entries)
     result->elements.push_back(entry.first);
@@ -193,8 +167,8 @@ static Value mapKeys(VM *vm, Value receiver, int argc, Value *argv) {
 static Value mapValues(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap())
     return Value::nil();
-  MapObject *map = static_cast<MapObject *>(receiver.asGC());
-  ListObject *result = vm->allocateList(0);
+  auto *map = static_cast<MapObject *>(receiver.asGC());
+  auto *result = vm->allocateList(0);
   vm->protect(Value::object(result));
   for (const auto &entry : map->entries)
     result->elements.push_back(entry.second);
@@ -205,7 +179,7 @@ static Value mapValues(VM *vm, Value receiver, int argc, Value *argv) {
 static Value mapRemove(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap() || argc < 1)
     return Value::nil();
-  MapObject *map = static_cast<MapObject *>(receiver.asGC());
+  auto *map = static_cast<MapObject *>(receiver.asGC());
   Value key = argv[0];
   for (auto it = map->entries.begin(); it != map->entries.end(); ++it) {
     if (it->first.equals(key)) {
@@ -220,11 +194,10 @@ static Value mapRemove(VM *vm, Value receiver, int argc, Value *argv) {
 static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return Value::object(vm->allocateString(""));
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
+  auto *str = static_cast<StringObject *>(receiver.asGC());
   if (argc < 2 || !argv[0].isInt() || !argv[1].isInt())
     return Value::object(vm->allocateString(""));
-  int64_t start = argv[0].asInt();
-  int64_t end = argv[1].asInt();
+  int64_t start = argv[0].asInt(), end = argv[1].asInt();
   int64_t len = static_cast<int64_t>(str->length);
   if (start < 0)
     start = std::max(int64_t(0), len + start);
@@ -234,17 +207,14 @@ static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
   end = std::clamp(end, int64_t(0), len);
   if (end <= start)
     return Value::object(vm->allocateString(""));
-  std::string_view sv = str->view();
-  return Value::object(vm->allocateString(sv.substr(start, end - start)));
+  return Value::object(vm->allocateString(str->view().substr(start, end - start)));
 }
 
 static Value stringIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::integer(-1);
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *sub = static_cast<StringObject *>(argv[0].asGC());
-  std::string_view strView = str->view();
-  std::string_view subView = sub->view();
+  auto strView = static_cast<StringObject *>(receiver.asGC())->view();
+  auto subView = static_cast<StringObject *>(argv[0].asGC())->view();
   size_t pos = strView.find(subView);
   return Value::integer((pos == std::string_view::npos) ? -1 : static_cast<int64_t>(pos));
 }
@@ -252,36 +222,30 @@ static Value stringIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
 static Value stringContains(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::boolean(false);
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *sub = static_cast<StringObject *>(argv[0].asGC());
-  std::string_view strView = str->view();
-  std::string_view subView = sub->view();
+  auto strView = static_cast<StringObject *>(receiver.asGC())->view();
+  auto subView = static_cast<StringObject *>(argv[0].asGC())->view();
   return Value::boolean(strView.find(subView) != std::string_view::npos);
 }
 
 static Value stringStartsWith(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::boolean(false);
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *prefix = static_cast<StringObject *>(argv[0].asGC());
+  auto *str = static_cast<StringObject *>(receiver.asGC());
+  auto *prefix = static_cast<StringObject *>(argv[0].asGC());
   if (prefix->length > str->length)
     return Value::boolean(false);
-  std::string_view strView = str->view();
-  std::string_view prefixView = prefix->view();
-  return Value::boolean(strView.compare(0, prefixView.size(), prefixView) == 0);
+  return Value::boolean(str->view().compare(0, prefix->length, prefix->view()) == 0);
 }
 
 static Value stringEndsWith(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString() || argc < 1 || !argv[0].isString())
     return Value::boolean(false);
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *suffix = static_cast<StringObject *>(argv[0].asGC());
+  auto *str = static_cast<StringObject *>(receiver.asGC());
+  auto *suffix = static_cast<StringObject *>(argv[0].asGC());
   if (suffix->length > str->length)
     return Value::boolean(false);
-  std::string_view strView = str->view();
-  std::string_view suffixView = suffix->view();
   return Value::boolean(
-      strView.compare(strView.size() - suffixView.size(), suffixView.size(), suffixView) == 0);
+      str->view().compare(str->length - suffix->length, suffix->length, suffix->view()) == 0);
 }
 
 static Value stringToUpper(VM *vm, Value receiver, int argc, Value *argv) {
@@ -316,12 +280,11 @@ static Value stringTrim(VM *vm, Value receiver, int argc, Value *argv) {
 static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return Value::nil();
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
+  auto *str = static_cast<StringObject *>(receiver.asGC());
   std::string delimiter =
       (argc >= 1 && argv[0].isString()) ? static_cast<StringObject *>(argv[0].asGC())->str() : "";
-  ListObject *result = vm->allocateList(0);
+  auto *result = vm->allocateList(0);
   vm->protect(Value::object(result));
-
   std::string strData = str->str();
   if (delimiter.empty()) {
     for (char c : strData)
@@ -339,21 +302,16 @@ static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
   return Value::object(result);
 }
 
-static Value stringFind(VM *vm, Value receiver, int argc, Value *argv) {
-  return stringIndexOf(vm, receiver, argc, argv);
-}
-
 static Value stringReplace(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString() || argc < 2 || !argv[0].isString() || !argv[1].isString())
     return receiver;
-  StringObject *str = static_cast<StringObject *>(receiver.asGC());
-  StringObject *oldStr = static_cast<StringObject *>(argv[0].asGC());
-  StringObject *newStr = static_cast<StringObject *>(argv[1].asGC());
+  auto *str = static_cast<StringObject *>(receiver.asGC());
+  auto *oldStr = static_cast<StringObject *>(argv[0].asGC());
+  auto *newStr = static_cast<StringObject *>(argv[1].asGC());
   if (oldStr->length == 0)
     return receiver;
   std::string result = str->str();
-  std::string oldData = oldStr->str();
-  std::string newData = newStr->str();
+  std::string oldData = oldStr->str(), newData = newStr->str();
   size_t pos = 0;
   while ((pos = result.find(oldData, pos)) != std::string::npos) {
     result.replace(pos, oldData.length(), newData);
@@ -362,35 +320,11 @@ static Value stringReplace(VM *vm, Value receiver, int argc, Value *argv) {
   return Value::object(vm->allocateString(result));
 }
 
-static const MethodEntry listMethods[] = {
-    {"push", listPush, 1},         {"pop", listPop, 0},           {"insert", listInsert, 2},
-    {"clear", listClear, 0},       {"removeAt", listRemoveAt, 1}, {"indexOf", listIndexOf, 1},
-    {"contains", listContains, 1}, {"slice", listSlice, 2},       {"join", listJoin, -1},
-    {nullptr, nullptr, 0}};
-
-static const MethodEntry mapMethods[] = {{"has", mapHas, 1},       {"clear", mapClear, 0},
-                                         {"keys", mapKeys, 0},     {"values", mapValues, 0},
-                                         {"remove", mapRemove, 1}, {nullptr, nullptr, 0}};
-
-static const MethodEntry stringMethods[] = {{"slice", stringSlice, 2},
-                                            {"indexOf", stringIndexOf, 1},
-                                            {"find", stringFind, 1},
-                                            {"contains", stringContains, 1},
-                                            {"startsWith", stringStartsWith, 1},
-                                            {"endsWith", stringEndsWith, 1},
-                                            {"toUpper", stringToUpper, 0},
-                                            {"toLower", stringToLower, 0},
-                                            {"trim", stringTrim, 0},
-                                            {"split", stringSplit, -1},
-                                            {"replace", stringReplace, 2},
-                                            {nullptr, nullptr, 0}};
-
 static Value fiberCall(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isFiber()) {
     vm->throwError(Value::object(vm->allocateString("Expected fiber")));
     return Value::nil();
   }
-
   return vm->fiberCall(static_cast<FiberObject *>(receiver.asGC()),
                        (argc > 0) ? argv[0] : Value::nil(), false);
 }
@@ -400,18 +334,182 @@ static Value fiberTry(VM *vm, Value receiver, int argc, Value *argv) {
     vm->throwError(Value::object(vm->allocateString("Expected fiber")));
     return Value::nil();
   }
-  FiberObject *fiber = static_cast<FiberObject *>(receiver.asGC());
-
+  auto *fiber = static_cast<FiberObject *>(receiver.asGC());
   Value result = vm->fiberCall(fiber, (argc > 0) ? argv[0] : Value::nil(), true);
-
   return fiber->hasError ? fiber->error : result;
 }
 
-static const MethodEntry fiberMethods[] = {
-    {"call", fiberCall, -1}, {"try", fiberTry, -1}, {nullptr, nullptr, 0}};
+void SymbolTable::registerBuiltinMethods() {
 
-static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance, std::string_view fieldName,
-                                      Value &outValue) {
+  listMethods[push] = {listPush, 1};
+  listMethods[pop] = {listPop, 0};
+  listMethods[insert] = {listInsert, 2};
+  listMethods[clear] = {listClear, 0};
+  listMethods[removeAt] = {listRemoveAt, 1};
+  listMethods[indexOf] = {listIndexOf, 1};
+  listMethods[contains] = {listContains, 1};
+  listMethods[slice] = {listSlice, 2};
+  listMethods[join] = {listJoin, -1};
+
+  mapMethods[has] = {mapHas, 1};
+  mapMethods[clear] = {mapClear, 0};
+  mapMethods[keys] = {mapKeys, 0};
+  mapMethods[values] = {mapValues, 0};
+  mapMethods[remove] = {mapRemove, 1};
+
+  stringMethods[slice] = {stringSlice, 2};
+  stringMethods[indexOf] = {stringIndexOf, 1};
+  stringMethods[find] = {stringIndexOf, 1};
+  stringMethods[contains] = {stringContains, 1};
+  stringMethods[startsWith] = {stringStartsWith, 1};
+  stringMethods[endsWith] = {stringEndsWith, 1};
+  stringMethods[toUpper] = {stringToUpper, 0};
+  stringMethods[toLower] = {stringToLower, 0};
+  stringMethods[trim] = {stringTrim, 0};
+  stringMethods[split] = {stringSplit, -1};
+  stringMethods[replace] = {stringReplace, 2};
+
+  fiberMethods[call] = {fiberCall, -1};
+  fiberMethods[tryCall] = {fiberTry, -1};
+}
+
+bool StdlibDispatcher::getProperty(VM *vm, Value object, StringObject *fieldName, Value &outValue) {
+  const SymbolTable &syms = vm->symbols();
+
+  if (object.isList()) {
+    auto *list = static_cast<ListObject *>(object.asGC());
+
+    if (fieldName == syms.length) {
+      outValue = Value::integer(list->elements.size());
+      return true;
+    }
+
+    auto it = syms.listMethods.find(fieldName);
+    if (it != syms.listMethods.end()) {
+      outValue = createBoundNative(vm, object, fieldName, it->second.fn, it->second.arity);
+      return true;
+    }
+    return false;
+  }
+
+  if (object.isMap()) {
+    auto *map = static_cast<MapObject *>(object.asGC());
+    if (fieldName == syms.size) {
+      outValue = Value::integer(map->entries.size());
+      return true;
+    }
+    auto it = syms.mapMethods.find(fieldName);
+    if (it != syms.mapMethods.end()) {
+      outValue = createBoundNative(vm, object, fieldName, it->second.fn, it->second.arity);
+      return true;
+    }
+    return false;
+  }
+
+  if (object.isString()) {
+    auto *str = static_cast<StringObject *>(object.asGC());
+    if (fieldName == syms.length) {
+      outValue = Value::integer(str->length);
+      return true;
+    }
+    auto it = syms.stringMethods.find(fieldName);
+    if (it != syms.stringMethods.end()) {
+      outValue = createBoundNative(vm, object, fieldName, it->second.fn, it->second.arity);
+      return true;
+    }
+    return false;
+  }
+
+  if (object.isFiber()) {
+    auto *fiber = static_cast<FiberObject *>(object.asGC());
+    if (fieldName == syms.isDone) {
+      outValue = Value::boolean(fiber->isDone() || fiber->isError());
+      return true;
+    }
+    if (fieldName == syms.error) {
+      outValue = fiber->hasError ? fiber->error : Value::nil();
+      return true;
+    }
+    auto it = syms.fiberMethods.find(fieldName);
+    if (it != syms.fiberMethods.end()) {
+      outValue = createBoundNative(vm, object, fieldName, it->second.fn, it->second.arity);
+      return true;
+    }
+    return false;
+  }
+
+  if (object.isNativeInstance()) {
+    return getNativeInstanceProperty(vm, static_cast<NativeInstance *>(object.asGC()), fieldName,
+                                     outValue);
+  }
+
+  if (object.isNativeClass()) {
+    return getNativeClassStatic(vm, static_cast<NativeClassObject *>(object.asGC()), fieldName,
+                                outValue);
+  }
+
+  return false;
+}
+
+bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, StringObject *methodName, int argc,
+                                    Value *argv, Value &outResult) {
+  const SymbolTable &syms = vm->symbols();
+
+  if (receiver.isList()) {
+    auto it = syms.listMethods.find(methodName);
+    if (it != syms.listMethods.end()) {
+      outResult = it->second.fn(vm, receiver, argc, argv);
+      return true;
+    }
+    return false;
+  }
+
+  if (receiver.isMap()) {
+    auto it = syms.mapMethods.find(methodName);
+    if (it != syms.mapMethods.end()) {
+      outResult = it->second.fn(vm, receiver, argc, argv);
+      return true;
+    }
+    return false;
+  }
+
+  if (receiver.isString()) {
+    auto it = syms.stringMethods.find(methodName);
+    if (it != syms.stringMethods.end()) {
+      outResult = it->second.fn(vm, receiver, argc, argv);
+      return true;
+    }
+    return false;
+  }
+
+  if (receiver.isFiber()) {
+    auto it = syms.fiberMethods.find(methodName);
+    if (it != syms.fiberMethods.end()) {
+      outResult = it->second.fn(vm, receiver, argc, argv);
+      return true;
+    }
+    return false;
+  }
+
+  if (receiver.isNativeInstance()) {
+    return invokeNativeInstanceMethod(vm, static_cast<NativeInstance *>(receiver.asGC()),
+                                      methodName, argc, argv, outResult);
+  }
+
+  return false;
+}
+
+bool StdlibDispatcher::setProperty(VM *vm, Value object, StringObject *fieldName,
+                                   const Value &value) {
+  if (object.isNativeInstance()) {
+    return setNativeInstanceProperty(vm, static_cast<NativeInstance *>(object.asGC()), fieldName,
+                                     value);
+  }
+  return false;
+}
+
+bool StdlibDispatcher::getNativeInstanceProperty(VM *vm, NativeInstance *instance,
+                                                 StringObject *fieldName, Value &outValue) {
   if (!instance || !instance->nativeClass)
     return false;
 
@@ -427,14 +525,26 @@ static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance, std::str
 
   const NativeMethodDesc *method = instance->nativeClass->findMethod(fieldName);
   if (method) {
-
     vm->protect(Value::object(instance));
-    outValue = createBoundNativeMethod(vm, instance, fieldName, *method);
+    NativeFunction *native = vm->gc().allocate<NativeFunction>();
+    native->name = fieldName->view();
+    native->arity = method->arity;
+    native->receiver = Value::object(instance);
+    NativeMethodFn methodFn = method->function;
+    native->function = [methodFn](VM *vm, Value recv, int argc, Value *args) -> Value {
+      auto *inst = static_cast<NativeInstance *>(recv.asGC());
+      if (!inst->isValid()) {
+        vm->throwError(Value::object(vm->allocateString("Native instance destroyed")));
+        return Value::nil();
+      }
+      return methodFn(vm, inst, argc, args);
+    };
     vm->unprotect(1);
+    outValue = Value::object(native);
     return true;
   }
 
-  auto it = instance->fields.find(std::string_view(fieldName));
+  auto it = instance->fields.find(fieldName);
   if (it != instance->fields.end()) {
     outValue = it->second;
     return true;
@@ -443,8 +553,8 @@ static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance, std::str
   return false;
 }
 
-static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance, std::string_view fieldName,
-                                      const Value &value) {
+bool StdlibDispatcher::setNativeInstanceProperty(VM *vm, NativeInstance *instance,
+                                                 StringObject *fieldName, const Value &value) {
   if (!instance || !instance->nativeClass)
     return false;
 
@@ -452,29 +562,25 @@ static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance, std::str
   if (prop) {
     if (prop->isReadOnly || !prop->setter) {
       std::string msg = "Cannot set read-only property: ";
-      msg += fieldName;
+      msg += fieldName->view();
       vm->throwError(Value::object(vm->allocateString(msg)));
       return false;
     }
     if (!instance->isValid()) {
-      vm->throwError(Value::object(vm->allocateString("Native instance has been destroyed")));
+      vm->throwError(Value::object(vm->allocateString("Native instance destroyed")));
       return false;
     }
     prop->setter(vm, instance, value);
     return true;
   }
 
-  vm->protect(Value::object(instance));
-  vm->protect(value);
-  StringObject *nameStr = vm->allocateString(fieldName);
-  instance->setField(nameStr, value);
-  vm->unprotect(2);
+  instance->setField(fieldName, value);
   return true;
 }
 
-static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
-                                       std::string_view methodName, int argc, Value *argv,
-                                       Value &outResult) {
+bool StdlibDispatcher::invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
+                                                  StringObject *methodName, int argc, Value *argv,
+                                                  Value &outResult) {
   if (!instance || !instance->nativeClass)
     return false;
 
@@ -483,17 +589,14 @@ static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
     return false;
 
   if (!instance->isValid()) {
-    vm->throwError(Value::object(vm->allocateString("Native instance has been destroyed")));
+    vm->throwError(Value::object(vm->allocateString("Native instance destroyed")));
     return false;
   }
 
   if (method->arity >= 0 && argc != method->arity) {
-    std::string msg = "";
-    msg += "Expected ";
-    msg += " arguments but got " + std::to_string(argc);
-    msg += " for method '";
-    msg += methodName;
-    msg += "'";
+    std::string msg = "Expected " + std::to_string(method->arity) + " arguments but got " +
+                      std::to_string(argc) + " for method '" + std::string(methodName->view()) +
+                      "'";
     vm->throwError(Value::object(vm->allocateString(msg)));
     return false;
   }
@@ -502,8 +605,8 @@ static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
   return true;
 }
 
-static bool getNativeClassStatic(VM *vm, NativeClassObject *nativeClass, std::string_view name,
-                                 Value &outValue) {
+bool StdlibDispatcher::getNativeClassStatic(VM *vm, NativeClassObject *nativeClass,
+                                            StringObject *name, Value &outValue) {
   if (!nativeClass)
     return false;
 
@@ -522,142 +625,20 @@ static bool getNativeClassStatic(VM *vm, NativeClassObject *nativeClass, std::st
 
 bool StdlibDispatcher::getProperty(VM *vm, Value object, std::string_view fieldName,
                                    Value &outValue) {
-
-  if (object.isList()) {
-    ListObject *list = static_cast<ListObject *>(object.asGC());
-    if (fieldName == "length") {
-      outValue = Value::integer(list->elements.size());
-      return true;
-    }
-    for (const MethodEntry *m = listMethods; m->name != nullptr; ++m) {
-      if (fieldName == m->name) {
-        outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  if (object.isMap()) {
-    MapObject *map = static_cast<MapObject *>(object.asGC());
-    if (fieldName == "size") {
-      outValue = Value::integer(map->entries.size());
-      return true;
-    }
-    for (const MethodEntry *m = mapMethods; m->name != nullptr; ++m) {
-      if (fieldName == m->name) {
-        outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  if (object.isString()) {
-    StringObject *str = static_cast<StringObject *>(object.asGC());
-    if (fieldName == "length") {
-      outValue = Value::integer(str->length);
-      return true;
-    }
-    for (const MethodEntry *m = stringMethods; m->name != nullptr; ++m) {
-      if (fieldName == m->name) {
-        outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  if (object.isFiber()) {
-    FiberObject *fiber = static_cast<FiberObject *>(object.asGC());
-
-    if (fieldName == "isDone") {
-      outValue = Value::boolean(fiber->isDone() || fiber->isError());
-      return true;
-    }
-    if (fieldName == "error") {
-      outValue = fiber->hasError ? fiber->error : Value::nil();
-      return true;
-    }
-
-    for (const MethodEntry *m = fiberMethods; m->name != nullptr; ++m) {
-      if (fieldName == m->name) {
-        outValue = createBoundNative(vm, object, m->name, m->fn, m->arity);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  if (object.isNativeInstance()) {
-    NativeInstance *instance = static_cast<NativeInstance *>(object.asGC());
-    return getNativeInstanceProperty(vm, instance, fieldName, outValue);
-  }
-
-  if (object.isNativeClass()) {
-    NativeClassObject *nativeClass = static_cast<NativeClassObject *>(object.asGC());
-    return getNativeClassStatic(vm, nativeClass, fieldName, outValue);
-  }
-
-  return false;
+  StringObject *key = vm->allocateString(fieldName);
+  return getProperty(vm, object, key, outValue);
 }
 
 bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, std::string_view methodName, int argc,
                                     Value *argv, Value &outResult) {
-  if (receiver.isList()) {
-    for (const MethodEntry *m = listMethods; m->name != nullptr; ++m) {
-      if (methodName == m->name) {
-        outResult = m->fn(vm, receiver, argc, argv);
-        return true;
-      }
-    }
-    return false;
-  }
-  if (receiver.isMap()) {
-    for (const MethodEntry *m = mapMethods; m->name != nullptr; ++m) {
-      if (methodName == m->name) {
-        outResult = m->fn(vm, receiver, argc, argv);
-        return true;
-      }
-    }
-    return false;
-  }
-  if (receiver.isString()) {
-    for (const MethodEntry *m = stringMethods; m->name != nullptr; ++m) {
-      if (methodName == m->name) {
-        outResult = m->fn(vm, receiver, argc, argv);
-        return true;
-      }
-    }
-    return false;
-  }
-  if (receiver.isFiber()) {
-    for (const MethodEntry *m = fiberMethods; m->name != nullptr; ++m) {
-      if (methodName == m->name) {
-        outResult = m->fn(vm, receiver, argc, argv);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  if (receiver.isNativeInstance()) {
-    NativeInstance *instance = static_cast<NativeInstance *>(receiver.asGC());
-    return invokeNativeInstanceMethod(vm, instance, methodName, argc, argv, outResult);
-  }
-
-  return false;
+  StringObject *key = vm->allocateString(methodName);
+  return invokeMethod(vm, receiver, key, argc, argv, outResult);
 }
 
 bool StdlibDispatcher::setProperty(VM *vm, Value object, std::string_view fieldName,
                                    const Value &value) {
-
-  if (object.isNativeInstance()) {
-    NativeInstance *instance = static_cast<NativeInstance *>(object.asGC());
-    return setNativeInstanceProperty(vm, instance, fieldName, value);
-  }
-
-  return false;
+  StringObject *key = vm->allocateString(fieldName);
+  return setProperty(vm, object, key, value);
 }
 
 } // namespace spt

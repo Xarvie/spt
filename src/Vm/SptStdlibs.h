@@ -228,18 +228,39 @@
 
 namespace spt {
 class VM;
+struct StringObject;
+struct NativeInstance;
+struct NativeClassObject;
 
 class StdlibDispatcher {
 public:
-  // 从object中获取property或method
+  // 获取属性或绑定方法（使用 StringObject* 键）
+  static bool getProperty(VM *vm, Value object, StringObject *fieldName, Value &outValue);
+
+  // 直接调用方法（使用 StringObject* 键）
+  static bool invokeMethod(VM *vm, Value receiver, StringObject *methodName, int argc, Value *argv,
+                           Value &outResult);
+
+  // 设置属性（使用 StringObject* 键）
+  static bool setProperty(VM *vm, Value object, StringObject *fieldName, const Value &value);
+
+  // === 兼容性 API（仅用于非热路径） ===
+  // 这些版本会通过 VM 驻留字符串后调用指针版本
   static bool getProperty(VM *vm, Value object, std::string_view fieldName, Value &outValue);
-
-  // 为object设置property或method
-  static bool setProperty(VM *vm, Value object, std::string_view fieldName, const Value &value);
-
-  // 调用object的方法
   static bool invokeMethod(VM *vm, Value receiver, std::string_view methodName, int argc,
                            Value *argv, Value &outResult);
+  static bool setProperty(VM *vm, Value object, std::string_view fieldName, const Value &value);
+
+private:
+  // === Native Instance 处理（内部使用） ===
+  static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance, StringObject *fieldName,
+                                        Value &outValue);
+  static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance, StringObject *fieldName,
+                                        const Value &value);
+  static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance, StringObject *methodName,
+                                         int argc, Value *argv, Value &outResult);
+  static bool getNativeClassStatic(VM *vm, NativeClassObject *nativeClass, StringObject *name,
+                                   Value &outValue);
 };
 
 } // namespace spt

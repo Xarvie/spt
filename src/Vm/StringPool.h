@@ -71,9 +71,17 @@ private:
 };
 
 // ============================================================================
-// SymbolTable（符号表） - 预先驻留的常用字符串，用于快速查找
+// 内置方法描述符 - 用于方法表注册
 // ============================================================================
+struct BuiltinMethodDesc {
+  using MethodFn = Value (*)(VM *vm, Value receiver, int argc, Value *argv);
+  MethodFn fn;
+  int arity;
+};
 
+// ============================================================================
+// SymbolTable - 预驻留的所有内置符号 + 方法表
+// ============================================================================
 struct SymbolTable {
   // 类相关
   StringObject *init = nullptr; // "init" - 构造函数
@@ -81,7 +89,7 @@ struct SymbolTable {
   StringObject *str = nullptr;  // "__str" - 字符串转换
   StringObject *len = nullptr;  // "__len" - 长度操作符
 
-  // 常用方法名
+  // === 通用方法名 ===
   StringObject *push = nullptr;
   StringObject *pop = nullptr;
   StringObject *length = nullptr;
@@ -108,7 +116,7 @@ struct SymbolTable {
   StringObject *removeAt = nullptr;
   StringObject *remove = nullptr;
 
-  // Fiber（纤程）相关
+  // === Fiber 相关 ===
   StringObject *create = nullptr;
   StringObject *yield = nullptr;
   StringObject *current = nullptr;
@@ -118,11 +126,17 @@ struct SymbolTable {
   StringObject *tryCall = nullptr;
   StringObject *isDone = nullptr;
   StringObject *error = nullptr;
-
-  // 类型名称
   StringObject *Fiber = nullptr;
 
-  // 从字符串池中初始化所有符号
+  // =========================================================================
+  // 内置类型方法表 - 以 StringObject* 为键，实现 O(1) 指针查找
+  // =========================================================================
+  StringMap<BuiltinMethodDesc> listMethods;
+  StringMap<BuiltinMethodDesc> mapMethods;
+  StringMap<BuiltinMethodDesc> stringMethods;
+  StringMap<BuiltinMethodDesc> fiberMethods;
+
+  // 初始化符号（仅驻留字符串，不注册方法）
   void initialize(StringPool &pool) {
     // 类相关
     init = pool.intern("init");
@@ -171,6 +185,9 @@ struct SymbolTable {
     // 类型
     Fiber = pool.intern("Fiber");
   }
+
+  // 注册内置方法表（在 VM 初始化时调用）
+  void registerBuiltinMethods();
 };
 
 } // namespace spt

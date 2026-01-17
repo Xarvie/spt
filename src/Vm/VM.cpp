@@ -26,6 +26,7 @@ VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
 
   symbols_ = std::make_unique<SymbolTable>();
   symbols_->initialize(*stringPool_);
+  symbols_->registerBuiltinMethods();
 
   mainFiber_ = gc_.allocate<FiberObject>();
   if (config.stackSize > FiberObject::DEFAULT_STACK_SIZE) {
