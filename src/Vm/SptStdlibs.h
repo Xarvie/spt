@@ -232,13 +232,13 @@ class VM;
 class StdlibDispatcher {
 public:
   // 从object中获取property或method
-  static bool getProperty(VM *vm, Value object, const std::string &fieldName, Value &outValue);
+  static bool getProperty(VM *vm, Value object, std::string_view fieldName, Value &outValue);
 
   // 为object设置property或method
-  static bool setProperty(VM *vm, Value object, const std::string &fieldName, const Value &value);
+  static bool setProperty(VM *vm, Value object, std::string_view fieldName, const Value &value);
 
   // 调用object的方法
-  static bool invokeMethod(VM *vm, Value receiver, const std::string &methodName, int argc,
+  static bool invokeMethod(VM *vm, Value receiver, std::string_view methodName, int argc,
                            Value *argv, Value &outResult);
 };
 

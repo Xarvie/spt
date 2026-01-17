@@ -24,8 +24,7 @@ InterpretResult VM::run() {
   const uint32_t *ip = frame->ip;
   Value *slots = frame->slots;
 
-  const ConstantValue *k = frame->closure->proto->constants.data();
-
+  const Value *k = frame->closure->proto->k;
   Value *stackBase = fiber->stack;
   Value *stackLimit = fiber->stackLast;
 
@@ -51,17 +50,12 @@ InterpretResult VM::run() {
 
 #define RESTORE_POINTERS()                                                                         \
   do {                                                                                             \
-                                                                                                   \
     fiber = currentFiber_;                                                                         \
-                                                                                                   \
     stackBase = fiber->stack;                                                                      \
     stackLimit = fiber->stackLast;                                                                 \
-                                                                                                   \
     frame = &fiber->frames[fiber->frameCount - 1];                                                 \
-                                                                                                   \
     slots = frame->slots;                                                                          \
-                                                                                                   \
-    k = frame->closure->proto->constants.data();                                                   \
+    k = frame->closure->proto->k;                                                                  \
   } while (0)
 
 #define RESTORE_SLOTS_ONLY()                                                                       \
@@ -70,7 +64,7 @@ InterpretResult VM::run() {
     stackLimit = fiber->stackLast;                                                                 \
     frame = &fiber->frames[fiber->frameCount - 1];                                                 \
     slots = frame->slots;                                                                          \
-    k = frame->closure->proto->constants.data();                                                   \
+    k = frame->closure->proto->k;                                                                  \
   } while (0)
 
 #define PROTECT(action)                                                                            \
@@ -123,8 +117,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);
 
-    const Value *kv = frame->closure->proto->k;
-    slots[A] = kv[Bx];
+    slots[A] = k[Bx];
     SPT_DISPATCH();
   }
 
@@ -238,15 +231,16 @@ InterpretResult VM::run() {
     uint8_t C = GETARG_C(inst);
     Value object = slots[B];
 
-    const auto &keyConst = k[C];
+    Value keyVal = k[C];
 
-    if (!std::holds_alternative<std::string>(keyConst)) {
+    if (!keyVal.isString()) {
       SAVE_PC();
       runtimeError("GETFIELD requires string key constant");
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    const std::string &fieldName = std::get<std::string>(keyConst);
+    StringObject *strObj = static_cast<StringObject *>(keyVal.asGC());
+    std::string_view fieldName = strObj->view();
 
     if (object.isList() || object.isMap() || object.isString() || object.isFiber()) {
       Value result;
@@ -259,7 +253,7 @@ InterpretResult VM::run() {
       }
       if (!object.isMap()) {
         SAVE_PC();
-        runtimeError("Type '%s' has no property '%s'", object.typeName(), fieldName.c_str());
+        runtimeError("Type '%s' has no property '%s'", object.typeName(), strObj->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     }
@@ -371,7 +365,7 @@ InterpretResult VM::run() {
       slots[A] = result;
     } else {
       SAVE_PC();
-      runtimeError("Cannot get field '%s' from type: %s", fieldName.c_str(), object.typeName());
+      runtimeError("Cannot get field '%s' from type: %s", strObj->c_str(), object.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
     SPT_DISPATCH();
@@ -381,63 +375,49 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    Value object = slots[A];
 
-    const auto &keyConst = k[B];
-    Value value = slots[C];
+    Value keyVal = k[B];
 
-    if (!std::holds_alternative<std::string>(keyConst)) {
+    if (!keyVal.isString()) {
       SAVE_PC();
       runtimeError("SETFIELD requires string key constant");
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    const std::string &fieldName = std::get<std::string>(keyConst);
+    StringObject *fieldNameStr = static_cast<StringObject *>(keyVal.asGC());
 
-    StringObject *fieldNameStr;
-    PROTECT(fieldNameStr = allocateString(fieldName));
-
-    object = slots[A];
-    value = slots[C];
+    Value object = slots[A];
+    Value value = slots[C];
 
     if (object.isInstance()) {
       auto *instance = static_cast<Instance *>(object.asGC());
       instance->setField(fieldNameStr, value);
     } else if (object.isNativeInstance()) {
-
       auto *instance = static_cast<NativeInstance *>(object.asGC());
 
       if (instance->nativeClass) {
-        const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
+        const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldNameStr->view());
         if (prop) {
           if (prop->isReadOnly || !prop->setter) {
             SAVE_PC();
-            runtimeError("Property '%s' is read-only on native class '%s'", fieldName.c_str(),
+            runtimeError("Property '%s' is read-only on native class '%s'", fieldNameStr->c_str(),
                          instance->nativeClass->name.c_str());
             return InterpretResult::RUNTIME_ERROR;
           }
-
           PROTECT(prop->setter(this, instance, value));
           SPT_DISPATCH();
         }
       }
-
       instance->fields[fieldNameStr] = value;
     } else if (object.isClass()) {
       auto *klass = static_cast<ClassObject *>(object.asGC());
       klass->methods[fieldNameStr] = value;
     } else if (object.isMap()) {
       auto *map = static_cast<MapObject *>(object.asGC());
-
-      StringObject *key;
-      PROTECT(key = allocateString(fieldName));
-
-      map = static_cast<MapObject *>(slots[A].asGC());
-      value = slots[C];
-      map->set(Value::object(key), value);
+      map->set(Value::object(fieldNameStr), value);
     } else {
       SAVE_PC();
-      runtimeError("Cannot set field '%s' on type: %s", fieldName.c_str(), object.typeName());
+      runtimeError("Cannot set field '%s' on type: %s", fieldNameStr->c_str(), object.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
     SPT_DISPATCH();
@@ -446,17 +426,18 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_NEWCLASS) {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);
+    Value nameVal = k[Bx];
 
-    const auto &nameConst = k[Bx];
-    if (!std::holds_alternative<std::string>(nameConst)) {
+    if (!nameVal.isString()) {
       SAVE_PC();
       runtimeError("Class name must be string constant");
       return InterpretResult::RUNTIME_ERROR;
     }
-    const std::string &className = std::get<std::string>(nameConst);
+    StringObject *nameStrObj = nameVal.asString();
 
     ClassObject *klass;
-    PROTECT(klass = allocateClass(className));
+    PROTECT(klass = allocateClass(nameStrObj->str()));
+
     slots[A] = Value::object(klass);
     SPT_DISPATCH();
   }
@@ -561,7 +542,7 @@ InterpretResult VM::run() {
 
         frame = newFrame;
         slots = frame->slots;
-        k = frame->closure->proto->constants.data();
+        k = frame->closure->proto->k;
         LOAD_PC();
 
       } else if (initializer.isNativeFunc()) {
@@ -1081,7 +1062,7 @@ InterpretResult VM::run() {
 
       frame = newFrame;
       slots = frame->slots;
-      k = frame->closure->proto->constants.data();
+      k = frame->closure->proto->k;
       LOAD_PC();
 
     } else if (callee.isNativeFunc()) {
@@ -1239,7 +1220,7 @@ InterpretResult VM::run() {
 
     frame = newFrame;
     slots = frame->slots;
-    k = frame->closure->proto->constants.data();
+    k = frame->closure->proto->k;
     LOAD_PC();
 
     SPT_DISPATCH();
@@ -1262,13 +1243,14 @@ InterpretResult VM::run() {
       userArgCount = B - 1;
     }
 
-    const auto &methodNameConst = k[methodIdx];
-    if (!std::holds_alternative<std::string>(methodNameConst)) {
+    Value methodNameVal = k[methodIdx];
+    if (!methodNameVal.isString()) {
       SAVE_PC();
       runtimeError("OP_INVOKE: method name constant must be string");
       return InterpretResult::RUNTIME_ERROR;
     }
-    const std::string &methodName = std::get<std::string>(methodNameConst);
+    StringObject *methodStrObj = methodNameVal.asString();
+    std::string_view methodName = methodStrObj->view();
 
     Value method = Value::nil();
     Value *argsStart = &slots[A + 1];
@@ -1339,7 +1321,7 @@ InterpretResult VM::run() {
         } else {
           SAVE_PC();
           runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
-                       methodName.c_str());
+                       methodStrObj->c_str());
           return InterpretResult::RUNTIME_ERROR;
         }
       } else if (receiver.isMap()) {
@@ -1354,7 +1336,7 @@ InterpretResult VM::run() {
 
       if (method.isNil()) {
         SAVE_PC();
-        runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName.c_str());
+        runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodStrObj->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isInstance()) {
@@ -1370,7 +1352,7 @@ InterpretResult VM::run() {
 
       if (method.isNil()) {
         SAVE_PC();
-        runtimeError("Instance has no method '%s'", methodName.c_str());
+        runtimeError("Instance has no method '%s'", methodStrObj->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isNativeInstance()) {
@@ -1385,7 +1367,7 @@ InterpretResult VM::run() {
       if (nativeMethod) {
         if (nativeMethod->arity != -1 && userArgCount != nativeMethod->arity) {
           SAVE_PC();
-          runtimeError("Native method '%s' expects %d arguments, got %d", methodName.c_str(),
+          runtimeError("Native method '%s' expects %d arguments, got %d", methodStrObj->c_str(),
                        nativeMethod->arity, userArgCount);
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -1445,7 +1427,7 @@ InterpretResult VM::run() {
       if (method.isNil()) {
         SAVE_PC();
         runtimeError("Native instance of '%s' has no method '%s'",
-                     instance->nativeClass->name.c_str(), methodName.c_str());
+                     instance->nativeClass->name.c_str(), methodStrObj->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isClass()) {
@@ -1463,7 +1445,7 @@ InterpretResult VM::run() {
       }
       if (method.isNil()) {
         SAVE_PC();
-        runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodName.c_str());
+        runtimeError("Class '%s' has no method '%s'", klass->name.c_str(), methodStrObj->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else if (receiver.isNativeClass()) {
@@ -1485,12 +1467,12 @@ InterpretResult VM::run() {
       if (method.isNil()) {
         SAVE_PC();
         runtimeError("Native class '%s' has no static method '%s'", nativeClass->name.c_str(),
-                     methodName.c_str());
+                     methodStrObj->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     } else {
       SAVE_PC();
-      runtimeError("Cannot invoke method '%s' on type '%s'", methodName.c_str(),
+      runtimeError("Cannot invoke method '%s' on type '%s'", methodStrObj->c_str(),
                    receiver.typeName());
       return InterpretResult::RUNTIME_ERROR;
     }
@@ -1506,14 +1488,14 @@ InterpretResult VM::run() {
         if (!proto->isVararg && totalArgsProvided != proto->numParams) {
           SAVE_PC();
           runtimeError("Method '%s' expects %d arguments (including 'this'), got %d",
-                       methodName.c_str(), proto->numParams, totalArgsProvided);
+                       methodStrObj->c_str(), proto->numParams, totalArgsProvided);
           return InterpretResult::RUNTIME_ERROR;
         }
         dropThis = false;
       } else {
         if (!proto->isVararg && totalArgsProvided != (proto->numParams + 1)) {
           SAVE_PC();
-          runtimeError("Method '%s' expects %d arguments, got %d", methodName.c_str(),
+          runtimeError("Method '%s' expects %d arguments, got %d", methodStrObj->c_str(),
                        proto->numParams, totalArgsProvided - 1);
           return InterpretResult::RUNTIME_ERROR;
         }
@@ -1564,7 +1546,7 @@ InterpretResult VM::run() {
 
       frame = newFrame;
       slots = frame->slots;
-      k = frame->closure->proto->constants.data();
+      k = frame->closure->proto->k;
       LOAD_PC();
 
     } else if (method.isNativeFunc()) {
@@ -1629,7 +1611,7 @@ InterpretResult VM::run() {
       }
     } else {
       SAVE_PC();
-      runtimeError("'%s.%s' is not callable", receiver.typeName(), methodName.c_str());
+      runtimeError("'%s.%s' is not callable", receiver.typeName(), methodStrObj->c_str());
       return InterpretResult::RUNTIME_ERROR;
     }
 
@@ -1711,7 +1693,7 @@ InterpretResult VM::run() {
 
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
-    k = frame->closure->proto->constants.data();
+    k = frame->closure->proto->k;
     LOAD_PC();
 
     if (expectedResults == -1) {
@@ -1797,7 +1779,7 @@ InterpretResult VM::run() {
 
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
-    k = frame->closure->proto->constants.data();
+    k = frame->closure->proto->k;
     LOAD_PC();
 
     if (expectedResults == -1) {
@@ -1823,19 +1805,18 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);
 
-    const auto &moduleNameConst = k[Bx];
+    Value moduleNameVal = k[Bx];
 
-    if (!std::holds_alternative<std::string>(moduleNameConst)) {
+    if (!moduleNameVal.isString()) {
       SAVE_PC();
       runtimeError("Module name must be a string constant");
       return InterpretResult::RUNTIME_ERROR;
     }
-
-    const std::string &moduleName = std::get<std::string>(moduleNameConst);
+    StringObject *moduleNameStrObj = moduleNameVal.asString();
     const char *currentPath = frame->closure->proto->source.c_str();
 
     Value exportsTable;
-    PROTECT(exportsTable = moduleManager_->loadModule(moduleName, currentPath));
+    PROTECT(exportsTable = moduleManager_->loadModule(moduleNameStrObj->str(), currentPath));
 
     if (FRAME_COUNT == 0 || hasError_) {
       return InterpretResult::RUNTIME_ERROR;
@@ -1873,22 +1854,19 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
 
-    const auto &moduleNameConst = k[B];
-    const auto &symbolNameConst = k[C];
+    Value moduleNameVal = k[B];
+    Value symbolNameVal = k[C];
 
-    if (!std::holds_alternative<std::string>(moduleNameConst) ||
-        !std::holds_alternative<std::string>(symbolNameConst)) {
+    if (!moduleNameVal.isString() || !symbolNameVal.isString()) {
       SAVE_PC();
       runtimeError("Module and symbol names must be string constants");
       return InterpretResult::RUNTIME_ERROR;
     }
-
-    const std::string &moduleName = std::get<std::string>(moduleNameConst);
-    const std::string &symbolName = std::get<std::string>(symbolNameConst);
     const char *currentPath = frame->closure->proto->source.c_str();
 
     Value exportsTable;
-    PROTECT(exportsTable = moduleManager_->loadModule(moduleName, currentPath));
+    PROTECT(exportsTable =
+                moduleManager_->loadModule(moduleNameVal.asString()->str(), currentPath));
 
     if (FRAME_COUNT == 0 || hasError_) {
       return InterpretResult::RUNTIME_ERROR;
@@ -1915,8 +1893,7 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      StringObject *symKey;
-      PROTECT(symKey = allocateString(symbolName));
+      StringObject *symKey = symbolNameVal.asString();
       exports = static_cast<MapObject *>(exportsTable.asGC());
       Value symbolValue = exports->get(Value::object(symKey));
       slots[A] = symbolValue;
@@ -2172,7 +2149,7 @@ InterpretResult VM::run() {
       }
 
       slots = frame->slots;
-      k = frame->closure->proto->constants.data();
+      k = frame->closure->proto->k;
       LOAD_PC();
 
     }

@@ -11,7 +11,7 @@
 
 namespace spt {
 
-static Value createBoundNative(VM *vm, Value receiver, const std::string &name, NativeFn fn,
+static Value createBoundNative(VM *vm, Value receiver, std::string_view name, NativeFn fn,
                                int arity) {
   NativeFunction *native = vm->gc().allocate<NativeFunction>();
   native->name = name;
@@ -21,7 +21,7 @@ static Value createBoundNative(VM *vm, Value receiver, const std::string &name, 
   return Value::object(native);
 }
 
-static Value createBoundNativeMethod(VM *vm, NativeInstance *instance, const std::string &name,
+static Value createBoundNativeMethod(VM *vm, NativeInstance *instance, std::string_view name,
                                      const NativeMethodDesc &methodDesc) {
 
   NativeFunction *native = vm->gc().allocate<NativeFunction>();
@@ -410,8 +410,8 @@ static Value fiberTry(VM *vm, Value receiver, int argc, Value *argv) {
 static const MethodEntry fiberMethods[] = {
     {"call", fiberCall, -1}, {"try", fiberTry, -1}, {nullptr, nullptr, 0}};
 
-static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance,
-                                      const std::string &fieldName, Value &outValue) {
+static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance, std::string_view fieldName,
+                                      Value &outValue) {
   if (!instance || !instance->nativeClass)
     return false;
 
@@ -443,16 +443,17 @@ static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance,
   return false;
 }
 
-static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance,
-                                      const std::string &fieldName, const Value &value) {
+static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance, std::string_view fieldName,
+                                      const Value &value) {
   if (!instance || !instance->nativeClass)
     return false;
 
   const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
   if (prop) {
     if (prop->isReadOnly || !prop->setter) {
-      vm->throwError(
-          Value::object(vm->allocateString("Cannot set read-only property: " + fieldName)));
+      std::string msg = "Cannot set read-only property: ";
+      msg += fieldName;
+      vm->throwError(Value::object(vm->allocateString(msg)));
       return false;
     }
     if (!instance->isValid()) {
@@ -472,7 +473,7 @@ static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance,
 }
 
 static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
-                                       const std::string &methodName, int argc, Value *argv,
+                                       std::string_view methodName, int argc, Value *argv,
                                        Value &outResult) {
   if (!instance || !instance->nativeClass)
     return false;
@@ -487,9 +488,13 @@ static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
   }
 
   if (method->arity >= 0 && argc != method->arity) {
-    vm->throwError(Value::object(vm->allocateString("Expected " + std::to_string(method->arity) +
-                                                    " arguments but got " + std::to_string(argc) +
-                                                    " for method '" + methodName + "'")));
+    std::string msg = "";
+    msg += "Expected ";
+    msg += " arguments but got " + std::to_string(argc);
+    msg += " for method '";
+    msg += methodName;
+    msg += "'";
+    vm->throwError(Value::object(vm->allocateString(msg)));
     return false;
   }
 
@@ -497,7 +502,7 @@ static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
   return true;
 }
 
-static bool getNativeClassStatic(VM *vm, NativeClassObject *nativeClass, const std::string &name,
+static bool getNativeClassStatic(VM *vm, NativeClassObject *nativeClass, std::string_view name,
                                  Value &outValue) {
   if (!nativeClass)
     return false;
@@ -515,7 +520,7 @@ static bool getNativeClassStatic(VM *vm, NativeClassObject *nativeClass, const s
   return false;
 }
 
-bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fieldName,
+bool StdlibDispatcher::getProperty(VM *vm, Value object, std::string_view fieldName,
                                    Value &outValue) {
 
   if (object.isList()) {
@@ -597,7 +602,7 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, const std::string &fiel
   return false;
 }
 
-bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, const std::string &methodName, int argc,
+bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, std::string_view methodName, int argc,
                                     Value *argv, Value &outResult) {
   if (receiver.isList()) {
     for (const MethodEntry *m = listMethods; m->name != nullptr; ++m) {
@@ -644,7 +649,7 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, const std::string &m
   return false;
 }
 
-bool StdlibDispatcher::setProperty(VM *vm, Value object, const std::string &fieldName,
+bool StdlibDispatcher::setProperty(VM *vm, Value object, std::string_view fieldName,
                                    const Value &value) {
 
   if (object.isNativeInstance()) {
