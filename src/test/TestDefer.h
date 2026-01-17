@@ -138,4 +138,15 @@ inline void registerDeferTests(TestRunner &runner) {
             print(result);
        )",
                  "465");
+
+  runner.addTest("Defer - ForLoop rebind",
+                 R"(
+            void rebind() {
+                for(int i = 0; i < 3; i+=1){
+                  defer { print(i); }
+                }
+            }
+            rebind();
+       )",
+                 "2\n1\n0");
 }

@@ -783,46 +783,54 @@ bool Compiler::tryCompileNumericLoop(ForCStyleStatementNode *stmt) {
 
   cg_->beginScope();
 
+  int internalBase = cg_->allocSlots(3);
+  int internalIndex = internalBase;
+  int internalLimit = internalBase + 1;
+  int internalStep = internalBase + 2;
+
   cg_->setLineGetter(varDecl);
-  int indexSlot = cg_->addLocal(varName);
   if (varDecl->initializer) {
-    compileExpression(varDecl->initializer, indexSlot);
+    compileExpression(varDecl->initializer, internalIndex);
   } else {
-    cg_->emitABC(OpCode::OP_LOADNIL, indexSlot, 0, 0);
+    cg_->emitABC(OpCode::OP_LOADNIL, internalIndex, 0, 0);
   }
-  cg_->markInitialized();
-
-  int limitSlot = cg_->allocSlot();
-  compileExpression(binOp->right, limitSlot);
-
+  compileExpression(binOp->right, internalLimit);
   if (binOp->op == OperatorKind::LT) {
-    cg_->emitABC(OpCode::OP_ADDI, limitSlot, limitSlot, static_cast<uint8_t>(-1));
+    cg_->emitABC(OpCode::OP_ADDI, internalLimit, internalLimit, static_cast<uint8_t>(-1));
   }
+  compileExpression(stepExpr, internalStep);
 
-  int stepSlot = cg_->allocSlot();
-  compileExpression(stepExpr, stepSlot);
+  int prepJumpInst = cg_->currentPc();
+  cg_->emitAsBx(OpCode::OP_FORPREP, (uint8_t)internalBase, 0);
 
-  int forPrepPc = cg_->currentPc();
-  cg_->emitAsBx(OpCode::OP_FORPREP, indexSlot, 0);
-  int prepJump = forPrepPc;
+  int loopStartPc = cg_->currentPc();
+  cg_->beginLoop(loopStartPc);
 
-  cg_->beginLoop(forPrepPc + 1);
+  cg_->beginScope();
+
+  int userVarSlot = cg_->addLocal(varName);
+
+  cg_->emitABC(OpCode::OP_MOVE, (uint8_t)userVarSlot, (uint8_t)internalIndex, 0);
+  cg_->markInitialized();
 
   compileBlock(stmt->body);
 
-  int loopEndPc = cg_->currentPc();
+  cg_->endScope();
 
+  int loopEndPc = cg_->currentPc();
   cg_->patchContinues(loopEndPc);
 
-  int jumpBackOffset = forPrepPc - loopEndPc;
-  cg_->emitAsBx(OpCode::OP_FORLOOP, indexSlot, jumpBackOffset);
+  int jumpOffset = loopStartPc - loopEndPc - 1;
+  cg_->emitAsBx(OpCode::OP_FORLOOP, (uint8_t)internalBase, jumpOffset);
+
+  cg_->patchJumpTo(prepJumpInst, loopEndPc);
 
   cg_->patchBreaks();
   cg_->endLoop();
 
-  cg_->patchJumpTo(prepJump, loopEndPc);
-
   cg_->endScope();
+  cg_->freeSlots(3);
+
   return true;
 }
 
