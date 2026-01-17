@@ -14,6 +14,14 @@
 #include <string>
 #include <vector>
 
+#if defined(__GNUC__) || defined(__clang__)
+#define SPT_LIKELY(x) __builtin_expect(!!(x), 1)
+#define SPT_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define SPT_LIKELY(x) (x)
+#define SPT_UNLIKELY(x) (x)
+#endif
+
 namespace spt {
 
 struct NativeClassObject;

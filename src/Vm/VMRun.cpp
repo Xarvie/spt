@@ -5,7 +5,6 @@
 #include "SptStdlibs.h"
 #include "StringPool.h"
 #include "VMDispatch.h"
-#include <algorithm>
 #include <cmath>
 
 namespace spt {
@@ -1046,12 +1045,19 @@ InterpretResult VM::run() {
       }
 
       Value *newSlots = slots + A + 1;
-      int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
+      Value *neededTop = newSlots + proto->maxStackSize;
 
-      fiber->ensureStack(neededStack);
-      fiber->ensureFrames(1);
-      REFRESH_CACHE();
-      newSlots = slots + A + 1;
+      if (SPT_UNLIKELY(neededTop > fiber->stackLast)){
+        int needed = static_cast<int>(neededTop - fiber->stackTop);
+        fiber->ensureStack(needed);
+        REFRESH_CACHE();
+        newSlots = slots + A + 1;
+      }
+      if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity))  {
+        fiber->ensureFrames(1);
+        REFRESH_CACHE();
+        newSlots = slots + A + 1;
+      }
 
       Value *argsStart = newSlots;
 
