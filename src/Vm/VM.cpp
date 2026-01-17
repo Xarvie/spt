@@ -67,6 +67,7 @@ void VM::protect(Value value) { currentFiber_->push(value); }
 void VM::unprotect(int count) { currentFiber_->stackTop -= count; }
 
 InterpretResult VM::interpret(const CompiledChunk &chunk) {
+  prepareChunk(const_cast<CompiledChunk &>(chunk));
 
   mainFiber_->reset();
   currentFiber_ = mainFiber_;
@@ -140,6 +141,9 @@ InterpretResult VM::call(Closure *closure, int argCount) {
 }
 
 InterpretResult VM::executeModule(const CompiledChunk &chunk) {
+
+  prepareChunk(const_cast<CompiledChunk &>(chunk));
+
   FiberObject *fiber = currentFiber_;
 
   Closure *mainClosure = allocateClosure(&chunk.mainProto);
@@ -697,8 +701,9 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
   return 1;
 }
 
-bool VM::hotReload(const std::string &moduleName, const CompiledChunk &newChunk) {
-  modules_[moduleName] = newChunk;
+bool VM::hotReload(const std::string &moduleName, CompiledChunk newChunk) {
+  prepareChunk(newChunk);
+  modules_[moduleName] = std::move(newChunk);
 
   for (auto &[nameStr, value] : globals_) {
     if (value.isClass()) {
@@ -710,8 +715,9 @@ bool VM::hotReload(const std::string &moduleName, const CompiledChunk &newChunk)
   return true;
 }
 
-void VM::registerModule(const std::string &name, const CompiledChunk &chunk) {
-  modules_[name] = chunk;
+void VM::registerModule(const std::string &name, CompiledChunk chunk) {
+  prepareChunk(chunk);
+  modules_[name] = std::move(chunk);
 }
 
 Value VM::importModule(const std::string &path) {
@@ -781,6 +787,142 @@ NativeInstance *VM::createNativeInstance(NativeClassObject *nativeClass, int arg
   unprotect(1);
 
   return instance;
+}
+
+Value VM::constantToValue(const ConstantValue &cv) {
+  return std::visit(
+      [this](auto &&arg) -> Value {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, std::nullptr_t>) {
+          return Value::nil();
+        } else if constexpr (std::is_same_v<T, bool>) {
+          return Value::boolean(arg);
+        } else if constexpr (std::is_same_v<T, int64_t>) {
+          return Value::integer(arg);
+        } else if constexpr (std::is_same_v<T, double>) {
+          return Value::number(arg);
+        } else if constexpr (std::is_same_v<T, std::string>) {
+
+          StringObject *str = allocateString(arg);
+          return Value::object(str);
+        }
+      },
+      cv);
+}
+
+void VM::preparePrototype(Prototype *proto) {
+  if (proto->kPrepared) {
+    return;
+  }
+
+  size_t count = proto->constants.size();
+  if (count > 0) {
+    proto->k = new Value[count];
+    proto->kCount = count;
+
+    for (size_t i = 0; i < count; ++i) {
+      proto->k[i] = constantToValue(proto->constants[i]);
+    }
+  }
+
+  proto->kPrepared = true;
+
+  for (Prototype &child : proto->protos) {
+    preparePrototype(&child);
+  }
+}
+
+void VM::prepareChunk(CompiledChunk &chunk) { preparePrototype(&chunk.mainProto); }
+
+Prototype::~Prototype() {
+  if (k != nullptr) {
+    delete[] k;
+    k = nullptr;
+  }
+}
+
+Prototype::Prototype(Prototype &&other) noexcept
+    : name(std::move(other.name)), source(std::move(other.source)),
+      short_src(std::move(other.short_src)), lineDefined(other.lineDefined),
+      lastLineDefined(other.lastLineDefined), numParams(other.numParams),
+      numUpvalues(other.numUpvalues), maxStackSize(other.maxStackSize), isVararg(other.isVararg),
+      needsReceiver(other.needsReceiver), useDefer(other.useDefer), code(std::move(other.code)),
+      constants(std::move(other.constants)), absLineInfo(std::move(other.absLineInfo)),
+      lineInfo(std::move(other.lineInfo)), protos(std::move(other.protos)), flags(other.flags),
+      upvalues(std::move(other.upvalues)), k(other.k), kCount(other.kCount),
+      kPrepared(other.kPrepared) {
+  other.k = nullptr;
+  other.kCount = 0;
+  other.kPrepared = false;
+}
+
+Prototype &Prototype::operator=(Prototype &&other) noexcept {
+  if (this != &other) {
+    if (k != nullptr) {
+      delete[] k;
+    }
+
+    name = std::move(other.name);
+    source = std::move(other.source);
+    short_src = std::move(other.short_src);
+    lineDefined = other.lineDefined;
+    lastLineDefined = other.lastLineDefined;
+    numParams = other.numParams;
+    numUpvalues = other.numUpvalues;
+    maxStackSize = other.maxStackSize;
+    isVararg = other.isVararg;
+    needsReceiver = other.needsReceiver;
+    useDefer = other.useDefer;
+    code = std::move(other.code);
+    constants = std::move(other.constants);
+    absLineInfo = std::move(other.absLineInfo);
+    lineInfo = std::move(other.lineInfo);
+    protos = std::move(other.protos);
+    flags = other.flags;
+    upvalues = std::move(other.upvalues);
+
+    k = other.k;
+    kCount = other.kCount;
+    kPrepared = other.kPrepared;
+
+    other.k = nullptr;
+    other.kCount = 0;
+    other.kPrepared = false;
+  }
+  return *this;
+}
+
+Prototype Prototype::deepCopy() const {
+  Prototype copy;
+
+  copy.name = name;
+  copy.source = source;
+  copy.short_src = short_src;
+  copy.lineDefined = lineDefined;
+  copy.lastLineDefined = lastLineDefined;
+  copy.numParams = numParams;
+  copy.numUpvalues = numUpvalues;
+  copy.maxStackSize = maxStackSize;
+  copy.isVararg = isVararg;
+  copy.needsReceiver = needsReceiver;
+  copy.useDefer = useDefer;
+  copy.code = code;
+  copy.constants = constants;
+  copy.absLineInfo = absLineInfo;
+  copy.lineInfo = lineInfo;
+  copy.flags = flags;
+  copy.upvalues = upvalues;
+
+  copy.protos.reserve(protos.size());
+  for (const Prototype &childProto : protos) {
+    copy.protos.push_back(childProto.deepCopy());
+  }
+
+  copy.k = nullptr;
+  copy.kCount = 0;
+  copy.kPrepared = false;
+
+  return copy;
 }
 
 } // namespace spt

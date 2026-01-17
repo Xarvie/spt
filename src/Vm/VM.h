@@ -75,7 +75,6 @@ public:
   InterpretResult executeModule(const CompiledChunk &chunk);
 
   // === 全局环境管理 ===
-  // 推荐使用 StringObject* 键（实现 O(1) 的快速查找）
   void defineGlobal(StringObject *name, Value value); // 定义全局变量
   Value getGlobal(StringObject *name);                // 获取全局变量
   void setGlobal(StringObject *name, Value value);    // 设置全局变量值
@@ -129,14 +128,14 @@ public:
 
   Value getLastModuleResult() const { return lastModuleResult_; }
 
-  // === 栈保护 (防止 GC 意外回收正在构造中的对象) ===
+  // === 栈保护 ===
   void protect(Value value);
   void unprotect(int count = 1);
 
-  // === Fiber (纤程) 访问 ===
-  FiberObject *currentFiber() const { return currentFiber_; } // 获取当前运行的纤程
+  // === Fiber 访问 ===
+  FiberObject *currentFiber() const { return currentFiber_; }
 
-  FiberObject *mainFiber() const { return mainFiber_; } // 获取主纤程
+  FiberObject *mainFiber() const { return mainFiber_; }
 
   const SymbolTable &symbols() const { return *symbols_; }
 
@@ -146,16 +145,19 @@ public:
   void fiberAbort(Value error);                               // 中止纤程并抛错
 
   // === 错误处理 ===
-  void throwError(Value errorValue); // 抛出脚本异常
+  void throwError(Value errorValue);
   void setNativeMultiReturn(std::initializer_list<Value> values);
 
+  // =========================================================================
+  // 常量表预编译 - 将 ConstantValue variant 转换为 Value 数组
+  // =========================================================================
+  void prepareChunk(CompiledChunk &chunk);
+  void preparePrototype(Prototype *proto);
+  Value constantToValue(const ConstantValue &cv);
+
 private:
-  // === 核心指令执行循环 ===
   InterpretResult run();
-
-  // === 注册内置基础函数 ===
   void registerBuiltinFunctions();
-
   void resetStack();
 
   // === UpValue (闭包变量) 管理 ===

@@ -123,27 +123,8 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);
 
-    const auto &constant = k[Bx];
-    Value value;
-    std::visit(
-        [&](auto &&arg) {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr (std::is_same_v<T, std::nullptr_t>) {
-            value = Value::nil();
-          } else if constexpr (std::is_same_v<T, bool>) {
-            value = Value::boolean(arg);
-          } else if constexpr (std::is_same_v<T, int64_t>) {
-            value = Value::integer(arg);
-          } else if constexpr (std::is_same_v<T, double>) {
-            value = Value::number(arg);
-          } else if constexpr (std::is_same_v<T, std::string>) {
-            StringObject *str;
-            PROTECT(str = allocateString(arg));
-            value = Value::object(str);
-          }
-        },
-        constant);
-    slots[A] = value;
+    const Value *kv = frame->closure->proto->k;
+    slots[A] = kv[Bx];
     SPT_DISPATCH();
   }
 
@@ -1991,29 +1972,8 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
 
-    const auto &constant = k[B];
-    Value kVal;
-    std::visit(
-        [&](auto &&arg) {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr (std::is_same_v<T, std::nullptr_t>) {
-            kVal = Value::nil();
-          } else if constexpr (std::is_same_v<T, bool>) {
-            kVal = Value::boolean(arg);
-          } else if constexpr (std::is_same_v<T, int64_t>) {
-            kVal = Value::integer(arg);
-          } else if constexpr (std::is_same_v<T, double>) {
-            kVal = Value::number(arg);
-          } else if constexpr (std::is_same_v<T, std::string>) {
-
-            StringObject *str;
-            PROTECT(str = allocateString(arg));
-            kVal = Value::object(str);
-          }
-        },
-        constant);
-
-    bool equal = valuesEqual(slots[A], kVal);
+    const Value *kv = frame->closure->proto->k;
+    bool equal = valuesEqual(slots[A], kv[B]);
     if (equal != (C != 0)) {
       ip++;
     }
