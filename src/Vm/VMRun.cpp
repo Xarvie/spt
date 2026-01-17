@@ -25,7 +25,6 @@ InterpretResult VM::run() {
   const uint32_t *ip = frame->ip;
   Value *slots = frame->slots;
 
-  const Value *k = frame->closure->proto->k;
   Value *stackBase = fiber->stack;
   Value *stackLimit = fiber->stackLast;
 
@@ -56,7 +55,7 @@ InterpretResult VM::run() {
     stackLimit = fiber->stackLast;                                                                 \
     frame = &fiber->frames[fiber->frameCount - 1];                                                 \
     slots = frame->slots;                                                                          \
-    k = frame->closure->proto->k;                                                                  \
+                                                                                                   \
   } while (0)
 
 #define RESTORE_SLOTS_ONLY()                                                                       \
@@ -65,7 +64,7 @@ InterpretResult VM::run() {
     stackLimit = fiber->stackLast;                                                                 \
     frame = &fiber->frames[fiber->frameCount - 1];                                                 \
     slots = frame->slots;                                                                          \
-    k = frame->closure->proto->k;                                                                  \
+                                                                                                   \
   } while (0)
 
 #define PROTECT(action)                                                                            \
@@ -102,7 +101,6 @@ InterpretResult VM::run() {
 
   (void)stackBase;
   (void)stackLimit;
-  (void)k;
   (void)trap;
 
   SPT_DISPATCH_LOOP_BEGIN()
@@ -118,6 +116,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);
 
+    const Value *k = frame->closure->proto->k;
     slots[A] = k[Bx];
     SPT_DISPATCH();
   }
@@ -231,6 +230,8 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
     Value object = slots[B];
+
+    const Value *k = frame->closure->proto->k;
     Value keyVal = k[C];
 
     if (!keyVal.isString()) {
@@ -379,6 +380,7 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
 
+    const Value *k = frame->closure->proto->k;
     Value keyVal = k[B];
 
     if (!keyVal.isString()) {
@@ -429,6 +431,8 @@ InterpretResult VM::run() {
   SPT_OPCODE(OP_NEWCLASS) {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);
+
+    const Value *k = frame->closure->proto->k;
     Value nameVal = k[Bx];
 
     if (!nameVal.isString()) {
@@ -545,7 +549,7 @@ InterpretResult VM::run() {
 
         frame = newFrame;
         slots = frame->slots;
-        k = frame->closure->proto->k;
+
         LOAD_PC();
 
       } else if (initializer.isNativeFunc()) {
@@ -636,8 +640,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    Value b = slots[B];
-    Value c = slots[C];
+
+    const Value &b = slots[B];
+    const Value &c = slots[C];
 
     if (b.isInt() && c.isInt()) {
       slots[A] = Value::integer(b.asInt() + c.asInt());
@@ -664,8 +669,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    Value b = slots[B];
-    Value c = slots[C];
+
+    const Value &b = slots[B];
+    const Value &c = slots[C];
 
     if (b.isInt() && c.isInt()) {
       slots[A] = Value::integer(b.asInt() - c.asInt());
@@ -685,8 +691,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    Value b = slots[B];
-    Value c = slots[C];
+
+    const Value &b = slots[B];
+    const Value &c = slots[C];
 
     if (b.isInt() && c.isInt()) {
       slots[A] = Value::integer(b.asInt() * c.asInt());
@@ -706,8 +713,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    Value b = slots[B];
-    Value c = slots[C];
+
+    const Value &b = slots[B];
+    const Value &c = slots[C];
 
     if (!b.isNumber() || !c.isNumber()) {
       SAVE_PC();
@@ -942,8 +950,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    Value a = slots[A];
-    Value b = slots[B];
+
+    const Value &a = slots[A];
+    const Value &b = slots[B];
 
     bool result = false;
     if (a.isInt() && b.isInt()) {
@@ -969,8 +978,9 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    Value a = slots[A];
-    Value b = slots[B];
+
+    const Value &a = slots[A];
+    const Value &b = slots[B];
 
     bool result = false;
     if (a.isInt() && b.isInt()) {
@@ -1065,7 +1075,7 @@ InterpretResult VM::run() {
 
       frame = newFrame;
       slots = frame->slots;
-      k = frame->closure->proto->k;
+
       LOAD_PC();
 
     } else if (callee.isNativeFunc()) {
@@ -1223,7 +1233,7 @@ InterpretResult VM::run() {
 
     frame = newFrame;
     slots = frame->slots;
-    k = frame->closure->proto->k;
+
     LOAD_PC();
 
     SPT_DISPATCH();
@@ -1246,6 +1256,7 @@ InterpretResult VM::run() {
       userArgCount = B - 1;
     }
 
+    const Value *k = frame->closure->proto->k;
     Value methodNameVal = k[methodIdx];
     if (!methodNameVal.isString()) {
       SAVE_PC();
@@ -1543,7 +1554,7 @@ InterpretResult VM::run() {
 
       frame = newFrame;
       slots = frame->slots;
-      k = frame->closure->proto->k;
+
       LOAD_PC();
 
     } else if (method.isNativeFunc()) {
@@ -1690,7 +1701,7 @@ InterpretResult VM::run() {
 
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
-    k = frame->closure->proto->k;
+
     LOAD_PC();
 
     if (expectedResults == -1) {
@@ -1776,7 +1787,7 @@ InterpretResult VM::run() {
 
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
-    k = frame->closure->proto->k;
+
     LOAD_PC();
 
     if (expectedResults == -1) {
@@ -1802,6 +1813,7 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);
 
+    const Value *k = frame->closure->proto->k;
     Value moduleNameVal = k[Bx];
 
     if (!moduleNameVal.isString()) {
@@ -1851,6 +1863,7 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
 
+    const Value *k = frame->closure->proto->k;
     Value moduleNameVal = k[B];
     Value symbolNameVal = k[C];
 
@@ -2146,7 +2159,7 @@ InterpretResult VM::run() {
       }
 
       slots = frame->slots;
-      k = frame->closure->proto->k;
+
       LOAD_PC();
 
     }
