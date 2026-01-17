@@ -68,7 +68,7 @@ public:
 
   // === 热更新 ===
   // 重新加载指定模块的代码块而不重启 VM
-  bool hotReload(const std::string &moduleName, const CompiledChunk &newChunk);
+  bool hotReload(const std::string &moduleName, CompiledChunk newChunk);
 
   ModuleManager *moduleManager() { return moduleManager_.get(); }
 
@@ -89,7 +89,7 @@ public:
   void registerNative(const std::string &name, NativeFn fn, int arity, uint8_t flags = FUNC_NONE);
 
   // === 模块系统 ===
-  void registerModule(const std::string &name, const CompiledChunk &chunk);
+  void registerModule(const std::string &name, CompiledChunk chunk);
   Value importModule(const std::string &path);
 
   // === 回调设置 ===

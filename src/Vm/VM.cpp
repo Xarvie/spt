@@ -702,6 +702,7 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
 }
 
 bool VM::hotReload(const std::string &moduleName, CompiledChunk newChunk) {
+
   prepareChunk(newChunk);
   modules_[moduleName] = std::move(newChunk);
 
