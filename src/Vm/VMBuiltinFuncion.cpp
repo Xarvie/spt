@@ -3,6 +3,7 @@
 #include "Fiber.h"
 #include "NativeBinding.h"
 #include <algorithm>
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -533,18 +534,22 @@ void VM::registerBuiltinFunctions() {
           this->errorValue_ = savedErrorValue;
           return Value::nil();
         } else {
+
           this->closeUpvalues(fiber->stack + savedStackTopOffset);
 
           while (fiber->frameCount > savedFrameCount) {
-
             CallFrame *currentFrame = &fiber->frames[fiber->frameCount - 1];
+
+            this->closeUpvalues(currentFrame->slots);
 
             this->invokeDefers(currentFrame->deferBase);
 
             fiber->frameCount--;
           }
+
           fiber->deferTop = savedDeferTop;
-          fiber->openUpvalues = savedOpenUpvalues;
+
+          assert(fiber->openUpvalues == savedOpenUpvalues);
 
           Value errVal = this->hasError_ ? this->errorValue_
                                          : Value::object(this->allocateString("unknown error"));

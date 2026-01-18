@@ -488,19 +488,59 @@ public:
   template <typename Pred> size_t removeIf(Pred &&pred) {
     if (!nodes_)
       return 0;
-
     size_t removed = 0;
     for (size_t i = 0; i < capacity_; ++i) {
-      if (nodes_[i].key && pred(nodes_[i].key, nodes_[i].value)) {
-        // 简化删除：直接清空，可能破坏链结构
-        // 对于 GC 场景，这是安全的因为整个表会被重建
-        nodes_[i].key = nullptr;
-        nodes_[i].value = V{};
-        // 注意：不更新 next 链，假设 GC 后会重建或表被丢弃
+      Node *node = &nodes_[i];
+      if (!node->key)
+        continue;
+      // 检查主位置节点
+      if (pred(node->key, node->value)) {
+        // 需要删除主位置节点
+        if (node->next >= 0) {
+          // 用链中下一个节点替换
+          Node *nextNode = &nodes_[node->next];
+          int savedNext = nextNode->next;
+          node->key = nextNode->key;
+          node->value = nextNode->value;
+          node->next = savedNext;
+          // 清空被移动的节点
+          nextNode->key = nullptr;
+          nextNode->value = V{};
+          nextNode->next = -1;
+        } else {
+          // 直接清空
+          node->key = nullptr;
+          node->value = V{};
+          node->next = -1;
+        }
         ++removed;
         --size_;
+        // 重新检查当前位置（因为可能移入了新节点）
+        --i;
+        continue;
+      }
+
+      // 检查并清理链中的节点
+      int prevIdx = static_cast<int>(i);
+      int currIdx = node->next;
+      while (currIdx >= 0) {
+        Node *curr = &nodes_[currIdx];
+        if (pred(curr->key, curr->value)) {
+          // 从链中移除
+          nodes_[prevIdx].next = curr->next;
+          curr->key = nullptr;
+          curr->value = V{};
+          curr->next = -1;
+          ++removed;
+          --size_;
+          currIdx = nodes_[prevIdx].next;
+        } else {
+          prevIdx = currIdx;
+          currIdx = curr->next;
+        }
       }
     }
+
     return removed;
   }
 

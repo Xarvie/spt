@@ -82,7 +82,7 @@ using NativeDestructorFn = std::function<void(void *ptr)>;
 // 所有权模式
 // ============================================================================
 
-enum class OwnershipMode : uint8_t { OwnedByVM, OwnedExternally, Shared };
+enum class OwnershipMode : uint8_t { OwnedByVM, OwnedExternally };
 
 // ============================================================================
 // NativeClassObject - 代表脚本系统中的一个 C++ 类
@@ -178,9 +178,20 @@ struct NativeInstance : GCObject {
   void destroy() {
     if (isDestroyed || !data)
       return;
-    if (ownership == OwnershipMode::OwnedByVM && nativeClass && nativeClass->destructor) {
-      nativeClass->destructor(data);
+
+    switch (ownership) {
+    case OwnershipMode::OwnedByVM:
+      // VM 拥有，需要调用析构函数
+      if (nativeClass && nativeClass->destructor) {
+        nativeClass->destructor(data);
+      }
+      break;
+
+    case OwnershipMode::OwnedExternally:
+      // 外部拥有，不做任何事
+      break;
     }
+
     isDestroyed = true;
     data = nullptr;
   }

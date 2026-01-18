@@ -14,6 +14,8 @@ namespace spt {
 
 static Value createBoundNative(VM *vm, Value receiver, StringObject *name,
                                BuiltinMethodDesc::MethodFn fn, int arity) {
+  vm->protect(receiver);
+  vm->protect(Value::object(name));
   NativeFunction *native = vm->gc().allocate<NativeFunction>();
   native->name = name->view();
   native->arity = arity;
@@ -21,6 +23,7 @@ static Value createBoundNative(VM *vm, Value receiver, StringObject *name,
   native->function = [fn](VM *vm, Value recv, int argc, Value *argv) -> Value {
     return fn(vm, recv, argc, argv);
   };
+  vm->unprotect(2);
   return Value::object(native);
 }
 
@@ -83,9 +86,12 @@ static Value listRemoveAt(VM *vm, Value receiver, int argc, Value *argv) {
 static Value listSlice(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isList() || argc < 2)
     return Value::nil();
+  vm->protect(receiver);
   auto *list = static_cast<ListObject *>(receiver.asGC());
-  if (!argv[0].isInt() || !argv[1].isInt())
+  if (!argv[0].isInt() || !argv[1].isInt()) {
+    vm->unprotect(1);
     return Value::nil();
+  }
   int64_t start = argv[0].asInt(), end = argv[1].asInt();
   int64_t len = list->elements.size();
   if (start < 0)
@@ -94,13 +100,16 @@ static Value listSlice(VM *vm, Value receiver, int argc, Value *argv) {
     end = std::max(int64_t(0), len + end);
   start = std::clamp(start, int64_t(0), len);
   end = std::clamp(end, int64_t(0), len);
-  if (end <= start)
+  if (end <= start) {
+    vm->unprotect(1);
     return Value::object(vm->allocateList(0));
+  }
   auto *result = vm->allocateList(0);
   vm->protect(Value::object(result));
+  list = static_cast<ListObject *>(receiver.asGC());
   for (int64_t i = start; i < end; ++i)
     result->elements.push_back(list->elements[i]);
-  vm->unprotect(1);
+  vm->unprotect(2);
   return Value::object(result);
 }
 
@@ -155,24 +164,27 @@ static Value mapClear(VM *vm, Value receiver, int argc, Value *argv) {
 static Value mapKeys(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap())
     return Value::nil();
-  auto *map = static_cast<MapObject *>(receiver.asGC());
+  vm->protect(receiver);
   auto *result = vm->allocateList(0);
   vm->protect(Value::object(result));
+  auto *map = static_cast<MapObject *>(receiver.asGC());
   for (const auto &entry : map->entries)
     result->elements.push_back(entry.first);
-  vm->unprotect(1);
+  vm->unprotect(2);
   return Value::object(result);
 }
 
 static Value mapValues(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isMap())
     return Value::nil();
+  vm->protect(receiver);
   auto *map = static_cast<MapObject *>(receiver.asGC());
   auto *result = vm->allocateList(0);
   vm->protect(Value::object(result));
+  map = static_cast<MapObject *>(receiver.asGC());
   for (const auto &entry : map->entries)
     result->elements.push_back(entry.second);
-  vm->unprotect(1);
+  vm->unprotect(2);
   return Value::object(result);
 }
 
@@ -181,12 +193,11 @@ static Value mapRemove(VM *vm, Value receiver, int argc, Value *argv) {
     return Value::nil();
   auto *map = static_cast<MapObject *>(receiver.asGC());
   Value key = argv[0];
-  for (auto it = map->entries.begin(); it != map->entries.end(); ++it) {
-    if (it->first.equals(key)) {
-      Value value = it->second;
-      map->entries.erase(it);
-      return value;
-    }
+  auto it = map->entries.find(key);
+  if (it != map->entries.end()) {
+    Value value = it->second;
+    map->entries.erase(it);
+    return value;
   }
   return Value::nil();
 }
@@ -198,7 +209,7 @@ static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
   if (argc < 2 || !argv[0].isInt() || !argv[1].isInt())
     return Value::object(vm->allocateString(""));
   int64_t start = argv[0].asInt(), end = argv[1].asInt();
-  int64_t len = static_cast<int64_t>(str->length);
+  int64_t len = str->length;
   if (start < 0)
     start = std::max(int64_t(0), len + start);
   if (end < 0)
@@ -207,7 +218,8 @@ static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
   end = std::clamp(end, int64_t(0), len);
   if (end <= start)
     return Value::object(vm->allocateString(""));
-  return Value::object(vm->allocateString(str->view().substr(start, end - start)));
+  std::string sub(str->chars() + start, end - start);
+  return Value::object(vm->allocateString(sub));
 }
 
 static Value stringIndexOf(VM *vm, Value receiver, int argc, Value *argv) {

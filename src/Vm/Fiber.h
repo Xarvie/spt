@@ -154,11 +154,12 @@ struct FiberObject : GCObject {
       newSize *= 2;
     }
 
-    // 3. 分配新内存并保留旧指针
-    Value *oldStack = stack;
-    Value *newStack = new Value[newSize];
+    // 3. 使用 unique_ptr 确保异常安全
+    std::unique_ptr<Value[]> newStackPtr(new Value[newSize]);
+    Value *newStack = newStackPtr.get();
 
     // 4. 迁移数据
+    Value *oldStack = stack;
     for (size_t i = 0; i < used; ++i) {
       newStack[i] = oldStack[i];
     }
@@ -167,18 +168,12 @@ struct FiberObject : GCObject {
       newStack[i] = Value::nil();
     }
 
-    // 5. 更新 Fiber 主状态指针
-    stack = newStack;
-    stackSize = newSize;
-    stackTop = stack + used;
-    stackLast = stack + newSize;
-
-    // 6. 修复 Open UpValues (闭包引用的栈变量)
+    // 5. 修复 Open UpValues (闭包引用的栈变量)
     if (openUpvalues != nullptr) {
       fixUpvaluePointers(oldStack, newStack);
     }
 
-    // 7. 修复 CallFrames (调用帧中的指针)
+    // 6. 修复 CallFrames (调用帧中的指针)
     for (int i = 0; i < frameCount; ++i) {
       CallFrame &frame = frames[i];
 
@@ -193,10 +188,12 @@ struct FiberObject : GCObject {
       }
     }
 
-    // 8. 释放旧栈
-    if (oldStack) {
-      delete[] oldStack;
-    }
+    delete[] oldStack;
+
+    stack = newStackPtr.release();
+    stackSize = newSize;
+    stackTop = stack + used;
+    stackLast = stack + newSize;
   }
 
   void ensureStack(int needed) { checkStack(needed); }

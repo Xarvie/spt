@@ -623,7 +623,9 @@ InterpretResult VM::run() {
     for (size_t i = 0; i < proto.numUpvalues; ++i) {
       const auto &uvDesc = proto.upvalues[i];
       if (uvDesc.isLocal) {
-        closure->upvalues[i] = captureUpvalue(&slots[uvDesc.index]);
+        UpValue *uv;
+        PROTECT_LIGHT(uv = captureUpvalue(&slots[uvDesc.index]));
+        closure->upvalues[i] = uv;
       } else {
         closure->upvalues[i] = frame->closure->upvalues[uvDesc.index];
       }
