@@ -1020,8 +1020,13 @@ void Compiler::compileAssignment(AssignmentNode *stmt) {
     int localSlot = tryResolveLocalSlot(cg_.get(), stmt->lvalues[0]);
 
     if (localSlot != -1) {
-      compileExpression(stmt->rvalues[0], localSlot);
-      return;
+      Expression *rhs = stmt->rvalues[0];
+      bool isUnsafeNode = dynamic_cast<FunctionCallNode *>(rhs) != nullptr ||
+                          dynamic_cast<NewExpressionNode *>(rhs) != nullptr;
+      if (!isUnsafeNode) {
+        compileExpression(rhs, localSlot);
+        return;
+      }
     }
   }
 
