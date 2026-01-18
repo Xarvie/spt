@@ -142,3 +142,30 @@ while (i < limit) {
        )spt",
                  "");
 }
+
+inline void registerBench3(TestRunner &runner) {
+  runner.addTest("Benchmark LoopMethodAdd", // lua 34s spt47s
+                 R"spt(
+class Adder {
+    int sum;
+    void init(Adder this, int sum){
+        this.sum = sum;
+    }
+
+    void add(Adder this, int i) {
+        this.sum = this.sum + i;
+    }
+}
+
+auto adder = new Adder(0);
+
+auto i = 0;
+auto limit = 1000000000;
+
+while (i < limit) {
+    adder.add(i);
+    i = i + 1;
+}
+       )spt",
+                 "");
+}

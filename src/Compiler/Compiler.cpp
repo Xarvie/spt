@@ -1426,8 +1426,16 @@ void Compiler::compileUnaryOp(UnaryOpNode *node, int dest) {
 }
 
 void Compiler::compileMemberAccess(MemberAccessNode *node, int dest) {
-  int objSlot = cg_->allocSlot();
-  compileExpression(node->objectExpr, objSlot);
+  cg_->setLineGetter(node->objectExpr);
+
+  int objSlot = tryResolveLocalSlot(cg_.get(), node->objectExpr);
+  bool isTemp = false;
+
+  if (objSlot == -1) {
+    objSlot = cg_->allocSlot();
+    compileExpression(node->objectExpr, objSlot);
+    isTemp = true;
+  }
 
   int memberIdx = cg_->addStringConstant(node->memberName);
   if (memberIdx <= 255) {
@@ -1438,7 +1446,9 @@ void Compiler::compileMemberAccess(MemberAccessNode *node, int dest) {
     cg_->emitABC(OpCode::OP_GETINDEX, dest, objSlot, keySlot);
     cg_->freeSlots(1);
   }
-  cg_->freeSlots(1);
+
+  if (isTemp)
+    cg_->freeSlots(1);
 }
 
 void Compiler::compileMemberLookup(MemberLookupNode *node, int dest) {
@@ -1653,15 +1663,26 @@ LValue Compiler::compileLValue(Expression *expr) {
 
   if (auto *member = dynamic_cast<MemberAccessNode *>(expr)) {
     int nameIdx = cg_->addStringConstant(member->memberName);
+
+    int localBase = tryResolveLocalSlot(cg_.get(), member->objectExpr);
+
     if (nameIdx <= 255) {
       lv.kind = LValue::FIELD;
-      lv.a = cg_->allocSlot();
-      compileExpression(member->objectExpr, lv.a);
+      if (localBase != -1) {
+        lv.a = localBase;
+      } else {
+        lv.a = cg_->allocSlot();
+        compileExpression(member->objectExpr, lv.a);
+      }
       lv.b = nameIdx;
     } else {
       lv.kind = LValue::INDEX;
-      lv.a = cg_->allocSlot();
-      compileExpression(member->objectExpr, lv.a);
+      if (localBase != -1) {
+        lv.a = localBase;
+      } else {
+        lv.a = cg_->allocSlot();
+        compileExpression(member->objectExpr, lv.a);
+      }
       lv.b = cg_->allocSlot();
       cg_->emitABx(OpCode::OP_LOADK, lv.b, nameIdx);
     }
