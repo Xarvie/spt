@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Common/Types.h"
+#include "StringTable.h"
 #include "unordered_dense.h"
 #include <cstdint>
 #include <cstring>
@@ -133,6 +134,8 @@ struct StringPtrHash {
   size_t operator()(std::string_view sv) const noexcept { return fnv1a_hash(sv); }
 };
 
+inline uint32_t IdentityStringHash::hash(const StringObject *s) noexcept { return s ? s->hash : 0; }
+
 struct StringPtrEqual {
   using is_transparent = void;
 
@@ -151,8 +154,7 @@ struct StringPtrEqual {
 };
 
 // 便捷别名：以 StringObject* 指针为键的 Map
-template <typename V>
-using StringMap = ankerl::unordered_dense::map<StringObject *, V, StringPtrHash, StringPtrEqual>;
+template <typename V> using StringMap = spt::SptHashTable<V>;
 
 // ============================================================================
 // Value - 标签联合体 (Tagged Union)
@@ -309,6 +311,7 @@ struct ListObject : GCObject {
 struct MapObject : GCObject {
   // 使用 spt::Value 作为键值对的哈希表
   ankerl::unordered_dense::map<Value, Value> entries;
+  template <typename V> using StringMap = spt::SptHashTable<V>;
 
   MapObject() { type = ValueType::Map; }
 

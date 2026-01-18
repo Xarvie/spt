@@ -83,22 +83,15 @@ struct Instance : GCObject {
   // === 推荐使用 StringObject* 键进行字段访问 ===
 
   Value getField(StringObject *name) const {
-    auto it = fields.find(name);
-    return (it != fields.end()) ? it->second : Value::nil();
+    if (const Value *v = fields.get(name)) {
+      return *v;
+    }
+    return Value::nil();
   }
 
   void setField(StringObject *name, const Value &value) { fields[name] = value; }
 
   bool hasField(StringObject *name) const { return fields.find(name) != fields.end(); }
-
-  // === 使用 string_view 进行访问（支持异构查找） ===
-
-  Value getField(std::string_view name) const {
-    auto it = fields.find(name);
-    return (it != fields.end()) ? it->second : Value::nil();
-  }
-
-  bool hasField(std::string_view name) const { return fields.find(name) != fields.end(); }
 };
 
 // ============================================================================

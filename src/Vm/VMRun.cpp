@@ -57,6 +57,18 @@ InterpretResult VM::run() {
                                                                                                    \
   } while (0)
 
+#define RESTORE_FRAME()                                                                            \
+  do {                                                                                             \
+    frame = &fiber->frames[fiber->frameCount - 1];                                                 \
+    slots = frame->slots;                                                                          \
+  } while (0)
+
+#define PROTECT_LIGHT(action)                                                                      \
+  do {                                                                                             \
+    action;                                                                                        \
+    RESTORE_FRAME();                                                                               \
+  } while (0)
+
 #define RESTORE_SLOTS_ONLY()                                                                       \
   do {                                                                                             \
     stackBase = fiber->stack;                                                                      \
@@ -71,12 +83,6 @@ InterpretResult VM::run() {
     SAVE_PC();                                                                                     \
     action;                                                                                        \
     RESTORE_POINTERS();                                                                            \
-  } while (0)
-
-#define PROTECT_LIGHT(action)                                                                      \
-  do {                                                                                             \
-    action;                                                                                        \
-    RESTORE_SLOTS_ONLY();                                                                          \
   } while (0)
 
 #define HALF_PROTECT(action)                                                                       \
@@ -263,9 +269,8 @@ InterpretResult VM::run() {
       Value result = instance->getField(fieldName);
       if (result.isNil() && instance->klass) {
 
-        auto it = instance->klass->methods.find(fieldName);
-        if (it != instance->klass->methods.end()) {
-          result = it->second;
+        if (Value *v = instance->klass->methods.get(fieldName)) {
+          result = *v;
         }
       }
       slots[A] = result;
@@ -400,7 +405,7 @@ InterpretResult VM::run() {
       auto *instance = static_cast<NativeInstance *>(object.asGC());
 
       if (instance->nativeClass) {
-        const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldNameStr->view());
+        const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldNameStr);
         if (prop) {
           if (prop->isReadOnly || !prop->setter) {
             SAVE_PC();
@@ -492,7 +497,7 @@ InterpretResult VM::run() {
 
     slots[A] = instanceVal;
 
-    auto it = klass->methods.find("init");
+    auto it = klass->methods.find(symbols().init);
     if (it != klass->methods.end()) {
       Value initializer = it->second;
 
@@ -954,7 +959,7 @@ InterpretResult VM::run() {
     const Value &b = slots[B];
 
     bool result = false;
-    if (a.isInt() && b.isInt()) {
+    if (SPT_LIKELY(a.isInt() && b.isInt())) {
       result = a.asInt() < b.asInt();
     } else if (a.isNumber() && b.isNumber()) {
       double left = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
@@ -1047,13 +1052,13 @@ InterpretResult VM::run() {
       Value *newSlots = slots + A + 1;
       Value *neededTop = newSlots + proto->maxStackSize;
 
-      if (SPT_UNLIKELY(neededTop > fiber->stackLast)){
+      if (SPT_UNLIKELY(neededTop > fiber->stackLast)) {
         int needed = static_cast<int>(neededTop - fiber->stackTop);
         fiber->ensureStack(needed);
         REFRESH_CACHE();
         newSlots = slots + A + 1;
       }
-      if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity))  {
+      if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity)) {
         fiber->ensureFrames(1);
         REFRESH_CACHE();
         newSlots = slots + A + 1;
@@ -1274,93 +1279,15 @@ InterpretResult VM::run() {
     Value method = Value::nil();
     Value *argsStart = &slots[A + 1];
 
-    if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
-      Value directResult;
-      hasNativeMultiReturn_ = false;
-      nativeMultiReturn_.clear();
-
-      bool invokeSuccess;
-
-      PROTECT(invokeSuccess = StdlibDispatcher::invokeMethod(
-                  this, receiver, methodName, userArgCount, argsStart, directResult));
-      if (invokeSuccess) {
-        if (yieldPending_) {
-          yieldPending_ = false;
-          return InterpretResult::OK;
-        }
-
-        if (hasError_) {
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        int expectedResults = C - 1;
-
-        if (hasNativeMultiReturn_) {
-          int returnCount = static_cast<int>(nativeMultiReturn_.size());
-          if (expectedResults == -1) {
-            for (int i = 0; i < returnCount; ++i) {
-              slots[A + i] = nativeMultiReturn_[i];
-            }
-            STACK_TOP = slots + A + returnCount;
-          } else if (expectedResults > 0) {
-            for (int i = 0; i < expectedResults; ++i) {
-              slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
-            }
-          }
-          hasNativeMultiReturn_ = false;
-          nativeMultiReturn_.clear();
-        } else {
-          slots[A] = directResult;
-          if (expectedResults == -1) {
-            STACK_TOP = slots + A + 1;
-          } else if (expectedResults > 1) {
-            for (int i = 1; i < expectedResults; ++i) {
-              slots[A + i] = Value::nil();
-            }
-          }
-        }
-        SPT_DISPATCH();
-      }
-
-      receiver = slots[A];
-      argsStart = &slots[A + 1];
-
-      Value propertyValue;
-      bool getPropSuccess;
-      PROTECT(getPropSuccess =
-                  StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue));
-      if (getPropSuccess) {
-        if (propertyValue.isNativeFunc()) {
-          method = propertyValue;
-        } else {
-          SAVE_PC();
-          runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
-                       methodName->c_str());
-          return InterpretResult::RUNTIME_ERROR;
-        }
-      } else if (receiver.isMap()) {
-
-        auto *map = static_cast<MapObject *>(slots[A].asGC());
-        method = map->get(Value::object(methodName));
-      }
-
-      if (method.isNil()) {
-        SAVE_PC();
-        runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName->c_str());
-        return InterpretResult::RUNTIME_ERROR;
-      }
-    }
-
-    else if (receiver.isInstance()) {
+    if (SPT_LIKELY(receiver.isInstance())) {
       auto *instance = static_cast<Instance *>(receiver.asGC());
 
       method = instance->getField(methodName);
 
       if (method.isNil() && instance->klass) {
 
-        auto it = instance->klass->methods.find(methodName);
-        if (it != instance->klass->methods.end()) {
-          method = it->second;
+        if (Value *v = instance->klass->methods.get(methodName)) {
+          method = *v;
         }
       }
 
@@ -1484,6 +1411,81 @@ InterpretResult VM::run() {
                      methodName->c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
+    } else if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
+      Value directResult;
+      hasNativeMultiReturn_ = false;
+      nativeMultiReturn_.clear();
+
+      bool invokeSuccess;
+
+      PROTECT(invokeSuccess = StdlibDispatcher::invokeMethod(
+                  this, receiver, methodName, userArgCount, argsStart, directResult));
+      if (invokeSuccess) {
+        if (yieldPending_) {
+          yieldPending_ = false;
+          return InterpretResult::OK;
+        }
+
+        if (hasError_) {
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        int expectedResults = C - 1;
+
+        if (hasNativeMultiReturn_) {
+          int returnCount = static_cast<int>(nativeMultiReturn_.size());
+          if (expectedResults == -1) {
+            for (int i = 0; i < returnCount; ++i) {
+              slots[A + i] = nativeMultiReturn_[i];
+            }
+            STACK_TOP = slots + A + returnCount;
+          } else if (expectedResults > 0) {
+            for (int i = 0; i < expectedResults; ++i) {
+              slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
+            }
+          }
+          hasNativeMultiReturn_ = false;
+          nativeMultiReturn_.clear();
+        } else {
+          slots[A] = directResult;
+          if (expectedResults == -1) {
+            STACK_TOP = slots + A + 1;
+          } else if (expectedResults > 1) {
+            for (int i = 1; i < expectedResults; ++i) {
+              slots[A + i] = Value::nil();
+            }
+          }
+        }
+        SPT_DISPATCH();
+      }
+
+      receiver = slots[A];
+      argsStart = &slots[A + 1];
+
+      Value propertyValue;
+      bool getPropSuccess;
+      PROTECT(getPropSuccess =
+                  StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue));
+      if (getPropSuccess) {
+        if (propertyValue.isNativeFunc()) {
+          method = propertyValue;
+        } else {
+          SAVE_PC();
+          runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
+                       methodName->c_str());
+          return InterpretResult::RUNTIME_ERROR;
+        }
+      } else if (receiver.isMap()) {
+
+        auto *map = static_cast<MapObject *>(slots[A].asGC());
+        method = map->get(Value::object(methodName));
+      }
+
+      if (method.isNil()) {
+        SAVE_PC();
+        runtimeError("Type '%s' has no method '%s'", receiver.typeName(), methodName->c_str());
+        return InterpretResult::RUNTIME_ERROR;
+      }
     } else {
       SAVE_PC();
       runtimeError("Cannot invoke method '%s' on type '%s'", methodName->c_str(),
@@ -1522,12 +1524,18 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      Value *newSlots = slots + A + (dropThis ? 2 : 1);
+      Value *newSlots = slots + A + (dropThis ? 1 : 0);
       int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
 
-      fiber->ensureStack(neededStack);
-      fiber->ensureFrames(1);
-      REFRESH_CACHE();
+      if (SPT_UNLIKELY(neededStack > static_cast<int>(fiber->stackSize))) {
+        fiber->ensureStack(neededStack);
+        RESTORE_SLOTS_ONLY();
+        newSlots = slots + A + (dropThis ? 1 : 0);
+      }
+      if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity)) {
+        fiber->ensureFrames(1);
+        frame = &fiber->frames[fiber->frameCount - 1];
+      }
 
       int argsPushed;
       if (dropThis) {
@@ -1542,8 +1550,8 @@ InterpretResult VM::run() {
 
       Value *targetStackTop = newSlots + proto->maxStackSize;
 
-      for (Value *p = newSlots + argsPushed; p < targetStackTop; ++p) {
-        *p = Value::nil();
+      for (int i = argsPushed; i < proto->numParams; ++i) {
+        newSlots[i] = Value::nil();
       }
 
       STACK_TOP = targetStackTop;

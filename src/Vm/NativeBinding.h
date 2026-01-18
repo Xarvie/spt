@@ -126,25 +126,7 @@ struct NativeClassObject : GCObject {
     return nullptr;
   }
 
-  const NativeMethodDesc *findMethod(std::string_view methodName) const {
-    auto it = methods.find(methodName);
-    if (it != methods.end())
-      return &it->second;
-    if (baseClass)
-      return baseClass->findMethod(methodName);
-    return nullptr;
-  }
-
   const NativePropertyDesc *findProperty(StringObject *propName) const {
-    auto it = properties.find(propName);
-    if (it != properties.end())
-      return &it->second;
-    if (baseClass)
-      return baseClass->findProperty(propName);
-    return nullptr;
-  }
-
-  const NativePropertyDesc *findProperty(std::string_view propName) const {
     auto it = properties.find(propName);
     if (it != properties.end())
       return &it->second;
@@ -213,13 +195,6 @@ struct NativeInstance : GCObject {
   void setField(StringObject *name, const Value &value) { fields[name] = value; }
 
   bool hasField(StringObject *name) const { return fields.find(name) != fields.end(); }
-
-  Value getField(std::string_view name) const {
-    auto it = fields.find(name);
-    return (it != fields.end()) ? it->second : Value::nil();
-  }
-
-  bool hasField(std::string_view name) const { return fields.find(name) != fields.end(); }
 };
 
 // ============================================================================
@@ -381,13 +356,13 @@ private:
   // 从成员函数指针提取返回类型和参数类型
   template <typename MemFnPtr> struct MethodTraits_;
 
-  template <typename RetT, typename... Args> struct MethodTraits_<RetT (T:: *)(Args...)> {
+  template <typename RetT, typename... Args> struct MethodTraits_<RetT (T::*)(Args...)> {
     using ReturnType = RetT;
     using ArgsTuple = std::tuple<Args...>;
     static constexpr size_t Arity = sizeof...(Args);
   };
 
-  template <typename RetT, typename... Args> struct MethodTraits_<RetT (T:: *)(Args...) const> {
+  template <typename RetT, typename... Args> struct MethodTraits_<RetT (T::*)(Args...) const> {
     using ReturnType = RetT;
     using ArgsTuple = std::tuple<Args...>;
     static constexpr size_t Arity = sizeof...(Args);
@@ -416,10 +391,10 @@ public:
   NativeClassBuilder &property(const std::string &name, NativePropertyGetter getter,
                                NativePropertySetter setter);
 
-  template <typename MemberT, MemberT T:: *Member>
+  template <typename MemberT, MemberT T::*Member>
   NativeClassBuilder &memberProperty(const std::string &name);
 
-  template <typename MemberT, MemberT T:: *Member>
+  template <typename MemberT, MemberT T::*Member>
   NativeClassBuilder &memberPropertyReadOnly(const std::string &name);
 
   // === 静态成员 ===
@@ -546,7 +521,7 @@ NativeClassBuilder<T> &NativeClassBuilder<T>::property(const std::string &name,
 }
 
 template <typename T>
-template <typename MemberT, MemberT T:: *Member>
+template <typename MemberT, MemberT T::*Member>
 NativeClassBuilder<T> &NativeClassBuilder<T>::memberProperty(const std::string &name) {
   StringObject *nameStr = vm_->allocateString(name);
   class_->properties[nameStr] = NativePropertyDesc(
@@ -569,7 +544,7 @@ NativeClassBuilder<T> &NativeClassBuilder<T>::memberProperty(const std::string &
 }
 
 template <typename T>
-template <typename MemberT, MemberT T:: *Member>
+template <typename MemberT, MemberT T::*Member>
 NativeClassBuilder<T> &NativeClassBuilder<T>::memberPropertyReadOnly(const std::string &name) {
   StringObject *nameStr = vm_->allocateString(name);
   class_->properties[nameStr] = NativePropertyDesc(

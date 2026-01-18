@@ -183,7 +183,7 @@ void GC::markRoots() {
     markObject(vm_->currentFiber());
   }
 
-  for (auto &[nameStr, val] : vm_->globals_) {
+  for (auto [nameStr, val] : vm_->globals_) {
 
     markObject(const_cast<StringObject *>(nameStr));
 
@@ -329,7 +329,7 @@ void GC::traceReferences() {
       auto *instance = static_cast<Instance *>(obj);
       markObject(instance->klass);
 
-      for (auto &[nameStr, value] : instance->fields) {
+      for (auto [nameStr, value] : instance->fields) {
         markObject(const_cast<StringObject *>(nameStr));
         Value v = value;
         markValue(v);
@@ -340,13 +340,13 @@ void GC::traceReferences() {
     case ValueType::Class: {
       auto *klass = static_cast<ClassObject *>(obj);
 
-      for (auto &[nameStr, method] : klass->methods) {
+      for (auto [nameStr, method] : klass->methods) {
         markObject(const_cast<StringObject *>(nameStr));
         Value v = method;
         markValue(v);
       }
 
-      for (auto &[nameStr, val] : klass->statics) {
+      for (auto [nameStr, val] : klass->statics) {
         markObject(const_cast<StringObject *>(nameStr));
         Value v = val;
         markValue(v);
@@ -406,15 +406,15 @@ void GC::traceReferences() {
         markObject(nativeClass->baseClass);
       }
 
-      for (auto &[nameStr, method] : nativeClass->methods) {
+      for (auto [nameStr, method] : nativeClass->methods) {
         markObject(const_cast<StringObject *>(nameStr));
       }
 
-      for (auto &[nameStr, prop] : nativeClass->properties) {
+      for (auto [nameStr, prop] : nativeClass->properties) {
         markObject(const_cast<StringObject *>(nameStr));
       }
 
-      for (auto &[nameStr, val] : nativeClass->statics) {
+      for (auto [nameStr, val] : nativeClass->statics) {
         markObject(const_cast<StringObject *>(nameStr));
         Value v = val;
         markValue(v);
@@ -428,7 +428,7 @@ void GC::traceReferences() {
         markObject(nativeInstance->nativeClass);
       }
 
-      for (auto &[nameStr, val] : nativeInstance->fields) {
+      for (auto [nameStr, val] : nativeInstance->fields) {
         markObject(const_cast<StringObject *>(nameStr));
         Value v = val;
         markValue(v);

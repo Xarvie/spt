@@ -118,8 +118,10 @@ InterpretResult VM::call(Closure *closure, int argCount) {
 
   Value *argsStart = fiber->stack + slotsBaseOffset;
   Value *frameEnd = argsStart + closure->proto->maxStackSize;
-  for (Value *slot = argsStart + argCount; slot < frameEnd; ++slot) {
-    *slot = Value::nil();
+  int numParams = closure->proto->numParams;
+  Value *slot = argsStart + argCount;
+  for (int i = argCount; i < numParams; ++i) {
+    *slot++ = Value::nil();
   }
   fiber->stackTop = frameEnd;
 
@@ -440,8 +442,10 @@ void VM::defineGlobal(const std::string &name, Value value) {
 }
 
 Value VM::getGlobal(const std::string &name) {
-
-  auto it = globals_.find(std::string_view(name));
+  StringObject *nameStr = stringPool_->find(name);
+  if (!nameStr)
+    return Value::nil();
+  auto it = globals_.find(nameStr);
   return (it != globals_.end()) ? it->second : Value::nil();
 }
 
@@ -707,7 +711,7 @@ bool VM::hotReload(const std::string &moduleName, CompiledChunk newChunk) {
   prepareChunk(newChunk);
   modules_[moduleName] = std::move(newChunk);
 
-  for (auto &[nameStr, value] : globals_) {
+  for (auto [nameStr, value] : globals_) {
     if (value.isClass()) {
       auto *klass = static_cast<ClassObject *>(value.asGC());
       klass->methods.clear();
