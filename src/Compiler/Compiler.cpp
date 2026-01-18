@@ -1703,6 +1703,18 @@ LValue Compiler::compileLValue(Expression *expr) {
 }
 
 void Compiler::emitStore(const LValue &lv, int srcReg) {
+  bool isLocalBase = false;
+  if (lv.kind == LValue::FIELD || lv.kind == LValue::INDEX) {
+    if (cg_->current()) {
+      for (const auto &loc : cg_->current()->locals) {
+        if (loc.slot == lv.a) {
+          isLocalBase = true;
+          break;
+        }
+      }
+    }
+  }
+
   switch (lv.kind) {
   case LValue::LOCAL:
     if (lv.a != srcReg)
@@ -1716,11 +1728,16 @@ void Compiler::emitStore(const LValue &lv, int srcReg) {
     break;
   case LValue::FIELD:
     cg_->emitABC(OpCode::OP_SETFIELD, lv.a, lv.b, srcReg);
-    cg_->freeSlots(1);
+    if (!isLocalBase) {
+      cg_->freeSlots(1);
+    }
     break;
   case LValue::INDEX:
     cg_->emitABC(OpCode::OP_SETINDEX, lv.a, lv.b, srcReg);
-    cg_->freeSlots(2);
+    cg_->freeSlots(1);
+    if (!isLocalBase) {
+      cg_->freeSlots(1);
+    }
     break;
   }
 }
