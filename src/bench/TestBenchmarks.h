@@ -109,7 +109,7 @@ inline void registerFib40Bench(TestRunner &runner) {
 }
 
 inline void registerBench1(TestRunner &runner) {
-  runner.addTest("Benchmark ForAdd",
+  runner.addTest("Benchmark loopAdd",
                  R"spt(
 // lua6.35s spt7.9s
 int sum = 0;
@@ -125,30 +125,20 @@ while (i < limit) {
 }
 
 inline void registerBench2(TestRunner &runner) {
-  runner.addTest("Benchmark ForAdd", // lua3.5s spt10s
+  runner.addTest("Benchmark LoopFunctionAdd", // lua18s spt18s
                  R"spt(
-print("------------------------------------------------");
-print("Task: 1. SPT Pure While Loop (1 Billion iters)");
-print("Status: Running...");
-
-// 记录开始时间 (微秒)
-int start = clock();
+int add(int a, int b) {
+    return a + b;
+}
 
 int sum = 0;
 int i = 0;
-int limit = 1000000000; // 10亿次
+int limit = 1000000000;
 
 while (i < limit) {
-    sum = sum + i;
+    sum = add(sum, i);
     i = i + 1;
 }
-
-// 记录结束时间
-int end = clock();
-
-print("Result: " .. sum);
-// 转换为秒: (end - start) / 1000000.0
-print("Elapsed Time: " .. (toFloat(end - start) / 1000000.0) .. " seconds");
        )spt",
                  "");
 }
