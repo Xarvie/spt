@@ -824,6 +824,15 @@ void VM::registerBuiltinFunctions() {
         return Value::nil();
       },
       1);
+  registerNative(
+      "clock",
+      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        int64_t micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+        return Value::integer(micros);
+      },
+      0);
 }
 
 } // namespace spt

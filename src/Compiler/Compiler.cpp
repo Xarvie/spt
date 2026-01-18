@@ -631,18 +631,24 @@ int Compiler::compileCondition(Expression *expr) {
             (op == OpCode::OP_EQK) ? static_cast<uint8_t>(constIdx) : static_cast<uint8_t>(imm);
         cg_->emitABC(op, leftSlot, bVal, k);
       } else {
-        int rightSlot = cg_->allocSlot();
-        compileExpression(bin->right, rightSlot);
+        int rightSlot = tryResolveLocalSlot(cg_.get(), bin->right);
+        bool rightTemp = false;
+
+        if (rightSlot == -1) {
+          rightSlot = cg_->allocSlot();
+          compileExpression(bin->right, rightSlot);
+          rightTemp = true;
+        }
 
         if (bin->op == OperatorKind::GT || bin->op == OperatorKind::GE) {
-
           cg_->emitABC(op, rightSlot, leftSlot, k);
         } else {
-
           cg_->emitABC(op, leftSlot, rightSlot, k);
         }
 
-        cg_->freeSlots(1);
+        if (rightTemp) {
+          cg_->freeSlots(1);
+        }
       }
 
       if (isTemp)
@@ -701,13 +707,7 @@ void Compiler::compileWhileStatement(WhileStatementNode *stmt) {
   int loopStart = cg_->currentPc();
   cg_->beginLoop(loopStart);
 
-  int condSlot = cg_->allocSlot();
-  compileExpression(stmt->condition, condSlot);
-
-  cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
-  int exitJump = cg_->emitJump(OpCode::OP_JMP);
-
-  cg_->freeSlots(1);
+  int exitJump = compileCondition(stmt->condition);
 
   compileBlock(stmt->body);
 
@@ -867,12 +867,7 @@ void Compiler::compileForCStyle(ForCStyleStatementNode *stmt) {
   int exitJump = -1;
 
   if (stmt->condition) {
-    int condSlot = cg_->allocSlot();
-    compileExpression(stmt->condition, condSlot);
-
-    cg_->emitABC(OpCode::OP_TEST, condSlot, 0, 0);
-    exitJump = cg_->emitJump(OpCode::OP_JMP);
-    cg_->freeSlots(1);
+    exitJump = compileCondition(stmt->condition);
   }
 
   compileBlock(stmt->body);
@@ -1021,6 +1016,15 @@ void Compiler::compileContinue(ContinueStatementNode *) {
 }
 
 void Compiler::compileAssignment(AssignmentNode *stmt) {
+  if (stmt->lvalues.size() == 1 && stmt->rvalues.size() == 1) {
+    int localSlot = tryResolveLocalSlot(cg_.get(), stmt->lvalues[0]);
+
+    if (localSlot != -1) {
+      compileExpression(stmt->rvalues[0], localSlot);
+      return;
+    }
+  }
+
   std::vector<int> valueSlots;
 
   for (auto *rval : stmt->rvalues) {
@@ -1042,6 +1046,16 @@ void Compiler::compileAssignment(AssignmentNode *stmt) {
 
 void Compiler::compileUpdateAssignment(UpdateAssignmentNode *stmt) {
   LValue lv = compileLValue(stmt->lvalue);
+  if (lv.kind == LValue::LOCAL) {
+    int rightSlot = cg_->allocSlot();
+    compileExpression(stmt->rvalue, rightSlot);
+
+    OpCode op = binaryOpToOpcode(stmt->op);
+    cg_->emitABC(op, lv.a, lv.a, rightSlot);
+
+    cg_->freeSlots(1);
+    return;
+  }
 
   int leftSlot = cg_->allocSlot();
   int rightSlot = cg_->allocSlot();

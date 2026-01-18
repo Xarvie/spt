@@ -10,7 +10,7 @@
 // =========================================================
 
 // 性能基准测试
-#include "test/TestBenchmarks.h"
+#include "bench/TestBenchmarks.h"
 
 // 原生绑定（类定义和测试）
 #include "test/NativeBindings.h"
@@ -140,8 +140,8 @@ int main(int argc, char *argv[]) {
   // 快速测试 / 单项测试
   // =====================================================
 
-  registerFib40Bench(runner);
-
+  //  registerFib40Bench(runner);
+  registerBench1(runner);
 #endif
 
   runner.runAll();
