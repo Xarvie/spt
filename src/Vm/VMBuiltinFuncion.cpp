@@ -4,6 +4,7 @@
 #include "NativeBinding.h"
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 
