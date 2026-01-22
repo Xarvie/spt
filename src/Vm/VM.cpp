@@ -817,33 +817,63 @@ Value VM::constantToValue(const ConstantValue &cv) {
 }
 
 void VM::preparePrototype(Prototype *proto) {
-  if (proto->kPrepared) {
+  if (proto->jitReady) {
     return;
   }
 
-  size_t count = proto->constants.size();
-  if (count > 0) {
-    proto->k = new Value[count];
-    proto->kCount = count;
+  if (!proto->code.empty()) {
+    proto->codeCount = static_cast<uint32_t>(proto->code.size());
+    proto->codePtr = new Instruction[proto->codeCount];
+    std::memcpy(proto->codePtr, proto->code.data(), proto->codeCount * sizeof(Instruction));
+  }
 
-    for (size_t i = 0; i < count; ++i) {
+  size_t constCount = proto->constants.size();
+  if (constCount > 0) {
+    proto->k = new Value[constCount];
+    proto->kCount = static_cast<uint32_t>(constCount);
+
+    for (size_t i = 0; i < constCount; ++i) {
       proto->k[i] = constantToValue(proto->constants[i]);
     }
   }
 
-  proto->kPrepared = true;
-
-  for (Prototype &child : proto->protos) {
-    preparePrototype(&child);
+  if (!proto->upvalues.empty()) {
+    proto->upvaluePtr = new Prototype::UpvalueDesc[proto->numUpvalues];
+    std::memcpy(proto->upvaluePtr, proto->upvalues.data(),
+                proto->numUpvalues * sizeof(Prototype::UpvalueDesc));
   }
+
+  if (!proto->protos.empty()) {
+    proto->protoCount = static_cast<uint32_t>(proto->protos.size());
+    proto->protoPtr = new Prototype *[proto->protoCount];
+
+    for (uint32_t i = 0; i < proto->protoCount; ++i) {
+      preparePrototype(&proto->protos[i]);
+      proto->protoPtr[i] = &proto->protos[i];
+    }
+  }
+
+  proto->jitReady = true;
 }
 
 void VM::prepareChunk(CompiledChunk &chunk) { preparePrototype(&chunk.mainProto); }
 
 Prototype::~Prototype() {
+  if (codePtr != nullptr) {
+    delete[] codePtr;
+    codePtr = nullptr;
+  }
   if (k != nullptr) {
     delete[] k;
     k = nullptr;
+  }
+  if (upvaluePtr != nullptr) {
+    delete[] upvaluePtr;
+    upvaluePtr = nullptr;
+  }
+  if (protoPtr != nullptr) {
+    delete[] protoPtr;
+    protoPtr = nullptr;
   }
 }
 
@@ -855,17 +885,35 @@ Prototype::Prototype(Prototype &&other) noexcept
       needsReceiver(other.needsReceiver), useDefer(other.useDefer), code(std::move(other.code)),
       constants(std::move(other.constants)), absLineInfo(std::move(other.absLineInfo)),
       lineInfo(std::move(other.lineInfo)), protos(std::move(other.protos)), flags(other.flags),
-      upvalues(std::move(other.upvalues)), k(other.k), kCount(other.kCount),
-      kPrepared(other.kPrepared) {
+      upvalues(std::move(other.upvalues)),
+      // JIT pointers
+      codePtr(other.codePtr), codeCount(other.codeCount), k(other.k), kCount(other.kCount),
+      upvaluePtr(other.upvaluePtr), protoPtr(other.protoPtr), protoCount(other.protoCount),
+      jitReady(other.jitReady) {
+
+  other.codePtr = nullptr;
+  other.codeCount = 0;
   other.k = nullptr;
   other.kCount = 0;
-  other.kPrepared = false;
+  other.upvaluePtr = nullptr;
+  other.protoPtr = nullptr;
+  other.protoCount = 0;
+  other.jitReady = false;
 }
 
 Prototype &Prototype::operator=(Prototype &&other) noexcept {
   if (this != &other) {
+    if (codePtr != nullptr) {
+      delete[] codePtr;
+    }
     if (k != nullptr) {
       delete[] k;
+    }
+    if (upvaluePtr != nullptr) {
+      delete[] upvaluePtr;
+    }
+    if (protoPtr != nullptr) {
+      delete[] protoPtr;
     }
 
     name = std::move(other.name);
@@ -887,13 +935,23 @@ Prototype &Prototype::operator=(Prototype &&other) noexcept {
     flags = other.flags;
     upvalues = std::move(other.upvalues);
 
+    codePtr = other.codePtr;
+    codeCount = other.codeCount;
     k = other.k;
     kCount = other.kCount;
-    kPrepared = other.kPrepared;
+    upvaluePtr = other.upvaluePtr;
+    protoPtr = other.protoPtr;
+    protoCount = other.protoCount;
+    jitReady = other.jitReady;
 
+    other.codePtr = nullptr;
+    other.codeCount = 0;
     other.k = nullptr;
     other.kCount = 0;
-    other.kPrepared = false;
+    other.upvaluePtr = nullptr;
+    other.protoPtr = nullptr;
+    other.protoCount = 0;
+    other.jitReady = false;
   }
   return *this;
 }
@@ -924,9 +982,14 @@ Prototype Prototype::deepCopy() const {
     copy.protos.push_back(childProto.deepCopy());
   }
 
+  copy.codePtr = nullptr;
+  copy.codeCount = 0;
   copy.k = nullptr;
   copy.kCount = 0;
-  copy.kPrepared = false;
+  copy.upvaluePtr = nullptr;
+  copy.protoPtr = nullptr;
+  copy.protoCount = 0;
+  copy.jitReady = false;
 
   return copy;
 }

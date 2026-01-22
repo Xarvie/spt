@@ -90,18 +90,28 @@ struct Prototype {
   std::vector<UpvalueDesc> upvalues;
 
   // =========================================================================
-  // 预编译常量表 - 运行时使用
-  // =========================================================================
-  // k 数组在 VM 加载时由 preparePrototype() 初始化，直接存储 Value 对象，
-  // 避免在热路径上使用 std::visit 访问 ConstantValue variant。
-  //
   // 生命周期：
-  // - 编译时：k = nullptr, kPrepared = false
-  // - 加载时：VM::preparePrototype() 分配并填充 k 数组
-  // - 销毁时：析构函数释放 k 数组
-  Value *k = nullptr;     // 预编译的 Value 数组
-  size_t kCount = 0;      // k 数组大小
-  bool kPrepared = false; // 是否已完成预编译
+  // - 编译时：所有指针为 nullptr
+  // - 加载时：VM::preparePrototype() 分配并填充
+  // - 销毁时：析构函数释放
+
+  // 指令数组 (从 code vector 拷贝)
+  Instruction *codePtr = nullptr;
+  uint32_t codeCount = 0;
+
+  // 常量表 (从 constants variant 转换为 Value)
+  Value *k = nullptr;
+  uint32_t kCount = 0;
+
+  // Upvalue 描述数组 (从 upvalues vector 拷贝)
+  UpvalueDesc *upvaluePtr = nullptr;
+  // numUpvalues 已存在，复用
+
+  // 子原型指针数组 (指向 protos vector 中元素，用于 O(1) 索引访问)
+  Prototype **protoPtr = nullptr;
+  uint32_t protoCount = 0;
+
+  bool jitReady = false; // JIT 数据是否已准备完成
 
   // =========================================================================
   // 构造与析构
