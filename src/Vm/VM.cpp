@@ -1,7 +1,6 @@
 #include "VM.h"
 
 #include "Fiber.h"
-#include "NativeBinding.h"
 #include "SptDebug.hpp"
 #include "SptStdlibs.h"
 #include "StringPool.h"
@@ -753,46 +752,6 @@ Value VM::importModule(const std::string &path) {
   }
 
   return Value::object(exports);
-}
-
-NativeClassObject *VM::allocateNativeClass(const std::string &name) {
-  NativeClassObject *nativeClass = gc_.allocate<NativeClassObject>();
-  nativeClass->name = name;
-  return nativeClass;
-}
-
-NativeInstance *VM::allocateNativeInstance(NativeClassObject *nativeClass) {
-  NativeInstance *instance = gc_.allocate<NativeInstance>();
-  instance->nativeClass = nativeClass;
-  instance->ownership = nativeClass ? nativeClass->defaultOwnership : OwnershipMode::OwnedByVM;
-  return instance;
-}
-
-NativeInstance *VM::createNativeInstance(NativeClassObject *nativeClass, int argc, Value *argv) {
-  if (!nativeClass) {
-    runtimeError("Cannot create instance of null native class");
-    return nullptr;
-  }
-
-  if (!nativeClass->hasConstructor()) {
-    runtimeError("Native class '%s' has no constructor", nativeClass->name.c_str());
-    return nullptr;
-  }
-
-  NativeInstance *instance = allocateNativeInstance(nativeClass);
-  protect(Value::object(instance));
-
-  void *data = nativeClass->constructor(this, argc, argv);
-  if (!data) {
-    unprotect(1);
-    runtimeError("Failed to construct native object of type '%s'", nativeClass->name.c_str());
-    return nullptr;
-  }
-
-  instance->data = data;
-  unprotect(1);
-
-  return instance;
 }
 
 Value VM::constantToValue(const ConstantValue &cv) {

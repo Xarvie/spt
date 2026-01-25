@@ -13,7 +13,7 @@
 #include "bench/TestBenchmarks.h"
 
 // 原生绑定（类定义和测试）
-#include "test/NativeBindings.h"
+
 #include "test/TestNativeBindings.h"
 
 // 基础语法测试
@@ -120,8 +120,8 @@ int main(int argc, char *argv[]) {
   // 栈重分配安全
   registerStackReallocationTests(runner);
 
-  // 原生绑定
-  registerNativeBindingTests(runner);
+  //  // 原生绑定
+  //  registerNativeBindingTests(runner);
 
   // GC 测试
   // registerGCTests(runner);
@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
   registerApply(runner);
 
   registerMultiReturnTests(runner);
-  registerNativeMultiReturnTests(runner);
+  //  registerNativeMultiReturnTests(runner);
 
   registerCompilerTest(runner);
 #else

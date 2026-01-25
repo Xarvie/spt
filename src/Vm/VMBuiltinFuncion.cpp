@@ -1,7 +1,5 @@
-#include "VM.h"
-
 #include "Fiber.h"
-#include "NativeBinding.h"
+#include "VM.h"
 #include <algorithm>
 #include <cassert>
 #include <cerrno>

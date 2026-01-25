@@ -249,7 +249,6 @@ public:
   static bool getProperty(VM *vm, Value object, std::string_view fieldName, Value &outValue);
   static bool invokeMethod(VM *vm, Value receiver, std::string_view methodName, int argc,
                            Value *argv, Value &outResult);
-  static bool setProperty(VM *vm, Value object, std::string_view fieldName, const Value &value);
 
 private:
   // === Native Instance 处理（内部使用） ===
