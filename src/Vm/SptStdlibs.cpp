@@ -16,12 +16,12 @@ static Value createBoundNative(VM *vm, Value receiver, StringObject *name,
   vm->protect(receiver);
   vm->protect(Value::object(name));
 
-  NativeFunction *native = vm->gc().allocateNativeFunction(0);
+  Closure *native = vm->gc().allocateNativeClosure(0);
   native->name = name;
   native->arity = arity;
   native->receiver = receiver;
 
-  native->function = [fn](VM *vm, NativeFunction *self, int argc, Value *argv) -> Value {
+  native->function = [fn](VM *vm, Closure *self, int argc, Value *argv) -> Value {
     return fn(vm, self->receiver, argc, argv);
   };
 
@@ -562,15 +562,14 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, StringObject *method
         Value method = *v;
 
         if (method.isClosure()) {
+          Closure *closure = static_cast<Closure *>(method.asGC());
+          if (closure->isNative()) {
+            closure->receiver = receiver;
+            outResult = closure->function(vm, closure, argc, argv);
+            return true;
+          }
 
           return false;
-        }
-
-        if (method.isNativeFunc()) {
-          NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
-          native->receiver = receiver;
-          outResult = native->function(vm, native, argc, argv);
-          return true;
         }
       }
     }

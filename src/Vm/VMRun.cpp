@@ -419,80 +419,72 @@ InterpretResult VM::run() {
 
       if (initializer.isClosure()) {
         Closure *closure = static_cast<Closure *>(initializer.asGC());
-        const Prototype *proto = closure->proto;
+        if (closure->isNative()) {
+          if (closure->arity != -1 && C != closure->arity) {
+            SAVE_PC();
+            runtimeError("Native init expects %d arguments, got %d", closure->arity, C);
+            return InterpretResult::RUNTIME_ERROR;
+          }
 
-        int providedArgs = C;
-        if (proto->needsReceiver) {
-          providedArgs += 1;
-        }
+          Value *argsStart = &slots[B + 1];
+          closure->receiver = instanceVal;
+          PROTECT(closure->function(this, closure, C, argsStart));
+        } else {
 
-        if (!proto->isVararg && providedArgs != proto->numParams) {
+          const Prototype *proto = closure->proto;
+
+          int providedArgs = C;
+          if (proto->needsReceiver) {
+            providedArgs += 1;
+          }
+
+          if (!proto->isVararg && providedArgs != proto->numParams) {
+            SAVE_PC();
+            runtimeError("init expects %d arguments, got %d", proto->numParams, providedArgs);
+            return InterpretResult::RUNTIME_ERROR;
+          }
+
+          if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+            SAVE_PC();
+            runtimeError("Stack overflow");
+            return InterpretResult::RUNTIME_ERROR;
+          }
+
+          Value *newSlots = slots + B;
+          int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
+
+          fiber->ensureStack(neededStack);
+          fiber->ensureFrames(1);
+          REFRESH_CACHE();
+          newSlots = slots + B;
+
+          Value *argsStart = newSlots;
+          Value *targetStackTop = argsStart + proto->maxStackSize;
+
+          for (Value *p = argsStart + providedArgs; p < targetStackTop; ++p) {
+            *p = Value::nil();
+          }
+
+          STACK_TOP = targetStackTop;
+
           SAVE_PC();
-          runtimeError("init expects %d arguments, got %d", proto->numParams, providedArgs);
-          return InterpretResult::RUNTIME_ERROR;
+
+          CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
+          newFrame->closure = closure;
+          newFrame->ip = proto->code.data();
+          newFrame->expectedResults = 0;
+          newFrame->slots = newSlots;
+          newFrame->returnTo = slots + A;
+          newFrame->deferBase = fiber->deferTop;
+
+          frame = newFrame;
+          slots = frame->slots;
+
+          LOAD_PC();
         }
-
-        if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
-          SAVE_PC();
-          runtimeError("Stack overflow");
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        Value *newSlots = slots + B;
-        int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
-
-        fiber->ensureStack(neededStack);
-        fiber->ensureFrames(1);
-        REFRESH_CACHE();
-        newSlots = slots + B;
-
-        Value *argsStart = newSlots;
-        Value *targetStackTop = argsStart + proto->maxStackSize;
-
-        for (Value *p = argsStart + providedArgs; p < targetStackTop; ++p) {
-          *p = Value::nil();
-        }
-
-        STACK_TOP = targetStackTop;
-
-        SAVE_PC();
-
-        CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
-        newFrame->closure = closure;
-        newFrame->ip = proto->code.data();
-        newFrame->expectedResults = 0;
-        newFrame->slots = newSlots;
-        newFrame->returnTo = slots + A;
-        newFrame->deferBase = fiber->deferTop;
-
-        frame = newFrame;
-        slots = frame->slots;
-
-        LOAD_PC();
-
-      } else if (initializer.isNativeFunc()) {
-        NativeFunction *native = static_cast<NativeFunction *>(initializer.asGC());
-
-        if (native->arity != -1 && C != native->arity) {
-          SAVE_PC();
-          runtimeError("Native init expects %d arguments, got %d", native->arity, C);
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        Value *argsStart = &slots[B + 1];
-        native->receiver = instanceVal;
-        PROTECT(native->function(this, native, C, argsStart));
-
       } else {
         SAVE_PC();
         runtimeError("init method must be a function");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-    } else {
-      if (C > 0) {
-        SAVE_PC();
-        runtimeError("Class '%s' has no init method but arguments were provided.",
-                     klass->name.c_str());
         return InterpretResult::RUNTIME_ERROR;
       }
     }
@@ -508,7 +500,7 @@ InterpretResult VM::run() {
       runtimeError("Invalid upvalue index: %d", B);
       return InterpretResult::RUNTIME_ERROR;
     }
-    UpValue *upval = frame->closure->upvalues[B];
+    UpValue *upval = frame->closure->scriptUpvalues[B];
     slots[A] = *upval->location;
     SPT_DISPATCH();
   }
@@ -521,7 +513,7 @@ InterpretResult VM::run() {
       runtimeError("Invalid upvalue index: %d", B);
       return InterpretResult::RUNTIME_ERROR;
     }
-    UpValue *upval = frame->closure->upvalues[B];
+    UpValue *upval = frame->closure->scriptUpvalues[B];
     *upval->location = slots[A];
     SPT_DISPATCH();
   }
@@ -532,7 +524,7 @@ InterpretResult VM::run() {
     const Prototype &proto = frame->closure->proto->protos[Bx];
 
     Closure *closure;
-    PROTECT(closure = allocateClosure(&proto));
+    PROTECT(closure = allocateScriptClosure(&proto));
     protect(Value::object(closure));
     REFRESH_SLOTS();
 
@@ -541,9 +533,9 @@ InterpretResult VM::run() {
       if (uvDesc.isLocal) {
         UpValue *uv;
         PROTECT_LIGHT(uv = captureUpvalue(&slots[uvDesc.index]));
-        closure->upvalues[i] = uv;
+        closure->scriptUpvalues[i] = uv;
       } else {
-        closure->upvalues[i] = frame->closure->upvalues[uvDesc.index];
+        closure->scriptUpvalues[i] = frame->closure->scriptUpvalues[uvDesc.index];
       }
     }
 
@@ -952,123 +944,122 @@ InterpretResult VM::run() {
 
     if (callee.isClosure()) {
       Closure *closure = static_cast<Closure *>(callee.asGC());
-      const Prototype *proto = closure->proto;
-
-      if (argCount != proto->numParams && !proto->isVararg) {
-        SAVE_PC();
-        runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
-                     proto->numParams, argCount);
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
-        SAVE_PC();
-        runtimeError("Stack overflow");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      Value *newSlots = slots + A + 1;
-      Value *neededTop = newSlots + proto->maxStackSize;
-
-      if (SPT_UNLIKELY(neededTop > fiber->stackLast)) {
-        int needed = static_cast<int>(neededTop - fiber->stackTop);
-        fiber->ensureStack(needed);
-        REFRESH_CACHE();
-        newSlots = slots + A + 1;
-      }
-      if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity)) {
-        fiber->ensureFrames(1);
-        REFRESH_CACHE();
-        newSlots = slots + A + 1;
-      }
-
-      Value *argsStart = newSlots;
-
-      int numParams = proto->numParams;
-
-      for (int i = argCount; i < numParams; ++i) {
-        argsStart[i] = Value::nil();
-      }
-
-      fiber->stackTop = argsStart + proto->maxStackSize;
-
-      SAVE_PC();
-
-      CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
-      newFrame->closure = closure;
-      newFrame->ip = proto->code.data();
-      newFrame->expectedResults = expectedResults;
-      newFrame->slots = newSlots;
-      newFrame->returnTo = slots + A;
-      newFrame->deferBase = fiber->deferTop;
-
-      frame = newFrame;
-      slots = frame->slots;
-
-      LOAD_PC();
-
-    } else if (callee.isNativeFunc()) {
-      NativeFunction *native = static_cast<NativeFunction *>(callee.asGC());
-
-      if (native->arity != -1 && argCount != native->arity) {
-        SAVE_PC();
-        runtimeError("Native function '%s' expects %d arguments, got %d", native->getName(),
-                     native->arity, argCount);
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      hasNativeMultiReturn_ = false;
-      nativeMultiReturn_.clear();
-
-      Value *argsStart = &slots[A + 1];
-
-      Value result;
-      PROTECT(result = native->function(this, native, argCount, argsStart));
-
-      if (yieldPending_) {
-        yieldPending_ = false;
-        return InterpretResult::OK;
-      }
-
-      if (hasError_) {
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      if (hasNativeMultiReturn_) {
-        int returnCount = static_cast<int>(nativeMultiReturn_.size());
-
-        if (expectedResults == -1) {
-
-          fiber->ensureStack(returnCount);
-
-          RESTORE_SLOTS_ONLY();
-
-          for (int i = 0; i < returnCount; ++i) {
-            slots[A + i] = nativeMultiReturn_[i];
-          }
-          STACK_TOP = slots + A + returnCount;
-        } else if (expectedResults > 0) {
-          for (int i = 0; i < returnCount && i < expectedResults; ++i) {
-            slots[A + i] = nativeMultiReturn_[i];
-          }
-          for (int i = returnCount; i < expectedResults; ++i) {
-            slots[A + i] = Value::nil();
-          }
-        } else {
+      if (closure->isNative()) {
+        if (closure->arity != -1 && argCount != closure->arity) {
+          SAVE_PC();
+          runtimeError("Native function '%s' expects %d arguments, got %d", closure->getName(),
+                       closure->arity, argCount);
+          return InterpretResult::RUNTIME_ERROR;
         }
 
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
-      } else {
-        if (expectedResults != 0) {
-          slots[A] = result;
+
+        Value *argsStart = &slots[A + 1];
+
+        Value result;
+        PROTECT(result = closure->function(this, closure, argCount, argsStart));
+
+        if (yieldPending_) {
+          yieldPending_ = false;
+          return InterpretResult::OK;
+        }
+
+        if (hasError_) {
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        if (hasNativeMultiReturn_) {
+          int returnCount = static_cast<int>(nativeMultiReturn_.size());
+
           if (expectedResults == -1) {
-            STACK_TOP = slots + A + 1;
-          } else {
-            for (int i = 1; i < expectedResults; ++i)
+
+            fiber->ensureStack(returnCount);
+
+            RESTORE_SLOTS_ONLY();
+
+            for (int i = 0; i < returnCount; ++i) {
+              slots[A + i] = nativeMultiReturn_[i];
+            }
+            STACK_TOP = slots + A + returnCount;
+          } else if (expectedResults > 0) {
+            for (int i = 0; i < returnCount && i < expectedResults; ++i) {
+              slots[A + i] = nativeMultiReturn_[i];
+            }
+            for (int i = returnCount; i < expectedResults; ++i) {
               slots[A + i] = Value::nil();
+            }
+          } else {
+          }
+
+          hasNativeMultiReturn_ = false;
+          nativeMultiReturn_.clear();
+        } else {
+          if (expectedResults != 0) {
+            slots[A] = result;
+            if (expectedResults == -1) {
+              STACK_TOP = slots + A + 1;
+            } else {
+              for (int i = 1; i < expectedResults; ++i)
+                slots[A + i] = Value::nil();
+            }
           }
         }
+      } else {
+        const Prototype *proto = closure->proto;
+
+        if (argCount != proto->numParams && !proto->isVararg) {
+          SAVE_PC();
+          runtimeError("Function '%s' expects %d arguments, got %d", proto->name.c_str(),
+                       proto->numParams, argCount);
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+          SAVE_PC();
+          runtimeError("Stack overflow");
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        Value *newSlots = slots + A + 1;
+        Value *neededTop = newSlots + proto->maxStackSize;
+
+        if (SPT_UNLIKELY(neededTop > fiber->stackLast)) {
+          int needed = static_cast<int>(neededTop - fiber->stackTop);
+          fiber->ensureStack(needed);
+          REFRESH_CACHE();
+          newSlots = slots + A + 1;
+        }
+        if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity)) {
+          fiber->ensureFrames(1);
+          REFRESH_CACHE();
+          newSlots = slots + A + 1;
+        }
+
+        Value *argsStart = newSlots;
+
+        int numParams = proto->numParams;
+
+        for (int i = argCount; i < numParams; ++i) {
+          argsStart[i] = Value::nil();
+        }
+
+        fiber->stackTop = argsStart + proto->maxStackSize;
+
+        SAVE_PC();
+
+        CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
+        newFrame->closure = closure;
+        newFrame->ip = proto->code.data();
+        newFrame->expectedResults = expectedResults;
+        newFrame->slots = newSlots;
+        newFrame->returnTo = slots + A;
+        newFrame->deferBase = fiber->deferTop;
+
+        frame = newFrame;
+        slots = frame->slots;
+
+        LOAD_PC();
       }
     } else {
       SAVE_PC();
@@ -1281,8 +1272,16 @@ InterpretResult VM::run() {
       PROTECT(getPropSuccess =
                   StdlibDispatcher::getProperty(this, receiver, methodName, propertyValue));
       if (getPropSuccess) {
-        if (propertyValue.isNativeFunc()) {
-          method = propertyValue;
+        if (propertyValue.isClosure()) {
+          Closure *closure = static_cast<Closure *>(propertyValue.asGC());
+          if (closure->isNative()) {
+            method = propertyValue;
+          } else {
+            SAVE_PC();
+            runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
+                         methodName->c_str());
+            return InterpretResult::RUNTIME_ERROR;
+          }
         } else {
           SAVE_PC();
           runtimeError("'%s.%s' is a property, not a method", receiver.typeName(),
@@ -1308,144 +1307,145 @@ InterpretResult VM::run() {
 
     if (method.isClosure()) {
       Closure *closure = static_cast<Closure *>(method.asGC());
-      const Prototype *proto = closure->proto;
+      if (closure->isNative()) {
+        protect(method);
+        REFRESH_SLOTS();
 
-      int totalArgsProvided = userArgCount + 1;
-      bool dropThis = false;
-
-      if (proto->needsReceiver) {
-        if (!proto->isVararg && totalArgsProvided != proto->numParams) {
+        if (closure->arity != -1 && userArgCount != closure->arity) {
           SAVE_PC();
-          runtimeError("Method '%s' expects %d arguments (including 'this'), got %d",
-                       methodName->c_str(), proto->numParams, totalArgsProvided);
+          runtimeError("Native method '%s' expects %d arguments, got %d", closure->getName(),
+                       closure->arity, userArgCount);
           return InterpretResult::RUNTIME_ERROR;
         }
-        dropThis = false;
-      } else {
-        if (!proto->isVararg && totalArgsProvided != (proto->numParams + 1)) {
-          SAVE_PC();
-          runtimeError("Method '%s' expects %d arguments, got %d", methodName->c_str(),
-                       proto->numParams, totalArgsProvided - 1);
-          return InterpretResult::RUNTIME_ERROR;
-        }
-        dropThis = true;
-      }
 
-      if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
-        SAVE_PC();
-        runtimeError("Stack overflow");
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      Value *newSlots = slots + A + (dropThis ? 1 : 0);
-      int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
-
-      if (SPT_UNLIKELY(neededStack > static_cast<int>(fiber->stackSize))) {
-        fiber->ensureStack(neededStack);
-        RESTORE_SLOTS_ONLY();
-        newSlots = slots + A + (dropThis ? 1 : 0);
-      }
-      if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity)) {
-        fiber->ensureFrames(1);
-        frame = &fiber->frames[fiber->frameCount - 1];
-      }
-
-      int argsPushed;
-      if (dropThis) {
-        newSlots = slots + A + 1;
-        argsPushed = userArgCount;
-      } else {
-        newSlots = slots + A;
-        argsPushed = totalArgsProvided;
-      }
-
-      Value *targetStackTop = newSlots + proto->maxStackSize;
-
-      for (int i = argsPushed; i < proto->numParams; ++i) {
-        newSlots[i] = Value::nil();
-      }
-
-      STACK_TOP = targetStackTop;
-
-      SAVE_PC();
-
-      CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
-      newFrame->closure = closure;
-      newFrame->ip = proto->code.data();
-      newFrame->expectedResults = C - 1;
-      newFrame->slots = newSlots;
-      newFrame->returnTo = slots + A;
-      newFrame->deferBase = fiber->deferTop;
-
-      frame = newFrame;
-      slots = frame->slots;
-
-      LOAD_PC();
-
-    } else if (method.isNativeFunc()) {
-      NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
-      protect(method);
-      REFRESH_SLOTS();
-
-      if (native->arity != -1 && userArgCount != native->arity) {
-        SAVE_PC();
-        runtimeError("Native method '%s' expects %d arguments, got %d", native->getName(),
-                     native->arity, userArgCount);
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      hasNativeMultiReturn_ = false;
-      nativeMultiReturn_.clear();
-
-      argsStart = &slots[A + 1];
-      FiberObject *callFiber = currentFiber_;
-
-      Value result;
-      Value savedReceiver = native->receiver;
-      native->receiver = receiver;
-      PROTECT(result = native->function(this, native, userArgCount, argsStart));
-      native->receiver = savedReceiver;
-
-      if (currentFiber_ != callFiber) {
-        callFiber->stackTop--;
-      } else {
-        unprotect(1);
-      }
-
-      if (yieldPending_) {
-        yieldPending_ = false;
-        return InterpretResult::OK;
-      }
-
-      if (hasError_) {
-        return InterpretResult::RUNTIME_ERROR;
-      }
-
-      int expectedResults = C - 1;
-
-      if (hasNativeMultiReturn_) {
-        int returnCount = static_cast<int>(nativeMultiReturn_.size());
-        if (expectedResults == -1) {
-          for (int i = 0; i < returnCount; ++i)
-            slots[A + i] = nativeMultiReturn_[i];
-          STACK_TOP = slots + A + returnCount;
-        } else {
-          for (int i = 0; i < expectedResults; ++i) {
-            slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
-          }
-        }
         hasNativeMultiReturn_ = false;
         nativeMultiReturn_.clear();
-      } else {
-        if (expectedResults != 0) {
-          slots[A] = result;
-          if (expectedResults == -1)
-            STACK_TOP = slots + A + 1;
-          else {
-            for (int i = 1; i < expectedResults; ++i)
-              slots[A + i] = Value::nil();
+
+        argsStart = &slots[A + 1];
+        FiberObject *callFiber = currentFiber_;
+
+        Value result;
+        Value savedReceiver = closure->receiver;
+        closure->receiver = receiver;
+        PROTECT(result = closure->function(this, closure, userArgCount, argsStart));
+        closure->receiver = savedReceiver;
+
+        if (currentFiber_ != callFiber) {
+          callFiber->stackTop--;
+        } else {
+          unprotect(1);
+        }
+
+        if (yieldPending_) {
+          yieldPending_ = false;
+          return InterpretResult::OK;
+        }
+
+        if (hasError_) {
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        int expectedResults = C - 1;
+
+        if (hasNativeMultiReturn_) {
+          int returnCount = static_cast<int>(nativeMultiReturn_.size());
+          if (expectedResults == -1) {
+            for (int i = 0; i < returnCount; ++i)
+              slots[A + i] = nativeMultiReturn_[i];
+            STACK_TOP = slots + A + returnCount;
+          } else {
+            for (int i = 0; i < expectedResults; ++i) {
+              slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
+            }
+          }
+          hasNativeMultiReturn_ = false;
+          nativeMultiReturn_.clear();
+        } else {
+          if (expectedResults != 0) {
+            slots[A] = result;
+            if (expectedResults == -1)
+              STACK_TOP = slots + A + 1;
+            else {
+              for (int i = 1; i < expectedResults; ++i)
+                slots[A + i] = Value::nil();
+            }
           }
         }
+      } else {
+
+        const Prototype *proto = closure->proto;
+
+        int totalArgsProvided = userArgCount + 1;
+        bool dropThis = false;
+
+        if (proto->needsReceiver) {
+          if (!proto->isVararg && totalArgsProvided != proto->numParams) {
+            SAVE_PC();
+            runtimeError("Method '%s' expects %d arguments (including 'this'), got %d",
+                         methodName->c_str(), proto->numParams, totalArgsProvided);
+            return InterpretResult::RUNTIME_ERROR;
+          }
+          dropThis = false;
+        } else {
+          if (!proto->isVararg && totalArgsProvided != (proto->numParams + 1)) {
+            SAVE_PC();
+            runtimeError("Method '%s' expects %d arguments, got %d", methodName->c_str(),
+                         proto->numParams, totalArgsProvided - 1);
+            return InterpretResult::RUNTIME_ERROR;
+          }
+          dropThis = true;
+        }
+
+        if (FRAME_COUNT >= FiberObject::MAX_FRAMES) {
+          SAVE_PC();
+          runtimeError("Stack overflow");
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        Value *newSlots = slots + A + (dropThis ? 1 : 0);
+        int neededStack = static_cast<int>((newSlots - fiber->stack) + proto->maxStackSize);
+
+        if (SPT_UNLIKELY(neededStack > static_cast<int>(fiber->stackSize))) {
+          fiber->ensureStack(neededStack);
+          RESTORE_SLOTS_ONLY();
+          newSlots = slots + A + (dropThis ? 1 : 0);
+        }
+        if (SPT_UNLIKELY(fiber->frameCount + 1 > fiber->framesCapacity)) {
+          fiber->ensureFrames(1);
+          frame = &fiber->frames[fiber->frameCount - 1];
+        }
+
+        int argsPushed;
+        if (dropThis) {
+          newSlots = slots + A + 1;
+          argsPushed = userArgCount;
+        } else {
+          newSlots = slots + A;
+          argsPushed = totalArgsProvided;
+        }
+
+        Value *targetStackTop = newSlots + proto->maxStackSize;
+
+        for (int i = argsPushed; i < proto->numParams; ++i) {
+          newSlots[i] = Value::nil();
+        }
+
+        STACK_TOP = targetStackTop;
+
+        SAVE_PC();
+
+        CallFrame *newFrame = &fiber->frames[FRAME_COUNT++];
+        newFrame->closure = closure;
+        newFrame->ip = proto->code.data();
+        newFrame->expectedResults = C - 1;
+        newFrame->slots = newSlots;
+        newFrame->returnTo = slots + A;
+        newFrame->deferBase = fiber->deferTop;
+
+        frame = newFrame;
+        slots = frame->slots;
+
+        LOAD_PC();
       }
     } else {
       SAVE_PC();
@@ -1952,75 +1952,73 @@ InterpretResult VM::run() {
 
     if (funcVal.isClosure()) {
       Closure *closure = static_cast<Closure *>(funcVal.asGC());
-      const Prototype *proto = closure->proto;
+      if (closure->isNative()) {
+        nativeMultiReturn_.clear();
+        hasNativeMultiReturn_ = false;
 
-      size_t currentSize = fiber->stackTop - fiber->stack;
-      if (currentSize + 3 + proto->maxStackSize >= fiber->stackSize) {
-        fiber->ensureStack(proto->maxStackSize + 3);
-        REFRESH_SLOTS();
-        base = &slots[A];
-      }
-      fiber->ensureFrames(1);
+        Value result;
+        PROTECT(result = closure->function(this, closure, 2, &base[1]));
 
-      Value *top = fiber->stackTop;
-      top[0] = base[0];
-      top[1] = base[1];
-      top[2] = base[2];
-      fiber->stackTop += 3;
+        if (hasError_)
+          return InterpretResult::RUNTIME_ERROR;
 
-      SAVE_PC();
+        Value *dest = &slots[A + 3];
 
-      CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
-      newFrame->closure = closure;
-      newFrame->ip = proto->code.data();
-
-      newFrame->slots = top + 1;
-
-      newFrame->returnTo = slots + A + 3;
-      newFrame->expectedResults = C;
-      newFrame->deferBase = fiber->deferTop;
-
-      frame = newFrame;
-
-      Value *newStackStart = newFrame->slots;
-      Value *newStackEnd = newStackStart + proto->maxStackSize;
-      while (fiber->stackTop < newStackEnd) {
-        *fiber->stackTop++ = Value::nil();
-      }
-
-      slots = frame->slots;
-
-      LOAD_PC();
-
-    }
-
-    else if (funcVal.isNativeFunc()) {
-      NativeFunction *native = static_cast<NativeFunction *>(funcVal.asGC());
-
-      nativeMultiReturn_.clear();
-      hasNativeMultiReturn_ = false;
-
-      Value result;
-      PROTECT(result = native->function(this, native, 2, &base[1]));
-
-      if (hasError_)
-        return InterpretResult::RUNTIME_ERROR;
-
-      Value *dest = &slots[A + 3];
-
-      if (hasNativeMultiReturn_) {
-        const size_t count = nativeMultiReturn_.size();
-        const size_t limit = (count < C) ? count : C;
-        for (size_t i = 0; i < limit; ++i)
-          dest[i] = nativeMultiReturn_[i];
-        for (size_t i = limit; i < C; ++i)
-          dest[i] = Value::nil();
-      } else {
-        if (C > 0) {
-          dest[0] = result;
-          for (int i = 1; i < C; ++i)
+        if (hasNativeMultiReturn_) {
+          const size_t count = nativeMultiReturn_.size();
+          const size_t limit = (count < C) ? count : C;
+          for (size_t i = 0; i < limit; ++i)
+            dest[i] = nativeMultiReturn_[i];
+          for (size_t i = limit; i < C; ++i)
             dest[i] = Value::nil();
+        } else {
+          if (C > 0) {
+            dest[0] = result;
+            for (int i = 1; i < C; ++i)
+              dest[i] = Value::nil();
+          }
         }
+      } else {
+
+        const Prototype *proto = closure->proto;
+
+        size_t currentSize = fiber->stackTop - fiber->stack;
+        if (currentSize + 3 + proto->maxStackSize >= fiber->stackSize) {
+          fiber->ensureStack(proto->maxStackSize + 3);
+          REFRESH_SLOTS();
+          base = &slots[A];
+        }
+        fiber->ensureFrames(1);
+
+        Value *top = fiber->stackTop;
+        top[0] = base[0];
+        top[1] = base[1];
+        top[2] = base[2];
+        fiber->stackTop += 3;
+
+        SAVE_PC();
+
+        CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
+        newFrame->closure = closure;
+        newFrame->ip = proto->code.data();
+
+        newFrame->slots = top + 1;
+
+        newFrame->returnTo = slots + A + 3;
+        newFrame->expectedResults = C;
+        newFrame->deferBase = fiber->deferTop;
+
+        frame = newFrame;
+
+        Value *newStackStart = newFrame->slots;
+        Value *newStackEnd = newStackStart + proto->maxStackSize;
+        while (fiber->stackTop < newStackEnd) {
+          *fiber->stackTop++ = Value::nil();
+        }
+
+        slots = frame->slots;
+
+        LOAD_PC();
       }
     } else {
       SAVE_PC();

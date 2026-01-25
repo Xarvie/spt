@@ -14,7 +14,6 @@ struct NativeInstance;
 struct Closure;
 struct StringObject;
 class StringPool;
-struct NativeFunction;
 
 // ============================================================================
 // GC 调试控制 - 全局开关
@@ -64,7 +63,6 @@ struct GCStats {
   size_t fibers[2] = {0, 0};
   size_t upvalues[2] = {0, 0};
   size_t classes[2] = {0, 0};
-  size_t nativeFuncs[2] = {0, 0};
   size_t nativeClasses[2] = {0, 0};
   size_t nativeObjects[2] = {0, 0};
 };
@@ -91,7 +89,11 @@ public:
   void *allocateRaw(size_t size);
   void deallocate(GCObject *obj);
 
-  Closure *allocateClosure(const Prototype *proto);
+  // 分配脚本闭包（根据 proto 的 upvalue 数量）
+  Closure *allocateScriptClosure(const Prototype *proto);
+
+  // 分配原生闭包
+  Closure *allocateNativeClosure(int nupvalues = 0);
 
   StringObject *allocateString(std::string_view sv, uint32_t hash);
 
@@ -138,10 +140,6 @@ public:
   void markObject(GCObject *obj);
 
   void setStringPool(StringPool *pool) { stringPool_ = pool; }
-
-  // 分配带 upvalue 的原生函数
-  // nupvalues: upvalue 数量，默认为 0
-  NativeFunction *allocateNativeFunction(int nupvalues = 0);
 
 private:
   void markRoots();

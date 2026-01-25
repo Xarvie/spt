@@ -25,12 +25,15 @@ std::string Value::toString() const {
     return "<map>";
   case ValueType::Object:
     return "<instance>";
-  case ValueType::Closure:
+  case ValueType::Closure: {
+    Closure *closure = static_cast<Closure *>(as.gc);
+    if (closure->isNative()) {
+      return "<native function>";
+    }
     return "<function>";
+  }
   case ValueType::Class:
     return "<class>";
-  case ValueType::NativeFunc:
-    return "<native function>";
   case ValueType::Fiber:
     return "<fiber>";
   case ValueType::NativeObject: {
@@ -63,12 +66,15 @@ const char *Value::typeName() const {
     return "map";
   case ValueType::Object:
     return "instance";
-  case ValueType::Closure:
+  case ValueType::Closure: {
+    Closure *closure = static_cast<Closure *>(as.gc);
+    if (closure && closure->isNative()) {
+      return "native";
+    }
     return "function";
+  }
   case ValueType::Class:
     return "class";
-  case ValueType::NativeFunc:
-    return "native";
   case ValueType::Fiber:
     return "fiber";
 

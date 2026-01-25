@@ -21,7 +21,6 @@ enum class ValueType : uint8_t {
   Map,
   Object,
   Closure,
-  NativeFunc,
   Class,
   Upvalue,
   Fiber,

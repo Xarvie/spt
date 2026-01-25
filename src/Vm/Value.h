@@ -233,16 +233,12 @@ struct Value {
 
   bool isClass() const { return type == ValueType::Class; }
 
-  bool isNativeFunc() const { return type == ValueType::NativeFunc; }
-
   bool isFiber() const { return type == ValueType::Fiber; }
 
   bool isNativeInstance() const { return type == ValueType::NativeObject; }
 
-  // 检查是否可调用（闭包、原生函数、类构造函数等）
-  bool isCallable() const {
-    return type == ValueType::Closure || type == ValueType::NativeFunc || type == ValueType::Class;
-  }
+  // 检查是否可调用（闭包、类构造函数等）
+  bool isCallable() const { return type == ValueType::Closure || type == ValueType::Class; }
 
   // ========================================================================
   // 值提取（强制转换/获取）

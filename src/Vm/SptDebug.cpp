@@ -31,9 +31,9 @@ static Value buildDebugInfo(VM *vm, StringObject *str, DebugInfo info) {
   return Value::object(map_object);
 }
 
-static Value debugGetInfo(VM *vm, NativeFunction *self, int argc, Value *argv) {
+static Value debugGetInfo(VM *vm, Closure *self, int argc, Value *argv) {
 
-  if (argc < 1 || !(argv[0].isClosure() || argv[0].isNativeFunc())) {
+  if (argc < 1 || !argv[0].isClosure()) {
     vm->throwError(Value::object(vm->allocateString("debug.getInfo: arg 1 must be a function")));
     return Value::nil();
   }
@@ -58,7 +58,7 @@ static Value debugGetInfo(VM *vm, NativeFunction *self, int argc, Value *argv) {
   return buildDebugInfo(vm, str, info);
 }
 
-static Value debugGetStack(VM *vm, NativeFunction *self, int argc, Value *argv) {
+static Value debugGetStack(VM *vm, Closure *self, int argc, Value *argv) {
 
   if (argc < 1 || !argv[0].isNumber()) {
     vm->throwError(Value::object(vm->allocateString("debug.getStack: arg 1 must be a number")));

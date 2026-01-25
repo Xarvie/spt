@@ -71,7 +71,7 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
   mainFiber_->reset();
   currentFiber_ = mainFiber_;
 
-  Closure *mainClosure = allocateClosure(&chunk.mainProto);
+  Closure *mainClosure = allocateScriptClosure(&chunk.mainProto);
   protect(Value::object(mainClosure));
 
   currentFiber_->ensureStack(mainClosure->proto->maxStackSize);
@@ -147,7 +147,7 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
 
   FiberObject *fiber = currentFiber_;
 
-  Closure *mainClosure = allocateClosure(&chunk.mainProto);
+  Closure *mainClosure = allocateScriptClosure(&chunk.mainProto);
   protect(Value::object(mainClosure));
 
   int frameStartOffset = static_cast<int>(fiber->stackTop - fiber->stack);
@@ -453,7 +453,7 @@ void VM::setGlobal(const std::string &name, Value value) {
 }
 
 void VM::registerNative(const std::string &name, NativeFn fn, int arity) {
-  NativeFunction *native = gc_.allocateNativeFunction(0);
+  Closure *native = gc_.allocateNativeClosure(0);
   native->function = std::move(fn);
   native->arity = arity;
   native->name = allocateString(name);
@@ -462,39 +462,31 @@ void VM::registerNative(const std::string &name, NativeFn fn, int arity) {
   defineGlobal(name, Value::object(native));
 }
 
-// ----------------------------------------------------------------------------
-// 新增：createNativeFunction
-// ----------------------------------------------------------------------------
-NativeFunction *VM::createNativeFunction(NativeFn fn, int arity, int nupvalues) {
-  NativeFunction *native = gc_.allocateNativeFunction(nupvalues);
+Closure *VM::createNativeClosure(NativeFn fn, int arity, int nupvalues) {
+  Closure *native = gc_.allocateNativeClosure(nupvalues);
   native->function = std::move(fn);
   native->arity = arity;
   native->receiver = Value::nil();
   return native;
 }
 
-// ----------------------------------------------------------------------------
-// 新增：registerNativeWithUpvalues
-// ----------------------------------------------------------------------------
 void VM::registerNativeWithUpvalues(const std::string &name, NativeFn fn, int arity,
                                     std::initializer_list<Value> upvalues) {
   int nupvalues = static_cast<int>(upvalues.size());
 
-  // 先保护所有 upvalue（可能是 GC 对象）
   for (const Value &uv : upvalues) {
     protect(uv);
   }
 
-  NativeFunction *native = gc_.allocateNativeFunction(nupvalues);
+  Closure *native = gc_.allocateNativeClosure(nupvalues);
   native->function = std::move(fn);
   native->arity = arity;
   native->name = allocateString(name);
   native->receiver = Value::nil();
 
-  // 拷贝 upvalues
   int i = 0;
   for (const Value &uv : upvalues) {
-    native->upvalues[i++] = uv;
+    native->nativeUpvalues[i++] = uv;
   }
 
   unprotect(nupvalues);
@@ -643,7 +635,9 @@ StringObject *VM::allocateString(const char *str) {
   return stringPool_->intern(std::string_view(str));
 }
 
-Closure *VM::allocateClosure(const Prototype *proto) { return gc_.allocateClosure(proto); }
+Closure *VM::allocateScriptClosure(const Prototype *proto) {
+  return gc_.allocateScriptClosure(proto);
+}
 
 ClassObject *VM::allocateClass(const std::string &name) {
   ClassObject *klass = gc_.allocate<ClassObject>();

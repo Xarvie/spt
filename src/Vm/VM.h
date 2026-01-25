@@ -96,8 +96,8 @@ public:
   // 注册原生函数（无 upvalue）
   void registerNative(const std::string &name, NativeFn fn, int arity);
 
-  // === 创建原生函数对象（不注册到全局） ===
-  NativeFunction *createNativeFunction(NativeFn fn, int arity, int nupvalues = 0);
+  // === 创建原生闭包对象（不注册到全局） ===
+  Closure *createNativeClosure(NativeFn fn, int arity, int nupvalues = 0);
 
   // === 创建并注册带 upvalue 的原生函数 ===
   void registerNativeWithUpvalues(const std::string &name, NativeFn fn, int arity,
@@ -129,7 +129,7 @@ public:
   StringObject *allocateString(const std::string &str);
   StringObject *allocateString(const char *str);
 
-  Closure *allocateClosure(const Prototype *proto);
+  Closure *allocateScriptClosure(const Prototype *proto);
   ClassObject *allocateClass(const std::string &name);
   Instance *allocateInstance(ClassObject *klass);
   ListObject *allocateList(int capacity);

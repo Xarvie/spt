@@ -31,9 +31,9 @@ void *GC::allocateRaw(size_t size) {
 
 void GC::deallocate(GCObject *obj) { freeObject(obj); }
 
-Closure *GC::allocateClosure(const Prototype *proto) {
+Closure *GC::allocateScriptClosure(const Prototype *proto) {
   size_t count = proto->upvalues.size();
-  size_t size = sizeof(Closure) + sizeof(UpValue *) * count;
+  size_t size = Closure::scriptAllocSize(static_cast<int>(count));
 
   void *ptr = allocateRaw(size);
   Closure *closure = static_cast<Closure *>(ptr);
@@ -43,11 +43,16 @@ Closure *GC::allocateClosure(const Prototype *proto) {
   closure->next = objects_;
   objects_ = closure;
 
+  closure->kind = ClosureKind::Script;
   closure->proto = proto;
-  closure->upvalueCount = static_cast<int>(count);
+  closure->upvalueCount = static_cast<uint8_t>(count);
+
+  closure->name = nullptr;
+  closure->arity = 0;
+  closure->receiver = Value::nil();
 
   if (count > 0) {
-    std::memset(closure->upvalues, 0, count * sizeof(UpValue *));
+    std::memset(closure->scriptUpvalues, 0, count * sizeof(UpValue *));
   }
 
   objectCount_++;
@@ -58,8 +63,56 @@ Closure *GC::allocateClosure(const Prototype *proto) {
   updateTypeStats(ValueType::Closure, true);
 
   if (GCDebug::enabled && GCDebug::logAllocations) {
-    fprintf(stderr, "[GC] alloc Closure @%p size=%zu (uv=%zu) total=%zu #%zu\n", (void *)closure,
-            size, count, bytesAllocated_, objectCount_);
+    fprintf(stderr, "[GC] alloc ScriptClosure @%p size=%zu (uv=%zu) total=%zu #%zu\n",
+            (void *)closure, size, count, bytesAllocated_, objectCount_);
+  }
+
+  return closure;
+}
+
+Closure *GC::allocateNativeClosure(int nupvalues) {
+  collectIfNeeded();
+
+  size_t size = Closure::nativeAllocSize(nupvalues);
+
+  void *mem = ::operator new(size);
+  bytesAllocated_ += size;
+  objectCount_++;
+
+  if (bytesAllocated_ > stats_.peakBytesAllocated) {
+    stats_.peakBytesAllocated = bytesAllocated_;
+  }
+  if (objectCount_ > stats_.peakObjectCount) {
+    stats_.peakObjectCount = objectCount_;
+  }
+
+  Closure *closure = static_cast<Closure *>(mem);
+
+  closure->next = objects_;
+  closure->type = ValueType::Closure;
+  closure->marked = false;
+  objects_ = closure;
+
+  closure->kind = ClosureKind::Native;
+  closure->upvalueCount = static_cast<uint8_t>(nupvalues);
+
+  closure->proto = nullptr;
+
+  closure->name = nullptr;
+  closure->arity = 0;
+  closure->receiver = Value::nil();
+
+  new (&closure->function) NativeFn();
+
+  for (int i = 0; i < nupvalues; i++) {
+    closure->nativeUpvalues[i] = Value::nil();
+  }
+
+  updateTypeStats(ValueType::Closure, true);
+
+  if (GCDebug::enabled && GCDebug::logAllocations) {
+    fprintf(stderr, "[GC] alloc NativeClosure @%p size=%zu upvalues=%d total=%zu #%zu\n",
+            (void *)closure, size, nupvalues, bytesAllocated_, objectCount_);
   }
 
   return closure;
@@ -278,50 +331,6 @@ void GC::markValue(Value &value) {
   markObject(value.asGC());
 }
 
-NativeFunction *GC::allocateNativeFunction(int nupvalues) {
-  collectIfNeeded();
-
-  size_t size = NativeFunction::allocSize(nupvalues);
-
-  void *mem = ::operator new(size);
-  bytesAllocated_ += size;
-  objectCount_++;
-
-  if (bytesAllocated_ > stats_.peakBytesAllocated) {
-    stats_.peakBytesAllocated = bytesAllocated_;
-  }
-  if (objectCount_ > stats_.peakObjectCount) {
-    stats_.peakObjectCount = objectCount_;
-  }
-
-  NativeFunction *fn = static_cast<NativeFunction *>(mem);
-
-  fn->next = objects_;
-  fn->type = ValueType::NativeFunc;
-  fn->marked = false;
-  objects_ = fn;
-
-  fn->name = nullptr;
-  fn->arity = 0;
-  fn->upvalueCount = static_cast<uint8_t>(nupvalues);
-  fn->receiver = Value::nil();
-
-  new (&fn->function) NativeFn();
-
-  for (int i = 0; i < nupvalues; i++) {
-    fn->upvalues[i] = Value::nil();
-  }
-
-  updateTypeStats(ValueType::NativeFunc, true);
-
-  if (GCDebug::enabled && GCDebug::logAllocations) {
-    fprintf(stderr, "[GC] alloc NativeFunction @%p size=%zu upvalues=%d total=%zu #%zu\n",
-            (void *)fn, size, nupvalues, bytesAllocated_, objectCount_);
-  }
-
-  return fn;
-}
-
 void GC::traceReferences() {
   if (GCDebug::enabled && GCDebug::verboseMarking) {
     fprintf(stderr, "[GC] tracing %zu gray objects...\n", grayStack_.size());
@@ -337,9 +346,28 @@ void GC::traceReferences() {
 
     case ValueType::Closure: {
       auto *closure = static_cast<Closure *>(obj);
-      for (int i = 0; i < closure->upvalueCount; ++i) {
-        if (closure->upvalues[i]) {
-          markObject(closure->upvalues[i]);
+
+      if (closure->name) {
+        markObject(closure->name);
+      }
+
+      if (!closure->receiver.isNil()) {
+        markValue(closure->receiver);
+      }
+
+      if (closure->isScript()) {
+
+        for (int i = 0; i < closure->upvalueCount; ++i) {
+          if (closure->scriptUpvalues[i]) {
+            markObject(closure->scriptUpvalues[i]);
+          }
+        }
+      } else {
+
+        for (int i = 0; i < closure->upvalueCount; i++) {
+          if (!closure->nativeUpvalues[i].isNil()) {
+            markValue(closure->nativeUpvalues[i]);
+          }
         }
       }
       break;
@@ -399,25 +427,6 @@ void GC::traceReferences() {
     case ValueType::Upvalue: {
       auto *uv = static_cast<UpValue *>(obj);
       markValue(*uv->location);
-      break;
-    }
-
-    case ValueType::NativeFunc: {
-      auto *native = static_cast<NativeFunction *>(obj);
-
-      if (native->name) {
-        markObject(native->name);
-      }
-
-      if (!native->receiver.isNil()) {
-        markValue(native->receiver);
-      }
-
-      for (int i = 0; i < native->upvalueCount; i++) {
-        if (!native->upvalues[i].isNil()) {
-          markValue(native->upvalues[i]);
-        }
-      }
       break;
     }
 
@@ -539,9 +548,19 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::Closure: {
     Closure *closure = static_cast<Closure *>(obj);
-    size_t size = sizeof(Closure) + sizeof(UpValue *) * closure->upvalueCount;
+    size_t size = closure->allocSize();
+
+    if (closure->isNative()) {
+      closure->function.~NativeFn();
+    }
+
     bytesAllocated_ -= size;
     ::operator delete(closure);
+
+    if (GCDebug::enabled && GCDebug::logFrees) {
+      fprintf(stderr, "[GC] free Closure @%p size=%zu kind=%s upvalues=%d\n", (void *)closure, size,
+              closure->isNative() ? "Native" : "Script", closure->upvalueCount);
+    }
     break;
   }
   case ValueType::Class: {
@@ -554,22 +573,6 @@ void GC::freeObject(GCObject *obj) {
     Instance *instance = static_cast<Instance *>(obj);
     bytesAllocated_ -= sizeof(Instance);
     delete instance;
-    break;
-  }
-  case ValueType::NativeFunc: {
-    NativeFunction *native = static_cast<NativeFunction *>(obj);
-    size_t size = NativeFunction::allocSize(native->upvalueCount);
-
-    native->function.~NativeFn();
-
-    bytesAllocated_ -= size;
-
-    ::operator delete(native);
-
-    if (GCDebug::enabled && GCDebug::logFrees) {
-      fprintf(stderr, "[GC] free NativeFunction @%p size=%zu upvalues=%d\n", (void *)native, size,
-              native->upvalueCount);
-    }
     break;
   }
   case ValueType::Upvalue: {
@@ -641,6 +644,10 @@ void GC::invokeGCMethod(Instance *instance) {
     return;
 
   Closure *closure = static_cast<Closure *>(gcMethod.asGC());
+
+  if (!closure->isScript())
+    return;
+
   FiberObject *fiber = vm_->currentFiber();
   if (!fiber)
     return;
@@ -681,8 +688,6 @@ const char *GC::typeName(ValueType type) {
     return "Class";
   case ValueType::Object:
     return "Instance";
-  case ValueType::NativeFunc:
-    return "NativeFunc";
   case ValueType::Upvalue:
     return "Upvalue";
   case ValueType::Fiber:
@@ -722,9 +727,6 @@ void GC::updateTypeStats(ValueType type, bool isAlloc) {
   case ValueType::Class:
     stats_.classes[idx]++;
     break;
-  case ValueType::NativeFunc:
-    stats_.nativeFuncs[idx]++;
-    break;
 
   case ValueType::NativeObject:
     stats_.nativeObjects[idx]++;
@@ -758,7 +760,6 @@ void GC::dumpStats() const {
   DUMP_TYPE("Fiber", stats_.fibers);
   DUMP_TYPE("Upvalue", stats_.upvalues);
   DUMP_TYPE("Class", stats_.classes);
-  DUMP_TYPE("NativeFunc", stats_.nativeFuncs);
   DUMP_TYPE("NativeClass", stats_.nativeClasses);
   DUMP_TYPE("NativeObj", stats_.nativeObjects);
 
@@ -797,6 +798,11 @@ void GC::dumpObjects() const {
     case ValueType::Class: {
       auto *klass = static_cast<ClassObject *>(obj);
       fprintf(stderr, " '%s'", klass->name.c_str());
+      break;
+    }
+    case ValueType::Closure: {
+      auto *closure = static_cast<Closure *>(obj);
+      fprintf(stderr, " %s '%s'", closure->isNative() ? "native" : "script", closure->getName());
       break;
     }
     default:
