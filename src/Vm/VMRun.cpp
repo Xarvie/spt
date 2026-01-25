@@ -480,8 +480,9 @@ InterpretResult VM::run() {
         }
 
         Value *argsStart = &slots[B + 1];
+        native->receiver = instanceVal;
+        PROTECT(native->function(this, native, C, argsStart));
 
-        PROTECT(native->function(this, instanceVal, C, argsStart));
       } else {
         SAVE_PC();
         runtimeError("init method must be a function");
@@ -1011,7 +1012,7 @@ InterpretResult VM::run() {
 
       if (native->arity != -1 && argCount != native->arity) {
         SAVE_PC();
-        runtimeError("Native function '%s' expects %d arguments, got %d", native->name.c_str(),
+        runtimeError("Native function '%s' expects %d arguments, got %d", native->getName(),
                      native->arity, argCount);
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1022,7 +1023,7 @@ InterpretResult VM::run() {
       Value *argsStart = &slots[A + 1];
 
       Value result;
-      PROTECT(result = native->function(this, native->receiver, argCount, argsStart));
+      PROTECT(result = native->function(this, native, argCount, argsStart));
 
       if (yieldPending_) {
         yieldPending_ = false;
@@ -1388,7 +1389,7 @@ InterpretResult VM::run() {
 
       if (native->arity != -1 && userArgCount != native->arity) {
         SAVE_PC();
-        runtimeError("Native method '%s' expects %d arguments, got %d", native->name.c_str(),
+        runtimeError("Native method '%s' expects %d arguments, got %d", native->getName(),
                      native->arity, userArgCount);
         return InterpretResult::RUNTIME_ERROR;
       }
@@ -1398,8 +1399,12 @@ InterpretResult VM::run() {
 
       argsStart = &slots[A + 1];
       FiberObject *callFiber = currentFiber_;
+
       Value result;
-      PROTECT(result = native->function(this, receiver, userArgCount, argsStart));
+      Value savedReceiver = native->receiver;
+      native->receiver = receiver;
+      PROTECT(result = native->function(this, native, userArgCount, argsStart));
+      native->receiver = savedReceiver;
 
       if (currentFiber_ != callFiber) {
         callFiber->stackTop--;
@@ -1996,7 +2001,7 @@ InterpretResult VM::run() {
       hasNativeMultiReturn_ = false;
 
       Value result;
-      PROTECT(result = native->function(this, Value::nil(), 2, &base[1]));
+      PROTECT(result = native->function(this, native, 2, &base[1]));
 
       if (hasError_)
         return InterpretResult::RUNTIME_ERROR;

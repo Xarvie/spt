@@ -15,13 +15,16 @@ static Value createBoundNative(VM *vm, Value receiver, StringObject *name,
                                BuiltinMethodDesc::MethodFn fn, int arity) {
   vm->protect(receiver);
   vm->protect(Value::object(name));
-  NativeFunction *native = vm->gc().allocate<NativeFunction>();
-  native->name = name->view();
+
+  NativeFunction *native = vm->gc().allocateNativeFunction(0);
+  native->name = name;
   native->arity = arity;
   native->receiver = receiver;
-  native->function = [fn](VM *vm, Value recv, int argc, Value *argv) -> Value {
-    return fn(vm, recv, argc, argv);
+
+  native->function = [fn](VM *vm, NativeFunction *self, int argc, Value *argv) -> Value {
+    return fn(vm, self->receiver, argc, argv);
   };
+
   vm->unprotect(2);
   return Value::object(native);
 }
@@ -565,7 +568,8 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, StringObject *method
 
         if (method.isNativeFunc()) {
           NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
-          outResult = native->function(vm, receiver, argc, argv);
+          native->receiver = receiver;
+          outResult = native->function(vm, native, argc, argv);
           return true;
         }
       }

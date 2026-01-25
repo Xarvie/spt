@@ -11,7 +11,7 @@ namespace spt {
 void VM::registerBuiltinFunctions() {
   registerNative(
       "print",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         std::string outputBuffer;
         for (int i = 0; i < argc; ++i) {
           if (i > 0)
@@ -40,7 +40,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "toInt",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::integer(0);
         Value v = args[0];
@@ -75,7 +75,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "toFloat",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::number(0.0);
         Value v = args[0];
@@ -101,7 +101,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "toString",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::object(this->allocateString(""));
         return Value::object(this->allocateString(args[0].toString()));
@@ -110,7 +110,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "toBool",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::boolean(false);
         return Value::boolean(args[0].isTruthy());
@@ -119,7 +119,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "typeOf",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::object(this->allocateString("nil"));
         return Value::object(this->allocateString(args[0].typeName()));
@@ -128,7 +128,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "len",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::integer(0);
         Value v = args[0];
@@ -148,7 +148,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "abs",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::integer(0);
         Value v = args[0];
@@ -169,7 +169,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "floor",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::integer(0);
         Value v = args[0];
@@ -192,7 +192,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "ceil",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::integer(0);
         Value v = args[0];
@@ -215,7 +215,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "round",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::integer(0);
         Value v = args[0];
@@ -239,7 +239,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "sqrt",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::number(0.0);
         Value v = args[0];
@@ -255,7 +255,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "pow",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::number(0.0);
 
@@ -271,7 +271,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "min",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::nil();
         Value a = args[0];
@@ -291,7 +291,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "max",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::nil();
         Value a = args[0];
@@ -311,7 +311,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "char",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1 || !args[0].isInt())
           return Value::object(this->allocateString(""));
         int64_t code = args[0].asInt();
@@ -324,7 +324,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "ord",
-      [](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1 || !args[0].isString())
           return Value::integer(0);
         StringObject *str = static_cast<StringObject *>(args[0].asGC());
@@ -336,7 +336,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "range",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::nil();
         int64_t start = args[0].isInt() ? args[0].asInt() : 0;
@@ -365,7 +365,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "assert",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::nil();
         if (!args[0].isTruthy()) {
@@ -381,7 +381,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "error",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         Value errorVal;
         if (argc >= 1) {
           errorVal = args[0];
@@ -395,7 +395,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "pcall",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1) {
           this->setNativeMultiReturn({Value::boolean(false), Value::object(this->allocateString(
                                                                  "pcall: expected a function"))});
@@ -502,7 +502,7 @@ void VM::registerBuiltinFunctions() {
             result = InterpretResult::RUNTIME_ERROR;
           } else {
             this->hasNativeMultiReturn_ = false;
-            Value nativeResult = native->function(this, native->receiver, funcArgCount, funcArgs);
+            Value nativeResult = native->function(this, native, funcArgCount, funcArgs);
 
             if (!this->hasError_) {
               if (this->hasNativeMultiReturn_) {
@@ -560,7 +560,7 @@ void VM::registerBuiltinFunctions() {
       -1);
   registerNative(
       "apply",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1) {
           this->throwError(Value::object(this->allocateString(
               "apply: expected at least 1 argument (fn, [args], [receiver])")));
@@ -690,7 +690,7 @@ void VM::registerBuiltinFunctions() {
           }
 
           this->hasNativeMultiReturn_ = false;
-          Value nativeResult = native->function(this, actualReceiver, argsToCheck, actualArgs);
+          Value nativeResult = native->function(this, native, argsToCheck, actualArgs);
 
           if (!this->hasError_) {
             if (this->hasNativeMultiReturn_) {
@@ -711,38 +711,62 @@ void VM::registerBuiltinFunctions() {
       -1);
   registerNative(
       "isInt",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isInt()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c > 0 && a[0].isInt());
+      },
+      1);
   registerNative(
       "isFloat",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isFloat()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c > 0 && a[0].isFloat());
+      },
+      1);
   registerNative(
       "isNumber",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isNumber()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c > 0 && a[0].isNumber());
+      },
+      1);
   registerNative(
       "isString",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isString()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c > 0 && a[0].isString());
+      },
+      1);
   registerNative(
       "isBool",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isBool()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c > 0 && a[0].isBool());
+      },
+      1);
   registerNative(
       "isList",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isList()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c > 0 && a[0].isList());
+      },
+      1);
   registerNative(
       "isMap",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c > 0 && a[0].isMap()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c > 0 && a[0].isMap());
+      },
+      1);
   registerNative(
       "isNull",
-      [](VM *vm, Value r, int c, Value *a) { return Value::boolean(c < 1 || a[0].isNil()); }, 1);
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
+        return Value::boolean(c < 1 || a[0].isNil());
+      },
+      1);
   registerNative(
       "isFunction",
-      [](VM *vm, Value r, int c, Value *a) {
+      [](VM *vm, NativeFunction *self, int c, Value *a) {
         return Value::boolean(c > 0 && (a[0].isClosure() || a[0].isNativeFunc()));
       },
       1);
 
   registerNative(
       "__iter_list",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::nil();
         Value listVal = args[0];
@@ -774,7 +798,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "__iter_map",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 2)
           return Value::nil();
         Value mapVal = args[0];
@@ -809,7 +833,7 @@ void VM::registerBuiltinFunctions() {
 
   registerNative(
       "pairs",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         if (argc < 1)
           return Value::nil();
         Value target = args[0];
@@ -830,7 +854,7 @@ void VM::registerBuiltinFunctions() {
       1);
   registerNative(
       "clock",
-      [this](VM *vm, Value receiver, int argc, Value *args) -> Value {
+      [this](VM *vm, NativeFunction *self, int argc, Value *args) -> Value {
         auto now = std::chrono::system_clock::now();
         auto duration = now.time_since_epoch();
         int64_t micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();

@@ -278,6 +278,50 @@ void GC::markValue(Value &value) {
   markObject(value.asGC());
 }
 
+NativeFunction *GC::allocateNativeFunction(int nupvalues) {
+  collectIfNeeded();
+
+  size_t size = NativeFunction::allocSize(nupvalues);
+
+  void *mem = ::operator new(size);
+  bytesAllocated_ += size;
+  objectCount_++;
+
+  if (bytesAllocated_ > stats_.peakBytesAllocated) {
+    stats_.peakBytesAllocated = bytesAllocated_;
+  }
+  if (objectCount_ > stats_.peakObjectCount) {
+    stats_.peakObjectCount = objectCount_;
+  }
+
+  NativeFunction *fn = static_cast<NativeFunction *>(mem);
+
+  fn->next = objects_;
+  fn->type = ValueType::NativeFunc;
+  fn->marked = false;
+  objects_ = fn;
+
+  fn->name = nullptr;
+  fn->arity = 0;
+  fn->upvalueCount = static_cast<uint8_t>(nupvalues);
+  fn->receiver = Value::nil();
+
+  new (&fn->function) NativeFn();
+
+  for (int i = 0; i < nupvalues; i++) {
+    fn->upvalues[i] = Value::nil();
+  }
+
+  updateTypeStats(ValueType::NativeFunc, true);
+
+  if (GCDebug::enabled && GCDebug::logAllocations) {
+    fprintf(stderr, "[GC] alloc NativeFunction @%p size=%zu upvalues=%d total=%zu #%zu\n",
+            (void *)fn, size, nupvalues, bytesAllocated_, objectCount_);
+  }
+
+  return fn;
+}
+
 void GC::traceReferences() {
   if (GCDebug::enabled && GCDebug::verboseMarking) {
     fprintf(stderr, "[GC] tracing %zu gray objects...\n", grayStack_.size());
@@ -360,7 +404,20 @@ void GC::traceReferences() {
 
     case ValueType::NativeFunc: {
       auto *native = static_cast<NativeFunction *>(obj);
-      markValue(native->receiver);
+
+      if (native->name) {
+        markObject(native->name);
+      }
+
+      if (!native->receiver.isNil()) {
+        markValue(native->receiver);
+      }
+
+      for (int i = 0; i < native->upvalueCount; i++) {
+        if (!native->upvalues[i].isNil()) {
+          markValue(native->upvalues[i]);
+        }
+      }
       break;
     }
 
@@ -501,8 +558,18 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::NativeFunc: {
     NativeFunction *native = static_cast<NativeFunction *>(obj);
-    bytesAllocated_ -= sizeof(NativeFunction);
-    delete native;
+    size_t size = NativeFunction::allocSize(native->upvalueCount);
+
+    native->function.~NativeFn();
+
+    bytesAllocated_ -= size;
+
+    ::operator delete(native);
+
+    if (GCDebug::enabled && GCDebug::logFrees) {
+      fprintf(stderr, "[GC] free NativeFunction @%p size=%zu upvalues=%d\n", (void *)native, size,
+              native->upvalueCount);
+    }
     break;
   }
   case ValueType::Upvalue: {

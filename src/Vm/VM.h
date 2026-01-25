@@ -93,8 +93,15 @@ public:
   void setGlobal(const std::string &name, Value value);
 
   // === 原生函数注册 ===
-  // 将 C++ 函数注册到脚本环境中
-  void registerNative(const std::string &name, NativeFn fn, int arity, uint8_t flags = FUNC_NONE);
+  // 注册原生函数（无 upvalue）
+  void registerNative(const std::string &name, NativeFn fn, int arity);
+
+  // === 创建原生函数对象（不注册到全局） ===
+  NativeFunction *createNativeFunction(NativeFn fn, int arity, int nupvalues = 0);
+
+  // === 创建并注册带 upvalue 的原生函数 ===
+  void registerNativeWithUpvalues(const std::string &name, NativeFn fn, int arity,
+                                  std::initializer_list<Value> upvalues);
 
   // === 模块系统 ===
   void registerModule(const std::string &name, CompiledChunk chunk);

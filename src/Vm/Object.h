@@ -10,6 +10,7 @@
 namespace spt {
 
 class VM;
+struct NativeFunction;
 
 // ============================================================================
 // UpValue - 闭包捕获的变量
@@ -123,18 +124,49 @@ struct NativeInstance : GCObject {
 // 原生函数 (Native Function)
 // ============================================================================
 // C++ 实现的函数，可被 VM 调用
-using NativeFn = std::function<Value(VM *vm, Value receiver, int argc, Value *args)>;
+using NativeFn = std::function<Value(VM *vm, NativeFunction *self, int argc, Value *args)>;
 
 struct NativeFunction : public GCObject {
-  std::string name;              // 函数名（用于调试）
-  NativeFn function;             // C++ 函数包装器
-  int arity;                     // 参数个数（参数秩）
-  Value receiver = Value::nil(); // 接收者（对于绑定方法）
+  NativeFn function;            // C++ 函数包装器
+  StringObject *name = nullptr; // 函数名（用于调试），改为指针
+  int arity = 0;                // 参数个数（-1 表示变参）
+  uint8_t upvalueCount = 0;     // upvalue 数量
+  Value receiver;               // 接收者（绑定方法用）
+  Value upvalues[];             // 柔性数组，存储 upvalues
 
-  NativeFunction() {
-    type = ValueType::NativeFunc;
-    receiver = Value::nil();
+  // 禁用默认构造和拷贝
+  NativeFunction() = delete;
+  NativeFunction(const NativeFunction &) = delete;
+  NativeFunction &operator=(const NativeFunction &) = delete;
+
+  // === 便捷访问方法 ===
+
+  Value getUpvalue(int index) const {
+    return (index >= 0 && index < upvalueCount) ? upvalues[index] : Value::nil();
   }
+
+  void setUpvalue(int index, Value val) {
+    if (index >= 0 && index < upvalueCount) {
+      upvalues[index] = val;
+    }
+  }
+
+  // 获取名称字符串（安全访问）
+  const char *getName() const { return name ? name->c_str() : "<anonymous>"; }
+
+  std::string_view getNameView() const {
+    return name ? name->view() : std::string_view("<anonymous>");
+  }
+
+  // === 内存布局计算 ===
+
+  static constexpr size_t baseSize() { return sizeof(NativeFunction); }
+
+  static size_t allocSize(int nupvalues) {
+    return baseSize() + static_cast<size_t>(nupvalues) * sizeof(Value);
+  }
+
+  size_t allocSize() const { return allocSize(upvalueCount); }
 };
 
 // ============================================================================

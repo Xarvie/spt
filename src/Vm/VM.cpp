@@ -452,11 +452,53 @@ void VM::setGlobal(const std::string &name, Value value) {
   globals_[nameStr] = value;
 }
 
-void VM::registerNative(const std::string &name, NativeFn fn, int arity, uint8_t flags) {
-  NativeFunction *native = gc_.allocate<NativeFunction>();
-  native->name = name;
-  native->function = fn;
+void VM::registerNative(const std::string &name, NativeFn fn, int arity) {
+  NativeFunction *native = gc_.allocateNativeFunction(0);
+  native->function = std::move(fn);
   native->arity = arity;
+  native->name = allocateString(name);
+  native->receiver = Value::nil();
+
+  defineGlobal(name, Value::object(native));
+}
+
+// ----------------------------------------------------------------------------
+// 新增：createNativeFunction
+// ----------------------------------------------------------------------------
+NativeFunction *VM::createNativeFunction(NativeFn fn, int arity, int nupvalues) {
+  NativeFunction *native = gc_.allocateNativeFunction(nupvalues);
+  native->function = std::move(fn);
+  native->arity = arity;
+  native->receiver = Value::nil();
+  return native;
+}
+
+// ----------------------------------------------------------------------------
+// 新增：registerNativeWithUpvalues
+// ----------------------------------------------------------------------------
+void VM::registerNativeWithUpvalues(const std::string &name, NativeFn fn, int arity,
+                                    std::initializer_list<Value> upvalues) {
+  int nupvalues = static_cast<int>(upvalues.size());
+
+  // 先保护所有 upvalue（可能是 GC 对象）
+  for (const Value &uv : upvalues) {
+    protect(uv);
+  }
+
+  NativeFunction *native = gc_.allocateNativeFunction(nupvalues);
+  native->function = std::move(fn);
+  native->arity = arity;
+  native->name = allocateString(name);
+  native->receiver = Value::nil();
+
+  // 拷贝 upvalues
+  int i = 0;
+  for (const Value &uv : upvalues) {
+    native->upvalues[i++] = uv;
+  }
+
+  unprotect(nupvalues);
+
   defineGlobal(name, Value::object(native));
 }
 

@@ -385,8 +385,8 @@ Value ModuleManager::loadCModule(const std::string &moduleName, const std::strin
     modulePtr->metadata.exports.push_back(modulEntry->name);
     StringObject *key = vm_->allocateString(modulEntry->name);
 
-    NativeFunction *native = vm_->gc().allocate<NativeFunction>();
-    native->name = modulEntry->name;
+    NativeFunction *native = vm_->gc().allocateNativeFunction();
+    native->name = vm_->allocateString(modulEntry->name);
     native->function = modulEntry->fn;
     native->arity = modulEntry->arity;
 

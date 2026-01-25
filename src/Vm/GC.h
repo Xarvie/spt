@@ -14,6 +14,7 @@ struct NativeInstance;
 struct Closure;
 struct StringObject;
 class StringPool;
+struct NativeFunction;
 
 // ============================================================================
 // GC 调试控制 - 全局开关
@@ -137,6 +138,10 @@ public:
   void markObject(GCObject *obj);
 
   void setStringPool(StringPool *pool) { stringPool_ = pool; }
+
+  // 分配带 upvalue 的原生函数
+  // nupvalues: upvalue 数量，默认为 0
+  NativeFunction *allocateNativeFunction(int nupvalues = 0);
 
 private:
   void markRoots();
