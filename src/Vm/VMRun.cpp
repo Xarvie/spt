@@ -533,6 +533,7 @@ InterpretResult VM::run() {
     Closure *closure;
     PROTECT(closure = allocateClosure(&proto));
     protect(Value::object(closure));
+    REFRESH_SLOTS();
 
     for (size_t i = 0; i < proto.numUpvalues; ++i) {
       const auto &uvDesc = proto.upvalues[i];
@@ -1383,6 +1384,7 @@ InterpretResult VM::run() {
     } else if (method.isNativeFunc()) {
       NativeFunction *native = static_cast<NativeFunction *>(method.asGC());
       protect(method);
+      REFRESH_SLOTS();
 
       if (native->arity != -1 && userArgCount != native->arity) {
         SAVE_PC();
