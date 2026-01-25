@@ -146,6 +146,7 @@ private:
 
   void runFinalizers();
   void invokeGCMethod(Instance *instance);
+  void invokeNativeDestructor(NativeInstance *instance);
 
   void freeObject(GCObject *obj);
   void removeWhiteStrings();
@@ -164,6 +165,7 @@ private:
   std::vector<RootVisitor> roots_;
 
   std::vector<Instance *> finalizerQueue_;
+  std::vector<NativeInstance *> nativeFinalizerQueue_;
   bool inFinalizer_ = false;
 
   size_t bytesAllocated_ = 0;

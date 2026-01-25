@@ -1,5 +1,6 @@
 #include "SptStdlibs.h"
 #include "Fiber.h"
+#include "NativeBinding.h"
 #include "Object.h"
 #include "StringPool.h"
 #include "VM.h"
@@ -449,6 +450,16 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, StringObject *fieldName
     return false;
   }
 
+  if (object.isNativeInstance()) {
+    return getNativeInstanceProperty(vm, static_cast<NativeInstance *>(object.asGC()), fieldName,
+                                     outValue);
+  }
+
+  if (object.isNativeClass()) {
+    return getNativeClassStatic(vm, static_cast<NativeClassObject *>(object.asGC()), fieldName,
+                                outValue);
+  }
+
   return false;
 }
 
@@ -492,11 +503,135 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, StringObject *method
     return false;
   }
 
+  if (receiver.isNativeInstance()) {
+    return invokeNativeInstanceMethod(vm, static_cast<NativeInstance *>(receiver.asGC()),
+                                      methodName, argc, argv, outResult);
+  }
+
   return false;
 }
 
 bool StdlibDispatcher::setProperty(VM *vm, Value object, StringObject *fieldName,
                                    const Value &value) {
+  if (object.isNativeInstance()) {
+    return setNativeInstanceProperty(vm, static_cast<NativeInstance *>(object.asGC()), fieldName,
+                                     value);
+  }
+  return false;
+}
+
+bool StdlibDispatcher::getNativeInstanceProperty(VM *vm, NativeInstance *instance,
+                                                 StringObject *fieldName, Value &outValue) {
+  if (!instance || !instance->nativeClass)
+    return false;
+
+  const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
+  if (prop && prop->getter) {
+    if (!instance->isValid()) {
+      vm->throwError(Value::object(vm->allocateString("Native instance has been destroyed")));
+      return false;
+    }
+    outValue = prop->getter(vm, instance);
+    return true;
+  }
+
+  const NativeMethodDesc *method = instance->nativeClass->findMethod(fieldName);
+  if (method) {
+    vm->protect(Value::object(instance));
+    NativeFunction *native = vm->gc().allocate<NativeFunction>();
+    native->name = fieldName->view();
+    native->arity = method->arity;
+    native->receiver = Value::object(instance);
+    NativeMethodFn methodFn = method->function;
+    native->function = [methodFn](VM *vm, Value recv, int argc, Value *args) -> Value {
+      auto *inst = static_cast<NativeInstance *>(recv.asGC());
+      if (!inst->isValid()) {
+        vm->throwError(Value::object(vm->allocateString("Native instance destroyed")));
+        return Value::nil();
+      }
+      return methodFn(vm, inst, argc, args);
+    };
+    vm->unprotect(1);
+    outValue = Value::object(native);
+    return true;
+  }
+
+  auto it = instance->fields.find(fieldName);
+  if (it != instance->fields.end()) {
+    outValue = it->second;
+    return true;
+  }
+
+  return false;
+}
+
+bool StdlibDispatcher::setNativeInstanceProperty(VM *vm, NativeInstance *instance,
+                                                 StringObject *fieldName, const Value &value) {
+  if (!instance || !instance->nativeClass)
+    return false;
+
+  const NativePropertyDesc *prop = instance->nativeClass->findProperty(fieldName);
+  if (prop) {
+    if (prop->isReadOnly || !prop->setter) {
+      std::string msg = "Cannot set read-only property: ";
+      msg += fieldName->view();
+      vm->throwError(Value::object(vm->allocateString(msg)));
+      return false;
+    }
+    if (!instance->isValid()) {
+      vm->throwError(Value::object(vm->allocateString("Native instance destroyed")));
+      return false;
+    }
+    prop->setter(vm, instance, value);
+    return true;
+  }
+
+  instance->setField(fieldName, value);
+  return true;
+}
+
+bool StdlibDispatcher::invokeNativeInstanceMethod(VM *vm, NativeInstance *instance,
+                                                  StringObject *methodName, int argc, Value *argv,
+                                                  Value &outResult) {
+  if (!instance || !instance->nativeClass)
+    return false;
+
+  const NativeMethodDesc *method = instance->nativeClass->findMethod(methodName);
+  if (!method)
+    return false;
+
+  if (!instance->isValid()) {
+    vm->throwError(Value::object(vm->allocateString("Native instance destroyed")));
+    return false;
+  }
+
+  if (method->arity >= 0 && argc != method->arity) {
+    std::string msg = "Expected " + std::to_string(method->arity) + " arguments but got " +
+                      std::to_string(argc) + " for method '" + std::string(methodName->view()) +
+                      "'";
+    vm->throwError(Value::object(vm->allocateString(msg)));
+    return false;
+  }
+
+  outResult = method->function(vm, instance, argc, argv);
+  return true;
+}
+
+bool StdlibDispatcher::getNativeClassStatic(VM *vm, NativeClassObject *nativeClass,
+                                            StringObject *name, Value &outValue) {
+  if (!nativeClass)
+    return false;
+
+  auto it = nativeClass->statics.find(name);
+  if (it != nativeClass->statics.end()) {
+    outValue = it->second;
+    return true;
+  }
+
+  if (nativeClass->baseClass) {
+    return getNativeClassStatic(vm, nativeClass->baseClass, name, outValue);
+  }
+
   return false;
 }
 
@@ -510,6 +645,12 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, std::string_view met
                                     Value *argv, Value &outResult) {
   StringObject *key = vm->allocateString(methodName);
   return invokeMethod(vm, receiver, key, argc, argv, outResult);
+}
+
+bool StdlibDispatcher::setProperty(VM *vm, Value object, std::string_view fieldName,
+                                   const Value &value) {
+  StringObject *key = vm->allocateString(fieldName);
+  return setProperty(vm, object, key, value);
 }
 
 } // namespace spt
