@@ -1,6 +1,5 @@
 #include "GC.h"
 #include "Fiber.h"
-#include "NativeBinding.h"
 #include "Object.h"
 #include "StringPool.h"
 #include "VM.h"
@@ -212,9 +211,6 @@ void GC::markRoots() {
   for (Instance *instance : finalizerQueue_) {
     markObject(instance);
   }
-  for (NativeInstance *instance : nativeFinalizerQueue_) {
-    markObject(instance);
-  }
 
   const SymbolTable &syms = vm_->symbols();
   auto markSymbol = [this](StringObject *s) {
@@ -293,7 +289,6 @@ void GC::traceReferences() {
 
     switch (obj->type) {
     case ValueType::String:
-
       break;
 
     case ValueType::Closure: {
@@ -400,32 +395,10 @@ void GC::traceReferences() {
       break;
     }
 
-    case ValueType::NativeClass: {
-      auto *nativeClass = static_cast<NativeClassObject *>(obj);
-      if (nativeClass->baseClass) {
-        markObject(nativeClass->baseClass);
-      }
-
-      for (auto [nameStr, method] : nativeClass->methods) {
-        markObject(const_cast<StringObject *>(nameStr));
-      }
-
-      for (auto [nameStr, prop] : nativeClass->properties) {
-        markObject(const_cast<StringObject *>(nameStr));
-      }
-
-      for (auto [nameStr, val] : nativeClass->statics) {
-        markObject(const_cast<StringObject *>(nameStr));
-        Value v = val;
-        markValue(v);
-      }
-      break;
-    }
-
     case ValueType::NativeObject: {
       auto *nativeInstance = static_cast<NativeInstance *>(obj);
-      if (nativeInstance->nativeClass) {
-        markObject(nativeInstance->nativeClass);
+      if (nativeInstance->klass) {
+        markObject(nativeInstance->klass);
       }
 
       for (auto [nameStr, val] : nativeInstance->fields) {
@@ -468,8 +441,8 @@ void GC::sweep() {
         }
       } else if (unreached->type == ValueType::NativeObject) {
         NativeInstance *instance = static_cast<NativeInstance *>(unreached);
-        if (!instance->isDestroyed) {
-          nativeFinalizerQueue_.push_back(instance);
+        if (instance->klass && instance->klass->hasFinalizer() && !instance->isFinalized) {
+          finalizerQueue_.push_back(reinterpret_cast<Instance *>(instance));
           instance->marked = true;
           continue;
         }
@@ -490,10 +463,8 @@ void GC::freeObject(GCObject *obj) {
   switch (obj->type) {
   case ValueType::String: {
     StringObject *str = static_cast<StringObject *>(obj);
-
     size_t totalSize = str->allocationSize();
     bytesAllocated_ -= totalSize;
-
     ::operator delete(str);
     break;
   }
@@ -548,22 +519,11 @@ void GC::freeObject(GCObject *obj) {
     delete fiber;
     break;
   }
-  case ValueType::NativeClass: {
-    NativeClassObject *nativeClass = static_cast<NativeClassObject *>(obj);
-    bytesAllocated_ -= sizeof(NativeClassObject);
-    delete nativeClass;
-    break;
-  }
+
   case ValueType::NativeObject: {
     NativeInstance *nativeInstance = static_cast<NativeInstance *>(obj);
-    if (nativeInstance->ownership == OwnershipMode::OwnedByVM && !nativeInstance->isDestroyed &&
-        nativeInstance->data && nativeInstance->nativeClass &&
-        nativeInstance->nativeClass->destructor) {
-      nativeInstance->nativeClass->destructor(nativeInstance->data);
-    }
-    bytesAllocated_ -=
-        sizeof(NativeInstance) +
-        (nativeInstance->nativeClass ? nativeInstance->nativeClass->instanceDataSize : 0);
+
+    bytesAllocated_ -= sizeof(NativeInstance);
     delete nativeInstance;
     break;
   }
@@ -575,7 +535,7 @@ void GC::freeObject(GCObject *obj) {
 }
 
 void GC::runFinalizers() {
-  if (finalizerQueue_.empty() && nativeFinalizerQueue_.empty())
+  if (finalizerQueue_.empty())
     return;
 
   inFinalizer_ = true;
@@ -591,24 +551,25 @@ void GC::runFinalizers() {
     instance->marked = false;
   }
 
-  std::vector<NativeInstance *> nativeToFinalize = std::move(nativeFinalizerQueue_);
-  nativeFinalizerQueue_.clear();
-
-  for (NativeInstance *instance : nativeToFinalize) {
-    if (!instance->isDestroyed) {
-      invokeNativeDestructor(instance);
-    }
-    instance->marked = false;
-  }
-
   inFinalizer_ = false;
 }
 
 void GC::invokeGCMethod(Instance *instance) {
-  if (!instance || !instance->klass)
+  if (!instance)
     return;
 
-  Value gcMethod = instance->klass->gcMethod;
+  ClassObject *klass = nullptr;
+
+  if (instance->type == ValueType::Object) {
+    klass = instance->klass;
+  } else if (instance->type == ValueType::NativeObject) {
+    klass = reinterpret_cast<NativeInstance *>(instance)->klass;
+  }
+
+  if (!klass)
+    return;
+
+  Value gcMethod = klass->gcMethod;
   if (!gcMethod.isClosure())
     return;
 
@@ -629,19 +590,6 @@ void GC::invokeGCMethod(Instance *instance) {
     vm_->hasError_ = false;
     vm_->errorValue_ = Value::nil();
   }
-}
-
-void GC::invokeNativeDestructor(NativeInstance *instance) {
-  if (!instance || !instance->nativeClass || !instance->data || instance->isDestroyed)
-    return;
-  if (instance->ownership != OwnershipMode::OwnedByVM)
-    return;
-
-  if (instance->nativeClass->destructor) {
-    instance->nativeClass->destructor(instance->data);
-  }
-  instance->isDestroyed = true;
-  instance->data = nullptr;
 }
 
 const char *GC::typeName(ValueType type) {
@@ -672,8 +620,7 @@ const char *GC::typeName(ValueType type) {
     return "Upvalue";
   case ValueType::Fiber:
     return "Fiber";
-  case ValueType::NativeClass:
-    return "NativeClass";
+
   case ValueType::NativeObject:
     return "NativeObject";
   default:
@@ -711,9 +658,7 @@ void GC::updateTypeStats(ValueType type, bool isAlloc) {
   case ValueType::NativeFunc:
     stats_.nativeFuncs[idx]++;
     break;
-  case ValueType::NativeClass:
-    stats_.nativeClasses[idx]++;
-    break;
+
   case ValueType::NativeObject:
     stats_.nativeObjects[idx]++;
     break;

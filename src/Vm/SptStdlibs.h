@@ -229,8 +229,6 @@
 namespace spt {
 class VM;
 struct StringObject;
-struct NativeInstance;
-struct NativeClassObject;
 
 class StdlibDispatcher {
 public:
@@ -250,17 +248,6 @@ public:
   static bool invokeMethod(VM *vm, Value receiver, std::string_view methodName, int argc,
                            Value *argv, Value &outResult);
   static bool setProperty(VM *vm, Value object, std::string_view fieldName, const Value &value);
-
-private:
-  // === Native Instance 处理（内部使用） ===
-  static bool getNativeInstanceProperty(VM *vm, NativeInstance *instance, StringObject *fieldName,
-                                        Value &outValue);
-  static bool setNativeInstanceProperty(VM *vm, NativeInstance *instance, StringObject *fieldName,
-                                        const Value &value);
-  static bool invokeNativeInstanceMethod(VM *vm, NativeInstance *instance, StringObject *methodName,
-                                         int argc, Value *argv, Value &outResult);
-  static bool getNativeClassStatic(VM *vm, NativeClassObject *nativeClass, StringObject *name,
-                                   Value &outValue);
 };
 
 } // namespace spt

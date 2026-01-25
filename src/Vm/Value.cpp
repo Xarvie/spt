@@ -1,5 +1,4 @@
 #include "Value.h"
-#include "NativeBinding.h"
 #include "Object.h"
 #include <cmath>
 
@@ -16,7 +15,6 @@ std::string Value::toString() const {
   case ValueType::Float:
     return std::to_string(as.number);
   case ValueType::String:
-
     if (as.gc) {
       return static_cast<StringObject *>(as.gc)->str();
     }
@@ -35,14 +33,10 @@ std::string Value::toString() const {
     return "<native function>";
   case ValueType::Fiber:
     return "<fiber>";
-  case ValueType::NativeClass: {
-    NativeClassObject *nc = static_cast<NativeClassObject *>(as.gc);
-    return "<native class " + (nc ? nc->name : "?") + ">";
-  }
   case ValueType::NativeObject: {
     NativeInstance *ni = static_cast<NativeInstance *>(as.gc);
-    if (ni && ni->nativeClass) {
-      return "<" + ni->nativeClass->name + " instance>";
+    if (ni && ni->klass) {
+      return "<" + ni->klass->name + " instance>";
     }
     return "<native instance>";
   }
@@ -77,8 +71,7 @@ const char *Value::typeName() const {
     return "native";
   case ValueType::Fiber:
     return "fiber";
-  case ValueType::NativeClass:
-    return "native_class";
+
   case ValueType::NativeObject:
     return "native_instance";
   default:

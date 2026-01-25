@@ -95,6 +95,31 @@ struct Instance : GCObject {
 };
 
 // ============================================================================
+// 原生实例 - 包装 C++ 对象指针
+// ============================================================================
+struct NativeInstance : GCObject {
+  ClassObject *klass;       // 所属的类（__gc 在这里）
+  void *data = nullptr;     // C++ 对象指针
+  bool isFinalized = false; // 标识是否已执行过 __gc
+  StringMap<Value> fields;  // 脚本层字段
+
+  NativeInstance() { type = ValueType::NativeObject; }
+
+  bool isValid() const { return data != nullptr; }
+
+  Value getField(StringObject *name) const {
+    if (const Value *v = fields.get(name)) {
+      return *v;
+    }
+    return Value::nil();
+  }
+
+  void setField(StringObject *name, const Value &value) { fields[name] = value; }
+
+  bool hasField(StringObject *name) const { return fields.find(name) != fields.end(); }
+};
+
+// ============================================================================
 // 原生函数 (Native Function)
 // ============================================================================
 // C++ 实现的函数，可被 VM 调用

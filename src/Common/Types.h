@@ -25,7 +25,6 @@ enum class ValueType : uint8_t {
   Class,
   Upvalue,
   Fiber,
-  NativeClass,
   NativeObject
 };
 

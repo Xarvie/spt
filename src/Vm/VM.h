@@ -24,7 +24,7 @@
 
 namespace spt {
 
-struct NativeClassObject;
+struct ClassObject;
 struct NativeInstance;
 class StringPool;
 struct SymbolTable;
@@ -130,9 +130,7 @@ public:
   FiberObject *allocateFiber(Closure *closure);
 
   // 原生 C++ 绑定对象创建
-  NativeClassObject *allocateNativeClass(const std::string &name);
-  NativeInstance *allocateNativeInstance(NativeClassObject *nativeClass);
-  NativeInstance *createNativeInstance(NativeClassObject *nativeClass, int argc, Value *argv);
+  NativeInstance *allocateNativeInstance(ClassObject *klass, void *data = nullptr);
 
   Value getLastModuleResult() const { return lastModuleResult_; }
 
