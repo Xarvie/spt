@@ -135,43 +135,31 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
-#define SPT_FORCE_STACK_REALLOC 1
-
+  // === Value 栈扩容 ===
   void checkStack(int needed) {
-#if SPT_FORCE_STACK_REALLOC
-    // 强制测试模式：始终重新分配
-    bool needRealloc = true;
-#else
-    // 正常模式：空间足够就返回
-    bool needRealloc = (stackLast - stackTop < needed);
-#endif
-
-    if (!needRealloc) {
+    // 1. 检查剩余空间是否足够
+    if (stackLast - stackTop >= needed) {
       return;
     }
 
-    // 计算新容量
+    // 2. 计算新容量
     size_t used = stackTop - stack;
     size_t required = used + needed;
 
     size_t newSize = stackSize;
-    if (newSize == 0) {
+    if (newSize == 0)
       newSize = DEFAULT_STACK_SIZE;
-    }
-
-#if SPT_FORCE_STACK_REALLOC
-    newSize += 1; // 强制增长，确保一定会重新分配内存
-#endif
 
     while (newSize < required) {
       newSize *= 2;
     }
 
-    // 分配新栈
-    Value *newStack = new Value[newSize];
-    Value *oldStack = stack;
+    // 3. 使用 unique_ptr 确保异常安全
+    std::unique_ptr<Value[]> newStackPtr(new Value[newSize]);
+    Value *newStack = newStackPtr.get();
 
-    // 迁移数据
+    // 4. 迁移数据
+    Value *oldStack = stack;
     for (size_t i = 0; i < used; ++i) {
       newStack[i] = oldStack[i];
     }
@@ -180,26 +168,29 @@ struct FiberObject : GCObject {
       newStack[i] = Value::nil();
     }
 
-    // 修复 Open UpValues
+    // 5. 修复 Open UpValues (闭包引用的栈变量)
     if (openUpvalues != nullptr) {
       fixUpvaluePointers(oldStack, newStack);
     }
 
-    // 修复 CallFrames
+    // 6. 修复 CallFrames (调用帧中的指针)
     for (int i = 0; i < frameCount; ++i) {
       CallFrame &frame = frames[i];
+
+      // 修复 slots 指针
       if (frame.slots) {
         frame.slots = newStack + (frame.slots - oldStack);
       }
+
+      // 修复 returnTo 指针
       if (frame.returnTo) {
         frame.returnTo = newStack + (frame.returnTo - oldStack);
       }
     }
 
-    // 释放旧栈，更新指针
     delete[] oldStack;
 
-    stack = newStack;
+    stack = newStackPtr.release();
     stackSize = newSize;
     stackTop = stack + used;
     stackLast = stack + newSize;

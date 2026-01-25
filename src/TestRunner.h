@@ -91,7 +91,6 @@ public:
     for (const auto &test : tests_) {
       if (runSingleTest(test)) {
         passed++;
-        std::cout << "passed " << passed << "/" << total << std::endl;
       }
     }
 
@@ -193,7 +192,7 @@ private:
 
     std::stringstream capturedOutput;
     vm.setPrintHandler([&](const std::string &msg) { capturedOutput << msg; });
-    spt::BytecodeDumper::dump(chunk);
+    //    spt::BytecodeDumper::dump(chunk);
     InterpretResult result = vm.interpret(chunk);
 
     // 计时结束
