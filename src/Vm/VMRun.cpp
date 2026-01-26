@@ -1989,7 +1989,7 @@ InterpretResult VM::run() {
           base = &slots[A];
         }
         fiber->ensureFrames(1);
-
+        RESTORE_FRAME();
         Value *top = fiber->stackTop;
         top[0] = base[0];
         top[1] = base[1];
