@@ -168,6 +168,16 @@ public:
   void preparePrototype(Prototype *proto);
   Value constantToValue(const ConstantValue &cv);
 
+  // =========================================================================
+  // 用户数据指针 - 供嵌入层（如 C API）存储关联数据
+  // =========================================================================
+  void setUserData(void *data) { userData_ = data; }
+
+  void *getUserData() const { return userData_; }
+
+  // === 原生函数多返回值支持 ===
+  void setNativeMultiReturn(const std::vector<Value> &values);
+
 private:
   InterpretResult run();
   void registerBuiltinFunctions();
@@ -185,9 +195,6 @@ private:
   int getLine(const Prototype *proto, size_t instruction);
   size_t getCurrentInstruction(const CallFrame &frame) const;
   std::string getStackTrace(); // 生成当前的调用栈追踪字符串
-
-  // === 原生函数多返回值支持 ===
-  void setNativeMultiReturn(const std::vector<Value> &values);
 
   // === Fiber 内部私有操作 ===
   void initFiberForCall(FiberObject *fiber, Value arg);
@@ -232,6 +239,9 @@ private:
   // 错误与打印回调
   ErrorHandler errorHandler_;
   PrintHandler printHandler_;
+
+  // === 用户数据指针 - 供 C API 等嵌入层使用 ===
+  void *userData_ = nullptr;
 };
 
 } // namespace spt
