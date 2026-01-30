@@ -389,19 +389,21 @@ void VM::fiberAbort(Value error) {
 
 UpValue *VM::captureUpvalue(Value *local) {
   FiberObject *fiber = currentFiber_;
+  ptrdiff_t localOffset = local - fiber->stack;
   UpValue *prevUpvalue = nullptr;
   UpValue *upvalue = fiber->openUpvalues;
 
-  while (upvalue != nullptr && upvalue->location > local) {
+  while (upvalue != nullptr && (upvalue->location - fiber->stack) > localOffset) {
     prevUpvalue = upvalue;
     upvalue = upvalue->nextOpen;
   }
 
-  if (upvalue != nullptr && upvalue->location == local) {
+  if (upvalue != nullptr && (upvalue->location - fiber->stack) == localOffset) {
     return upvalue;
   }
 
   UpValue *createdUpvalue = gc_.allocate<UpValue>();
+  local = fiber->stack + localOffset;
   createdUpvalue->location = local;
   createdUpvalue->nextOpen = upvalue;
 
