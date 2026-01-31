@@ -999,7 +999,6 @@ Prototype &Prototype::operator=(Prototype &&other) noexcept {
     other.upvaluePtr = nullptr;
     other.protoPtr = nullptr;
     other.protoCount = 0;
-    other.jitReady = false;
   }
   return *this;
 }

@@ -90,6 +90,7 @@ struct Prototype {
   bool isVararg = false;      // 是否可变参数
   bool needsReceiver = false; // 是否需要"this"
   bool useDefer = false;      // 使用defer
+  bool jitReady = false;
 
   // === 编译时数据（std::vector，用于序列化/编译）===
   std::vector<Instruction> code;        // 指令序列
