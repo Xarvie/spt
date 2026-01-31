@@ -51,6 +51,10 @@ VM::~VM() {
   currentFiber_ = nullptr;
   mainFiber_ = nullptr;
 
+  for (auto &[name, chunk] : modules_) {
+    chunk.destroyRuntimeData();
+  }
+
   globals_.clear();
   modules_.clear();
 
@@ -732,6 +736,12 @@ int VM::getStack(int f, const char *what, DebugInfo *out_info) {
 bool VM::hotReload(const std::string &moduleName, CompiledChunk newChunk) {
 
   prepareChunk(newChunk);
+
+  auto it = modules_.find(moduleName);
+  if (it != modules_.end()) {
+    it->second.destroyRuntimeData();
+  }
+
   modules_[moduleName] = std::move(newChunk);
 
   for (auto [nameStr, value] : globals_) {
@@ -746,6 +756,12 @@ bool VM::hotReload(const std::string &moduleName, CompiledChunk newChunk) {
 
 void VM::registerModule(const std::string &name, CompiledChunk chunk) {
   prepareChunk(chunk);
+
+  auto it = modules_.find(name);
+  if (it != modules_.end()) {
+    it->second.destroyRuntimeData();
+  }
+
   modules_[name] = std::move(chunk);
 }
 
@@ -848,23 +864,52 @@ void VM::preparePrototype(Prototype *proto) {
 
 void VM::prepareChunk(CompiledChunk &chunk) { preparePrototype(&chunk.mainProto); }
 
-Prototype::~Prototype() {
-  if (codePtr != nullptr) {
-    delete[] codePtr;
-    codePtr = nullptr;
+void Prototype::init(Prototype *proto) {
+  if (!proto)
+    return;
+
+  proto->codePtr = nullptr;
+  proto->codeCount = 0;
+  proto->k = nullptr;
+  proto->kCount = 0;
+  proto->upvaluePtr = nullptr;
+  proto->protoPtr = nullptr;
+  proto->protoCount = 0;
+  proto->jitReady = false;
+}
+
+void Prototype::destroy(Prototype *proto) {
+  if (!proto)
+    return;
+
+  for (auto &childProto : proto->protos) {
+    destroy(&childProto);
   }
-  if (k != nullptr) {
-    delete[] k;
-    k = nullptr;
+
+  if (proto->codePtr != nullptr) {
+    delete[] proto->codePtr;
+    proto->codePtr = nullptr;
   }
-  if (upvaluePtr != nullptr) {
-    delete[] upvaluePtr;
-    upvaluePtr = nullptr;
+  proto->codeCount = 0;
+
+  if (proto->k != nullptr) {
+    delete[] proto->k;
+    proto->k = nullptr;
   }
-  if (protoPtr != nullptr) {
-    delete[] protoPtr;
-    protoPtr = nullptr;
+  proto->kCount = 0;
+
+  if (proto->upvaluePtr != nullptr) {
+    delete[] proto->upvaluePtr;
+    proto->upvaluePtr = nullptr;
   }
+
+  if (proto->protoPtr != nullptr) {
+    delete[] proto->protoPtr;
+    proto->protoPtr = nullptr;
+  }
+  proto->protoCount = 0;
+
+  proto->jitReady = false;
 }
 
 Prototype::Prototype(Prototype &&other) noexcept
@@ -875,11 +920,9 @@ Prototype::Prototype(Prototype &&other) noexcept
       needsReceiver(other.needsReceiver), useDefer(other.useDefer), code(std::move(other.code)),
       constants(std::move(other.constants)), absLineInfo(std::move(other.absLineInfo)),
       lineInfo(std::move(other.lineInfo)), protos(std::move(other.protos)), flags(other.flags),
-      upvalues(std::move(other.upvalues)),
-
-      codePtr(other.codePtr), codeCount(other.codeCount), k(other.k), kCount(other.kCount),
-      upvaluePtr(other.upvaluePtr), protoPtr(other.protoPtr), protoCount(other.protoCount),
-      jitReady(other.jitReady) {
+      upvalues(std::move(other.upvalues)), codePtr(other.codePtr), codeCount(other.codeCount),
+      k(other.k), kCount(other.kCount), upvaluePtr(other.upvaluePtr), protoPtr(other.protoPtr),
+      protoCount(other.protoCount), jitReady(other.jitReady) {
 
   other.codePtr = nullptr;
   other.codeCount = 0;
@@ -893,18 +936,8 @@ Prototype::Prototype(Prototype &&other) noexcept
 
 Prototype &Prototype::operator=(Prototype &&other) noexcept {
   if (this != &other) {
-    if (codePtr != nullptr) {
-      delete[] codePtr;
-    }
-    if (k != nullptr) {
-      delete[] k;
-    }
-    if (upvaluePtr != nullptr) {
-      delete[] upvaluePtr;
-    }
-    if (protoPtr != nullptr) {
-      delete[] protoPtr;
-    }
+
+    destroy(this);
 
     name = std::move(other.name);
     source = std::move(other.source);
@@ -972,14 +1005,7 @@ Prototype Prototype::deepCopy() const {
     copy.protos.push_back(childProto.deepCopy());
   }
 
-  copy.codePtr = nullptr;
-  copy.codeCount = 0;
-  copy.k = nullptr;
-  copy.kCount = 0;
-  copy.upvaluePtr = nullptr;
-  copy.protoPtr = nullptr;
-  copy.protoCount = 0;
-  copy.jitReady = false;
+  Prototype::init(&copy);
 
   return copy;
 }
