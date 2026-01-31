@@ -144,7 +144,6 @@ InterpretResult VM::call(Closure *closure, int argCount) {
 }
 
 InterpretResult VM::executeModule(const CompiledChunk &chunk) {
-
   prepareChunk(const_cast<CompiledChunk &>(chunk));
 
   FiberObject *fiber = currentFiber_;
@@ -191,7 +190,6 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
 }
 
 FiberObject *VM::allocateFiber(Closure *closure) {
-
   FiberObject *fiber = gc_.allocateFiber();
   fiber->closure = closure;
   fiber->state = FiberState::NEW;
@@ -739,6 +737,7 @@ bool VM::hotReload(const std::string &moduleName, CompiledChunk newChunk) {
 
   auto it = modules_.find(moduleName);
   if (it != modules_.end()) {
+
     it->second.destroyRuntimeData();
   }
 
@@ -759,6 +758,7 @@ void VM::registerModule(const std::string &name, CompiledChunk chunk) {
 
   auto it = modules_.find(name);
   if (it != modules_.end()) {
+
     it->second.destroyRuntimeData();
   }
 
@@ -814,7 +814,6 @@ Value VM::constantToValue(const ConstantValue &cv) {
         } else if constexpr (std::is_same_v<T, double>) {
           return Value::number(arg);
         } else if constexpr (std::is_same_v<T, std::string>) {
-
           StringObject *str = allocateString(arg);
           return Value::object(str);
         }
@@ -910,6 +909,32 @@ void Prototype::destroy(Prototype *proto) {
   proto->protoCount = 0;
 
   proto->jitReady = false;
+}
+
+void Prototype::reset(Prototype *proto) {
+  if (!proto)
+    return;
+
+  destroy(proto);
+
+  proto->name.clear();
+  proto->source.clear();
+  proto->short_src.clear();
+  proto->lineDefined = 0;
+  proto->lastLineDefined = 0;
+  proto->numParams = 0;
+  proto->numUpvalues = 0;
+  proto->maxStackSize = 0;
+  proto->isVararg = false;
+  proto->needsReceiver = false;
+  proto->useDefer = false;
+  proto->code.clear();
+  proto->constants.clear();
+  proto->absLineInfo.clear();
+  proto->lineInfo.clear();
+  proto->protos.clear();
+  proto->flags = FunctionFlag::FUNC_NONE;
+  proto->upvalues.clear();
 }
 
 Prototype::Prototype(Prototype &&other) noexcept

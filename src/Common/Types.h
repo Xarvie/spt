@@ -63,13 +63,19 @@ constexpr uint8_t UseAbsLine = -1;
 // 生命周期管理（非 RAII，兼容 setjmp/longjmp）:
 // ============================================================================
 // 此结构分为两部分：
-// 1. 编译时数据（std::vector/std::string）- 由编译器填充，CompiledChunk 管理生命周期
-// 2. 运行时数据（原始指针）- 由 VM::preparePrototype() 分配，必须显式调用 destroy() 释放
+// 1. 编译时数据（std::vector/std::string）- 由编译器填充
+// 2. 运行时数据（原始指针）- 由 VM::preparePrototype() 分配
 //
-// 调用时机：
-// - 编译完成后：Prototype 包含编译时数据，运行时指针为 nullptr
-// - VM 加载时：调用 VM::preparePrototype()，分配运行时数据
-// - 模块卸载时：调用 Prototype::destroy()，释放运行时数据
+// 重要：运行时数据必须通过 destroy() 显式释放
+// 析构函数不会自动释放运行时资源。
+//
+// 典型生命周期：
+//   Prototype proto;                    // 创建，运行时指针为 nullptr
+//   compiler.compile(&proto);           // 填充编译时数据
+//   vm.preparePrototype(&proto);        // 分配运行时数据
+//   ... 执行 ...
+//   Prototype::destroy(&proto);         // 显式释放运行时数据
+//   // proto 析构时只释放 vector/string
 // ============================================================================
 struct Prototype {
   // === 编译时元数据（由编译器填充）===
@@ -102,7 +108,7 @@ struct Prototype {
   std::vector<UpvalueDesc> upvalues;
 
   // =========================================================================
-  // 运行时数据（手动管理，由 VM::preparePrototype() 分配）
+  // 运行时数据（手动管理）
   // =========================================================================
   // 这些指针在 VM 加载 Prototype 时分配，用于运行时快速访问
   // 必须通过 destroy() 显式释放
@@ -117,37 +123,38 @@ struct Prototype {
 
   // Upvalue 描述数组 (从 upvalues vector 拷贝)
   UpvalueDesc *upvaluePtr = nullptr;
-  // numUpvalues 已存在，复用
 
-  // 子原型指针数组 (指向 protos vector 中元素，用于 O(1) 索引访问)
   Prototype **protoPtr = nullptr;
   uint32_t protoCount = 0;
 
-  bool jitReady = false; // 运行时数据是否已准备完成
+  // =========================================================================
+  // 运行时状态查询
+  // =========================================================================
+
+  bool hasRuntimeResources() const {
+    return codePtr != nullptr || k != nullptr || upvaluePtr != nullptr || protoPtr != nullptr;
+  }
 
   // =========================================================================
   // 生命周期管理 - 必须显式调用，不依赖构造/析构
   // =========================================================================
 
-  // 初始化 Prototype 的运行时指针为安全状态
-  // 调用时机：创建新 Prototype 后，或重置时
+  // 初始化运行时指针为安全状态（幂等操作）
   static void init(Prototype *proto);
 
-  // 销毁 Prototype 的运行时数据（释放 codePtr, k, upvaluePtr, protoPtr）
-  // 注意：会递归销毁子 Prototype
-  // 调用时机：模块卸载时，或 CompiledChunk 销毁前
+  // 销毁运行时数据（递归处理子 Prototype）
   static void destroy(Prototype *proto);
+
+  // 完全重置（销毁运行时 + 清空编译时数据）
+  static void reset(Prototype *proto);
 
   // =========================================================================
   // 构造与析构
   // =========================================================================
 
-  // 默认构造 - 仅初始化编译时成员，运行时指针为 nullptr
   Prototype() = default;
 
-  // 析构函数 - 默认，不释放运行时资源
-  // 注意：运行时资源必须通过 destroy() 显式释放
-  // 这是为了兼容 setjmp/longjmp 错误处理机制
+  // 析构函数 - 不释放运行时资源
   ~Prototype() = default;
 
   // 移动构造函数
@@ -156,22 +163,16 @@ struct Prototype {
   // 移动赋值运算符
   Prototype &operator=(Prototype &&other) noexcept;
 
-  // 禁用拷贝（因为有原始指针成员）
-  // 如果需要拷贝，应使用 deepCopy() 方法
+  // 禁用拷贝
   Prototype(const Prototype &) = delete;
   Prototype &operator=(const Prototype &) = delete;
 
-  // 深拷贝方法（仅拷贝编译时数据，运行时指针置空）
+  // 深拷贝（仅编译时数据，运行时指针置空）
   Prototype deepCopy() const;
 };
 
 // ============================================================================
 // CompiledChunk - 一个模块的编译结果
-// ============================================================================
-// 生命周期管理：
-// - 编译完成后：包含编译时数据
-// - VM 加载时：VM::prepareChunk() 初始化运行时数据
-// - 卸载时：必须先调用 destroyRuntimeData() 释放运行时数据
 // ============================================================================
 struct CompiledChunk {
   std::string moduleName;           // 模块名
@@ -181,20 +182,17 @@ struct CompiledChunk {
 
   // 默认构造
   CompiledChunk() = default;
-
-  // 析构函数 - 默认，不释放 Prototype 的运行时数据
   ~CompiledChunk() = default;
 
-  // 移动构造/赋值（因为 Prototype 禁用了拷贝）
   CompiledChunk(CompiledChunk &&) = default;
   CompiledChunk &operator=(CompiledChunk &&) = default;
 
-  // 禁用拷贝
   CompiledChunk(const CompiledChunk &) = delete;
   CompiledChunk &operator=(const CompiledChunk &) = delete;
 
-  // 销毁运行时数据（必须在析构前调用，如果已调用 prepareChunk）
   void destroyRuntimeData() { Prototype::destroy(&mainProto); }
+
+  bool hasRuntimeResources() const { return mainProto.hasRuntimeResources(); }
 };
 
 struct DebugInfo {

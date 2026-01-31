@@ -109,8 +109,16 @@ ModuleManager::ModuleManager(VM *vm, const ModuleManagerConfig &config) : vm_(vm
 }
 
 ModuleManager::~ModuleManager() {
+
+  for (auto &[name, module] : modules_) {
+    if (module && module->state == ModuleState::LOADED) {
+      module->chunk.destroyRuntimeData();
+    }
+  }
+
   modules_.clear();
   pathToName_.clear();
+
   if (loader_ && loader_->vtable && loader_->vtable->destroy) {
     loader_->vtable->destroy(loader_);
     loader_ = nullptr;
@@ -333,7 +341,6 @@ bool ModuleManager::reloadModule(const std::string &moduleName) {
   newModule->metadata.timestamp = loader_->getTimestamp(path);
 
   if (!compileModule(newModule.get(), source)) {
-
     return false;
   }
 
@@ -341,15 +348,16 @@ bool ModuleManager::reloadModule(const std::string &moduleName) {
 
   if (!executeModule(newModule.get())) {
 
+    newModule->chunk.destroyRuntimeData();
     return false;
   }
 
   buildExportsTable(newModule.get());
 
+  oldModule->chunk.destroyRuntimeData();
+
   oldModule->chunk = std::move(newModule->chunk);
-
   oldModule->exportsTable = newModule->exportsTable;
-
   oldModule->metadata = newModule->metadata;
   oldModule->state = ModuleState::LOADED;
   oldModule->errorMessage.clear();
@@ -370,7 +378,6 @@ Value ModuleManager::loadCModule(const std::string &moduleName, const std::strin
   {
     auto module = std::make_unique<Module>();
     modulePtr = module.get();
-
     modules_[moduleName] = std::move(module);
   }
 
@@ -472,12 +479,22 @@ bool ModuleManager::detectCircular(const std::string &moduleName,
 
 void ModuleManager::clearCache(const std::string &moduleName) {
   if (moduleName.empty()) {
+
+    for (auto &[name, module] : modules_) {
+      if (module && module->state == ModuleState::LOADED) {
+        module->chunk.destroyRuntimeData();
+      }
+    }
     modules_.clear();
     pathToName_.clear();
     loadOrder_.clear();
   } else {
     auto it = modules_.find(moduleName);
     if (it != modules_.end()) {
+
+      if (it->second && it->second->state == ModuleState::LOADED) {
+        it->second->chunk.destroyRuntimeData();
+      }
       pathToName_.erase(it->second->metadata.path);
       modules_.erase(it);
       auto orderIt = std::find(loadOrder_.begin(), loadOrder_.end(), moduleName);
@@ -577,7 +594,14 @@ ModuleMetadata ModuleManager::getMetadata(const std::string &moduleName) const {
 void ModuleManager::evictCache() {
   if (loadOrder_.empty())
     return;
-  clearCache(loadOrder_.front());
+
+  const std::string &oldestModule = loadOrder_.front();
+  auto it = modules_.find(oldestModule);
+  if (it != modules_.end() && it->second && it->second->state == ModuleState::LOADED) {
+    it->second->chunk.destroyRuntimeData();
+  }
+
+  clearCache(oldestModule);
 }
 
 void ModuleManager::setError(Module *module, const std::string &error) {
