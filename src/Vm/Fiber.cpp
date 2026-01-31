@@ -4,6 +4,67 @@
 
 namespace spt {
 
+void FiberObject::init(FiberObject *fiber) {
+
+  fiber->stackSize = DEFAULT_STACK_SIZE;
+  fiber->stack = new Value[fiber->stackSize];
+  fiber->stackTop = fiber->stack;
+  fiber->stackLast = fiber->stack + fiber->stackSize;
+
+  for (size_t i = 0; i < fiber->stackSize; ++i) {
+    fiber->stack[i] = Value::nil();
+  }
+
+  fiber->framesCapacity = DEFAULT_FRAMES_SIZE;
+  fiber->frames = new CallFrame[fiber->framesCapacity];
+  fiber->frameCount = 0;
+
+  for (int i = 0; i < fiber->framesCapacity; ++i) {
+    fiber->frames[i] = CallFrame{};
+  }
+
+  fiber->deferCapacity = DEFAULT_DEFER_SIZE;
+  fiber->deferStack = new Value[fiber->deferCapacity];
+  fiber->deferTop = 0;
+
+  for (int i = 0; i < fiber->deferCapacity; ++i) {
+    fiber->deferStack[i] = Value::nil();
+  }
+
+  fiber->state = FiberState::NEW;
+  fiber->openUpvalues = nullptr;
+  fiber->closure = nullptr;
+  fiber->caller = nullptr;
+  fiber->error = Value::nil();
+  fiber->hasError = false;
+  fiber->yieldValue = Value::nil();
+}
+
+void FiberObject::destroy(FiberObject *fiber) {
+
+  if (fiber->stack) {
+    delete[] fiber->stack;
+    fiber->stack = nullptr;
+    fiber->stackTop = nullptr;
+    fiber->stackLast = nullptr;
+    fiber->stackSize = 0;
+  }
+
+  if (fiber->frames) {
+    delete[] fiber->frames;
+    fiber->frames = nullptr;
+    fiber->framesCapacity = 0;
+    fiber->frameCount = 0;
+  }
+
+  if (fiber->deferStack) {
+    delete[] fiber->deferStack;
+    fiber->deferStack = nullptr;
+    fiber->deferCapacity = 0;
+    fiber->deferTop = 0;
+  }
+}
+
 void FiberObject::fixUpvaluePointers(Value *oldBase, Value *newBase) {
   UpValue *uv = openUpvalues;
   while (uv != nullptr) {

@@ -26,7 +26,7 @@ VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
   symbols_->initialize(*stringPool_);
   symbols_->registerBuiltinMethods();
 
-  mainFiber_ = gc_.allocate<FiberObject>();
+  mainFiber_ = gc_.allocateFiber();
   if (config.stackSize > FiberObject::DEFAULT_STACK_SIZE) {
     mainFiber_->checkStack(config.stackSize);
   }
@@ -187,7 +187,8 @@ InterpretResult VM::executeModule(const CompiledChunk &chunk) {
 }
 
 FiberObject *VM::allocateFiber(Closure *closure) {
-  FiberObject *fiber = gc_.allocate<FiberObject>();
+
+  FiberObject *fiber = gc_.allocateFiber();
   fiber->closure = closure;
   fiber->state = FiberState::NEW;
   return fiber;

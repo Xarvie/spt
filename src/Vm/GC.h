@@ -13,6 +13,7 @@ struct Instance;
 struct NativeInstance;
 struct Closure;
 struct StringObject;
+struct FiberObject;
 class StringPool;
 
 // ============================================================================
@@ -96,6 +97,9 @@ public:
   Closure *allocateNativeClosure(int nupvalues = 0);
 
   StringObject *allocateString(std::string_view sv, uint32_t hash);
+
+  // 分配 Fiber（使用显式 init/destroy 生命周期管理）
+  FiberObject *allocateFiber();
 
   // === 内存跟踪 ===
   void trackAllocation(size_t bytes) { bytesAllocated_ += bytes; }

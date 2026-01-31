@@ -159,6 +159,38 @@ StringObject *GC::allocateString(std::string_view sv, uint32_t hash) {
   return str;
 }
 
+FiberObject *GC::allocateFiber() {
+  collectIfNeeded();
+
+  FiberObject *fiber = new FiberObject();
+
+  FiberObject::init(fiber);
+
+  size_t totalSize = sizeof(FiberObject) + fiber->totalAllocatedBytes();
+  bytesAllocated_ += totalSize;
+  objectCount_++;
+
+  if (bytesAllocated_ > stats_.peakBytesAllocated) {
+    stats_.peakBytesAllocated = bytesAllocated_;
+  }
+  if (objectCount_ > stats_.peakObjectCount) {
+    stats_.peakObjectCount = objectCount_;
+  }
+
+  fiber->next = objects_;
+  objects_ = fiber;
+
+  updateTypeStats(ValueType::Fiber, true);
+
+  if (GCDebug::enabled && GCDebug::logAllocations) {
+    fprintf(stderr, "[GC] alloc Fiber @%p size=%zu (stack=%zu frames=%d defer=%d) total=%zu #%zu\n",
+            (void *)fiber, totalSize, fiber->stackSize, fiber->framesCapacity, fiber->deferCapacity,
+            bytesAllocated_, objectCount_);
+  }
+
+  return fiber;
+}
+
 void GC::collect() {
   if (!enabled_ || inFinalizer_)
     return;
@@ -569,9 +601,12 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::Fiber: {
     FiberObject *fiber = static_cast<FiberObject *>(obj);
-    bytesAllocated_ -= sizeof(FiberObject) + (fiber->stackSize * sizeof(Value)) +
-                       (fiber->framesCapacity * sizeof(CallFrame)) +
-                       (fiber->deferStack.capacity() * sizeof(Value));
+
+    size_t totalSize = sizeof(FiberObject) + fiber->totalAllocatedBytes();
+    bytesAllocated_ -= totalSize;
+
+    FiberObject::destroy(fiber);
+
     delete fiber;
     break;
   }

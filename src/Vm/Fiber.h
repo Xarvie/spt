@@ -1,7 +1,6 @@
 #pragma once
 #include "../Common/Types.h"
 #include "Value.h"
-#include <vector>
 
 namespace spt {
 
@@ -38,11 +37,14 @@ enum class FiberState : uint8_t {
 // ============================================================================
 // FiberObject - 执行上下文核心载体
 // ============================================================================
+// 注意：此结构不使用 RAII，必须显式调用 init()/destroy() 管理生命周期
+// 这是为了兼容 setjmp/longjmp 错误处理机制
+// ============================================================================
 struct FiberObject : GCObject {
   // === 执行状态 ===
   FiberState state = FiberState::NEW;
 
-  // === Value 栈 ===
+  // === Value 栈 (手动管理) ===
   Value *stack = nullptr;     // 栈底指针 (Lua: L->stack)
   Value *stackTop = nullptr;  // 当前栈顶指针 (Lua: L->top)
   Value *stackLast = nullptr; // 栈内存的极限位置 (Lua: L->stack_last)
@@ -53,9 +55,10 @@ struct FiberObject : GCObject {
   int framesCapacity = 0;      // 帧数组总容量
   int frameCount = 0;          // 当前使用的帧数
 
-  // === Defer 栈 ===
-  std::vector<Value> deferStack;
-  int deferTop = 0; // 指向 deferStack 的下一个可用位置
+  // === Defer 栈 (手动管理) ===
+  Value *deferStack = nullptr; // defer 闭包数组
+  int deferCapacity = 0;       // defer 数组容量
+  int deferTop = 0;            // 指向 deferStack 的下一个可用位置
 
   UpValue *openUpvalues = nullptr;
 
@@ -75,52 +78,32 @@ struct FiberObject : GCObject {
   // === 配置 ===
   static constexpr size_t DEFAULT_STACK_SIZE = 64;
   static constexpr size_t DEFAULT_FRAMES_SIZE = 8;
+  static constexpr size_t DEFAULT_DEFER_SIZE = 16;
   static constexpr int MAX_FRAMES = 256;
 
-  // === 构造 ===
+  // =========================================================================
+  // 生命周期管理 - 必须显式调用，不依赖构造/析构
+  // =========================================================================
+
+  // 初始化 Fiber（分配所有内部内存）
+  // 调用时机：GC 分配 FiberObject 后立即调用
+  static void init(FiberObject *fiber);
+
+  // 销毁 Fiber（释放所有内部内存）
+  // 调用时机：GC 释放 FiberObject 前调用
+  static void destroy(FiberObject *fiber);
+
+  // =========================================================================
+  // 构造函数 - 仅设置类型标签，不分配内存
+  // =========================================================================
   FiberObject() {
     type = ValueType::Fiber;
-
-    // 分配初始 Value 栈内存
-    stackSize = DEFAULT_STACK_SIZE;
-    stack = new Value[stackSize];
-    stackTop = stack;
-    stackLast = stack + stackSize;
-
-    // 初始化栈内容为 nil
-    for (size_t i = 0; i < stackSize; ++i) {
-      stack[i] = Value::nil();
-    }
-
-    // 分配初始帧数组
-    framesCapacity = DEFAULT_FRAMES_SIZE;
-    frames = new CallFrame[framesCapacity];
-    frameCount = 0;
-
-    // 初始化帧数组（CallFrame 有默认值，但显式初始化更安全）
-    for (int i = 0; i < framesCapacity; ++i) {
-      frames[i] = CallFrame{};
-    }
-
-    deferStack.resize(16);
-    deferTop = 0;
     error = Value::nil();
     yieldValue = Value::nil();
   }
 
-  ~FiberObject() {
-    // 释放 Value 栈
-    if (stack) {
-      delete[] stack;
-      stack = nullptr;
-    }
-
-    // 释放帧数组
-    if (frames) {
-      delete[] frames;
-      frames = nullptr;
-    }
-  }
+  // 禁用析构函数 - 资源由 destroy() 显式释放
+  // ~FiberObject() = default; // 隐式默认，不做任何事
 
   // === 状态查询 ===
   bool isNew() const { return state == FiberState::NEW; }
@@ -207,16 +190,40 @@ struct FiberObject : GCObject {
 
   void ensureStack(int needed) { checkStack(needed); }
 
-  // === Defer 栈扩容 ===
+  // === Defer 栈扩容 (手动管理) ===
   void ensureDefers(int needed) {
-    if (deferTop + needed <= (int)deferStack.size()) {
+    int required = deferTop + needed;
+    if (required <= deferCapacity) {
       return;
     }
-    size_t newSize = deferStack.size() * 2;
-    while (newSize < static_cast<size_t>(deferTop + needed)) {
-      newSize *= 2;
+
+    int newCapacity = deferCapacity;
+    if (newCapacity == 0) {
+      newCapacity = DEFAULT_DEFER_SIZE;
     }
-    deferStack.resize(newSize);
+    while (newCapacity < required) {
+      newCapacity *= 2;
+    }
+
+    Value *newDefers = new Value[newCapacity];
+
+    // 迁移现有数据
+    for (int i = 0; i < deferTop; ++i) {
+      newDefers[i] = deferStack[i];
+    }
+
+    // 初始化新增区域为 nil
+    for (int i = deferTop; i < newCapacity; ++i) {
+      newDefers[i] = Value::nil();
+    }
+
+    // 释放旧数组
+    if (deferStack) {
+      delete[] deferStack;
+    }
+
+    deferStack = newDefers;
+    deferCapacity = newCapacity;
   }
 
   // === 帧栈扩容 (手动管理) ===
@@ -270,7 +277,7 @@ struct FiberObject : GCObject {
   // === 辅助方法：根据 slotsBase 获取实际的 slots 指针 ===
   Value *getSlots(int slotsBase) { return stack + slotsBase; }
 
-  // === 重置 ===
+  // === 重置（保留已分配的内存） ===
   void reset() {
     state = FiberState::NEW;
     stackTop = stack;
@@ -281,6 +288,12 @@ struct FiberObject : GCObject {
     error = Value::nil();
     hasError = false;
     yieldValue = Value::nil();
+  }
+
+  // === 内存大小计算（供 GC 统计使用） ===
+  size_t totalAllocatedBytes() const {
+    return (stackSize * sizeof(Value)) + (framesCapacity * sizeof(CallFrame)) +
+           (deferCapacity * sizeof(Value));
   }
 };
 
