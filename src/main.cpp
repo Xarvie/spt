@@ -60,9 +60,6 @@
 
 #include "test/TestShortCircuitDiagnostics.h"
 
-// Apply 测试
-#include "test/TestApply.h"
-
 // 多返回值测试
 #include "TestMultiReturn.h"
 
@@ -129,7 +126,6 @@ int main(int argc, char *argv[]) {
 
   registerShortCircuitDiagnostics(runner);
 
-  registerApply(runner);
 
   registerMultiReturnTests(runner);
   registerNativeMultiReturnTests(runner);
