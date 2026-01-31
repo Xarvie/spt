@@ -428,7 +428,15 @@ InterpretResult VM::run() {
 
           Value *argsStart = &slots[B + 1];
           closure->receiver = instanceVal;
-          PROTECT(closure->function(this, closure, C, argsStart));
+
+          size_t oldTopOffset = fiber->stackTop - fiber->stack;
+
+          int numResults;
+          PROTECT(numResults = closure->function(this, closure, C, argsStart));
+
+          (void)numResults;
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
         } else {
 
           const Prototype *proto = closure->proto;
@@ -952,13 +960,12 @@ InterpretResult VM::run() {
           return InterpretResult::RUNTIME_ERROR;
         }
 
-        hasNativeMultiReturn_ = false;
-        nativeMultiReturn_.clear();
-
         Value *argsStart = &slots[A + 1];
 
-        Value result;
-        PROTECT(result = closure->function(this, closure, argCount, argsStart));
+        size_t oldTopOffset = fiber->stackTop - fiber->stack;
+
+        int numResults;
+        PROTECT(numResults = closure->function(this, closure, argCount, argsStart));
 
         if (yieldPending_) {
           yieldPending_ = false;
@@ -969,42 +976,27 @@ InterpretResult VM::run() {
           return InterpretResult::RUNTIME_ERROR;
         }
 
-        if (hasNativeMultiReturn_) {
-          int returnCount = static_cast<int>(nativeMultiReturn_.size());
+        Value *resultsStart = fiber->stackTop - numResults;
 
-          if (expectedResults == -1) {
+        if (expectedResults == -1) {
 
-            fiber->ensureStack(returnCount);
-
-            RESTORE_SLOTS_ONLY();
-
-            for (int i = 0; i < returnCount; ++i) {
-              slots[A + i] = nativeMultiReturn_[i];
-            }
-            STACK_TOP = slots + A + returnCount;
-          } else if (expectedResults > 0) {
-            for (int i = 0; i < returnCount && i < expectedResults; ++i) {
-              slots[A + i] = nativeMultiReturn_[i];
-            }
-            for (int i = returnCount; i < expectedResults; ++i) {
-              slots[A + i] = Value::nil();
-            }
-          } else {
+          for (int i = 0; i < numResults; ++i) {
+            slots[A + i] = resultsStart[i];
           }
 
-          hasNativeMultiReturn_ = false;
-          nativeMultiReturn_.clear();
+          fiber->stackTop = slots + A + numResults;
+        } else if (expectedResults > 0) {
+
+          for (int i = 0; i < expectedResults; ++i) {
+            slots[A + i] = (i < numResults) ? resultsStart[i] : Value::nil();
+          }
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
         } else {
-          if (expectedResults != 0) {
-            slots[A] = result;
-            if (expectedResults == -1) {
-              STACK_TOP = slots + A + 1;
-            } else {
-              for (int i = 1; i < expectedResults; ++i)
-                slots[A + i] = Value::nil();
-            }
-          }
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
         }
+
       } else {
         const Prototype *proto = closure->proto;
 
@@ -1217,14 +1209,15 @@ InterpretResult VM::run() {
     }
 
     else if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
-      Value directResult;
-      hasNativeMultiReturn_ = false;
-      nativeMultiReturn_.clear();
 
+      size_t oldTopOffset = fiber->stackTop - fiber->stack;
+
+      Value resultValue;
       bool invokeSuccess;
 
-      PROTECT(invokeSuccess = StdlibDispatcher::invokeMethod(
-                  this, receiver, methodName, userArgCount, argsStart, directResult));
+      PROTECT(invokeSuccess = StdlibDispatcher::invokeMethod(this, receiver, methodName,
+                                                             userArgCount, argsStart, resultValue));
+
       if (invokeSuccess) {
         if (yieldPending_) {
           yieldPending_ = false;
@@ -1237,32 +1230,26 @@ InterpretResult VM::run() {
 
         int expectedResults = C - 1;
 
-        if (hasNativeMultiReturn_) {
-          int returnCount = static_cast<int>(nativeMultiReturn_.size());
-          if (expectedResults == -1) {
-            for (int i = 0; i < returnCount; ++i) {
-              slots[A + i] = nativeMultiReturn_[i];
-            }
-            STACK_TOP = slots + A + returnCount;
-          } else if (expectedResults > 0) {
-            for (int i = 0; i < expectedResults; ++i) {
-              slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
-            }
+        if (expectedResults == -1) {
+          slots[A] = resultValue;
+
+          fiber->stackTop = slots + A + 1;
+        } else if (expectedResults > 0) {
+          slots[A] = resultValue;
+          for (int i = 1; i < expectedResults; ++i) {
+            slots[A + i] = Value::nil();
           }
-          hasNativeMultiReturn_ = false;
-          nativeMultiReturn_.clear();
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
         } else {
-          slots[A] = directResult;
-          if (expectedResults == -1) {
-            STACK_TOP = slots + A + 1;
-          } else if (expectedResults > 1) {
-            for (int i = 1; i < expectedResults; ++i) {
-              slots[A + i] = Value::nil();
-            }
-          }
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
         }
+
         SPT_DISPATCH();
       }
+
+      fiber->stackTop = fiber->stack + oldTopOffset;
 
       receiver = slots[A];
       argsStart = &slots[A + 1];
@@ -1308,27 +1295,55 @@ InterpretResult VM::run() {
     if (method.isClosure()) {
       Closure *closure = static_cast<Closure *>(method.asGC());
       if (closure->isNative()) {
+
+        size_t oldTopOffset = fiber->stackTop - fiber->stack;
+
         protect(method);
         REFRESH_SLOTS();
 
         if (closure->arity != -1 && userArgCount != closure->arity) {
+          unprotect(1);
           SAVE_PC();
           runtimeError("Native method '%s' expects %d arguments, got %d", closure->getName(),
                        closure->arity, userArgCount);
           return InterpretResult::RUNTIME_ERROR;
         }
 
-        hasNativeMultiReturn_ = false;
-        nativeMultiReturn_.clear();
-
         argsStart = &slots[A + 1];
         FiberObject *callFiber = currentFiber_;
 
-        Value result;
         Value savedReceiver = closure->receiver;
         closure->receiver = receiver;
-        PROTECT(result = closure->function(this, closure, userArgCount, argsStart));
+
+        int numResults;
+        PROTECT(numResults = closure->function(this, closure, userArgCount, argsStart));
+
         closure->receiver = savedReceiver;
+
+        if (yieldPending_) {
+
+          if (currentFiber_ != callFiber) {
+            callFiber->stackTop--;
+          } else {
+            unprotect(1);
+          }
+          yieldPending_ = false;
+          return InterpretResult::OK;
+        }
+
+        if (hasError_) {
+
+          if (currentFiber_ != callFiber) {
+            callFiber->stackTop--;
+          } else {
+            unprotect(1);
+          }
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        int expectedResults = C - 1;
+
+        Value *resultsStart = fiber->stackTop - numResults;
 
         if (currentFiber_ != callFiber) {
           callFiber->stackTop--;
@@ -1336,41 +1351,22 @@ InterpretResult VM::run() {
           unprotect(1);
         }
 
-        if (yieldPending_) {
-          yieldPending_ = false;
-          return InterpretResult::OK;
-        }
+        if (expectedResults == -1) {
+          for (int i = 0; i < numResults; ++i)
+            slots[A + i] = resultsStart[i];
 
-        if (hasError_) {
-          return InterpretResult::RUNTIME_ERROR;
-        }
-
-        int expectedResults = C - 1;
-
-        if (hasNativeMultiReturn_) {
-          int returnCount = static_cast<int>(nativeMultiReturn_.size());
-          if (expectedResults == -1) {
-            for (int i = 0; i < returnCount; ++i)
-              slots[A + i] = nativeMultiReturn_[i];
-            STACK_TOP = slots + A + returnCount;
-          } else {
-            for (int i = 0; i < expectedResults; ++i) {
-              slots[A + i] = (i < returnCount) ? nativeMultiReturn_[i] : Value::nil();
-            }
+          fiber->stackTop = slots + A + numResults;
+        } else if (expectedResults > 0) {
+          for (int i = 0; i < expectedResults; ++i) {
+            slots[A + i] = (i < numResults) ? resultsStart[i] : Value::nil();
           }
-          hasNativeMultiReturn_ = false;
-          nativeMultiReturn_.clear();
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
         } else {
-          if (expectedResults != 0) {
-            slots[A] = result;
-            if (expectedResults == -1)
-              STACK_TOP = slots + A + 1;
-            else {
-              for (int i = 1; i < expectedResults; ++i)
-                slots[A + i] = Value::nil();
-            }
-          }
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
         }
+
       } else {
 
         const Prototype *proto = closure->proto;
@@ -1460,58 +1456,60 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
 
+    size_t slotsOffset = slots - fiber->stack;
+    size_t returnValuesOffset = slotsOffset + A;
+
     if (fiber->deferTop > frame->deferBase) {
       SAVE_PC();
       invokeDefers(frame->deferBase);
-
       if (hasError_)
         return InterpretResult::RUNTIME_ERROR;
-
       REFRESH_CACHE();
+      slotsOffset = slots - fiber->stack;
+      returnValuesOffset = slotsOffset + A;
     }
 
     int returnCount = (B >= 1) ? B - 1 : 0;
-
-    Value *returnValues = slots + A;
     int expectedResults = frame->expectedResults;
-
     bool isRootFrame = (FRAME_COUNT == 1);
+
     bool isModuleExit = (exitFrameCount_ > 0 && FRAME_COUNT == exitFrameCount_);
 
-    Value *destSlot = nullptr;
-    if (!isRootFrame && !isModuleExit) {
-      destSlot = frame->returnTo;
+    if (isModuleExit && !pcallStack_.empty()) {
+      const auto &ctx = pcallStack_.back();
+
+      if (ctx.frameCount == FRAME_COUNT) {
+        if (ctx.fiber != fiber) {
+
+          isModuleExit = false;
+        }
+      }
     }
 
-    closeUpvalues(slots);
+    size_t destSlotOffset = 0;
+    bool hasDestSlot = false;
+    if (!isRootFrame && frame->returnTo != nullptr) {
+      destSlotOffset = frame->returnTo - fiber->stack;
+      hasDestSlot = true;
+    }
 
+    closeUpvalues(fiber->stack + slotsOffset);
     FRAME_COUNT--;
+
+    Value *returnValues = fiber->stack + returnValuesOffset;
 
     if (isRootFrame) {
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
-
-      if (!pcallStack_.empty()) {
-        nativeMultiReturn_.clear();
-        for (int i = 0; i < returnCount; ++i) {
-          nativeMultiReturn_.push_back(returnValues[i]);
-        }
-        hasNativeMultiReturn_ = true;
-      }
-
       fiber->state = FiberState::DONE;
-
-      fiber->yieldValue = (returnCount > 0) ? returnValues[0] : Value::nil();
-      lastModuleResult_ = fiber->yieldValue;
+      fiber->yieldValue = lastModuleResult_;
 
       if (fiber->caller) {
         FiberObject *caller = fiber->caller;
         fiber->caller = nullptr;
         currentFiber_ = caller;
         caller->state = FiberState::RUNNING;
-
         return InterpretResult::OK;
       }
-
       unprotect(1);
       return InterpretResult::OK;
     }
@@ -1519,33 +1517,46 @@ InterpretResult VM::run() {
     if (isModuleExit) {
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
 
-      if (!pcallStack_.empty()) {
-        nativeMultiReturn_.clear();
-        for (int i = 0; i < returnCount; ++i) {
-          nativeMultiReturn_.push_back(returnValues[i]);
+      if (hasDestSlot) {
+        Value *destSlot = fiber->stack + destSlotOffset;
+
+        if (destSlot + returnCount > fiber->stackLast) {
+          returnCount = static_cast<int>(fiber->stackLast - destSlot);
         }
-        hasNativeMultiReturn_ = true;
+
+        if (expectedResults == -1) {
+          for (int i = 0; i < returnCount; ++i)
+            destSlot[i] = returnValues[i];
+          STACK_TOP = destSlot + returnCount;
+        } else {
+          for (int i = 0; i < expectedResults; ++i) {
+            destSlot[i] = (i < returnCount) ? returnValues[i] : Value::nil();
+          }
+        }
       }
       return InterpretResult::OK;
     }
 
     frame = &fiber->frames[FRAME_COUNT - 1];
     slots = frame->slots;
-
     LOAD_PC();
 
+    Value *destSlot = fiber->stack + destSlotOffset;
+
+    if (destSlot + returnCount > fiber->stackLast) {
+      fiber->ensureStack(returnCount);
+      REFRESH_SLOTS();
+      destSlot = fiber->stack + destSlotOffset;
+      returnValues = fiber->stack + returnValuesOffset;
+    }
+
     if (expectedResults == -1) {
-      for (int i = 0; i < returnCount; ++i) {
+      for (int i = 0; i < returnCount; ++i)
         destSlot[i] = returnValues[i];
-      }
       STACK_TOP = destSlot + returnCount;
     } else {
       for (int i = 0; i < expectedResults; ++i) {
-        if (i < returnCount) {
-          destSlot[i] = returnValues[i];
-        } else {
-          destSlot[i] = Value::nil();
-        }
+        destSlot[i] = (i < returnCount) ? returnValues[i] : Value::nil();
       }
       STACK_TOP = slots + frame->closure->proto->maxStackSize;
     }
@@ -1558,31 +1569,29 @@ InterpretResult VM::run() {
     uint8_t B = GETARG_B(inst);
     int returnCount = (B >= 1) ? B - 1 : 0;
 
-    Value *returnValues = slots + A;
+    size_t slotsOffset = slots - fiber->stack;
+    size_t returnValuesOffset = slotsOffset + A;
+
     int expectedResults = frame->expectedResults;
 
     bool isRootFrame = (FRAME_COUNT == 1);
     bool isModuleExit = (exitFrameCount_ > 0 && FRAME_COUNT == exitFrameCount_);
 
-    Value *destSlot = nullptr;
-    if (!isRootFrame && !isModuleExit) {
-      destSlot = frame->returnTo;
+    size_t destSlotOffset = 0;
+    bool hasDestSlot = false;
+    if (!isRootFrame && frame->returnTo != nullptr) {
+      destSlotOffset = frame->returnTo - fiber->stack;
+      hasDestSlot = true;
     }
 
-    closeUpvalues(slots);
+    closeUpvalues(fiber->stack + slotsOffset);
 
     FRAME_COUNT--;
 
+    Value *returnValues = fiber->stack + returnValuesOffset;
+
     if (isRootFrame) {
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
-
-      if (!pcallStack_.empty()) {
-        nativeMultiReturn_.clear();
-        for (int i = 0; i < returnCount; ++i) {
-          nativeMultiReturn_.push_back(returnValues[i]);
-        }
-        hasNativeMultiReturn_ = true;
-      }
 
       fiber->state = FiberState::DONE;
 
@@ -1605,12 +1614,24 @@ InterpretResult VM::run() {
     if (isModuleExit) {
       lastModuleResult_ = (returnCount > 0) ? returnValues[0] : Value::nil();
 
-      if (!pcallStack_.empty()) {
-        nativeMultiReturn_.clear();
-        for (int i = 0; i < returnCount; ++i) {
-          nativeMultiReturn_.push_back(returnValues[i]);
+      if (hasDestSlot) {
+
+        Value *destSlot = fiber->stack + destSlotOffset;
+
+        if (expectedResults == -1) {
+          for (int i = 0; i < returnCount; ++i) {
+            destSlot[i] = returnValues[i];
+          }
+          STACK_TOP = destSlot + returnCount;
+        } else {
+          for (int i = 0; i < expectedResults; ++i) {
+            if (i < returnCount) {
+              destSlot[i] = returnValues[i];
+            } else {
+              destSlot[i] = Value::nil();
+            }
+          }
         }
-        hasNativeMultiReturn_ = true;
       }
       return InterpretResult::OK;
     }
@@ -1619,6 +1640,8 @@ InterpretResult VM::run() {
     slots = frame->slots;
 
     LOAD_PC();
+
+    Value *destSlot = fiber->stack + destSlotOffset;
 
     if (expectedResults == -1) {
       for (int i = 0; i < returnCount; ++i) {
@@ -1953,31 +1976,41 @@ InterpretResult VM::run() {
     if (funcVal.isClosure()) {
       Closure *closure = static_cast<Closure *>(funcVal.asGC());
       if (closure->isNative()) {
-        nativeMultiReturn_.clear();
-        hasNativeMultiReturn_ = false;
-
-        Value result;
-        PROTECT(result = closure->function(this, closure, 2, &base[1]));
-
-        if (hasError_)
+        if (closure->arity != -1 && closure->arity != 2) {
+          SAVE_PC();
+          runtimeError("Iterator function expects 2 arguments");
           return InterpretResult::RUNTIME_ERROR;
+        }
 
+        size_t oldTopOffset = fiber->stackTop - fiber->stack;
+
+        int numResults;
+
+        PROTECT(numResults = closure->function(this, closure, 2, &base[1]));
+
+        if (yieldPending_) {
+          SAVE_PC();
+          return InterpretResult::OK;
+        }
+        if (hasError_) {
+          return InterpretResult::RUNTIME_ERROR;
+        }
+
+        frame = &fiber->frames[fiber->frameCount - 1];
+        slots = frame->slots;
         Value *dest = &slots[A + 3];
 
-        if (hasNativeMultiReturn_) {
-          const size_t count = nativeMultiReturn_.size();
-          const size_t limit = (count < C) ? count : C;
-          for (size_t i = 0; i < limit; ++i)
-            dest[i] = nativeMultiReturn_[i];
-          for (size_t i = limit; i < C; ++i)
-            dest[i] = Value::nil();
-        } else {
-          if (C > 0) {
-            dest[0] = result;
-            for (int i = 1; i < C; ++i)
-              dest[i] = Value::nil();
-          }
+        Value *resultsStart = fiber->stackTop - numResults;
+
+        int limit = (numResults < static_cast<int>(C)) ? numResults : static_cast<int>(C);
+        for (int i = 0; i < limit; ++i) {
+          dest[i] = resultsStart[i];
         }
+        for (int i = limit; i < static_cast<int>(C); ++i) {
+          dest[i] = Value::nil();
+        }
+
+        fiber->stackTop = fiber->stack + oldTopOffset;
       } else {
 
         const Prototype *proto = closure->proto;

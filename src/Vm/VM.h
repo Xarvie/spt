@@ -159,7 +159,47 @@ public:
 
   // === 错误处理 ===
   void throwError(Value errorValue);
-  void setNativeMultiReturn(std::initializer_list<Value> values);
+
+  // =========================================================================
+  // 原生函数栈操作 API (Lua 风格)
+  // =========================================================================
+  // 原生函数通过这些方法操作栈来传递返回值
+  //
+  // 使用示例:
+  //   int myNativeFunc(VM *vm, Closure *self, int argc, Value *args) {
+  //       vm->push(Value::integer(42));
+  //       vm->push(Value::boolean(true));
+  //       return 2;  // 返回 2 个值
+  //   }
+  // =========================================================================
+
+  // 将值压入栈顶（用于原生函数返回值）
+  void push(Value value);
+
+  // 从栈顶弹出一个值
+  Value pop();
+
+  // 查看栈顶往下第 n 个值（0 = 栈顶）
+  Value peek(int distance = 0) const;
+
+  // 获取当前栈顶指针
+  Value *top() const;
+
+  // 设置栈顶指针（谨慎使用）
+  void setTop(Value *newTop);
+
+  // 获取栈上指定索引的值（正数从栈底，负数从栈顶）
+  // 类似 Lua 的索引方式: 1 = 第一个参数, -1 = 栈顶
+  Value getStackValue(int index) const;
+
+  // 设置栈上指定索引的值
+  void setStackValue(int index, Value value);
+
+  // 确保栈有足够空间容纳 n 个额外的值
+  void checkStack(int n);
+
+  // 获取当前栈中元素数量（相对于当前帧）
+  int getTop() const;
 
   // =========================================================================
   // 常量表预编译 - 将 ConstantValue variant 转换为 Value 数组
@@ -174,9 +214,6 @@ public:
   void setUserData(void *data) { userData_ = data; }
 
   void *getUserData() const { return userData_; }
-
-  // === 原生函数多返回值支持 ===
-  void setNativeMultiReturn(const std::vector<Value> &values);
 
 private:
   InterpretResult run();
@@ -229,10 +266,6 @@ private:
   int exitFrameCount_ = 0;
   bool yieldPending_ = false;
 
-  // === 原生函数多返回值暂存 ===
-  std::vector<Value> nativeMultiReturn_;
-  bool hasNativeMultiReturn_ = false;
-
   // 垃圾回收器
   GC gc_;
 
@@ -243,5 +276,76 @@ private:
   // === 用户数据指针 - 供 C API 等嵌入层使用 ===
   void *userData_ = nullptr;
 };
+
+// ============================================================================
+// 内联实现 - 栈操作 API
+// ============================================================================
+
+inline void VM::push(Value value) { currentFiber_->push(value); }
+
+inline Value VM::pop() { return currentFiber_->pop(); }
+
+inline Value VM::peek(int distance) const { return currentFiber_->peek(distance); }
+
+inline Value *VM::top() const { return currentFiber_->stackTop; }
+
+inline void VM::setTop(Value *newTop) { currentFiber_->stackTop = newTop; }
+
+inline void VM::checkStack(int n) { currentFiber_->ensureStack(n); }
+
+inline int VM::getTop() const {
+  // 返回相对于当前帧的栈元素数量
+  if (currentFiber_->frameCount == 0) {
+    return static_cast<int>(currentFiber_->stackTop - currentFiber_->stack);
+  }
+  CallFrame &frame = currentFiber_->frames[currentFiber_->frameCount - 1];
+  return static_cast<int>(currentFiber_->stackTop - frame.slots);
+}
+
+inline Value VM::getStackValue(int index) const {
+  Value *ptr;
+  if (index > 0) {
+    // 正数索引：从当前帧底部开始（1-based，类似 Lua）
+    if (currentFiber_->frameCount == 0) {
+      ptr = currentFiber_->stack + (index - 1);
+    } else {
+      CallFrame &frame = currentFiber_->frames[currentFiber_->frameCount - 1];
+      ptr = frame.slots + (index - 1);
+    }
+  } else if (index < 0) {
+    // 负数索引：从栈顶开始（-1 = 栈顶）
+    ptr = currentFiber_->stackTop + index;
+  } else {
+    // index == 0 无效
+    return Value::nil();
+  }
+
+  // 边界检查
+  if (ptr < currentFiber_->stack || ptr >= currentFiber_->stackTop) {
+    return Value::nil();
+  }
+  return *ptr;
+}
+
+inline void VM::setStackValue(int index, Value value) {
+  Value *ptr;
+  if (index > 0) {
+    if (currentFiber_->frameCount == 0) {
+      ptr = currentFiber_->stack + (index - 1);
+    } else {
+      CallFrame &frame = currentFiber_->frames[currentFiber_->frameCount - 1];
+      ptr = frame.slots + (index - 1);
+    }
+  } else if (index < 0) {
+    ptr = currentFiber_->stackTop + index;
+  } else {
+    return; // index == 0 无效
+  }
+
+  // 边界检查
+  if (ptr >= currentFiber_->stack && ptr < currentFiber_->stackTop) {
+    *ptr = value;
+  }
+}
 
 } // namespace spt

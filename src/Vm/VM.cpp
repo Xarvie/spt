@@ -57,8 +57,6 @@ VM::~VM() {
   pcallStack_.clear();
   hasError_ = false;
   errorValue_ = Value::nil();
-  nativeMultiReturn_.clear();
-  hasNativeMultiReturn_ = false;
 }
 
 void VM::protect(Value value) { currentFiber_->push(value); }
@@ -456,12 +454,13 @@ void VM::setGlobal(const std::string &name, Value value) {
 
 void VM::registerNative(const std::string &name, NativeFn fn, int arity) {
   Closure *native = gc_.allocateNativeClosure(0);
+  protect(Value::object(native));
   native->function = std::move(fn);
   native->arity = arity;
   native->name = allocateString(name);
   native->receiver = Value::nil();
-
   defineGlobal(name, Value::object(native));
+  unprotect(1);
 }
 
 Closure *VM::createNativeClosure(NativeFn fn, int arity, int nupvalues) {
@@ -507,8 +506,6 @@ void VM::resetStack() {
   pcallStack_.clear();
   hasError_ = false;
   errorValue_ = Value::nil();
-  nativeMultiReturn_.clear();
-  hasNativeMultiReturn_ = false;
 }
 
 void VM::collectGarbage() { gc_.collect(); }
@@ -614,17 +611,6 @@ std::string VM::getStackTrace() {
   }
 
   return trace;
-}
-
-void VM::setNativeMultiReturn(const std::vector<Value> &values) {
-  hasNativeMultiReturn_ = true;
-  nativeMultiReturn_ = values;
-}
-
-void VM::setNativeMultiReturn(std::initializer_list<Value> values) {
-  hasNativeMultiReturn_ = true;
-  nativeMultiReturn_.clear();
-  nativeMultiReturn_.insert(nativeMultiReturn_.end(), values.begin(), values.end());
 }
 
 StringObject *VM::allocateString(std::string_view str) { return stringPool_->intern(str); }

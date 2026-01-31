@@ -21,8 +21,10 @@ static Value createBoundNative(VM *vm, Value receiver, StringObject *name,
   native->arity = arity;
   native->receiver = receiver;
 
-  native->function = [fn](VM *vm, Closure *self, int argc, Value *argv) -> Value {
-    return fn(vm, self->receiver, argc, argv);
+  native->function = [fn](VM *vm, Closure *self, int argc, Value *argv) -> int {
+    Value result = fn(vm, self->receiver, argc, argv);
+    vm->push(result);
+    return 1;
   };
 
   vm->unprotect(2);
@@ -565,7 +567,14 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, StringObject *method
           Closure *closure = static_cast<Closure *>(method.asGC());
           if (closure->isNative()) {
             closure->receiver = receiver;
-            outResult = closure->function(vm, closure, argc, argv);
+
+            Value *returnSlot = vm->top();
+            int nresults = closure->function(vm, closure, argc, argv);
+            if (nresults > 0) {
+              outResult = returnSlot[0];
+            } else {
+              outResult = Value::nil();
+            }
             return true;
           }
 

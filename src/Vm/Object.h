@@ -37,7 +37,12 @@ enum class ClosureKind : uint8_t {
 // 原生函数签名 (NativeFn)
 // ============================================================================
 // C++ 实现的函数，可被 VM 调用
-using NativeFn = std::function<Value(VM *vm, Closure *self, int argc, Value *args)>;
+//
+// 返回值含义 (int):
+//   - 正数 N: 已将 N 个返回值压入栈顶
+//   - 0: 无返回值
+
+using NativeFn = std::function<int(VM *vm, Closure *self, int argc, Value *args)>;
 
 // ============================================================================
 // 闭包对象 (Closure) - 统一脚本闭包和原生闭包

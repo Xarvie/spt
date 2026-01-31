@@ -251,12 +251,6 @@ void GC::markRoots() {
     markValue(vm_->errorValue_);
   }
 
-  if (vm_->hasNativeMultiReturn_) {
-    for (auto &val : vm_->nativeMultiReturn_) {
-      markValue(val);
-    }
-  }
-
   if (vm_->moduleManager()) {
     vm_->moduleManager()->markRoots();
   }
@@ -312,30 +306,29 @@ void GC::markRoots() {
   markSymbol(syms.Fiber);
 }
 
+void GC::markValue(Value &value) {
+  if (value.type == ValueType::Nil || value.type == ValueType::Bool ||
+      value.type == ValueType::Int || value.type == ValueType::Float) {
+    return;
+  }
+  if (value.as.gc) {
+    markObject(value.as.gc);
+  }
+}
+
 void GC::markObject(GCObject *obj) {
   if (!obj || obj->marked)
     return;
 
-  obj->marked = true;
-  grayStack_.push_back(obj);
-
   if (GCDebug::enabled && GCDebug::verboseMarking) {
     fprintf(stderr, "[GC] mark %s @%p\n", typeName(obj->type), (void *)obj);
   }
-}
 
-void GC::markValue(Value &value) {
-  if (value.isNil() || value.isBool() || value.isInt() || value.isNumber()) {
-    return;
-  }
-  markObject(value.asGC());
+  obj->marked = true;
+  grayStack_.push_back(obj);
 }
 
 void GC::traceReferences() {
-  if (GCDebug::enabled && GCDebug::verboseMarking) {
-    fprintf(stderr, "[GC] tracing %zu gray objects...\n", grayStack_.size());
-  }
-
   while (!grayStack_.empty()) {
     GCObject *obj = grayStack_.back();
     grayStack_.pop_back();
@@ -344,134 +337,129 @@ void GC::traceReferences() {
     case ValueType::String:
       break;
 
-    case ValueType::Closure: {
-      auto *closure = static_cast<Closure *>(obj);
-
-      if (closure->name) {
-        markObject(closure->name);
-      }
-
-      if (!closure->receiver.isNil()) {
-        markValue(closure->receiver);
-      }
-
-      if (closure->isScript()) {
-
-        for (int i = 0; i < closure->upvalueCount; ++i) {
-          if (closure->scriptUpvalues[i]) {
-            markObject(closure->scriptUpvalues[i]);
-          }
-        }
-      } else {
-
-        for (int i = 0; i < closure->upvalueCount; i++) {
-          if (!closure->nativeUpvalues[i].isNil()) {
-            markValue(closure->nativeUpvalues[i]);
-          }
-        }
-      }
-      break;
-    }
-
     case ValueType::List: {
-      auto *list = static_cast<ListObject *>(obj);
-      for (auto &elem : list->elements) {
+      ListObject *list = static_cast<ListObject *>(obj);
+      for (Value &elem : list->elements) {
         markValue(elem);
       }
       break;
     }
 
     case ValueType::Map: {
-      auto *map = static_cast<MapObject *>(obj);
-      for (auto &[k, v] : map->entries) {
-        Value key = k;
-        markValue(key);
-        Value val = v;
+      MapObject *map = static_cast<MapObject *>(obj);
+      for (auto &[key, val] : map->entries) {
+        Value k = key;
+        markValue(k);
         markValue(val);
       }
       break;
     }
 
-    case ValueType::Object: {
-      auto *instance = static_cast<Instance *>(obj);
-      markObject(instance->klass);
+    case ValueType::Closure: {
+      Closure *closure = static_cast<Closure *>(obj);
 
-      for (auto [nameStr, value] : instance->fields) {
-        markObject(const_cast<StringObject *>(nameStr));
-        Value v = value;
-        markValue(v);
-      }
-      break;
-    }
-
-    case ValueType::Class: {
-      auto *klass = static_cast<ClassObject *>(obj);
-
-      for (auto [nameStr, method] : klass->methods) {
-        markObject(const_cast<StringObject *>(nameStr));
-        Value v = method;
-        markValue(v);
+      if (closure->name) {
+        markObject(closure->name);
       }
 
-      for (auto [nameStr, val] : klass->statics) {
-        markObject(const_cast<StringObject *>(nameStr));
-        Value v = val;
-        markValue(v);
+      if (!closure->receiver.isNil() && closure->receiver.as.gc) {
+        markObject(closure->receiver.as.gc);
       }
-      if (!klass->gcMethod.isNil()) {
-        markValue(klass->gcMethod);
+
+      if (closure->isScript()) {
+        for (int i = 0; i < closure->upvalueCount; i++) {
+          if (closure->scriptUpvalues[i]) {
+            markObject(closure->scriptUpvalues[i]);
+          }
+        }
+      } else {
+        for (int i = 0; i < closure->upvalueCount; i++) {
+          markValue(closure->nativeUpvalues[i]);
+        }
       }
       break;
     }
 
     case ValueType::Upvalue: {
-      auto *uv = static_cast<UpValue *>(obj);
-      markValue(*uv->location);
+      UpValue *upvalue = static_cast<UpValue *>(obj);
+      markValue(upvalue->closed);
+      break;
+    }
+
+    case ValueType::Class: {
+      ClassObject *klass = static_cast<ClassObject *>(obj);
+
+      for (auto [nameKey, method] : klass->methods) {
+        markObject(const_cast<StringObject *>(nameKey));
+        markValue(method);
+      }
+      for (auto [nameKey, staticVal] : klass->statics) {
+        markObject(const_cast<StringObject *>(nameKey));
+        markValue(staticVal);
+      }
+      break;
+    }
+
+    case ValueType::Object: {
+      Instance *instance = static_cast<Instance *>(obj);
+      if (instance->klass) {
+        markObject(instance->klass);
+      }
+
+      for (auto [nameKey, fieldVal] : instance->fields) {
+        markObject(const_cast<StringObject *>(nameKey));
+        markValue(fieldVal);
+      }
+      break;
+    }
+
+    case ValueType::NativeObject: {
+      NativeInstance *nativeInstance = static_cast<NativeInstance *>(obj);
+      if (nativeInstance->klass) {
+        markObject(nativeInstance->klass);
+      }
+
+      for (auto [nameKey, fieldVal] : nativeInstance->fields) {
+        markObject(const_cast<StringObject *>(nameKey));
+        markValue(fieldVal);
+      }
       break;
     }
 
     case ValueType::Fiber: {
-      auto *fiber = static_cast<FiberObject *>(obj);
-      if (fiber->closure) {
-        markObject(fiber->closure);
-      }
+      FiberObject *fiber = static_cast<FiberObject *>(obj);
+
       for (Value *slot = fiber->stack; slot < fiber->stackTop; ++slot) {
         markValue(*slot);
       }
+
       for (int i = 0; i < fiber->frameCount; ++i) {
         CallFrame &frame = fiber->frames[i];
         if (frame.closure) {
           markObject(frame.closure);
         }
       }
+
       for (int i = 0; i < fiber->deferTop; ++i) {
         markValue(fiber->deferStack[i]);
       }
-      UpValue *upvalue = fiber->openUpvalues;
-      while (upvalue != nullptr) {
-        markObject(upvalue);
-        upvalue = upvalue->nextOpen;
+
+      UpValue *uv = fiber->openUpvalues;
+      while (uv) {
+        markObject(uv);
+        uv = uv->nextOpen;
       }
+
+      if (fiber->closure) {
+        markObject(fiber->closure);
+      }
+
       if (fiber->caller) {
         markObject(fiber->caller);
       }
-      if (fiber->hasError) {
-        markValue(fiber->error);
-      }
-      break;
-    }
 
-    case ValueType::NativeObject: {
-      auto *nativeInstance = static_cast<NativeInstance *>(obj);
-      if (nativeInstance->klass) {
-        markObject(nativeInstance->klass);
-      }
-
-      for (auto [nameStr, val] : nativeInstance->fields) {
-        markObject(const_cast<StringObject *>(nameStr));
-        Value v = val;
-        markValue(v);
-      }
+      markValue(fiber->error);
+      markValue(fiber->yieldValue);
       break;
     }
 
@@ -482,61 +470,64 @@ void GC::traceReferences() {
 }
 
 void GC::removeWhiteStrings() {
-
   if (stringPool_) {
     stringPool_->removeWhiteStrings();
   }
 }
 
 void GC::sweep() {
-  GCObject **obj = &objects_;
-  while (*obj) {
-    if ((*obj)->marked) {
-      (*obj)->marked = false;
-      obj = &(*obj)->next;
-    } else {
-      GCObject *unreached = *obj;
-      *obj = unreached->next;
+  GCObject **ptr = &objects_;
 
-      if (unreached->type == ValueType::Object) {
-        Instance *instance = static_cast<Instance *>(unreached);
+  while (*ptr) {
+    GCObject *obj = *ptr;
+
+    if (obj->marked) {
+      obj->marked = false;
+      ptr = &obj->next;
+    } else {
+      if (obj->type == ValueType::Object) {
+        Instance *instance = static_cast<Instance *>(obj);
         if (instance->klass && instance->klass->hasFinalizer() && !instance->isFinalized) {
           finalizerQueue_.push_back(instance);
-          instance->marked = true;
+          obj->marked = true;
+          ptr = &obj->next;
           continue;
         }
-      } else if (unreached->type == ValueType::NativeObject) {
-        NativeInstance *instance = static_cast<NativeInstance *>(unreached);
-        if (instance->klass && instance->klass->hasFinalizer() && !instance->isFinalized) {
-          finalizerQueue_.push_back(reinterpret_cast<Instance *>(instance));
-          instance->marked = true;
+      } else if (obj->type == ValueType::NativeObject) {
+        NativeInstance *nativeInstance = static_cast<NativeInstance *>(obj);
+        if (nativeInstance->klass && nativeInstance->klass->hasFinalizer() &&
+            !nativeInstance->isFinalized) {
+          finalizerQueue_.push_back(reinterpret_cast<Instance *>(nativeInstance));
+          obj->marked = true;
+          ptr = &obj->next;
           continue;
         }
       }
 
-      freeObject(unreached);
+      *ptr = obj->next;
+
+      if (GCDebug::enabled && GCDebug::logFrees) {
+        fprintf(stderr, "[GC] free %s @%p\n", typeName(obj->type), (void *)obj);
+      }
+
+      updateTypeStats(obj->type, false);
+      freeObject(obj);
     }
   }
 }
 
 void GC::freeObject(GCObject *obj) {
-  if (GCDebug::enabled && GCDebug::logFrees) {
-    fprintf(stderr, "[GC] free %s @%p\n", typeName(obj->type), (void *)obj);
-  }
-
-  updateTypeStats(obj->type, false);
-
   switch (obj->type) {
   case ValueType::String: {
     StringObject *str = static_cast<StringObject *>(obj);
-    size_t totalSize = str->allocationSize();
-    bytesAllocated_ -= totalSize;
+    size_t size = str->allocationSize();
+    bytesAllocated_ -= size;
     ::operator delete(str);
     break;
   }
   case ValueType::List: {
     ListObject *list = static_cast<ListObject *>(obj);
-    bytesAllocated_ -= sizeof(ListObject) + (list->elements.capacity() * sizeof(Value));
+    bytesAllocated_ -= sizeof(ListObject);
     delete list;
     break;
   }
@@ -556,11 +547,6 @@ void GC::freeObject(GCObject *obj) {
 
     bytesAllocated_ -= size;
     ::operator delete(closure);
-
-    if (GCDebug::enabled && GCDebug::logFrees) {
-      fprintf(stderr, "[GC] free Closure @%p size=%zu kind=%s upvalues=%d\n", (void *)closure, size,
-              closure->isNative() ? "Native" : "Script", closure->upvalueCount);
-    }
     break;
   }
   case ValueType::Class: {

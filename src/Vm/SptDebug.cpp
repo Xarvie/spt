@@ -31,49 +31,50 @@ static Value buildDebugInfo(VM *vm, StringObject *str, DebugInfo info) {
   return Value::object(map_object);
 }
 
-static Value debugGetInfo(VM *vm, Closure *self, int argc, Value *argv) {
+static int debugGetInfo(VM *vm, Closure *self, int argc, Value *argv) {
 
   if (argc < 1 || !argv[0].isClosure()) {
     vm->throwError(Value::object(vm->allocateString("debug.getInfo: arg 1 must be a function")));
-    return Value::nil();
+    return 0;
   }
 
   if (argc < 2) {
     vm->throwError(
         Value::object(vm->allocateString("debug.getInfo: arg 2 (what string) is required")));
-    return Value::nil();
+    return 0;
   }
 
   if (!argv[1].isString()) {
     vm->throwError(Value::object(vm->allocateString("debug.getInfo: arg 2 must be a string")));
-    return Value::nil();
+    return 0;
   }
 
   StringObject *str = static_cast<StringObject *>(argv[1].asGC());
   DebugInfo info;
   if (!vm->getInfo(&argv[0], str->c_str(), &info)) {
     vm->throwError(Value::object(vm->allocateString("debug.getInfo: vm error")));
-    return Value::nil();
+    return 0;
   }
-  return buildDebugInfo(vm, str, info);
+  vm->push(buildDebugInfo(vm, str, info));
+  return 1;
 }
 
-static Value debugGetStack(VM *vm, Closure *self, int argc, Value *argv) {
+static int debugGetStack(VM *vm, Closure *self, int argc, Value *argv) {
 
   if (argc < 1 || !argv[0].isNumber()) {
     vm->throwError(Value::object(vm->allocateString("debug.getStack: arg 1 must be a number")));
-    return Value::nil();
+    return 0;
   }
 
   if (argc < 2) {
     vm->throwError(
         Value::object(vm->allocateString("debug.getStack: arg 2 (what string) is required")));
-    return Value::nil();
+    return 0;
   }
 
   if (!argv[1].isString()) {
     vm->throwError(Value::object(vm->allocateString("debug.getStack: arg 2 must be a string")));
-    return Value::nil();
+    return 0;
   }
 
   int f = static_cast<int>(argv[0].asNumber());
@@ -81,9 +82,10 @@ static Value debugGetStack(VM *vm, Closure *self, int argc, Value *argv) {
   DebugInfo info;
   if (!vm->getStack(f, str->c_str(), &info)) {
     vm->throwError(Value::object(vm->allocateString("debug.getStack: vm error")));
-    return Value::nil();
+    return 0;
   }
-  return buildDebugInfo(vm, str, info);
+  vm->push(buildDebugInfo(vm, str, info));
+  return 1;
 }
 
 static const MethodEntry debugMethods[] = {

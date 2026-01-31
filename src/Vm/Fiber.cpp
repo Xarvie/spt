@@ -12,36 +12,38 @@ void FiberObject::fixUpvaluePointers(Value *oldBase, Value *newBase) {
   }
 }
 
-static Value fiberCreate(VM *vm, Closure *self, int argc, Value *argv) {
+static int fiberCreate(VM *vm, Closure *self, int argc, Value *argv) {
   if (argc < 1 || !argv[0].isClosure()) {
     vm->throwError(Value::object(vm->allocateString("Fiber.create requires a function")));
-    return Value::nil();
+    return 0;
   }
 
   Closure *closure = static_cast<Closure *>(argv[0].asGC());
   FiberObject *fiber = vm->allocateFiber(closure);
-  return Value::object(fiber);
+  vm->push(Value::object(fiber));
+  return 1;
 }
 
-static Value fiberYield(VM *vm, Closure *self, int argc, Value *argv) {
+static int fiberYield(VM *vm, Closure *self, int argc, Value *argv) {
   Value value = (argc > 0) ? argv[0] : Value::nil();
   vm->fiberYield(value);
-  return Value::nil();
+  return 0;
 }
 
-static Value fiberCurrent(VM *vm, Closure *self, int argc, Value *argv) {
-  return Value::object(vm->currentFiber());
+static int fiberCurrent(VM *vm, Closure *self, int argc, Value *argv) {
+  vm->push(Value::object(vm->currentFiber()));
+  return 1;
 }
 
-static Value fiberAbort(VM *vm, Closure *self, int argc, Value *argv) {
+static int fiberAbort(VM *vm, Closure *self, int argc, Value *argv) {
   Value error = (argc > 0) ? argv[0] : Value::object(vm->allocateString("Fiber aborted"));
   vm->fiberAbort(error);
-  return Value::nil();
+  return 0;
 }
 
-static Value fiberSuspend(VM *vm, Closure *self, int argc, Value *argv) {
+static int fiberSuspend(VM *vm, Closure *self, int argc, Value *argv) {
   vm->fiberYield(Value::nil());
-  return Value::nil();
+  return 0;
 }
 
 void SptFiber::load(VM *vm) {

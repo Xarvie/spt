@@ -11,7 +11,7 @@ namespace spt {
 void VM::registerBuiltinFunctions() {
   registerNative(
       "print",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
         std::string outputBuffer;
         for (int i = 0; i < argc; ++i) {
           if (i > 0)
@@ -34,316 +34,372 @@ void VM::registerBuiltinFunctions() {
         } else {
           printf("%s", outputBuffer.c_str());
         }
-        return Value::nil();
+        return 0;
       },
       -1);
 
   registerNative(
       "toInt",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::integer(0);
-        Value v = args[0];
-        if (v.isInt()) {
-          return v;
-        } else if (v.isFloat()) {
-          double val = v.asFloat();
-
-          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
-          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
-          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
-              std::isinf(val)) {
-            this->throwError(Value::object(this->allocateString("toInt: value out of range")));
-            return Value::nil();
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
+        Value result;
+        if (argc < 1) {
+          result = Value::integer(0);
+        } else {
+          Value v = args[0];
+          if (v.isInt()) {
+            result = v;
+          } else if (v.isFloat()) {
+            double val = v.asFloat();
+            constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+            constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+            if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+                std::isinf(val)) {
+              this->throwError(Value::object(this->allocateString("toInt: value out of range")));
+              return 0;
+            }
+            result = Value::integer(static_cast<int64_t>(val));
+          } else if (v.isString()) {
+            StringObject *str = static_cast<StringObject *>(v.asGC());
+            char *endptr = nullptr;
+            errno = 0;
+            long long r = std::strtoll(str->c_str(), &endptr, 10);
+            if (endptr == str->c_str() || errno == ERANGE) {
+              result = Value::integer(0);
+            } else {
+              result = Value::integer(static_cast<int64_t>(r));
+            }
+          } else if (v.isBool()) {
+            result = Value::integer(v.asBool() ? 1 : 0);
+          } else {
+            result = Value::integer(0);
           }
-          return Value::integer(static_cast<int64_t>(val));
-        } else if (v.isString()) {
-          StringObject *str = static_cast<StringObject *>(v.asGC());
-          char *endptr = nullptr;
-          errno = 0;
-          long long result = std::strtoll(str->c_str(), &endptr, 10);
-          if (endptr == str->c_str() || errno == ERANGE) {
-            return Value::integer(0);
-          }
-          return Value::integer(static_cast<int64_t>(result));
-        } else if (v.isBool()) {
-          return Value::integer(v.asBool() ? 1 : 0);
         }
-        return Value::integer(0);
+        vm->push(result);
+        return 1;
       },
       1);
 
   registerNative(
       "toFloat",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::number(0.0);
-        Value v = args[0];
-        if (v.isFloat()) {
-          return v;
-        } else if (v.isInt()) {
-          return Value::number(static_cast<double>(v.asInt()));
-        } else if (v.isString()) {
-          StringObject *str = static_cast<StringObject *>(v.asGC());
-          char *endptr = nullptr;
-          errno = 0;
-          double result = std::strtod(str->c_str(), &endptr);
-          if (endptr == str->c_str() || errno == ERANGE) {
-            return Value::number(0.0);
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
+        Value result;
+        if (argc < 1) {
+          result = Value::number(0.0);
+        } else {
+          Value v = args[0];
+          if (v.isFloat()) {
+            result = v;
+          } else if (v.isInt()) {
+            result = Value::number(static_cast<double>(v.asInt()));
+          } else if (v.isString()) {
+            StringObject *str = static_cast<StringObject *>(v.asGC());
+            char *endptr = nullptr;
+            errno = 0;
+            double r = std::strtod(str->c_str(), &endptr);
+            if (endptr == str->c_str() || errno == ERANGE) {
+              result = Value::number(0.0);
+            } else {
+              result = Value::number(r);
+            }
+          } else if (v.isBool()) {
+            result = Value::number(v.asBool() ? 1.0 : 0.0);
+          } else {
+            result = Value::number(0.0);
           }
-          return Value::number(result);
-        } else if (v.isBool()) {
-          return Value::number(v.asBool() ? 1.0 : 0.0);
         }
-        return Value::number(0.0);
+        vm->push(result);
+        return 1;
       },
       1);
 
   registerNative(
       "toString",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::object(this->allocateString(""));
-        return Value::object(this->allocateString(args[0].toString()));
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 1) {
+          vm->push(Value::object(this->allocateString("")));
+        } else {
+          vm->push(Value::object(this->allocateString(args[0].toString())));
+        }
+        return 1;
       },
       1);
 
   registerNative(
       "toBool",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::boolean(false);
-        return Value::boolean(args[0].isTruthy());
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 1) {
+          vm->push(Value::boolean(false));
+        } else {
+          vm->push(Value::boolean(args[0].isTruthy()));
+        }
+        return 1;
       },
       1);
 
   registerNative(
       "typeOf",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::object(this->allocateString("nil"));
-        return Value::object(this->allocateString(args[0].typeName()));
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 1) {
+          vm->push(Value::object(this->allocateString("nil")));
+        } else {
+          vm->push(Value::object(this->allocateString(args[0].typeName())));
+        }
+        return 1;
       },
       1);
 
   registerNative(
       "len",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::integer(0);
-        Value v = args[0];
-        if (v.isString()) {
-          StringObject *str = static_cast<StringObject *>(v.asGC());
-          return Value::integer(static_cast<int64_t>(str->length));
-        } else if (v.isList()) {
-          ListObject *list = static_cast<ListObject *>(v.asGC());
-          return Value::integer(static_cast<int64_t>(list->elements.size()));
-        } else if (v.isMap()) {
-          MapObject *map = static_cast<MapObject *>(v.asGC());
-          return Value::integer(static_cast<int64_t>(map->entries.size()));
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        Value result = Value::integer(0);
+        if (argc >= 1) {
+          Value v = args[0];
+          if (v.isString()) {
+            StringObject *str = static_cast<StringObject *>(v.asGC());
+            result = Value::integer(static_cast<int64_t>(str->length));
+          } else if (v.isList()) {
+            ListObject *list = static_cast<ListObject *>(v.asGC());
+            result = Value::integer(static_cast<int64_t>(list->elements.size()));
+          } else if (v.isMap()) {
+            MapObject *map = static_cast<MapObject *>(v.asGC());
+            result = Value::integer(static_cast<int64_t>(map->entries.size()));
+          }
         }
-        return Value::integer(0);
+        vm->push(result);
+        return 1;
       },
       1);
 
   registerNative(
       "abs",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::integer(0);
-        Value v = args[0];
-        if (v.isInt()) {
-          int64_t val = v.asInt();
-
-          if (val == INT64_MIN) {
-
-            return Value::number(static_cast<double>(INT64_MAX) + 1.0);
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        Value result = Value::integer(0);
+        if (argc >= 1) {
+          Value v = args[0];
+          if (v.isInt()) {
+            int64_t val = v.asInt();
+            if (val == INT64_MIN) {
+              result = Value::number(static_cast<double>(INT64_MAX) + 1.0);
+            } else {
+              result = Value::integer(val < 0 ? -val : val);
+            }
+          } else if (v.isFloat()) {
+            result = Value::number(std::abs(v.asFloat()));
           }
-          return Value::integer(val < 0 ? -val : val);
-        } else if (v.isFloat()) {
-          return Value::number(std::abs(v.asFloat()));
         }
-        return Value::integer(0);
+        vm->push(result);
+        return 1;
       },
       1);
 
   registerNative(
       "floor",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::integer(0);
-        Value v = args[0];
-        if (v.isInt()) {
-          return v;
-        } else if (v.isFloat()) {
-          double val = std::floor(v.asFloat());
-
-          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
-          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
-          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
-              std::isinf(val)) {
-            return Value::number(val);
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        Value result = Value::integer(0);
+        if (argc >= 1) {
+          Value v = args[0];
+          if (v.isInt()) {
+            result = v;
+          } else if (v.isFloat()) {
+            double val = std::floor(v.asFloat());
+            constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+            constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+            if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+                std::isinf(val)) {
+              result = Value::number(val);
+            } else {
+              result = Value::integer(static_cast<int64_t>(val));
+            }
           }
-          return Value::integer(static_cast<int64_t>(val));
         }
-        return Value::integer(0);
+        vm->push(result);
+        return 1;
       },
       1);
 
   registerNative(
       "ceil",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::integer(0);
-        Value v = args[0];
-        if (v.isInt()) {
-          return v;
-        } else if (v.isFloat()) {
-          double val = std::ceil(v.asFloat());
-
-          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
-          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
-          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
-              std::isinf(val)) {
-            return Value::number(val);
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        Value result = Value::integer(0);
+        if (argc >= 1) {
+          Value v = args[0];
+          if (v.isInt()) {
+            result = v;
+          } else if (v.isFloat()) {
+            double val = std::ceil(v.asFloat());
+            constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+            constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+            if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+                std::isinf(val)) {
+              result = Value::number(val);
+            } else {
+              result = Value::integer(static_cast<int64_t>(val));
+            }
           }
-          return Value::integer(static_cast<int64_t>(val));
         }
-        return Value::integer(0);
+        vm->push(result);
+        return 1;
       },
       1);
 
   registerNative(
       "round",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::integer(0);
-        Value v = args[0];
-        if (v.isInt()) {
-          return v;
-        } else if (v.isFloat()) {
-          double val = std::round(v.asFloat());
-
-          constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
-          constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
-          if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
-              std::isinf(val)) {
-
-            return Value::number(val);
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        Value result = Value::integer(0);
+        if (argc >= 1) {
+          Value v = args[0];
+          if (v.isInt()) {
+            result = v;
+          } else if (v.isFloat()) {
+            double val = std::round(v.asFloat());
+            constexpr double maxInt64AsDouble = static_cast<double>(INT64_MAX);
+            constexpr double minInt64AsDouble = static_cast<double>(INT64_MIN);
+            if (val > maxInt64AsDouble || val < minInt64AsDouble || std::isnan(val) ||
+                std::isinf(val)) {
+              result = Value::number(val);
+            } else {
+              result = Value::integer(static_cast<int64_t>(val));
+            }
           }
-          return Value::integer(static_cast<int64_t>(val));
         }
-        return Value::integer(0);
+        vm->push(result);
+        return 1;
       },
       1);
 
   registerNative(
       "sqrt",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::number(0.0);
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 1) {
+          vm->push(Value::number(0.0));
+          return 1;
+        }
         Value v = args[0];
-
         if (!v.isNumber()) {
           vm->throwError(Value::object(vm->allocateString("sqrt: argument must be a number")));
-          return Value::nil();
+          return 0;
         }
         double val = v.isInt() ? static_cast<double>(v.asInt()) : v.asFloat();
-        return Value::number(std::sqrt(val));
+        vm->push(Value::number(std::sqrt(val)));
+        return 1;
       },
       1);
 
   registerNative(
       "pow",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 2)
-          return Value::number(0.0);
-
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 2) {
+          vm->push(Value::number(0.0));
+          return 1;
+        }
         if (!args[0].isNumber() || !args[1].isNumber()) {
           vm->throwError(Value::object(vm->allocateString("pow: arguments must be numbers")));
-          return Value::nil();
+          return 0;
         }
         double base = args[0].isInt() ? static_cast<double>(args[0].asInt()) : args[0].asFloat();
         double exp = args[1].isInt() ? static_cast<double>(args[1].asInt()) : args[1].asFloat();
-        return Value::number(std::pow(base, exp));
+        vm->push(Value::number(std::pow(base, exp)));
+        return 1;
       },
       2);
 
   registerNative(
       "min",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 2)
-          return Value::nil();
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 2) {
+          vm->push(Value::nil());
+          return 1;
+        }
         Value a = args[0];
         Value b = args[1];
         if (a.isInt() && b.isInt()) {
-          return Value::integer(std::min(a.asInt(), b.asInt()));
+          vm->push(Value::integer(std::min(a.asInt(), b.asInt())));
+          return 1;
         }
         if (!a.isNumber() || !b.isNumber()) {
           vm->throwError(Value::object(vm->allocateString("min: arguments must be numbers")));
-          return Value::nil();
+          return 0;
         }
         double va = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
         double vb = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-        return Value::number(std::min(va, vb));
+        vm->push(Value::number(std::min(va, vb)));
+        return 1;
       },
       2);
 
   registerNative(
       "max",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 2)
-          return Value::nil();
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 2) {
+          vm->push(Value::nil());
+          return 1;
+        }
         Value a = args[0];
         Value b = args[1];
         if (a.isInt() && b.isInt()) {
-          return Value::integer(std::max(a.asInt(), b.asInt()));
+          vm->push(Value::integer(std::max(a.asInt(), b.asInt())));
+          return 1;
         }
         if (!a.isNumber() || !b.isNumber()) {
           vm->throwError(Value::object(vm->allocateString("max: arguments must be numbers")));
-          return Value::nil();
+          return 0;
         }
         double va = a.isInt() ? static_cast<double>(a.asInt()) : a.asFloat();
         double vb = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-        return Value::number(std::max(va, vb));
+        vm->push(Value::number(std::max(va, vb)));
+        return 1;
       },
       2);
 
   registerNative(
       "char",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1 || !args[0].isInt())
-          return Value::object(this->allocateString(""));
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 1 || !args[0].isInt()) {
+          vm->push(Value::object(this->allocateString("")));
+          return 1;
+        }
         int64_t code = args[0].asInt();
-        if (code < 0 || code > 127)
-          return Value::object(this->allocateString(""));
+        if (code < 0 || code > 127) {
+          vm->push(Value::object(this->allocateString("")));
+          return 1;
+        }
         char c = static_cast<char>(code);
-        return Value::object(this->allocateString(std::string(1, c)));
+        vm->push(Value::object(this->allocateString(std::string(1, c))));
+        return 1;
       },
       1);
 
   registerNative(
       "ord",
-      [](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1 || !args[0].isString())
-          return Value::integer(0);
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 1 || !args[0].isString()) {
+          vm->push(Value::integer(0));
+          return 1;
+        }
         StringObject *str = static_cast<StringObject *>(args[0].asGC());
-        if (str->length == 0)
-          return Value::integer(0);
-        return Value::integer(static_cast<int64_t>(static_cast<unsigned char>(str->chars()[0])));
+        if (str->length == 0) {
+          vm->push(Value::integer(0));
+          return 1;
+        }
+        vm->push(Value::integer(static_cast<int64_t>(static_cast<unsigned char>(str->chars()[0]))));
+        return 1;
       },
       1);
 
   registerNative(
       "range",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 2)
-          return Value::nil();
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 2) {
+          vm->push(Value::nil());
+          return 1;
+        }
         int64_t start = args[0].isInt() ? args[0].asInt() : 0;
         int64_t end = args[1].isInt() ? args[1].asInt() : 0;
         int64_t step = (argc >= 3 && args[2].isInt()) ? args[2].asInt() : 1;
-        if (step == 0)
-          return Value::nil();
+        if (step == 0) {
+          vm->push(Value::nil());
+          return 1;
+        }
 
         ListObject *list = this->allocateList(0);
         this->protect(Value::object(list));
@@ -359,29 +415,28 @@ void VM::registerBuiltinFunctions() {
         }
 
         this->unprotect(1);
-        return Value::object(list);
+        vm->push(Value::object(list));
+        return 1;
       },
       -1);
 
   registerNative(
       "assert",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::nil();
-        if (!args[0].isTruthy()) {
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc >= 1 && !args[0].isTruthy()) {
           std::string msg = "Assertion failed";
           if (argc >= 2 && args[1].isString()) {
             msg = static_cast<StringObject *>(args[1].asGC())->str();
           }
           this->runtimeError("%s", msg.c_str());
         }
-        return Value::nil();
+        return 0;
       },
       -1);
 
   registerNative(
       "error",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
         Value errorVal;
         if (argc >= 1) {
           errorVal = args[0];
@@ -389,33 +444,32 @@ void VM::registerBuiltinFunctions() {
           errorVal = Value::object(this->allocateString("error called without message"));
         }
         this->throwError(errorVal);
-        return Value::nil();
+        return 0;
       },
       -1);
 
   registerNative(
       "pcall",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
+      [this](VM *vm, Closure *self, int argc, Value *args) -> int {
         if (argc < 1) {
-          this->setNativeMultiReturn({Value::boolean(false), Value::object(this->allocateString(
-                                                                 "pcall: expected a function"))});
-          return Value::nil();
+          vm->push(Value::boolean(false));
+          vm->push(Value::object(this->allocateString("pcall: expected a function")));
+          return 2;
         }
 
         Value func = args[0];
         if (!func.isClosure()) {
-          this->setNativeMultiReturn(
-              {Value::boolean(false),
-               Value::object(this->allocateString("pcall: first argument must be a function"))});
-          return Value::nil();
+          vm->push(Value::boolean(false));
+          vm->push(Value::object(this->allocateString("pcall: first argument must be a function")));
+          return 2;
         }
 
         FiberObject *fiber = currentFiber_;
         int savedFrameCount = fiber->frameCount;
-
         size_t savedStackTopOffset = fiber->stackTop - fiber->stack;
         UpValue *savedOpenUpvalues = fiber->openUpvalues;
         int savedDeferTop = fiber->deferTop;
+
         bool savedHasError = this->hasError_;
         Value savedErrorValue = this->errorValue_;
 
@@ -433,7 +487,8 @@ void VM::registerBuiltinFunctions() {
         int funcArgCount = argc - 1;
         Value *funcArgs = args + 1;
 
-        Value *callBase = fiber->stackTop;
+        size_t callBaseOffset = fiber->stackTop - fiber->stack;
+
         *fiber->stackTop++ = func;
         for (int i = 0; i < funcArgCount; ++i) {
           *fiber->stackTop++ = funcArgs[i];
@@ -441,8 +496,8 @@ void VM::registerBuiltinFunctions() {
 
         InterpretResult result = InterpretResult::OK;
         std::vector<Value> returnValues;
-
         Closure *closure = static_cast<Closure *>(func.asGC());
+
         if (closure->isScript()) {
           const Prototype *proto = closure->proto;
 
@@ -457,12 +512,14 @@ void VM::registerBuiltinFunctions() {
             result = InterpretResult::RUNTIME_ERROR;
           } else {
 
-            int slotsBaseOffset = static_cast<int>((callBase + 1) - fiber->stack);
-
             fiber->ensureStack(proto->maxStackSize);
             fiber->ensureFrames(1);
 
+            Value *currentCallBase = fiber->stack + callBaseOffset;
+
+            int slotsBaseOffset = static_cast<int>((currentCallBase + 1) - fiber->stack);
             Value *newSlots = fiber->stack + slotsBaseOffset;
+
             for (Value *p = fiber->stackTop; p < newSlots + proto->maxStackSize; ++p) {
               *p = Value::nil();
             }
@@ -473,22 +530,21 @@ void VM::registerBuiltinFunctions() {
             newFrame->ip = proto->code.data();
             newFrame->expectedResults = -1;
             newFrame->slots = newSlots;
-            newFrame->returnTo = callBase;
+
+            newFrame->returnTo = currentCallBase;
+
             newFrame->deferBase = fiber->deferTop;
 
             int savedExitFrameCount = this->exitFrameCount_;
             this->exitFrameCount_ = fiber->frameCount;
-
             result = this->run();
-
             this->exitFrameCount_ = savedExitFrameCount;
 
             if (result == InterpretResult::OK && !this->hasError_) {
-              if (this->hasNativeMultiReturn_) {
-                returnValues = std::move(this->nativeMultiReturn_);
-                this->hasNativeMultiReturn_ = false;
-              } else if (!this->lastModuleResult_.isNil()) {
-                returnValues.push_back(this->lastModuleResult_);
+
+              Value *resultStart = fiber->stack + callBaseOffset;
+              for (Value *p = resultStart; p < fiber->stackTop; ++p) {
+                returnValues.push_back(*p);
               }
             }
           }
@@ -500,15 +556,17 @@ void VM::registerBuiltinFunctions() {
                 "Native function expects " + std::to_string(closure->arity) + " arguments"));
             result = InterpretResult::RUNTIME_ERROR;
           } else {
-            this->hasNativeMultiReturn_ = false;
-            Value nativeResult = closure->function(this, closure, funcArgCount, funcArgs);
+
+            Value *currentCallBase = fiber->stack + callBaseOffset;
+            fiber->stackTop = currentCallBase;
+
+            int nresults = closure->function(this, closure, funcArgCount, funcArgs);
 
             if (!this->hasError_) {
-              if (this->hasNativeMultiReturn_) {
-                returnValues = std::move(this->nativeMultiReturn_);
-                this->hasNativeMultiReturn_ = false;
-              } else {
-                returnValues.push_back(nativeResult);
+
+              currentCallBase = fiber->stack + callBaseOffset;
+              for (int i = 0; i < nresults; ++i) {
+                returnValues.push_back(currentCallBase[i]);
               }
             } else {
               result = InterpretResult::RUNTIME_ERROR;
@@ -518,18 +576,16 @@ void VM::registerBuiltinFunctions() {
 
         this->pcallStack_.pop_back();
 
-        fiber->stackTop = fiber->stack + savedStackTopOffset;
-
         if (result == InterpretResult::OK && !this->hasError_) {
-          std::vector<Value> multiResult;
-          multiResult.push_back(Value::boolean(true));
+
+          fiber->stackTop = fiber->stack + savedStackTopOffset;
+          vm->push(Value::boolean(true));
           for (const auto &v : returnValues) {
-            multiResult.push_back(v);
+            vm->push(v);
           }
-          this->setNativeMultiReturn(multiResult);
           this->hasError_ = savedHasError;
           this->errorValue_ = savedErrorValue;
-          return Value::nil();
+          return 1 + static_cast<int>(returnValues.size());
         } else {
 
           this->closeUpvalues(fiber->stack + savedStackTopOffset);
@@ -537,231 +593,116 @@ void VM::registerBuiltinFunctions() {
           while (fiber->frameCount > savedFrameCount) {
             CallFrame *currentFrame = &fiber->frames[fiber->frameCount - 1];
 
-            this->closeUpvalues(currentFrame->slots);
+            size_t frameSlotsOffset = currentFrame->slots - fiber->stack;
+            this->closeUpvalues(fiber->stack + frameSlotsOffset);
 
             this->invokeDefers(currentFrame->deferBase);
-
             fiber->frameCount--;
           }
 
           fiber->deferTop = savedDeferTop;
+          fiber->stackTop = fiber->stack + savedStackTopOffset;
 
           assert(fiber->openUpvalues == savedOpenUpvalues);
 
           Value errVal = this->hasError_ ? this->errorValue_
                                          : Value::object(this->allocateString("unknown error"));
-          this->setNativeMultiReturn({Value::boolean(false), errVal});
+          vm->push(Value::boolean(false));
+          vm->push(errVal);
+
           this->hasError_ = savedHasError;
           this->errorValue_ = savedErrorValue;
-          return Value::nil();
+          return 2;
         }
       },
       -1);
-  registerNative(
-      "apply",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1) {
-          this->throwError(Value::object(this->allocateString(
-              "apply: expected at least 1 argument (fn, [args], [receiver])")));
-          return Value::nil();
-        }
 
-        Value func = args[0];
-        Value argsList = (argc >= 2) ? args[1] : Value::nil();
-        Value funcReceiver = (argc >= 3) ? args[2] : Value::nil();
-
-        if (!func.isClosure()) {
-          this->throwError(
-              Value::object(this->allocateString("apply: first argument must be a function")));
-          return Value::nil();
-        }
-
-        if (!argsList.isNil() && !argsList.isList()) {
-          this->throwError(
-              Value::object(this->allocateString("apply: second argument must be a list or nil")));
-          return Value::nil();
-        }
-
-        std::vector<Value> funcArgs;
-        bool hasReceiver = !funcReceiver.isNil();
-
-        if (argsList.isList()) {
-          ListObject *argList = static_cast<ListObject *>(argsList.asGC());
-          if (hasReceiver) {
-            funcArgs.reserve(argList->elements.size() + 1);
-            funcArgs.push_back(funcReceiver);
-            funcArgs.insert(funcArgs.end(), argList->elements.begin(), argList->elements.end());
-          } else {
-            funcArgs = argList->elements;
-          }
-        } else {
-          if (hasReceiver) {
-            funcArgs.push_back(funcReceiver);
-          }
-        }
-
-        int funcArgCount = static_cast<int>(funcArgs.size());
-        FiberObject *fiber = currentFiber_;
-
-        Value *callBase = fiber->stackTop;
-        *fiber->stackTop++ = func;
-        for (int i = 0; i < funcArgCount; ++i) {
-          *fiber->stackTop++ = funcArgs[i];
-        }
-
-        Value result = Value::nil();
-
-        Closure *closure = static_cast<Closure *>(func.asGC());
-        if (closure->isScript()) {
-          const Prototype *proto = closure->proto;
-
-          if (!proto->isVararg && funcArgCount != proto->numParams) {
-            fiber->stackTop = callBase;
-            this->throwError(Value::object(
-                this->allocateString("apply: function expects " + std::to_string(proto->numParams) +
-                                     " arguments, got " + std::to_string(funcArgCount))));
-            return Value::nil();
-          }
-
-          if (fiber->frameCount >= FiberObject::MAX_FRAMES) {
-            fiber->stackTop = callBase;
-            this->throwError(Value::object(this->allocateString("apply: stack overflow")));
-            return Value::nil();
-          }
-
-          int slotsBaseOffset = static_cast<int>((callBase + 1) - fiber->stack);
-
-          fiber->ensureStack(proto->maxStackSize);
-          fiber->ensureFrames(1);
-
-          Value *newSlots = fiber->stack + slotsBaseOffset;
-          for (Value *p = fiber->stackTop; p < newSlots + proto->maxStackSize; ++p) {
-            *p = Value::nil();
-          }
-          fiber->stackTop = newSlots + proto->maxStackSize;
-
-          CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
-          newFrame->closure = closure;
-          newFrame->ip = proto->code.data();
-          newFrame->expectedResults = 1;
-          newFrame->slots = newSlots;
-          newFrame->returnTo = callBase;
-          newFrame->deferBase = fiber->deferTop;
-
-          int savedExitFrameCount = this->exitFrameCount_;
-          this->exitFrameCount_ = fiber->frameCount;
-
-          InterpretResult runResult = this->run();
-
-          this->exitFrameCount_ = savedExitFrameCount;
-
-          if (runResult == InterpretResult::OK && !this->hasError_) {
-            if (this->hasNativeMultiReturn_) {
-              if (!this->nativeMultiReturn_.empty()) {
-                result = this->nativeMultiReturn_[0];
-              }
-              this->hasNativeMultiReturn_ = false;
-            } else {
-              result = this->lastModuleResult_;
-            }
-          }
-
-        } else {
-
-          int expectedArity = closure->arity;
-          int argsToCheck = funcArgCount;
-          Value actualReceiver = closure->receiver;
-          Value *actualArgs = funcArgCount > 0 ? funcArgs.data() : nullptr;
-
-          if (hasReceiver) {
-            actualReceiver = funcReceiver;
-            argsToCheck = funcArgCount - 1;
-            actualArgs = funcArgCount > 1 ? funcArgs.data() + 1 : nullptr;
-          }
-
-          if (expectedArity != -1 && argsToCheck != expectedArity) {
-            fiber->stackTop = callBase;
-            this->throwError(Value::object(this->allocateString(
-                "apply: native function expects " + std::to_string(expectedArity) +
-                " arguments, got " + std::to_string(argsToCheck))));
-            return Value::nil();
-          }
-
-          this->hasNativeMultiReturn_ = false;
-          Value nativeResult = closure->function(this, closure, argsToCheck, actualArgs);
-
-          if (!this->hasError_) {
-            if (this->hasNativeMultiReturn_) {
-              if (!this->nativeMultiReturn_.empty()) {
-                result = this->nativeMultiReturn_[0];
-              }
-              this->hasNativeMultiReturn_ = false;
-            } else {
-              result = nativeResult;
-            }
-          }
-
-          fiber->stackTop = callBase;
-        }
-
-        return result;
-      },
-      -1);
   registerNative(
       "isInt",
-      [](VM *vm, Closure *self, int c, Value *a) { return Value::boolean(c > 0 && a[0].isInt()); },
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isInt()));
+        return 1;
+      },
       1);
+
   registerNative(
       "isFloat",
-      [](VM *vm, Closure *self, int c, Value *a) {
-        return Value::boolean(c > 0 && a[0].isFloat());
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isFloat()));
+        return 1;
       },
       1);
+
   registerNative(
       "isNumber",
-      [](VM *vm, Closure *self, int c, Value *a) {
-        return Value::boolean(c > 0 && a[0].isNumber());
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isNumber()));
+        return 1;
       },
       1);
+
   registerNative(
       "isString",
-      [](VM *vm, Closure *self, int c, Value *a) {
-        return Value::boolean(c > 0 && a[0].isString());
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isString()));
+        return 1;
       },
       1);
+
   registerNative(
       "isBool",
-      [](VM *vm, Closure *self, int c, Value *a) { return Value::boolean(c > 0 && a[0].isBool()); },
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isBool()));
+        return 1;
+      },
       1);
+
   registerNative(
       "isList",
-      [](VM *vm, Closure *self, int c, Value *a) { return Value::boolean(c > 0 && a[0].isList()); },
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isList()));
+        return 1;
+      },
       1);
+
   registerNative(
       "isMap",
-      [](VM *vm, Closure *self, int c, Value *a) { return Value::boolean(c > 0 && a[0].isMap()); },
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isMap()));
+        return 1;
+      },
       1);
+
   registerNative(
       "isNull",
-      [](VM *vm, Closure *self, int c, Value *a) { return Value::boolean(c < 1 || a[0].isNil()); },
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc < 1 || args[0].isNil()));
+        return 1;
+      },
       1);
+
   registerNative(
       "isFunction",
-      [](VM *vm, Closure *self, int c, Value *a) {
-        return Value::boolean(c > 0 && a[0].isClosure());
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        vm->push(Value::boolean(argc > 0 && args[0].isClosure()));
+        return 1;
       },
       1);
 
   registerNative(
       "__iter_list",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 2)
-          return Value::nil();
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 2) {
+          vm->push(Value::nil());
+          return 1;
+        }
         Value listVal = args[0];
         Value idxVal = args[1];
 
-        if (!listVal.isList())
-          return Value::nil();
+        if (!listVal.isList()) {
+          vm->push(Value::nil());
+          return 1;
+        }
         ListObject *list = static_cast<ListObject *>(listVal.asGC());
 
         int64_t nextIdx = 0;
@@ -770,40 +711,43 @@ void VM::registerBuiltinFunctions() {
         } else if (idxVal.isInt()) {
           nextIdx = idxVal.asInt() + 1;
         } else {
-          return Value::nil();
+          vm->push(Value::nil());
+          return 1;
         }
 
         if (nextIdx >= 0 && nextIdx < static_cast<int64_t>(list->elements.size())) {
-
-          vm->setNativeMultiReturn({Value::integer(nextIdx), list->elements[nextIdx]});
-
-          return Value::integer(nextIdx);
+          vm->push(Value::integer(nextIdx));
+          vm->push(list->elements[nextIdx]);
+          return 2;
         }
 
-        return Value::nil();
+        vm->push(Value::nil());
+        return 1;
       },
       2);
 
   registerNative(
       "__iter_map",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 2)
-          return Value::nil();
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 2) {
+          vm->push(Value::nil());
+          return 1;
+        }
         Value mapVal = args[0];
         Value keyVal = args[1];
 
-        if (!mapVal.isMap())
-          return Value::nil();
+        if (!mapVal.isMap()) {
+          vm->push(Value::nil());
+          return 1;
+        }
         MapObject *map = static_cast<MapObject *>(mapVal.asGC());
 
         auto &entries = map->entries;
         auto it = entries.end();
 
         if (keyVal.isNil()) {
-
           it = entries.begin();
         } else {
-
           it = entries.find(keyVal);
           if (it != entries.end()) {
             ++it;
@@ -811,42 +755,52 @@ void VM::registerBuiltinFunctions() {
         }
 
         if (it != entries.end()) {
-          vm->setNativeMultiReturn({it->first, it->second});
-          return it->first;
+          vm->push(it->first);
+          vm->push(it->second);
+          return 2;
         }
 
-        return Value::nil();
+        vm->push(Value::nil());
+        return 1;
       },
       2);
 
   registerNative(
       "pairs",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
-        if (argc < 1)
-          return Value::nil();
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
+        if (argc < 1) {
+          vm->push(Value::nil());
+          return 1;
+        }
         Value target = args[0];
 
         if (target.isList()) {
           Value iterFunc = vm->getGlobal("__iter_list");
-          vm->setNativeMultiReturn({iterFunc, target, Value::integer(-1)});
-          return iterFunc;
+          vm->push(iterFunc);
+          vm->push(target);
+          vm->push(Value::integer(-1));
+          return 3;
         } else if (target.isMap()) {
           Value iterFunc = vm->getGlobal("__iter_map");
-          vm->setNativeMultiReturn({iterFunc, target, Value::nil()});
-          return iterFunc;
+          vm->push(iterFunc);
+          vm->push(target);
+          vm->push(Value::nil());
+          return 3;
         }
 
         vm->throwError(Value::object(vm->allocateString("pairs() expects a list or map")));
-        return Value::nil();
+        return 0;
       },
       1);
+
   registerNative(
       "clock",
-      [this](VM *vm, Closure *self, int argc, Value *args) -> Value {
+      [](VM *vm, Closure *self, int argc, Value *args) -> int {
         auto now = std::chrono::system_clock::now();
         auto duration = now.time_since_epoch();
         int64_t micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-        return Value::integer(micros);
+        vm->push(Value::integer(micros));
+        return 1;
       },
       0);
 }
