@@ -3,7 +3,6 @@
 #include "../Common/Types.h"
 #include "Value.h"
 #include "unordered_dense.h"
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -41,8 +40,10 @@ enum class ClosureKind : uint8_t {
 // 返回值含义 (int):
 //   - 正数 N: 已将 N 个返回值压入栈顶
 //   - 0: 无返回值
+//
+// 注意: 使用普通函数指针而非 std::function，以支持 setjmp/longjmp 错误处理
 
-using NativeFn = std::function<int(VM *vm, Closure *self, int argc, Value *args)>;
+using NativeFn = int (*)(VM *vm, Closure *self, int argc, Value *args);
 
 // ============================================================================
 // 闭包对象 (Closure) - 统一脚本闭包和原生闭包

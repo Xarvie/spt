@@ -46,29 +46,30 @@ static int fiberSuspend(VM *vm, Closure *self, int argc, Value *argv) {
   return 0;
 }
 
+static void addStaticMethod(VM *vm, ClassObject *fiberClass, const char *name, NativeFn fn,
+                            int arity) {
+  Closure *native = vm->gc().allocateNativeClosure(0);
+  vm->protect(Value::object(native));
+
+  native->name = vm->allocateString(name);
+  native->function = fn;
+  native->arity = arity;
+  native->receiver = Value::nil();
+
+  vm->unprotect(1);
+
+  fiberClass->statics[native->name] = Value::object(native);
+}
+
 void SptFiber::load(VM *vm) {
   ClassObject *fiberClass = vm->allocateClass("Fiber");
   vm->protect(Value::object(fiberClass));
 
-  auto addStatic = [&](const char *name, NativeFn fn, int arity) {
-    Closure *native = vm->gc().allocateNativeClosure(0);
-    vm->protect(Value::object(native));
-
-    native->name = vm->allocateString(name);
-    native->function = fn;
-    native->arity = arity;
-    native->receiver = Value::nil();
-
-    vm->unprotect(1);
-
-    fiberClass->statics[native->name] = Value::object(native);
-  };
-
-  addStatic("create", fiberCreate, 1);
-  addStatic("yield", fiberYield, -1);
-  addStatic("current", fiberCurrent, 0);
-  addStatic("abort", fiberAbort, -1);
-  addStatic("suspend", fiberSuspend, 0);
+  addStaticMethod(vm, fiberClass, "create", fiberCreate, 1);
+  addStaticMethod(vm, fiberClass, "yield", fiberYield, -1);
+  addStaticMethod(vm, fiberClass, "current", fiberCurrent, 0);
+  addStaticMethod(vm, fiberClass, "abort", fiberAbort, -1);
+  addStaticMethod(vm, fiberClass, "suspend", fiberSuspend, 0);
 
   vm->defineGlobal("Fiber", Value::object(fiberClass));
   vm->unprotect(1);

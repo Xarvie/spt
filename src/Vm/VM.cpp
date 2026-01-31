@@ -455,7 +455,7 @@ void VM::setGlobal(const std::string &name, Value value) {
 void VM::registerNative(const std::string &name, NativeFn fn, int arity) {
   Closure *native = gc_.allocateNativeClosure(0);
   protect(Value::object(native));
-  native->function = std::move(fn);
+  native->function = fn;
   native->arity = arity;
   native->name = allocateString(name);
   native->receiver = Value::nil();
@@ -465,7 +465,7 @@ void VM::registerNative(const std::string &name, NativeFn fn, int arity) {
 
 Closure *VM::createNativeClosure(NativeFn fn, int arity, int nupvalues) {
   Closure *native = gc_.allocateNativeClosure(nupvalues);
-  native->function = std::move(fn);
+  native->function = fn;
   native->arity = arity;
   native->receiver = Value::nil();
   return native;
@@ -480,7 +480,7 @@ void VM::registerNativeWithUpvalues(const std::string &name, NativeFn fn, int ar
   }
 
   Closure *native = gc_.allocateNativeClosure(nupvalues);
-  native->function = std::move(fn);
+  native->function = fn;
   native->arity = arity;
   native->name = allocateString(name);
   native->receiver = Value::nil();

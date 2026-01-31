@@ -215,6 +215,51 @@ public:
 
   void *getUserData() const { return userData_; }
 
+  // =========================================================================
+  // 内部访问 API - 供内置函数和 setjmp/longjmp 错误处理使用
+  // =========================================================================
+
+  // 打印处理器访问
+  const PrintHandler &getPrintHandler() const { return printHandler_; }
+
+  // 错误状态访问
+  bool hasError() const { return hasError_; }
+
+  Value getErrorValue() const { return errorValue_; }
+
+  void setHasError(bool v) { hasError_ = v; }
+
+  void setErrorValue(Value v) { errorValue_ = v; }
+
+  void clearError() {
+    hasError_ = false;
+    errorValue_ = Value::nil();
+  }
+
+  // pcall 上下文栈操作
+  void pushPcallContext(const ProtectedCallContext &ctx) { pcallStack_.push_back(ctx); }
+
+  void popPcallContext() {
+    if (!pcallStack_.empty())
+      pcallStack_.pop_back();
+  }
+
+  bool hasPcallContext() const { return !pcallStack_.empty(); }
+
+  // 退出帧计数访问
+  int getExitFrameCount() const { return exitFrameCount_; }
+
+  void setExitFrameCount(int v) { exitFrameCount_ = v; }
+
+  // 内部执行 - 从当前帧开始执行直到退出帧
+  InterpretResult runInternal() { return run(); }
+
+  // closeUpvalues 公开访问（用于 pcall 错误恢复）
+  void closeUpvaluesPublic(Value *last) { closeUpvalues(last); }
+
+  // invokeDefers 公开访问（用于 pcall 错误恢复）
+  void invokeDefersPublic(int targetDeferBase) { invokeDefers(targetDeferBase); }
+
 private:
   InterpretResult run();
   void registerBuiltinFunctions();

@@ -11,21 +11,35 @@
 
 namespace spt {
 
+static int boundMethodDispatcher(VM *vm, Closure *self, int argc, Value *argv) {
+
+  Value fnVal = self->getNativeUpvalue(0);
+  if (!fnVal.isInt()) {
+    vm->throwError(Value::object(vm->allocateString("Internal error: invalid bound method")));
+    return 0;
+  }
+
+  int64_t fnPtr = fnVal.asInt();
+  auto fn = reinterpret_cast<BuiltinMethodDesc::MethodFn>(fnPtr);
+
+  Value result = fn(vm, self->receiver, argc, argv);
+  vm->push(result);
+  return 1;
+}
+
 static Value createBoundNative(VM *vm, Value receiver, StringObject *name,
                                BuiltinMethodDesc::MethodFn fn, int arity) {
   vm->protect(receiver);
   vm->protect(Value::object(name));
 
-  Closure *native = vm->gc().allocateNativeClosure(0);
+  Closure *native = vm->gc().allocateNativeClosure(1);
   native->name = name;
   native->arity = arity;
   native->receiver = receiver;
 
-  native->function = [fn](VM *vm, Closure *self, int argc, Value *argv) -> int {
-    Value result = fn(vm, self->receiver, argc, argv);
-    vm->push(result);
-    return 1;
-  };
+  native->function = boundMethodDispatcher;
+
+  native->setNativeUpvalue(0, Value::integer(reinterpret_cast<int64_t>(fn)));
 
   vm->unprotect(2);
   return Value::object(native);
@@ -299,12 +313,15 @@ static Value stringEndsWith(VM *vm, Value receiver, int argc, Value *argv) {
       str->view().compare(str->length - suffix->length, suffix->length, suffix->view()) == 0);
 }
 
+static char toUpperChar(unsigned char c) { return static_cast<char>(std::toupper(c)); }
+
+static char toLowerChar(unsigned char c) { return static_cast<char>(std::tolower(c)); }
+
 static Value stringToUpper(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
   std::string result = static_cast<StringObject *>(receiver.asGC())->str();
-  std::transform(result.begin(), result.end(), result.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  std::transform(result.begin(), result.end(), result.begin(), toUpperChar);
   return Value::object(vm->allocateString(result));
 }
 
@@ -312,8 +329,7 @@ static Value stringToLower(VM *vm, Value receiver, int argc, Value *argv) {
   if (!receiver.isString())
     return receiver;
   std::string result = static_cast<StringObject *>(receiver.asGC())->str();
-  std::transform(result.begin(), result.end(), result.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(result.begin(), result.end(), result.begin(), toLowerChar);
   return Value::object(vm->allocateString(result));
 }
 
