@@ -4,8 +4,6 @@
 #include "StringPool.h"
 #include "VM.h"
 #include <algorithm>
-#include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <new>
 
@@ -56,17 +54,6 @@ Closure *GC::allocateScriptClosure(const Prototype *proto) {
   }
 
   objectCount_++;
-  if (objectCount_ > stats_.peakObjectCount) {
-    stats_.peakObjectCount = objectCount_;
-  }
-
-  updateTypeStats(ValueType::Closure, true);
-
-  if (GCDebug::enabled && GCDebug::logAllocations) {
-    fprintf(stderr, "[GC] alloc ScriptClosure @%p size=%zu (uv=%zu) total=%zu #%zu\n",
-            (void *)closure, size, count, bytesAllocated_, objectCount_);
-  }
-
   return closure;
 }
 
@@ -74,17 +61,9 @@ Closure *GC::allocateNativeClosure(int nupvalues) {
   collectIfNeeded();
 
   size_t size = Closure::nativeAllocSize(nupvalues);
-
   void *mem = ::operator new(size);
   bytesAllocated_ += size;
   objectCount_++;
-
-  if (bytesAllocated_ > stats_.peakBytesAllocated) {
-    stats_.peakBytesAllocated = bytesAllocated_;
-  }
-  if (objectCount_ > stats_.peakObjectCount) {
-    stats_.peakObjectCount = objectCount_;
-  }
 
   Closure *closure = static_cast<Closure *>(mem);
 
@@ -95,9 +74,7 @@ Closure *GC::allocateNativeClosure(int nupvalues) {
 
   closure->kind = ClosureKind::Native;
   closure->upvalueCount = static_cast<uint8_t>(nupvalues);
-
   closure->proto = nullptr;
-
   closure->name = nullptr;
   closure->arity = 0;
   closure->receiver = Value::nil();
@@ -108,13 +85,6 @@ Closure *GC::allocateNativeClosure(int nupvalues) {
     closure->nativeUpvalues[i] = Value::nil();
   }
 
-  updateTypeStats(ValueType::Closure, true);
-
-  if (GCDebug::enabled && GCDebug::logAllocations) {
-    fprintf(stderr, "[GC] alloc NativeClosure @%p size=%zu upvalues=%d total=%zu #%zu\n",
-            (void *)closure, size, nupvalues, bytesAllocated_, objectCount_);
-  }
-
   return closure;
 }
 
@@ -122,17 +92,9 @@ StringObject *GC::allocateString(std::string_view sv, uint32_t hash) {
   collectIfNeeded();
 
   size_t totalSize = StringObject::allocationSize(sv.size());
-
   void *mem = ::operator new(totalSize);
   bytesAllocated_ += totalSize;
   objectCount_++;
-
-  if (bytesAllocated_ > stats_.peakBytesAllocated) {
-    stats_.peakBytesAllocated = bytesAllocated_;
-  }
-  if (objectCount_ > stats_.peakObjectCount) {
-    stats_.peakObjectCount = objectCount_;
-  }
 
   StringObject *str = static_cast<StringObject *>(mem);
 
@@ -148,14 +110,6 @@ StringObject *GC::allocateString(std::string_view sv, uint32_t hash) {
   chars[sv.size()] = '\0';
 
   objects_ = str;
-
-  updateTypeStats(ValueType::String, true);
-
-  if (GCDebug::enabled && GCDebug::logAllocations) {
-    fprintf(stderr, "[GC] alloc String @%p size=%zu len=%zu hash=%08x total=%zu #%zu\n",
-            (void *)str, totalSize, sv.size(), hash, bytesAllocated_, objectCount_);
-  }
-
   return str;
 }
 
@@ -163,30 +117,14 @@ FiberObject *GC::allocateFiber() {
   collectIfNeeded();
 
   FiberObject *fiber = new FiberObject();
-
   FiberObject::init(fiber);
 
   size_t totalSize = sizeof(FiberObject) + fiber->totalAllocatedBytes();
   bytesAllocated_ += totalSize;
   objectCount_++;
 
-  if (bytesAllocated_ > stats_.peakBytesAllocated) {
-    stats_.peakBytesAllocated = bytesAllocated_;
-  }
-  if (objectCount_ > stats_.peakObjectCount) {
-    stats_.peakObjectCount = objectCount_;
-  }
-
   fiber->next = objects_;
   objects_ = fiber;
-
-  updateTypeStats(ValueType::Fiber, true);
-
-  if (GCDebug::enabled && GCDebug::logAllocations) {
-    fprintf(stderr, "[GC] alloc Fiber @%p size=%zu (stack=%zu frames=%d defer=%d) total=%zu #%zu\n",
-            (void *)fiber, totalSize, fiber->stackSize, fiber->framesCapacity, fiber->deferCapacity,
-            bytesAllocated_, objectCount_);
-  }
 
   return fiber;
 }
@@ -195,39 +133,11 @@ void GC::collect() {
   if (!enabled_ || inFinalizer_)
     return;
 
-  auto startTime = std::chrono::high_resolution_clock::now();
-  size_t beforeBytes = bytesAllocated_;
-  size_t beforeObjects = objectCount_;
-
-  if (GCDebug::enabled && GCDebug::logCollections) {
-    fprintf(stderr, "[GC] === START #%zu === bytes=%zu objects=%zu threshold=%zu\n",
-            stats_.totalCollections + 1, bytesAllocated_, objectCount_, threshold_);
-  }
-
   markRoots();
   traceReferences();
   removeWhiteStrings();
   sweep();
   runFinalizers();
-
-  size_t bytesFreed = beforeBytes - bytesAllocated_;
-  size_t objectsFreed = beforeObjects - objectCount_;
-
-  stats_.totalCollections++;
-  stats_.totalBytesFreed += bytesFreed;
-  stats_.totalObjectsFreed += objectsFreed;
-  stats_.lastBytesFreed = bytesFreed;
-  stats_.lastObjectsFreed = objectsFreed;
-
-  auto endTime = std::chrono::high_resolution_clock::now();
-  stats_.lastDurationUs =
-      std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count();
-
-  if (GCDebug::enabled && GCDebug::logCollections) {
-    fprintf(stderr,
-            "[GC] === END === freed %zu bytes, %zu objects in %zu us. now: bytes=%zu objects=%zu\n",
-            bytesFreed, objectsFreed, stats_.lastDurationUs, bytesAllocated_, objectCount_);
-  }
 
   threshold_ = static_cast<size_t>(bytesAllocated_ * config_.growthFactor);
   if (threshold_ < config_.initialThreshold) {
@@ -236,7 +146,7 @@ void GC::collect() {
 }
 
 void GC::collectIfNeeded() {
-  if (config_.enableStressTest || bytesAllocated_ > threshold_) {
+  if (bytesAllocated_ > threshold_) {
     collect();
   }
 }
@@ -256,10 +166,6 @@ void GC::removeRoot(RootVisitor visitor) {
 }
 
 void GC::markRoots() {
-  if (GCDebug::enabled && GCDebug::verboseMarking) {
-    fprintf(stderr, "[GC] marking roots...\n");
-  }
-
   if (vm_->mainFiber()) {
     markObject(vm_->mainFiber());
   }
@@ -268,9 +174,7 @@ void GC::markRoots() {
   }
 
   for (auto [nameStr, val] : vm_->globals_) {
-
     markObject(const_cast<StringObject *>(nameStr));
-
     markValue(val);
   }
 
@@ -351,10 +255,6 @@ void GC::markValue(Value &value) {
 void GC::markObject(GCObject *obj) {
   if (!obj || obj->marked)
     return;
-
-  if (GCDebug::enabled && GCDebug::verboseMarking) {
-    fprintf(stderr, "[GC] mark %s @%p\n", typeName(obj->type), (void *)obj);
-  }
 
   obj->marked = true;
   grayStack_.push_back(obj);
@@ -537,12 +437,6 @@ void GC::sweep() {
       }
 
       *ptr = obj->next;
-
-      if (GCDebug::enabled && GCDebug::logFrees) {
-        fprintf(stderr, "[GC] free %s @%p\n", typeName(obj->type), (void *)obj);
-      }
-
-      updateTypeStats(obj->type, false);
       freeObject(obj);
     }
   }
@@ -601,19 +495,14 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::Fiber: {
     FiberObject *fiber = static_cast<FiberObject *>(obj);
-
     size_t totalSize = sizeof(FiberObject) + fiber->totalAllocatedBytes();
     bytesAllocated_ -= totalSize;
-
     FiberObject::destroy(fiber);
-
     delete fiber;
     break;
   }
-
   case ValueType::NativeObject: {
     NativeInstance *nativeInstance = static_cast<NativeInstance *>(obj);
-
     bytesAllocated_ -= sizeof(NativeInstance);
     delete nativeInstance;
     break;
@@ -685,191 +574,6 @@ void GC::invokeGCMethod(Instance *instance) {
     vm_->hasError_ = false;
     vm_->errorValue_ = Value::nil();
   }
-}
-
-const char *GC::typeName(ValueType type) {
-  switch (type) {
-  case ValueType::Nil:
-    return "Nil";
-  case ValueType::Bool:
-    return "Bool";
-  case ValueType::Int:
-    return "Int";
-  case ValueType::Float:
-    return "Float";
-  case ValueType::String:
-    return "String";
-  case ValueType::List:
-    return "List";
-  case ValueType::Map:
-    return "Map";
-  case ValueType::Closure:
-    return "Closure";
-  case ValueType::Class:
-    return "Class";
-  case ValueType::Object:
-    return "Instance";
-  case ValueType::Upvalue:
-    return "Upvalue";
-  case ValueType::Fiber:
-    return "Fiber";
-
-  case ValueType::NativeObject:
-    return "NativeObject";
-  default:
-    return "Unknown";
-  }
-}
-
-void GC::updateTypeStats(ValueType type, bool isAlloc) {
-  int idx = isAlloc ? 0 : 1;
-  switch (type) {
-  case ValueType::String:
-    stats_.strings[idx]++;
-    break;
-  case ValueType::List:
-    stats_.lists[idx]++;
-    break;
-  case ValueType::Map:
-    stats_.maps[idx]++;
-    break;
-  case ValueType::Closure:
-    stats_.closures[idx]++;
-    break;
-  case ValueType::Object:
-    stats_.instances[idx]++;
-    break;
-  case ValueType::Fiber:
-    stats_.fibers[idx]++;
-    break;
-  case ValueType::Upvalue:
-    stats_.upvalues[idx]++;
-    break;
-  case ValueType::Class:
-    stats_.classes[idx]++;
-    break;
-
-  case ValueType::NativeObject:
-    stats_.nativeObjects[idx]++;
-    break;
-  default:
-    break;
-  }
-}
-
-void GC::resetStats() { stats_ = GCStats{}; }
-
-void GC::dumpStats() const {
-  fprintf(stderr, "\n========== GC Stats ==========\n");
-  fprintf(stderr, "Collections: %zu (last: %zu us)\n", stats_.totalCollections,
-          stats_.lastDurationUs);
-  fprintf(stderr, "Freed: %zu bytes, %zu objects total\n", stats_.totalBytesFreed,
-          stats_.totalObjectsFreed);
-  fprintf(stderr, "Peak: %zu bytes, %zu objects\n", stats_.peakBytesAllocated,
-          stats_.peakObjectCount);
-  fprintf(stderr, "Now:  %zu bytes, %zu objects\n", bytesAllocated_, objectCount_);
-  fprintf(stderr, "\n--- By Type (alloc/freed/live) ---\n");
-
-#define DUMP_TYPE(name, arr)                                                                       \
-  fprintf(stderr, "%-12s %6zu / %6zu / %6zu\n", name, arr[0], arr[1], arr[0] - arr[1])
-
-  DUMP_TYPE("String", stats_.strings);
-  DUMP_TYPE("List", stats_.lists);
-  DUMP_TYPE("Map", stats_.maps);
-  DUMP_TYPE("Closure", stats_.closures);
-  DUMP_TYPE("Instance", stats_.instances);
-  DUMP_TYPE("Fiber", stats_.fibers);
-  DUMP_TYPE("Upvalue", stats_.upvalues);
-  DUMP_TYPE("Class", stats_.classes);
-  DUMP_TYPE("NativeClass", stats_.nativeClasses);
-  DUMP_TYPE("NativeObj", stats_.nativeObjects);
-
-#undef DUMP_TYPE
-  fprintf(stderr, "==============================\n\n");
-}
-
-void GC::dumpObjects() const {
-  fprintf(stderr, "\n========== Live Objects ==========\n");
-  size_t count = 0;
-  GCObject *obj = objects_;
-  while (obj) {
-    fprintf(stderr, "[%4zu] %-12s @%p", count, typeName(obj->type), (void *)obj);
-
-    switch (obj->type) {
-    case ValueType::String: {
-      auto *str = static_cast<StringObject *>(obj);
-      std::string_view sv = str->view();
-      if (sv.length() <= 40) {
-        fprintf(stderr, " \"%.*s\"", static_cast<int>(sv.length()), sv.data());
-      } else {
-        fprintf(stderr, " \"%.40s...\"", sv.data());
-      }
-      break;
-    }
-    case ValueType::List: {
-      auto *list = static_cast<ListObject *>(obj);
-      fprintf(stderr, " [%zu]", list->elements.size());
-      break;
-    }
-    case ValueType::Map: {
-      auto *map = static_cast<MapObject *>(obj);
-      fprintf(stderr, " {%zu}", map->entries.size());
-      break;
-    }
-    case ValueType::Class: {
-      auto *klass = static_cast<ClassObject *>(obj);
-      fprintf(stderr, " '%s'", klass->name.c_str());
-      break;
-    }
-    case ValueType::Closure: {
-      auto *closure = static_cast<Closure *>(obj);
-      fprintf(stderr, " %s '%s'", closure->isNative() ? "native" : "script", closure->getName());
-      break;
-    }
-    default:
-      break;
-    }
-
-    fprintf(stderr, "\n");
-    obj = obj->next;
-    count++;
-  }
-  fprintf(stderr, "Total: %zu objects\n", count);
-  fprintf(stderr, "==================================\n\n");
-}
-
-void GC::markCheckpoint() {
-  checkpointObjects_ = objectCount_;
-  checkpointBytes_ = bytesAllocated_;
-  if (GCDebug::enabled) {
-    fprintf(stderr, "[GC] checkpoint: %zu objects, %zu bytes\n", checkpointObjects_,
-            checkpointBytes_);
-  }
-}
-
-void GC::checkLeaks() const {
-  fprintf(stderr, "\n========== Leak Check ==========\n");
-  fprintf(stderr, "Checkpoint: %zu objects, %zu bytes\n", checkpointObjects_, checkpointBytes_);
-  fprintf(stderr, "Current:    %zu objects, %zu bytes\n", objectCount_, bytesAllocated_);
-
-  if (objectCount_ > checkpointObjects_) {
-    fprintf(stderr, "!! LEAK: +%zu objects, +%zu bytes\n", objectCount_ - checkpointObjects_,
-            bytesAllocated_ - checkpointBytes_);
-  } else if (objectCount_ < checkpointObjects_) {
-    fprintf(stderr, "OK: -%zu objects, -%zu bytes\n", checkpointObjects_ - objectCount_,
-            checkpointBytes_ - bytesAllocated_);
-  } else {
-    fprintf(stderr, "OK: no change\n");
-  }
-  fprintf(stderr, "================================\n\n");
-}
-
-size_t GC::leakedObjectCount() const {
-  return (objectCount_ > checkpointObjects_) ? objectCount_ - checkpointObjects_ : 0;
-}
-
-size_t GC::leakedBytes() const {
-  return (bytesAllocated_ > checkpointBytes_) ? bytesAllocated_ - checkpointBytes_ : 0;
 }
 
 } // namespace spt
