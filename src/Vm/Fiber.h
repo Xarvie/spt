@@ -118,7 +118,7 @@ struct FiberObject : GCObject {
 
   bool canResume() const { return state == FiberState::NEW || state == FiberState::SUSPENDED; }
 
-#define SPT_FORCE_STACK_REALLOC 1
+#define SPT_FORCE_STACK_REALLOC 0
 
   void checkStack(int needed) {
 #if SPT_FORCE_STACK_REALLOC
