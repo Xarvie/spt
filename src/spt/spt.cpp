@@ -1496,6 +1496,229 @@ SPT_API int spt_iscinstancevalid(spt_State *S, int idx) {
   return inst->isValid() && !inst->isFinalized ? 1 : 0;
 }
 
+namespace {
+
+static const char *const kMagicMethodNames[] = {
+    "__init", "__gc",   "__get", "__set",  "__getitem", "__setitem", "__add", "__sub",
+    "__mul",  "__div",  "__mod", "__pow",  "__unm",     "__idiv",    "__eq",  "__lt",
+    "__le",   "__band", "__bor", "__bxor", "__bnot",    "__shl",     "__shr",
+};
+
+static_assert(sizeof(kMagicMethodNames) / sizeof(kMagicMethodNames[0]) == SPT_MM_MAX,
+              "kMagicMethodNames size must match SPT_MM_MAX");
+
+inline spt::ClassObject *getClassObject(spt_State *S, int idx) {
+  spt::Value v = getValue(S, idx);
+  if (!v.isClass())
+    return nullptr;
+  return static_cast<spt::ClassObject *>(v.asGC());
+}
+
+inline spt::ClassObject *getInstanceClass(spt_State *S, int idx) {
+  spt::Value v = getValue(S, idx);
+  if (v.isInstance()) {
+    return static_cast<spt::Instance *>(v.asGC())->klass;
+  }
+  if (v.isNativeInstance()) {
+    return static_cast<spt::NativeInstance *>(v.asGC())->klass;
+  }
+  return nullptr;
+}
+
+} // namespace
+
+SPT_API const char *spt_magicmethodname(int mm) {
+  if (mm < 0 || mm >= SPT_MM_MAX)
+    return nullptr;
+  return kMagicMethodNames[mm];
+}
+
+SPT_API int spt_magicmethodindex(const char *name) {
+  if (!name)
+    return SPT_MM_MAX;
+
+  if (name[0] != '_' || name[1] != '_')
+    return SPT_MM_MAX;
+
+  for (int i = 0; i < SPT_MM_MAX; ++i) {
+    if (std::strcmp(name, kMagicMethodNames[i]) == 0)
+      return i;
+  }
+  return SPT_MM_MAX;
+}
+
+SPT_API unsigned int spt_getclassflags(spt_State *S, int class_idx) {
+  if (!S)
+    return 0;
+
+  spt::ClassObject *klass = getClassObject(S, class_idx);
+  if (!klass)
+    return 0;
+
+  return klass->flags;
+}
+
+SPT_API int spt_hasmagicmethod(spt_State *S, int class_idx, int mm) {
+  if (!S || mm < 0 || mm >= SPT_MM_MAX)
+    return 0;
+
+  spt::ClassObject *klass = getClassObject(S, class_idx);
+  if (!klass)
+    return 0;
+
+  return klass->hasFlag(static_cast<uint32_t>(1u << mm)) ? 1 : 0;
+}
+
+SPT_API int spt_getmagicmethod(spt_State *S, int class_idx, int mm) {
+  if (!S || mm < 0 || mm >= SPT_MM_MAX) {
+    if (S)
+      pushValue(S, spt::Value::nil());
+    return SPT_TNIL;
+  }
+
+  spt::ClassObject *klass = getClassObject(S, class_idx);
+  if (!klass) {
+    pushValue(S, spt::Value::nil());
+    return SPT_TNIL;
+  }
+
+  spt::Value method = klass->getMagicMethod(static_cast<spt::MagicMethod>(mm));
+  pushValue(S, method);
+  return valueTypeToSptType(method.type);
+}
+
+SPT_API void spt_setmagicmethod(spt_State *S, int class_idx, int mm) {
+  if (!S || mm < 0 || mm >= SPT_MM_MAX) {
+    if (S)
+      S->fiber->pop();
+    return;
+  }
+
+  spt::ClassObject *klass = getClassObject(S, class_idx);
+  if (!klass) {
+    S->fiber->pop();
+    return;
+  }
+
+  spt::Value method = S->fiber->pop();
+
+  klass->setMagicMethodDirect(static_cast<spt::MagicMethod>(mm), method);
+
+  spt::StringObject *nameStr = S->vm->allocateString(kMagicMethodNames[mm]);
+  klass->methods[nameStr] = method;
+}
+
+SPT_API void spt_setmagicmethodbyname(spt_State *S, int class_idx, const char *name) {
+  if (!S || !name) {
+    if (S)
+      S->fiber->pop();
+    return;
+  }
+
+  spt::ClassObject *klass = getClassObject(S, class_idx);
+  if (!klass) {
+    S->fiber->pop();
+    return;
+  }
+
+  spt::Value method = S->fiber->pop();
+  spt::StringObject *nameStr = S->vm->allocateString(name);
+
+  klass->setMethod(nameStr, method);
+}
+
+SPT_API int spt_objhasmagicmethod(spt_State *S, int obj_idx, int mm) {
+  if (!S || mm < 0 || mm >= SPT_MM_MAX)
+    return 0;
+
+  spt::ClassObject *klass = getInstanceClass(S, obj_idx);
+  if (!klass)
+    return 0;
+
+  return klass->hasFlag(static_cast<uint32_t>(1u << mm)) ? 1 : 0;
+}
+
+SPT_API int spt_objgetmagicmethod(spt_State *S, int obj_idx, int mm) {
+  if (!S || mm < 0 || mm >= SPT_MM_MAX) {
+    if (S)
+      pushValue(S, spt::Value::nil());
+    return SPT_TNIL;
+  }
+
+  spt::ClassObject *klass = getInstanceClass(S, obj_idx);
+  if (!klass) {
+    pushValue(S, spt::Value::nil());
+    return SPT_TNIL;
+  }
+
+  spt::Value method = klass->getMagicMethod(static_cast<spt::MagicMethod>(mm));
+  pushValue(S, method);
+  return valueTypeToSptType(method.type);
+}
+
+SPT_API int spt_callmagicmethod(spt_State *S, int mm, int nargs, int nresults) {
+  if (!S || mm < 0 || mm >= SPT_MM_MAX)
+    return SPT_ERRRUN;
+
+  int objIdx = -(nargs + 1);
+  spt::ClassObject *klass = getInstanceClass(S, objIdx);
+  if (!klass) {
+    setError(S, "Cannot call magic method on non-object");
+    return SPT_ERRRUN;
+  }
+
+  if (!klass->hasFlag(static_cast<uint32_t>(1u << mm))) {
+    const char *methodName = kMagicMethodNames[mm];
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "Object does not have magic method '%s'", methodName);
+    setError(S, buf);
+    return SPT_ERRRUN;
+  }
+
+  spt::Value methodVal = klass->getMagicMethod(static_cast<spt::MagicMethod>(mm));
+  if (!methodVal.isClosure()) {
+    setError(S, "Magic method is not a callable");
+    return SPT_ERRRUN;
+  }
+
+  spt::Closure *closure = static_cast<spt::Closure *>(methodVal.asGC());
+
+  pushValue(S, methodVal);
+
+  spt_rotate(S, objIdx, 1);
+
+  return spt_call(S, nargs + 1, nresults);
+}
+
+SPT_API int spt_pcallmagicmethod(spt_State *S, int mm, int nargs, int nresults, int errfunc) {
+  if (!S || mm < 0 || mm >= SPT_MM_MAX)
+    return SPT_ERRRUN;
+
+  int objIdx = -(nargs + 1);
+  spt::ClassObject *klass = getInstanceClass(S, objIdx);
+  if (!klass) {
+    spt_pushstring(S, "Cannot call magic method on non-object");
+    return SPT_ERRRUN;
+  }
+
+  if (!klass->hasFlag(static_cast<uint32_t>(1u << mm))) {
+    const char *methodName = kMagicMethodNames[mm];
+    spt_pushfstring(S, "Object does not have magic method '%s'", methodName);
+    return SPT_ERRRUN;
+  }
+
+  spt::Value methodVal = klass->getMagicMethod(static_cast<spt::MagicMethod>(mm));
+  if (!methodVal.isClosure()) {
+    spt_pushstring(S, "Magic method is not a callable");
+    return SPT_ERRRUN;
+  }
+
+  pushValue(S, methodVal);
+  spt_rotate(S, objIdx, 1);
+
+  return spt_pcall(S, nargs + 1, nresults, errfunc);
+}
+
 SPT_API void spt_pushcclosure(spt_State *S, spt_CFunction fn, int nup) {
   if (!S || !fn)
     return;

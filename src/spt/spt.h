@@ -165,6 +165,96 @@ enum {
   SPT_FIBER_ERROR = 4
 };
 
+/* Magic method indices (matches internal MagicMethod enum) */
+enum {
+  /* Lifecycle */
+  SPT_MM_INIT = 0, /* __init (constructor) */
+  SPT_MM_GC = 1,   /* __gc (finalizer/destructor) */
+
+  /* Property access */
+  SPT_MM_GET = 2,       /* __get (property get fallback) */
+  SPT_MM_SET = 3,       /* __set (property set intercept) */
+  SPT_MM_INDEX_GET = 4, /* __getitem (subscript read obj[key]) */
+  SPT_MM_INDEX_SET = 5, /* __setitem (subscript write obj[key] = value) */
+
+  /* Arithmetic operators */
+  SPT_MM_ADD = 6,   /* __add (+) */
+  SPT_MM_SUB = 7,   /* __sub (-) */
+  SPT_MM_MUL = 8,   /* __mul (*) */
+  SPT_MM_DIV = 9,   /* __div (/) */
+  SPT_MM_MOD = 10,  /* __mod (%) */
+  SPT_MM_POW = 11,  /* __pow (**) */
+  SPT_MM_UNM = 12,  /* __unm (unary minus -x) */
+  SPT_MM_IDIV = 13, /* __idiv (integer division ~/) */
+
+  /* Comparison operators */
+  SPT_MM_EQ = 14, /* __eq (==) */
+  SPT_MM_LT = 15, /* __lt (<) */
+  SPT_MM_LE = 16, /* __le (<=) */
+
+  /* Bitwise operators */
+  SPT_MM_BAND = 17, /* __band (&) */
+  SPT_MM_BOR = 18,  /* __bor (|) */
+  SPT_MM_BXOR = 19, /* __bxor (^) */
+  SPT_MM_BNOT = 20, /* __bnot (~) */
+  SPT_MM_SHL = 21,  /* __shl (<<) */
+  SPT_MM_SHR = 22,  /* __shr (>>) */
+
+  SPT_MM_MAX = 23 /* Total count (must be last) */
+};
+
+/* Class flags for quick magic method detection (bitmask) */
+enum {
+  SPT_CLASS_NONE = 0,
+
+  /* Lifecycle */
+  SPT_CLASS_HAS_INIT = (1u << SPT_MM_INIT),
+  SPT_CLASS_HAS_GC = (1u << SPT_MM_GC),
+
+  /* Property access */
+  SPT_CLASS_HAS_GET = (1u << SPT_MM_GET),
+  SPT_CLASS_HAS_SET = (1u << SPT_MM_SET),
+  SPT_CLASS_HAS_INDEX_GET = (1u << SPT_MM_INDEX_GET),
+  SPT_CLASS_HAS_INDEX_SET = (1u << SPT_MM_INDEX_SET),
+
+  /* Arithmetic operators */
+  SPT_CLASS_HAS_ADD = (1u << SPT_MM_ADD),
+  SPT_CLASS_HAS_SUB = (1u << SPT_MM_SUB),
+  SPT_CLASS_HAS_MUL = (1u << SPT_MM_MUL),
+  SPT_CLASS_HAS_DIV = (1u << SPT_MM_DIV),
+  SPT_CLASS_HAS_MOD = (1u << SPT_MM_MOD),
+  SPT_CLASS_HAS_POW = (1u << SPT_MM_POW),
+  SPT_CLASS_HAS_UNM = (1u << SPT_MM_UNM),
+  SPT_CLASS_HAS_IDIV = (1u << SPT_MM_IDIV),
+
+  /* Comparison operators */
+  SPT_CLASS_HAS_EQ = (1u << SPT_MM_EQ),
+  SPT_CLASS_HAS_LT = (1u << SPT_MM_LT),
+  SPT_CLASS_HAS_LE = (1u << SPT_MM_LE),
+
+  /* Bitwise operators */
+  SPT_CLASS_HAS_BAND = (1u << SPT_MM_BAND),
+  SPT_CLASS_HAS_BOR = (1u << SPT_MM_BOR),
+  SPT_CLASS_HAS_BXOR = (1u << SPT_MM_BXOR),
+  SPT_CLASS_HAS_BNOT = (1u << SPT_MM_BNOT),
+  SPT_CLASS_HAS_SHL = (1u << SPT_MM_SHL),
+  SPT_CLASS_HAS_SHR = (1u << SPT_MM_SHR),
+
+  /* Compound flags for quick category detection */
+  SPT_CLASS_HAS_ANY_ARITHMETIC = SPT_CLASS_HAS_ADD | SPT_CLASS_HAS_SUB | SPT_CLASS_HAS_MUL |
+                                 SPT_CLASS_HAS_DIV | SPT_CLASS_HAS_MOD | SPT_CLASS_HAS_POW |
+                                 SPT_CLASS_HAS_UNM | SPT_CLASS_HAS_IDIV,
+
+  SPT_CLASS_HAS_ANY_COMPARISON = SPT_CLASS_HAS_EQ | SPT_CLASS_HAS_LT | SPT_CLASS_HAS_LE,
+
+  SPT_CLASS_HAS_ANY_BITWISE = SPT_CLASS_HAS_BAND | SPT_CLASS_HAS_BOR | SPT_CLASS_HAS_BXOR |
+                              SPT_CLASS_HAS_BNOT | SPT_CLASS_HAS_SHL | SPT_CLASS_HAS_SHR,
+
+  SPT_CLASS_HAS_ANY_INDEX = SPT_CLASS_HAS_INDEX_GET | SPT_CLASS_HAS_INDEX_SET,
+
+  SPT_CLASS_HAS_ANY_PROPERTY = SPT_CLASS_HAS_GET | SPT_CLASS_HAS_SET
+};
+
 /* Pseudo-indices for special locations */
 #define SPT_REGISTRYINDEX (-1000000)
 #define SPT_GLOBALSINDEX (-1000001)
@@ -638,7 +728,97 @@ SPT_API void *spt_getcinstancedata(spt_State *S, int idx);
 SPT_API int spt_iscinstancevalid(spt_State *S, int idx);
 
 /* ============================================================================
- * 12. C FUNCTION & CLOSURE
+ * 12. MAGIC METHODS
+ * ============================================================================ */
+
+/*
+ * Get the name of a magic method by index.
+ * Returns NULL if mm is out of range.
+ * Example: spt_magicmethodname(SPT_MM_ADD) returns "__add"
+ */
+SPT_API const char *spt_magicmethodname(int mm);
+
+/*
+ * Get magic method index from name.
+ * Returns SPT_MM_MAX if name is not a magic method.
+ * Example: spt_magicmethodindex("__add") returns SPT_MM_ADD
+ */
+SPT_API int spt_magicmethodindex(const char *name);
+
+/*
+ * Get the class flags (bitmask indicating which magic methods are defined).
+ * Returns 0 if class_idx is not a valid class.
+ */
+SPT_API unsigned int spt_getclassflags(spt_State *S, int class_idx);
+
+/*
+ * Check if a class has a specific magic method.
+ * mm: magic method index (SPT_MM_*)
+ * Returns 1 if the class has the method, 0 otherwise.
+ */
+SPT_API int spt_hasmagicmethod(spt_State *S, int class_idx, int mm);
+
+/*
+ * Get a magic method from a class.
+ * mm: magic method index (SPT_MM_*)
+ * Pushes the method (closure) or nil if not defined.
+ * Returns the type of the pushed value.
+ */
+SPT_API int spt_getmagicmethod(spt_State *S, int class_idx, int mm);
+
+/*
+ * Set a magic method on a class.
+ * mm: magic method index (SPT_MM_*)
+ * Stack: [..., closure] -> spt_setmagicmethod(S, classidx, mm) -> [...]
+ * Note: Setting nil removes the magic method.
+ */
+SPT_API void spt_setmagicmethod(spt_State *S, int class_idx, int mm);
+
+/*
+ * Set a magic method on a class by name.
+ * name: magic method name (e.g., "__add", "__gc")
+ * Stack: [..., closure] -> spt_setmagicmethodbyname(S, classidx, "__add") -> [...]
+ * Note: This is equivalent to spt_bindmethod but optimized for magic methods.
+ *       It automatically updates the class's magic method VTable and flags.
+ */
+SPT_API void spt_setmagicmethodbyname(spt_State *S, int class_idx, const char *name);
+
+/*
+ * Check if an instance/object has a specific magic method (through its class).
+ * Works with both script instances (SPT_TOBJECT) and C instances (SPT_TCINSTANCE).
+ * mm: magic method index (SPT_MM_*)
+ */
+SPT_API int spt_objhasmagicmethod(spt_State *S, int obj_idx, int mm);
+
+/*
+ * Get a magic method from an instance/object (through its class).
+ * Works with both script instances and C instances.
+ * mm: magic method index (SPT_MM_*)
+ * Pushes the method or nil.
+ */
+SPT_API int spt_objgetmagicmethod(spt_State *S, int obj_idx, int mm);
+
+/*
+ * Invoke a magic method on an object with arguments.
+ * Stack: [..., obj, arg1, ..., argN] -> spt_callmagicmethod(S, mm, nargs, nresults)
+ *     -> [..., res1, ..., resN]
+ * mm: magic method index (SPT_MM_*)
+ * nargs: number of arguments (excluding self/obj)
+ * nresults: expected number of results (or SPT_MULTRET)
+ * Returns SPT_OK on success, error code on failure.
+ * If the object doesn't have the magic method, returns SPT_ERRRUN.
+ */
+SPT_API int spt_callmagicmethod(spt_State *S, int mm, int nargs, int nresults);
+
+/*
+ * Protected call of a magic method (catches errors).
+ * Stack: [..., obj, arg1, ..., argN] -> spt_pcallmagicmethod(...)
+ *     -> [..., res1, ...] or [..., errmsg]
+ */
+SPT_API int spt_pcallmagicmethod(spt_State *S, int mm, int nargs, int nresults, int errfunc);
+
+/* ============================================================================
+ * 13. C FUNCTION & CLOSURE
  * ============================================================================ */
 
 /*
@@ -678,7 +858,7 @@ SPT_API int spt_getupvaluecount(spt_State *S, int func_idx);
 SPT_API int spt_getarity(spt_State *S, int func_idx);
 
 /* ============================================================================
- * 13. PARSING & COMPILATION (Full Pipeline Support)
+ * 14. PARSING & COMPILATION (Full Pipeline Support)
  * ============================================================================ */
 
 /*
@@ -767,7 +947,7 @@ SPT_API spt_Chunk *spt_loadfile(spt_State *S, const char *filename);
 SPT_API void spt_pushchunk(spt_State *S, spt_Chunk *chunk);
 
 /* ============================================================================
- * 14. EXECUTION
+ * 15. EXECUTION
  * ============================================================================ */
 
 /*
@@ -815,7 +995,7 @@ SPT_API int spt_dostring(spt_State *S, const char *source, const char *name);
 SPT_API int spt_dofile(spt_State *S, const char *filename);
 
 /* ============================================================================
- * 15. FIBER (COROUTINE)
+ * 16. FIBER (COROUTINE)
  * ============================================================================ */
 
 /*
@@ -864,7 +1044,7 @@ SPT_API void spt_fiberabort(spt_State *S);
 SPT_API void spt_fibererror(spt_State *S);
 
 /* ============================================================================
- * 16. GLOBALS & REGISTRY
+ * 17. GLOBALS & REGISTRY
  * ============================================================================ */
 
 /*
@@ -900,7 +1080,7 @@ SPT_API void spt_unref(spt_State *S, int ref);
 SPT_API void spt_getref(spt_State *S, int ref);
 
 /* ============================================================================
- * 17. MODULE SYSTEM
+ * 18. MODULE SYSTEM
  * ============================================================================ */
 
 /*
@@ -939,7 +1119,7 @@ SPT_API void spt_tickmodules(spt_State *S);
 SPT_API void spt_registermodule(spt_State *S, const char *name, spt_Chunk *chunk);
 
 /* ============================================================================
- * 18. ERROR HANDLING
+ * 19. ERROR HANDLING
  * ============================================================================ */
 
 /*
@@ -995,7 +1175,7 @@ SPT_API int spt_getstack(spt_State *S, int level, const char *what, const char *
                          const char **source, int *lineDefined, int *currentLine);
 
 /* ============================================================================
- * 19. GARBAGE COLLECTION
+ * 20. GARBAGE COLLECTION
  * ============================================================================ */
 
 enum {
@@ -1018,7 +1198,7 @@ enum {
 SPT_API int spt_gc(spt_State *S, int what, int data);
 
 /* ============================================================================
- * 20. LIBRARY REGISTRATION
+ * 21. LIBRARY REGISTRATION
  * ============================================================================ */
 
 /*
@@ -1040,7 +1220,7 @@ SPT_API void spt_registermethods(spt_State *S, int class_idx, const spt_MethodRe
 SPT_API void spt_openlibs(spt_State *S);
 
 /* ============================================================================
- * 21. UTILITY FUNCTIONS
+ * 22. UTILITY FUNCTIONS
  * ============================================================================ */
 
 /*
@@ -1087,7 +1267,7 @@ SPT_API void *spt_checklightuserdata(spt_State *S, int arg);
 SPT_API void *spt_optlightuserdata(spt_State *S, int arg, void *def);
 
 /* ============================================================================
- * 22. ITERATION SUPPORT
+ * 23. ITERATION SUPPORT
  * ============================================================================ */
 
 /*
@@ -1109,7 +1289,7 @@ SPT_API int spt_listnext(spt_State *S, int idx, int *iter);
  */
 
 /* ============================================================================
- * 23. VERSION INFORMATION
+ * 24. VERSION INFORMATION
  * ============================================================================ */
 
 /*

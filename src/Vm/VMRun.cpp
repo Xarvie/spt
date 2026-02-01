@@ -1,4 +1,5 @@
 #include "Fiber.h"
+#include "Object.h"
 #include "SptStdlibs.h"
 #include "StringPool.h"
 #include "VM.h"
@@ -12,6 +13,19 @@ static inline double valueToNum(const Value &v) {
   if (v.isFloat())
     return v.asFloat();
   return 0.0;
+}
+
+static inline Value tryGetMagicMethod(const Value &v, MagicMethod mm) {
+  ClassObject *klass = getValueClass(v);
+  if (klass && klass->hasFlag(getMagicMethodFlag(mm))) {
+    return klass->getMagicMethod(mm);
+  }
+  return Value::nil();
+}
+
+static inline bool hasMagicMethod(const Value &v, MagicMethod mm) {
+  ClassObject *klass = getValueClass(v);
+  return klass && klass->hasFlag(getMagicMethodFlag(mm));
 }
 
 InterpretResult VM::run() {
@@ -102,6 +116,179 @@ InterpretResult VM::run() {
     inst = *ip++;                                                                                  \
   } while (0)
 
+#define INVOKE_BINARY_MAGIC_METHOD(resultSlot, leftVal, rightVal, mmEnum, opName)                  \
+  do {                                                                                             \
+    Value _mmMethod = tryGetMagicMethod(leftVal, mmEnum);                                          \
+    if (_mmMethod.isNil()) {                                                                       \
+      _mmMethod = tryGetMagicMethod(rightVal, mmEnum);                                             \
+    }                                                                                              \
+    if (_mmMethod.isClosure()) {                                                                   \
+      Closure *_mmClosure = static_cast<Closure *>(_mmMethod.asGC());                              \
+      if (_mmClosure->isNative()) {                                                                \
+        Value _mmArgs[2] = {leftVal, rightVal};                                                    \
+        size_t _oldTop = fiber->stackTop - fiber->stack;                                           \
+        int _numRes;                                                                               \
+        try {                                                                                      \
+          PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 2, _mmArgs));                   \
+        } catch (const CExtensionException &e) {                                                   \
+          fiber->stackTop = fiber->stack + _oldTop;                                                \
+          if (!hasError_)                                                                          \
+            runtimeError("%s", e.what());                                                          \
+          return InterpretResult::RUNTIME_ERROR;                                                   \
+        }                                                                                          \
+        if (hasError_)                                                                             \
+          return InterpretResult::RUNTIME_ERROR;                                                   \
+        if (_numRes > 0) {                                                                         \
+          slots[resultSlot] = fiber->stackTop[-_numRes];                                           \
+        } else {                                                                                   \
+          slots[resultSlot] = Value::nil();                                                        \
+        }                                                                                          \
+        fiber->stackTop = fiber->stack + _oldTop;                                                  \
+        SPT_DISPATCH();                                                                            \
+      } else {                                                                                     \
+        const Prototype *_proto = _mmClosure->proto;                                               \
+        fiber->ensureStack(_proto->maxStackSize + 3);                                              \
+        fiber->ensureFrames(1);                                                                    \
+        REFRESH_CACHE();                                                                           \
+        Value *_top = fiber->stackTop;                                                             \
+        _top[0] = leftVal;                                                                         \
+        _top[1] = rightVal;                                                                        \
+        fiber->stackTop = _top + _proto->maxStackSize;                                             \
+        for (Value *_p = _top + 2; _p < fiber->stackTop; ++_p)                                     \
+          *_p = Value::nil();                                                                      \
+        SAVE_PC();                                                                                 \
+        CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];                                \
+        _newFrame->closure = _mmClosure;                                                           \
+        _newFrame->ip = _proto->code.data();                                                       \
+        _newFrame->slots = _top;                                                                   \
+        _newFrame->returnTo = &slots[resultSlot];                                                  \
+        _newFrame->expectedResults = 1;                                                            \
+        _newFrame->deferBase = fiber->deferTop;                                                    \
+        frame = _newFrame;                                                                         \
+        slots = frame->slots;                                                                      \
+        LOAD_PC();                                                                                 \
+        SPT_DISPATCH();                                                                            \
+      }                                                                                            \
+    }                                                                                              \
+    SAVE_PC();                                                                                     \
+    runtimeError("Unsupported operand types for %s", opName);                                      \
+    return InterpretResult::RUNTIME_ERROR;                                                         \
+  } while (0)
+
+#define INVOKE_UNARY_MAGIC_METHOD(resultSlot, operandVal, mmEnum, opName)                          \
+  do {                                                                                             \
+    Value _mmMethod = tryGetMagicMethod(operandVal, mmEnum);                                       \
+    if (_mmMethod.isClosure()) {                                                                   \
+      Closure *_mmClosure = static_cast<Closure *>(_mmMethod.asGC());                              \
+      if (_mmClosure->isNative()) {                                                                \
+        Value _mmArgs[1] = {operandVal};                                                           \
+        size_t _oldTop = fiber->stackTop - fiber->stack;                                           \
+        int _numRes;                                                                               \
+        try {                                                                                      \
+          PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 1, _mmArgs));                   \
+        } catch (const CExtensionException &e) {                                                   \
+          fiber->stackTop = fiber->stack + _oldTop;                                                \
+          if (!hasError_)                                                                          \
+            runtimeError("%s", e.what());                                                          \
+          return InterpretResult::RUNTIME_ERROR;                                                   \
+        }                                                                                          \
+        if (hasError_)                                                                             \
+          return InterpretResult::RUNTIME_ERROR;                                                   \
+        if (_numRes > 0) {                                                                         \
+          slots[resultSlot] = fiber->stackTop[-_numRes];                                           \
+        } else {                                                                                   \
+          slots[resultSlot] = Value::nil();                                                        \
+        }                                                                                          \
+        fiber->stackTop = fiber->stack + _oldTop;                                                  \
+        SPT_DISPATCH();                                                                            \
+      } else {                                                                                     \
+        const Prototype *_proto = _mmClosure->proto;                                               \
+        fiber->ensureStack(_proto->maxStackSize + 2);                                              \
+        fiber->ensureFrames(1);                                                                    \
+        REFRESH_CACHE();                                                                           \
+        Value *_top = fiber->stackTop;                                                             \
+        _top[0] = operandVal;                                                                      \
+        fiber->stackTop = _top + _proto->maxStackSize;                                             \
+        for (Value *_p = _top + 1; _p < fiber->stackTop; ++_p)                                     \
+          *_p = Value::nil();                                                                      \
+        SAVE_PC();                                                                                 \
+        CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];                                \
+        _newFrame->closure = _mmClosure;                                                           \
+        _newFrame->ip = _proto->code.data();                                                       \
+        _newFrame->slots = _top;                                                                   \
+        _newFrame->returnTo = &slots[resultSlot];                                                  \
+        _newFrame->expectedResults = 1;                                                            \
+        _newFrame->deferBase = fiber->deferTop;                                                    \
+        frame = _newFrame;                                                                         \
+        slots = frame->slots;                                                                      \
+        LOAD_PC();                                                                                 \
+        SPT_DISPATCH();                                                                            \
+      }                                                                                            \
+    }                                                                                              \
+    SAVE_PC();                                                                                     \
+    runtimeError("Unsupported operand type for %s", opName);                                       \
+    return InterpretResult::RUNTIME_ERROR;                                                         \
+  } while (0)
+
+#define INVOKE_COMPARE_MAGIC_METHOD(leftVal, rightVal, mmEnum, outResult)                          \
+  do {                                                                                             \
+    Value _mmMethod = tryGetMagicMethod(leftVal, mmEnum);                                          \
+    if (_mmMethod.isNil()) {                                                                       \
+      _mmMethod = tryGetMagicMethod(rightVal, mmEnum);                                             \
+    }                                                                                              \
+    if (_mmMethod.isClosure()) {                                                                   \
+      Closure *_mmClosure = static_cast<Closure *>(_mmMethod.asGC());                              \
+      if (_mmClosure->isNative()) {                                                                \
+        Value _mmArgs[2] = {leftVal, rightVal};                                                    \
+        size_t _oldTop = fiber->stackTop - fiber->stack;                                           \
+        int _numRes;                                                                               \
+        try {                                                                                      \
+          PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 2, _mmArgs));                   \
+        } catch (const CExtensionException &e) {                                                   \
+          fiber->stackTop = fiber->stack + _oldTop;                                                \
+          if (!hasError_)                                                                          \
+            runtimeError("%s", e.what());                                                          \
+          return InterpretResult::RUNTIME_ERROR;                                                   \
+        }                                                                                          \
+        if (hasError_)                                                                             \
+          return InterpretResult::RUNTIME_ERROR;                                                   \
+        outResult = (_numRes > 0) ? fiber->stackTop[-_numRes].isTruthy() : false;                  \
+        fiber->stackTop = fiber->stack + _oldTop;                                                  \
+      } else {                                                                                     \
+        const Prototype *_proto = _mmClosure->proto;                                               \
+        fiber->ensureStack(_proto->maxStackSize + 3);                                              \
+        fiber->ensureFrames(1);                                                                    \
+        REFRESH_CACHE();                                                                           \
+                                                                                                   \
+        size_t _topOffset = fiber->stackTop - fiber->stack;                                        \
+        Value *_top = fiber->stackTop;                                                             \
+        _top[0] = leftVal;                                                                         \
+        _top[1] = rightVal;                                                                        \
+        fiber->stackTop = _top + _proto->maxStackSize;                                             \
+        for (Value *_p = _top + 2; _p < fiber->stackTop; ++_p)                                     \
+          *_p = Value::nil();                                                                      \
+        SAVE_PC();                                                                                 \
+        CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];                                \
+        _newFrame->closure = _mmClosure;                                                           \
+        _newFrame->ip = _proto->code.data();                                                       \
+        _newFrame->slots = _top;                                                                   \
+        _newFrame->returnTo = _top;                                                                \
+        _newFrame->expectedResults = 1;                                                            \
+        _newFrame->deferBase = fiber->deferTop;                                                    \
+        int _savedExitFrame = exitFrameCount_;                                                     \
+        exitFrameCount_ = fiber->frameCount - 1;                                                   \
+        InterpretResult _res = run();                                                              \
+        exitFrameCount_ = _savedExitFrame;                                                         \
+        RESTORE_POINTERS();                                                                        \
+        LOAD_PC();                                                                                 \
+        if (_res != InterpretResult::OK)                                                           \
+          return _res;                                                                             \
+                                                                                                   \
+        outResult = fiber->stack[_topOffset].isTruthy();                                           \
+      }                                                                                            \
+    }                                                                                              \
+  } while (0)
+
   (void)stackBase;
   (void)stackLimit;
   (void)trap;
@@ -187,6 +374,14 @@ InterpretResult VM::run() {
     } else if (container.isMap()) {
       auto *map = static_cast<MapObject *>(container.asGC());
       slots[A] = map->get(index);
+    } else if (container.isInstance() || container.isNativeInstance()) {
+
+      if (hasMagicMethod(container, MM_INDEX_GET)) {
+        INVOKE_BINARY_MAGIC_METHOD(A, container, index, MM_INDEX_GET, "[]");
+      }
+      SAVE_PC();
+      runtimeError("Cannot index type: %s", container.typeName());
+      return InterpretResult::RUNTIME_ERROR;
     } else {
       SAVE_PC();
       runtimeError("Cannot index type: %s", container.typeName());
@@ -220,6 +415,58 @@ InterpretResult VM::run() {
     } else if (container.isMap()) {
       auto *map = static_cast<MapObject *>(container.asGC());
       map->set(index, value);
+    } else if (container.isInstance() || container.isNativeInstance()) {
+
+      if (hasMagicMethod(container, MM_INDEX_SET)) {
+        Value _mmMethod = tryGetMagicMethod(container, MM_INDEX_SET);
+        if (_mmMethod.isClosure()) {
+          Closure *_mmClosure = static_cast<Closure *>(_mmMethod.asGC());
+          if (_mmClosure->isNative()) {
+            Value _mmArgs[3] = {container, index, value};
+            size_t _oldTop = fiber->stackTop - fiber->stack;
+            int _numRes;
+            try {
+              PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 3, _mmArgs));
+            } catch (const CExtensionException &e) {
+              fiber->stackTop = fiber->stack + _oldTop;
+              if (!hasError_)
+                runtimeError("%s", e.what());
+              return InterpretResult::RUNTIME_ERROR;
+            }
+            if (hasError_)
+              return InterpretResult::RUNTIME_ERROR;
+            fiber->stackTop = fiber->stack + _oldTop;
+            SPT_DISPATCH();
+          } else {
+            const Prototype *_proto = _mmClosure->proto;
+            fiber->ensureStack(_proto->maxStackSize + 4);
+            fiber->ensureFrames(1);
+            REFRESH_CACHE();
+            Value *_top = fiber->stackTop;
+            _top[0] = container;
+            _top[1] = index;
+            _top[2] = value;
+            fiber->stackTop = _top + _proto->maxStackSize;
+            for (Value *_p = _top + 3; _p < fiber->stackTop; ++_p)
+              *_p = Value::nil();
+            SAVE_PC();
+            CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];
+            _newFrame->closure = _mmClosure;
+            _newFrame->ip = _proto->code.data();
+            _newFrame->slots = _top;
+            _newFrame->returnTo = _top;
+            _newFrame->expectedResults = 0;
+            _newFrame->deferBase = fiber->deferTop;
+            frame = _newFrame;
+            slots = frame->slots;
+            LOAD_PC();
+            SPT_DISPATCH();
+          }
+        }
+      }
+      SAVE_PC();
+      runtimeError("Cannot index-assign to type: %s", container.typeName());
+      return InterpretResult::RUNTIME_ERROR;
     } else {
       SAVE_PC();
       runtimeError("Cannot index-assign to type: %s", container.typeName());
@@ -270,6 +517,14 @@ InterpretResult VM::run() {
           result = *v;
         }
       }
+
+      if (result.isNil() && instance->klass && instance->klass->hasFlag(CLASS_HAS_GET)) {
+        Value mmGet = instance->klass->getMagicMethod(MM_GET);
+        if (mmGet.isClosure()) {
+          Value keyValue = Value::object(fieldName);
+          INVOKE_BINARY_MAGIC_METHOD(A, object, keyValue, MM_GET, "__get");
+        }
+      }
       slots[A] = result;
       SPT_DISPATCH();
     }
@@ -282,6 +537,14 @@ InterpretResult VM::run() {
       if (result.isNil() && instance->klass) {
         if (Value *v = instance->klass->methods.get(fieldName)) {
           result = *v;
+        }
+      }
+
+      if (result.isNil() && instance->klass && instance->klass->hasFlag(CLASS_HAS_GET)) {
+        Value mmGet = instance->klass->getMagicMethod(MM_GET);
+        if (mmGet.isClosure()) {
+          Value keyValue = Value::object(fieldName);
+          INVOKE_BINARY_MAGIC_METHOD(A, object, keyValue, MM_GET, "__get");
         }
       }
       slots[A] = result;
@@ -348,14 +611,109 @@ InterpretResult VM::run() {
 
     if (object.isInstance()) {
       auto *instance = static_cast<Instance *>(object.asGC());
+
+      if (instance->klass && instance->klass->hasFlag(CLASS_HAS_SET)) {
+        Value mmSet = instance->klass->getMagicMethod(MM_SET);
+        if (mmSet.isClosure()) {
+          Closure *_mmClosure = static_cast<Closure *>(mmSet.asGC());
+          if (_mmClosure->isNative()) {
+            Value _mmArgs[3] = {object, Value::object(fieldNameStr), value};
+            size_t _oldTop = fiber->stackTop - fiber->stack;
+            int _numRes;
+            try {
+              PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 3, _mmArgs));
+            } catch (const CExtensionException &e) {
+              fiber->stackTop = fiber->stack + _oldTop;
+              if (!hasError_)
+                runtimeError("%s", e.what());
+              return InterpretResult::RUNTIME_ERROR;
+            }
+            if (hasError_)
+              return InterpretResult::RUNTIME_ERROR;
+            fiber->stackTop = fiber->stack + _oldTop;
+            SPT_DISPATCH();
+          } else {
+            const Prototype *_proto = _mmClosure->proto;
+            fiber->ensureStack(_proto->maxStackSize + 4);
+            fiber->ensureFrames(1);
+            REFRESH_CACHE();
+            Value *_top = fiber->stackTop;
+            _top[0] = object;
+            _top[1] = Value::object(fieldNameStr);
+            _top[2] = value;
+            fiber->stackTop = _top + _proto->maxStackSize;
+            for (Value *_p = _top + 3; _p < fiber->stackTop; ++_p)
+              *_p = Value::nil();
+            SAVE_PC();
+            CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];
+            _newFrame->closure = _mmClosure;
+            _newFrame->ip = _proto->code.data();
+            _newFrame->slots = _top;
+            _newFrame->returnTo = _top;
+            _newFrame->expectedResults = 0;
+            _newFrame->deferBase = fiber->deferTop;
+            frame = _newFrame;
+            slots = frame->slots;
+            LOAD_PC();
+            SPT_DISPATCH();
+          }
+        }
+      }
       instance->setField(fieldNameStr, value);
     } else if (object.isNativeInstance()) {
-
       auto *instance = static_cast<NativeInstance *>(object.asGC());
+
+      if (instance->klass && instance->klass->hasFlag(CLASS_HAS_SET)) {
+        Value mmSet = instance->klass->getMagicMethod(MM_SET);
+        if (mmSet.isClosure()) {
+          Closure *_mmClosure = static_cast<Closure *>(mmSet.asGC());
+          if (_mmClosure->isNative()) {
+            Value _mmArgs[3] = {object, Value::object(fieldNameStr), value};
+            size_t _oldTop = fiber->stackTop - fiber->stack;
+            int _numRes;
+            try {
+              PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 3, _mmArgs));
+            } catch (const CExtensionException &e) {
+              fiber->stackTop = fiber->stack + _oldTop;
+              if (!hasError_)
+                runtimeError("%s", e.what());
+              return InterpretResult::RUNTIME_ERROR;
+            }
+            if (hasError_)
+              return InterpretResult::RUNTIME_ERROR;
+            fiber->stackTop = fiber->stack + _oldTop;
+            SPT_DISPATCH();
+          } else {
+            const Prototype *_proto = _mmClosure->proto;
+            fiber->ensureStack(_proto->maxStackSize + 4);
+            fiber->ensureFrames(1);
+            REFRESH_CACHE();
+            Value *_top = fiber->stackTop;
+            _top[0] = object;
+            _top[1] = Value::object(fieldNameStr);
+            _top[2] = value;
+            fiber->stackTop = _top + _proto->maxStackSize;
+            for (Value *_p = _top + 3; _p < fiber->stackTop; ++_p)
+              *_p = Value::nil();
+            SAVE_PC();
+            CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];
+            _newFrame->closure = _mmClosure;
+            _newFrame->ip = _proto->code.data();
+            _newFrame->slots = _top;
+            _newFrame->returnTo = _top;
+            _newFrame->expectedResults = 0;
+            _newFrame->deferBase = fiber->deferTop;
+            frame = _newFrame;
+            slots = frame->slots;
+            LOAD_PC();
+            SPT_DISPATCH();
+          }
+        }
+      }
       instance->setField(fieldNameStr, value);
     } else if (object.isClass()) {
       auto *klass = static_cast<ClassObject *>(object.asGC());
-      klass->methods[fieldNameStr] = value;
+      klass->setMethod(fieldNameStr, value);
     } else if (object.isMap()) {
       auto *map = static_cast<MapObject *>(object.asGC());
       map->set(Value::object(fieldNameStr), value);
@@ -585,6 +943,9 @@ InterpretResult VM::run() {
       StringObject *result;
       PROTECT(result = allocateString(s1 + s2));
       slots[A] = Value::object(result);
+    } else if (hasMagicMethod(b, MM_ADD) || hasMagicMethod(c, MM_ADD)) {
+
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_ADD, "+");
     } else {
       SAVE_PC();
       runtimeError("Operands must be numbers or strings");
@@ -607,6 +968,9 @@ InterpretResult VM::run() {
       double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
       slots[A] = Value::number(left - right);
+    } else if (hasMagicMethod(b, MM_SUB) || hasMagicMethod(c, MM_SUB)) {
+
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_SUB, "-");
     } else {
       SAVE_PC();
       runtimeError("Operands must be numbers");
@@ -629,6 +993,9 @@ InterpretResult VM::run() {
       double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
       double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
       slots[A] = Value::number(left * right);
+    } else if (hasMagicMethod(b, MM_MUL) || hasMagicMethod(c, MM_MUL)) {
+
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_MUL, "*");
     } else {
       SAVE_PC();
       runtimeError("Operands must be numbers");
@@ -645,25 +1012,28 @@ InterpretResult VM::run() {
     const Value &b = slots[B];
     const Value &c = slots[C];
 
-    if (!b.isNumber() || !c.isNumber()) {
+    if (b.isNumber() && c.isNumber()) {
+      double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+      double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
+
+      if (right == 0.0) {
+        SAVE_PC();
+        runtimeError("Division by zero");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      if (b.isInt() && c.isInt()) {
+        slots[A] = Value::integer(b.asInt() / c.asInt());
+      } else {
+        slots[A] = Value::number(left / right);
+      }
+    } else if (hasMagicMethod(b, MM_DIV) || hasMagicMethod(c, MM_DIV)) {
+
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_DIV, "/");
+    } else {
       SAVE_PC();
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
-    }
-
-    double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-    double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-
-    if (right == 0.0) {
-      SAVE_PC();
-      runtimeError("Division by zero");
-      return InterpretResult::RUNTIME_ERROR;
-    }
-
-    if (b.isInt() && c.isInt()) {
-      slots[A] = Value::integer(b.asInt() / c.asInt());
-    } else {
-      slots[A] = Value::number(left / right);
     }
     SPT_DISPATCH();
   }
@@ -675,30 +1045,33 @@ InterpretResult VM::run() {
     Value b = slots[B];
     Value c = slots[C];
 
-    if (!b.isNumber() || !c.isNumber()) {
+    if (b.isNumber() && c.isNumber()) {
+      double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
+      double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
+
+      if (right == 0.0) {
+        SAVE_PC();
+        runtimeError("Division by zero");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      double result = std::floor(left / right);
+
+      constexpr double maxInt = static_cast<double>(INT64_MAX);
+      constexpr double minInt = static_cast<double>(INT64_MIN);
+
+      if (result >= minInt && result <= maxInt) {
+        slots[A] = Value::integer(static_cast<int64_t>(result));
+      } else {
+        slots[A] = Value::number(result);
+      }
+    } else if (hasMagicMethod(b, MM_IDIV) || hasMagicMethod(c, MM_IDIV)) {
+
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_IDIV, "~/");
+    } else {
       SAVE_PC();
       runtimeError("Operands must be numbers");
       return InterpretResult::RUNTIME_ERROR;
-    }
-
-    double left = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
-    double right = c.isInt() ? static_cast<double>(c.asInt()) : c.asFloat();
-
-    if (right == 0.0) {
-      SAVE_PC();
-      runtimeError("Division by zero");
-      return InterpretResult::RUNTIME_ERROR;
-    }
-
-    double result = std::floor(left / right);
-
-    constexpr double maxInt = static_cast<double>(INT64_MAX);
-    constexpr double minInt = static_cast<double>(INT64_MIN);
-
-    if (result >= minInt && result <= maxInt) {
-      slots[A] = Value::integer(static_cast<int64_t>(result));
-    } else {
-      slots[A] = Value::number(result);
     }
 
     SPT_DISPATCH();
@@ -711,25 +1084,28 @@ InterpretResult VM::run() {
     Value b = slots[B];
     Value c = slots[C];
 
-    if (!b.isInt() || !c.isInt()) {
+    if (b.isInt() && c.isInt()) {
+      int64_t left = b.asInt();
+      int64_t right = c.asInt();
+
+      if (right == 0) {
+        SAVE_PC();
+        runtimeError("Modulo by zero");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      if (left == INT64_MIN && right == -1) {
+        slots[A] = Value::integer(0);
+      } else {
+        slots[A] = Value::integer(left % right);
+      }
+    } else if (hasMagicMethod(b, MM_MOD) || hasMagicMethod(c, MM_MOD)) {
+
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_MOD, "%");
+    } else {
       SAVE_PC();
       runtimeError("Modulo requires integer operands");
       return InterpretResult::RUNTIME_ERROR;
-    }
-
-    int64_t left = b.asInt();
-    int64_t right = c.asInt();
-
-    if (right == 0) {
-      SAVE_PC();
-      runtimeError("Modulo by zero");
-      return InterpretResult::RUNTIME_ERROR;
-    }
-
-    if (left == INT64_MIN && right == -1) {
-      slots[A] = Value::integer(0);
-    } else {
-      slots[A] = Value::integer(left % right);
     }
     SPT_DISPATCH();
   }
@@ -749,6 +1125,9 @@ InterpretResult VM::run() {
       }
     } else if (b.isFloat()) {
       slots[A] = Value::number(-b.asFloat());
+    } else if (hasMagicMethod(b, MM_UNM)) {
+
+      INVOKE_UNARY_MAGIC_METHOD(A, b, MM_UNM, "-");
     } else {
       SAVE_PC();
       runtimeError("Operand must be a number");
@@ -757,25 +1136,43 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
-#define SPT_BW_BINARY_OP(opName, op)                                                               \
-  SPT_OPCODE(opName) {                                                                             \
-    uint8_t A = GETARG_A(inst);                                                                    \
-    uint8_t B = GETARG_B(inst);                                                                    \
-    uint8_t C = GETARG_C(inst);                                                                    \
-    Value b = slots[B];                                                                            \
-    Value c = slots[C];                                                                            \
-                                                                                                   \
-    if (!b.isInt() || !c.isInt()) {                                                                \
-      SAVE_PC();                                                                                   \
-      runtimeError("Operands must be integers");                                                   \
-      return InterpretResult::RUNTIME_ERROR;                                                       \
-    }                                                                                              \
-    slots[A] = Value::integer(b.asInt() op c.asInt());                                             \
-    SPT_DISPATCH();                                                                                \
+  SPT_OPCODE(OP_BAND) {
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
+    Value b = slots[B];
+    Value c = slots[C];
+
+    if (b.isInt() && c.isInt()) {
+      slots[A] = Value::integer(b.asInt() & c.asInt());
+    } else if (hasMagicMethod(b, MM_BAND) || hasMagicMethod(c, MM_BAND)) {
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_BAND, "&");
+    } else {
+      SAVE_PC();
+      runtimeError("Operands must be integers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
   }
 
-  SPT_BW_BINARY_OP(OP_BAND, &)
-  SPT_BW_BINARY_OP(OP_BOR, |)
+  SPT_OPCODE(OP_BOR) {
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
+    Value b = slots[B];
+    Value c = slots[C];
+
+    if (b.isInt() && c.isInt()) {
+      slots[A] = Value::integer(b.asInt() | c.asInt());
+    } else if (hasMagicMethod(b, MM_BOR) || hasMagicMethod(c, MM_BOR)) {
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_BOR, "|");
+    } else {
+      SAVE_PC();
+      runtimeError("Operands must be integers");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
 
   SPT_OPCODE(OP_BXOR) {
     uint8_t A = GETARG_A(inst);
@@ -783,12 +1180,15 @@ InterpretResult VM::run() {
     uint8_t C = GETARG_C(inst);
     Value b = slots[B];
     Value c = slots[C];
-    if (!b.isInt() || !c.isInt()) {
+    if (b.isInt() && c.isInt()) {
+      slots[A] = Value::integer(b.asInt() ^ c.asInt());
+    } else if (hasMagicMethod(b, MM_BXOR) || hasMagicMethod(c, MM_BXOR)) {
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_BXOR, "^");
+    } else {
       SAVE_PC();
       runtimeError("Operands must be integers");
       return InterpretResult::RUNTIME_ERROR;
     }
-    slots[A] = Value::integer(b.asInt() ^ c.asInt());
     SPT_DISPATCH();
   }
 
@@ -799,6 +1199,8 @@ InterpretResult VM::run() {
 
     if (b.isInt()) {
       slots[A] = Value::integer(~b.asInt());
+    } else if (hasMagicMethod(b, MM_BNOT)) {
+      INVOKE_UNARY_MAGIC_METHOD(A, b, MM_BNOT, "~");
     } else {
       SAVE_PC();
       runtimeError("Operand must be a integer");
@@ -807,8 +1209,6 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
-#undef SPT_BW_BINARY_OP
-
   SPT_OPCODE(OP_SHL) {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
@@ -816,20 +1216,22 @@ InterpretResult VM::run() {
     Value b = slots[B];
     Value c = slots[C];
 
-    if (!b.isInt() || !c.isInt()) {
+    if (b.isInt() && c.isInt()) {
+      int64_t shiftAmount = c.asInt();
+
+      if (shiftAmount < 0 || shiftAmount >= 64) {
+        SAVE_PC();
+        runtimeError("Shift amount must be between 0 and 63");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+      slots[A] = Value::integer(b.asInt() << shiftAmount);
+    } else if (hasMagicMethod(b, MM_SHL) || hasMagicMethod(c, MM_SHL)) {
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_SHL, "<<");
+    } else {
       SAVE_PC();
       runtimeError("Operands must be integers");
       return InterpretResult::RUNTIME_ERROR;
     }
-
-    int64_t shiftAmount = c.asInt();
-
-    if (shiftAmount < 0 || shiftAmount >= 64) {
-      SAVE_PC();
-      runtimeError("Shift amount must be between 0 and 63");
-      return InterpretResult::RUNTIME_ERROR;
-    }
-    slots[A] = Value::integer(b.asInt() << shiftAmount);
     SPT_DISPATCH();
   }
 
@@ -840,20 +1242,22 @@ InterpretResult VM::run() {
     Value b = slots[B];
     Value c = slots[C];
 
-    if (!b.isInt() || !c.isInt()) {
+    if (b.isInt() && c.isInt()) {
+      int64_t shiftAmount = c.asInt();
+
+      if (shiftAmount < 0 || shiftAmount >= 64) {
+        SAVE_PC();
+        runtimeError("Shift amount must be between 0 and 63");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+      slots[A] = Value::integer(b.asInt() >> shiftAmount);
+    } else if (hasMagicMethod(b, MM_SHR) || hasMagicMethod(c, MM_SHR)) {
+      INVOKE_BINARY_MAGIC_METHOD(A, b, c, MM_SHR, ">>");
+    } else {
       SAVE_PC();
       runtimeError("Operands must be integers");
       return InterpretResult::RUNTIME_ERROR;
     }
-
-    int64_t shiftAmount = c.asInt();
-
-    if (shiftAmount < 0 || shiftAmount >= 64) {
-      SAVE_PC();
-      runtimeError("Shift amount must be between 0 and 63");
-      return InterpretResult::RUNTIME_ERROR;
-    }
-    slots[A] = Value::integer(b.asInt() >> shiftAmount);
     SPT_DISPATCH();
   }
 
@@ -867,7 +1271,18 @@ InterpretResult VM::run() {
     uint8_t A = GETARG_A(inst);
     uint8_t B = GETARG_B(inst);
     uint8_t C = GETARG_C(inst);
-    bool equal = valuesEqual(slots[A], slots[B]);
+
+    const Value &a = slots[A];
+    const Value &b = slots[B];
+
+    bool equal = valuesEqual(a, b);
+
+    if (!equal && (hasMagicMethod(a, MM_EQ) || hasMagicMethod(b, MM_EQ))) {
+      bool mmResult = false;
+      INVOKE_COMPARE_MAGIC_METHOD(a, b, MM_EQ, mmResult);
+      equal = mmResult;
+    }
+
     if (equal != (C != 0)) {
       ip++;
     }
@@ -890,6 +1305,9 @@ InterpretResult VM::run() {
       double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
 
       result = left < right;
+    } else if (hasMagicMethod(a, MM_LT) || hasMagicMethod(b, MM_LT)) {
+
+      INVOKE_COMPARE_MAGIC_METHOD(a, b, MM_LT, result);
     } else {
       SAVE_PC();
       runtimeError("Cannot compare non-numeric types");
@@ -918,6 +1336,9 @@ InterpretResult VM::run() {
       double right = b.isInt() ? static_cast<double>(b.asInt()) : b.asFloat();
 
       result = left <= right;
+    } else if (hasMagicMethod(a, MM_LE) || hasMagicMethod(b, MM_LE)) {
+
+      INVOKE_COMPARE_MAGIC_METHOD(a, b, MM_LE, result);
     } else {
       SAVE_PC();
       runtimeError("Cannot compare non-numeric types");

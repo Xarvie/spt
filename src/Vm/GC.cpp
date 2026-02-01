@@ -320,10 +320,18 @@ void GC::traceReferences() {
     case ValueType::Class: {
       ClassObject *klass = static_cast<ClassObject *>(obj);
 
+      for (int i = 0; i < MM_MAX; ++i) {
+        Value &method = klass->magicMethods[i];
+        if (!method.isNil()) {
+          markValue(method);
+        }
+      }
+
       for (auto [nameKey, method] : klass->methods) {
         markObject(const_cast<StringObject *>(nameKey));
         markValue(method);
       }
+
       for (auto [nameKey, staticVal] : klass->statics) {
         markObject(const_cast<StringObject *>(nameKey));
         markValue(staticVal);
@@ -548,14 +556,21 @@ void GC::invokeGCMethod(Instance *instance) {
   if (!klass)
     return;
 
-  Value gcMethod = klass->gcMethod;
+  Value gcMethod = klass->getMagicMethod(MM_GC);
   if (!gcMethod.isClosure())
     return;
 
   Closure *closure = static_cast<Closure *>(gcMethod.asGC());
 
-  if (!closure->isScript())
+  if (closure->isNative()) {
+    Value instanceVal = Value::object(instance);
+
+    try {
+      closure->function(vm_, closure, 1, &instanceVal);
+    } catch (...) {
+    }
     return;
+  }
 
   FiberObject *fiber = vm_->currentFiber();
   if (!fiber)
