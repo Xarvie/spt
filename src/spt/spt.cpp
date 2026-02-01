@@ -100,19 +100,20 @@ inline spt::Value *getValuePtr(spt_State *S, int idx) {
   spt::FiberObject *fiber = S->fiber;
 
   if (idx == SPT_REGISTRYINDEX) {
-
     StateExtra *extra = getExtra(S);
     if (!extra->registry) {
       extra->registry = S->vm->allocateMap(32);
     }
-
     static thread_local spt::Value regValue;
     regValue = spt::Value::object(extra->registry);
     return &regValue;
   }
 
   if (idx == SPT_GLOBALSINDEX) {
-
+    spt::FiberObject *mainFiber = S->vm->mainFiber();
+    if (mainFiber && mainFiber->frameCount > 0) {
+      return &mainFiber->frames[0].slots[0];
+    }
     return nullptr;
   }
 
@@ -1751,68 +1752,60 @@ SPT_API int spt_execute(spt_State *S, spt_Chunk *chunk) {
   }
 }
 
-SPT_API void spt_call(spt_State *S, int nargs, int nresults) {
+SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
   if (!S)
-    return;
+    return SPT_ERRRUN;
 
   int funcIdx = -(nargs + 1);
   spt::Value funcVal = getValue(S, funcIdx);
 
   if (!funcVal.isClosure()) {
     setError(S, "Attempt to call non-function value");
-    spt_settop(S, funcIdx - 1);
-    if (nresults != 0) {
-      for (int i = 0; i < (nresults == SPT_MULTRET ? 1 : nresults); ++i) {
-        pushValue(S, spt::Value::nil());
-      }
-    }
-    return;
+
+    spt_pushstring(S, "Attempt to call non-function value");
+
+    return SPT_ERRRUN;
   }
 
   spt::Closure *closure = static_cast<spt::Closure *>(funcVal.asGC());
 
-  std::vector<spt::Value> args;
-  args.reserve(nargs);
-  for (int i = nargs; i > 0; --i) {
-    args.push_back(getValue(S, -i));
-  }
-
-  spt_settop(S, funcIdx - 1);
-
   spt::FiberObject *fiber = S->fiber;
-  fiber->ensureStack(closure->isScript() ? closure->proto->maxStackSize : nargs + 10);
 
-  for (const auto &arg : args) {
-    fiber->push(arg);
+  if (!ensureStack(S, nargs + 1)) {
+    setError(S, "Stack overflow");
+    spt_pushstring(S, "Stack overflow");
+    return SPT_ERRRUN;
   }
 
   spt::InterpretResult result = S->vm->call(closure, nargs);
 
   if (result != spt::InterpretResult::OK) {
-    setError(S, "Runtime error during call");
-    if (nresults != 0 && nresults != SPT_MULTRET) {
-      for (int i = 0; i < nresults; ++i) {
-        pushValue(S, spt::Value::nil());
-      }
+
+    if (S->vm->hasError()) {
+      spt::Value err = S->vm->getErrorValue();
+      pushValue(S, err);
+
+      S->vm->clearError();
+    } else {
+      spt_pushstring(S, "Runtime error during call");
     }
-    return;
+    return SPT_ERRRUN;
   }
 
   int actualResults = spt_gettop(S);
-  if (nresults == SPT_MULTRET) {
 
-  } else if (nresults == 0) {
-    spt_settop(S, 0);
-  } else {
-    if (actualResults > nresults) {
-      spt_settop(S, nresults);
-    } else {
-      while (actualResults < nresults) {
-        pushValue(S, spt::Value::nil());
-        actualResults++;
-      }
-    }
+  if (nresults == SPT_MULTRET) {
+    return SPT_OK;
   }
+
+  int currentTop = spt_gettop(S);
+
+  if (nresults == 0) {
+
+  } else {
+  }
+
+  return SPT_OK;
 }
 
 SPT_API int spt_pcall(spt_State *S, int nargs, int nresults, int errfunc) {
@@ -1821,28 +1814,40 @@ SPT_API int spt_pcall(spt_State *S, int nargs, int nresults, int errfunc) {
 
   (void)errfunc;
 
-  int top = spt_gettop(S);
+  int funcIdx = spt_gettop(S) - nargs - 1;
 
   try {
-    spt_call(S, nargs, nresults);
+
+    int status = spt_call(S, nargs, nresults);
+
+    if (status != SPT_OK) {
+
+      spt::Value errVal = S->fiber->pop();
+
+      spt_settop(S, funcIdx);
+
+      pushValue(S, errVal);
+
+      return status;
+    }
+
     return SPT_OK;
+
   } catch (const std::exception &e) {
 
-    spt_settop(S, top - nargs - 1);
-
+    spt_settop(S, funcIdx);
     spt_pushstring(S, e.what());
-
     return SPT_ERRRUN;
   } catch (...) {
-    spt_settop(S, top - nargs - 1);
-    spt_pushstring(S, "Unknown error");
+    spt_settop(S, funcIdx);
+    spt_pushstring(S, "Unknown critical error");
     return SPT_ERRERR;
   }
 }
 
-SPT_API void spt_callmethod(spt_State *S, const char *method, int nargs, int nresults) {
+SPT_API int spt_callmethod(spt_State *S, const char *method, int nargs, int nresults) {
   if (!S || !method)
-    return;
+    return SPT_ERRRUN;
 
   int objIdx = -(nargs + 1);
   spt::Value objVal = getValue(S, objIdx);
@@ -1872,14 +1877,10 @@ SPT_API void spt_callmethod(spt_State *S, const char *method, int nargs, int nre
   }
 
   if (methodVal.isNil() || !methodVal.isClosure()) {
-    setError(S, "Method not found");
+
     spt_settop(S, objIdx - 1);
-    if (nresults != 0) {
-      for (int i = 0; i < (nresults == SPT_MULTRET ? 1 : nresults); ++i) {
-        pushValue(S, spt::Value::nil());
-      }
-    }
-    return;
+    spt_pushfstring(S, "Method '%s' not found", method);
+    return SPT_ERRRUN;
   }
 
   spt::Closure *closure = static_cast<spt::Closure *>(methodVal.asGC());
@@ -1890,7 +1891,7 @@ SPT_API void spt_callmethod(spt_State *S, const char *method, int nargs, int nre
   spt::Value *objPtr = getValuePtr(S, objIdx);
   *objPtr = methodVal;
 
-  spt_call(S, nargs, nresults);
+  return spt_call(S, nargs, nresults);
 }
 
 SPT_API int spt_pcallmethod(spt_State *S, const char *method, int nargs, int nresults,
@@ -1899,14 +1900,22 @@ SPT_API int spt_pcallmethod(spt_State *S, const char *method, int nargs, int nre
     return SPT_ERRRUN;
 
   (void)errfunc;
-
-  int top = spt_gettop(S);
+  int funcIdx = spt_gettop(S) - nargs - 1;
 
   try {
-    spt_callmethod(S, method, nargs, nresults);
+
+    int status = spt_callmethod(S, method, nargs, nresults);
+
+    if (status != SPT_OK) {
+
+      spt::Value errVal = S->fiber->pop();
+      spt_settop(S, funcIdx);
+      pushValue(S, errVal);
+      return status;
+    }
     return SPT_OK;
   } catch (...) {
-    spt_settop(S, top - nargs - 1);
+    spt_settop(S, funcIdx);
     spt_pushstring(S, "Method call error");
     return SPT_ERRRUN;
   }

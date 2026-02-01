@@ -779,7 +779,7 @@ SPT_API int spt_execute(spt_State *S, spt_Chunk *chunk);
  * Stack: [..., func, arg1, ..., argN] -> spt_call(S, nargs, nresults) -> [..., res1, ..., resN]
  * Use SPT_MULTRET for nresults to keep all results.
  */
-SPT_API void spt_call(spt_State *S, int nargs, int nresults);
+SPT_API int spt_call(spt_State *S, int nargs, int nresults);
 
 /*
  * Protected call (catches errors).
@@ -794,7 +794,7 @@ SPT_API int spt_pcall(spt_State *S, int nargs, int nresults, int errfunc);
  * Stack: [..., object, arg1, ..., argN] -> spt_callmethod(S, "method", nargs, nresults)
  *     -> [..., res1, ..., resN]
  */
-SPT_API void spt_callmethod(spt_State *S, const char *method, int nargs, int nresults);
+SPT_API int spt_callmethod(spt_State *S, const char *method, int nargs, int nresults);
 
 /*
  * Protected method call.

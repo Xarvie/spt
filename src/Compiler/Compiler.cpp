@@ -30,19 +30,17 @@ CompiledChunk Compiler::compile(AstNode *ast) {
 }
 
 CompiledChunk Compiler::compileModule(BlockNode *block) {
+
   bool useDefer = checkPresenceDefer(block);
   cg_->beginFunction(source_, moduleName_, 0, false, useDefer, block);
 
   int envSlot = cg_->allocSlot();
-
   cg_->declareLocal("__env");
   cg_->current()->locals.push_back({"__env", envSlot, cg_->currentScopeDepth(), false});
-
   cg_->emitABC(OpCode::OP_NEWMAP, envSlot, 0, 0);
 
   for (auto *stmt : block->statements) {
     if (auto *funcDecl = dynamic_cast<FunctionDeclNode *>(stmt)) {
-
       try {
         cg_->addLocal(funcDecl->name);
         cg_->markInitialized();
@@ -61,7 +59,39 @@ CompiledChunk Compiler::compileModule(BlockNode *block) {
     compileStatement(stmt);
   }
 
-  cg_->emitABC(OpCode::OP_RETURN, 0, 2, 0);
+  if (exports_.empty()) {
+
+    int emptyMapSlot = cg_->allocSlot();
+    cg_->emitABC(OpCode::OP_NEWMAP, emptyMapSlot, 0, 0);
+    cg_->emitABC(OpCode::OP_RETURN, emptyMapSlot, 2, 0);
+    cg_->freeSlots(1);
+  } else {
+
+    int exportMapSlot = cg_->allocSlot();
+    int capacity = static_cast<int>(exports_.size());
+
+    cg_->emitABC(OpCode::OP_NEWMAP, exportMapSlot, capacity > 255 ? 255 : capacity, 0);
+
+    for (const auto &name : exports_) {
+      int localSlot = cg_->resolveLocal(name);
+
+      if (localSlot != -1) {
+        int nameIdx = cg_->addStringConstant(name);
+
+        if (nameIdx <= 255) {
+          cg_->emitABC(OpCode::OP_SETFIELD, exportMapSlot, nameIdx, localSlot);
+        } else {
+          int keySlot = cg_->allocSlot();
+          cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
+          cg_->emitABC(OpCode::OP_SETINDEX, exportMapSlot, keySlot, localSlot);
+          cg_->freeSlots(1);
+        }
+      }
+    }
+
+    cg_->emitABC(OpCode::OP_RETURN, exportMapSlot, 2, 0);
+    cg_->freeSlots(1);
+  }
 
   CompiledChunk chunk;
   chunk.moduleName = moduleName_;
@@ -192,65 +222,46 @@ void Compiler::compileVariableDecl(VariableDeclNode *decl) {
     exports_.push_back(decl->name);
   }
 
-  if (decl->isGlobal || decl->isExported) {
+  if (decl->isGlobal) {
     emitStoreToEnv(decl->name, slot);
   }
 }
 
 void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
-  if (decl->initializer) {
-    int numVars = static_cast<int>(decl->variables.size());
-    int baseSlot = cg_->allocSlots(numVars);
 
+  int numVars = static_cast<int>(decl->variables.size());
+
+  int baseSlot = cg_->allocSlots(numVars);
+
+  if (decl->initializer) {
     if (auto *callNode = dynamic_cast<FunctionCallNode *>(decl->initializer)) {
+
       cg_->setLineGetter(callNode);
       compileFunctionCall(callNode, baseSlot, numVars);
     } else {
+
       compileExpression(decl->initializer, baseSlot);
+
       if (numVars > 1) {
         cg_->emitABC(OpCode::OP_LOADNIL, baseSlot + 1, numVars - 1, 0);
       }
     }
-
-    for (size_t i = 0; i < decl->variables.size(); ++i) {
-      const auto &var = decl->variables[i];
-
-      cg_->addLocal(var.name);
-      cg_->current()->locals.back().slot = baseSlot + static_cast<int>(i);
-      if (decl->isExported)
-        exports_.push_back(var.name);
-
-      if (decl->isExported) {
-        int slot = baseSlot + static_cast<int>(i);
-        int nameIdx = cg_->addStringConstant(var.name);
-        if (nameIdx <= 255) {
-          cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, slot);
-        } else {
-          int keySlot = cg_->allocSlot();
-          cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-          cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, slot);
-          cg_->freeSlots(1);
-        }
-      }
-    }
   } else {
 
-    for (const auto &var : decl->variables) {
-      int slot = cg_->addLocal(var.name);
-      cg_->emitABC(OpCode::OP_LOADNIL, slot, 0, 0);
-      if (decl->isExported)
-        exports_.push_back(var.name);
-      if (decl->isExported) {
-        int nameIdx = cg_->addStringConstant(var.name);
-        if (nameIdx <= 255) {
-          cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, slot);
-        } else {
-          int keySlot = cg_->allocSlot();
-          cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-          cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, slot);
-          cg_->freeSlots(1);
-        }
-      }
+    cg_->emitABC(OpCode::OP_LOADNIL, baseSlot, numVars, 0);
+  }
+
+  for (size_t i = 0; i < decl->variables.size(); ++i) {
+    const auto &var = decl->variables[i];
+    int currentVarSlot = baseSlot + static_cast<int>(i);
+
+    cg_->addLocal(var.name);
+    cg_->current()->locals.back().slot = currentVarSlot;
+
+    cg_->markInitialized();
+
+    if (decl->isExported) {
+      exports_.push_back(var.name);
     }
   }
 }
@@ -260,12 +271,11 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   int nameSlot = -1;
 
   int existingSlot = cg_->resolveLocal(node->name);
-
   bool reuseSlot = false;
+
   if (existingSlot != -1) {
 
     const auto &local = cg_->current()->locals[existingSlot];
-
     if (local.scopeDepth == cg_->currentScopeDepth()) {
       nameSlot = existingSlot;
       reuseSlot = true;
@@ -279,7 +289,6 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   cg_->markInitialized();
 
   int numParams = static_cast<int>(node->params.size());
-
   bool useDefer = checkPresenceDefer(node->body);
 
   cg_->beginFunction(source_, node->name, numParams, node->isVariadic, useDefer, node);
@@ -294,7 +303,6 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   for (auto *param : node->params) {
     cg_->setLineGetter(param);
     cg_->addLocal(param->name);
-
     cg_->current()->locals.back().slot = paramIndex++;
     cg_->markInitialized();
   }
@@ -304,7 +312,6 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
 
   Prototype childProto = cg_->endFunction();
-
   int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
   cg_->current()->proto.protos.push_back(std::move(childProto));
 
@@ -314,7 +321,7 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
     exports_.push_back(node->name);
   }
 
-  if (node->isGlobalDecl || node->isExported) {
+  if (node->isGlobalDecl) {
     emitStoreToEnv(node->name, nameSlot);
   }
 }
@@ -505,11 +512,20 @@ void Compiler::compileMethodInvokeFallback(Expression *receiverExpr, const std::
 }
 
 void Compiler::compileClassDecl(ClassDeclNode *decl) {
+
   int slot = -1;
-  int existing = cg_->resolveLocal(decl->name);
-  if (existing != -1) {
-    slot = existing;
-  } else {
+  int existingSlot = cg_->resolveLocal(decl->name);
+  bool reuseSlot = false;
+
+  if (existingSlot != -1) {
+    const auto &local = cg_->current()->locals[existingSlot];
+    if (local.scopeDepth == cg_->currentScopeDepth()) {
+      slot = existingSlot;
+      reuseSlot = true;
+    }
+  }
+
+  if (!reuseSlot) {
     slot = cg_->addLocal(decl->name);
   }
 
@@ -572,10 +588,6 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
 
   if (decl->isExported) {
     exports_.push_back(decl->name);
-  }
-
-  if (decl->isExported) {
-    emitStoreToEnv(decl->name, slot);
   }
 }
 
