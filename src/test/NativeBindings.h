@@ -83,23 +83,15 @@ inline void registerNativeBindingTests(TestRunner &runner) {
   // 6. 测试 C++ 获取脚本全局变量
   runner.addNativeTest("Native Binding: Get Global",
                        R"(
-      setTrueGlobal("config", 42);
+      global int config = 42;
       print(checkConfig());
     )",
                        "true", [](VM *vm) {
                          vm->registerNative(
-                             "setTrueGlobal",
-                             [](VM *vm, Closure *, int argc, Value *args) -> int {
-                               std::string key = args[0].asString()->str();
-                               vm->setGlobal(key, args[1]);
-                               return 0;
-                             },
-                             2);
-
-                         vm->registerNative(
                              "checkConfig",
                              [](VM *vm, Closure *, int argc, Value *args) -> int {
                                Value val = vm->getGlobal("config");
+                               // 检查类型和值
                                bool isCorrect = (val.isInt() && val.asInt() == 42);
                                vm->push(Value::boolean(isCorrect));
                                return 1;

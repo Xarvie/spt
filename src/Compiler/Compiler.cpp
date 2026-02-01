@@ -41,6 +41,23 @@ CompiledChunk Compiler::compileModule(BlockNode *block) {
   cg_->emitABC(OpCode::OP_NEWMAP, envSlot, 0, 0);
 
   for (auto *stmt : block->statements) {
+    if (auto *funcDecl = dynamic_cast<FunctionDeclNode *>(stmt)) {
+
+      try {
+        cg_->addLocal(funcDecl->name);
+        cg_->markInitialized();
+      } catch (...) {
+      }
+    } else if (auto *classDecl = dynamic_cast<ClassDeclNode *>(stmt)) {
+      try {
+        cg_->addLocal(classDecl->name);
+        cg_->markInitialized();
+      } catch (...) {
+      }
+    }
+  }
+
+  for (auto *stmt : block->statements) {
     compileStatement(stmt);
   }
 
@@ -175,7 +192,7 @@ void Compiler::compileVariableDecl(VariableDeclNode *decl) {
     exports_.push_back(decl->name);
   }
 
-  if (decl->isGlobal || decl->isModuleRoot) {
+  if (decl->isGlobal || decl->isExported) {
     emitStoreToEnv(decl->name, slot);
   }
 }
@@ -203,7 +220,7 @@ void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
       if (decl->isExported)
         exports_.push_back(var.name);
 
-      if (decl->isModuleRoot) {
+      if (decl->isExported) {
         int slot = baseSlot + static_cast<int>(i);
         int nameIdx = cg_->addStringConstant(var.name);
         if (nameIdx <= 255) {
@@ -223,7 +240,7 @@ void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
       cg_->emitABC(OpCode::OP_LOADNIL, slot, 0, 0);
       if (decl->isExported)
         exports_.push_back(var.name);
-      if (decl->isModuleRoot) {
+      if (decl->isExported) {
         int nameIdx = cg_->addStringConstant(var.name);
         if (nameIdx <= 255) {
           cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, slot);
@@ -239,11 +256,32 @@ void Compiler::compileMutiVariableDecl(MutiVariableDeclarationNode *decl) {
 }
 
 void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
-  int nameSlot = cg_->addLocal(node->name);
+
+  int nameSlot = -1;
+
+  int existingSlot = cg_->resolveLocal(node->name);
+
+  bool reuseSlot = false;
+  if (existingSlot != -1) {
+
+    const auto &local = cg_->current()->locals[existingSlot];
+
+    if (local.scopeDepth == cg_->currentScopeDepth()) {
+      nameSlot = existingSlot;
+      reuseSlot = true;
+    }
+  }
+
+  if (!reuseSlot) {
+    nameSlot = cg_->addLocal(node->name);
+  }
+
   cg_->markInitialized();
 
   int numParams = static_cast<int>(node->params.size());
+
   bool useDefer = checkPresenceDefer(node->body);
+
   cg_->beginFunction(source_, node->name, numParams, node->isVariadic, useDefer, node);
 
   if (!node->params.empty() && node->params[0]->name == "this") {
@@ -256,6 +294,7 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   for (auto *param : node->params) {
     cg_->setLineGetter(param);
     cg_->addLocal(param->name);
+
     cg_->current()->locals.back().slot = paramIndex++;
     cg_->markInitialized();
   }
@@ -265,6 +304,7 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
   cg_->emitABC(OpCode::OP_RETURN, 0, 1, 0);
 
   Prototype childProto = cg_->endFunction();
+
   int protoIdx = static_cast<int>(cg_->current()->proto.protos.size());
   cg_->current()->proto.protos.push_back(std::move(childProto));
 
@@ -274,7 +314,7 @@ void Compiler::compileFunctionDecl(FunctionDeclNode *node) {
     exports_.push_back(node->name);
   }
 
-  if (node->isGlobalDecl || node->isModuleRoot) {
+  if (node->isGlobalDecl || node->isExported) {
     emitStoreToEnv(node->name, nameSlot);
   }
 }
@@ -465,7 +505,13 @@ void Compiler::compileMethodInvokeFallback(Expression *receiverExpr, const std::
 }
 
 void Compiler::compileClassDecl(ClassDeclNode *decl) {
-  int slot = cg_->addLocal(decl->name);
+  int slot = -1;
+  int existing = cg_->resolveLocal(decl->name);
+  if (existing != -1) {
+    slot = existing;
+  } else {
+    slot = cg_->addLocal(decl->name);
+  }
 
   cg_->markInitialized();
 
@@ -528,7 +574,7 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
     exports_.push_back(decl->name);
   }
 
-  if (decl->isModuleRoot) {
+  if (decl->isExported) {
     emitStoreToEnv(decl->name, slot);
   }
 }

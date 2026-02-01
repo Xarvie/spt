@@ -67,6 +67,30 @@ void VM::protect(Value value) { currentFiber_->push(value); }
 
 void VM::unprotect(int count) { currentFiber_->stackTop -= count; }
 
+void VM::migratePreRegisteredGlobals() {
+
+  if (globals_.empty()) {
+    return;
+  }
+
+  if (!mainFiber_ || mainFiber_->frameCount == 0) {
+    return;
+  }
+
+  Value envValue = mainFiber_->frames[0].slots[0];
+  if (!envValue.isMap()) {
+    return;
+  }
+
+  MapObject *envMap = static_cast<MapObject *>(envValue.asGC());
+
+  for (const auto &[name, value] : globals_) {
+    envMap->set(Value::object(name), value);
+  }
+
+  globals_.clear();
+}
+
 InterpretResult VM::interpret(const CompiledChunk &chunk) {
   prepareChunk(const_cast<CompiledChunk &>(chunk));
 
@@ -93,6 +117,8 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
   frame->expectedResults = 1;
   frame->returnTo = nullptr;
   frame->deferBase = currentFiber_->deferTop;
+
+  migratePreRegisteredGlobals();
 
   return run();
 }
@@ -172,46 +198,33 @@ InterpretResult VM::call(Closure *closure, int argCount) {
 InterpretResult VM::executeModule(const CompiledChunk &chunk) {
   prepareChunk(const_cast<CompiledChunk &>(chunk));
 
-  FiberObject *fiber = currentFiber_;
-
   Closure *mainClosure = allocateScriptClosure(&chunk.mainProto);
   protect(Value::object(mainClosure));
 
-  int frameStartOffset = static_cast<int>(fiber->stackTop - fiber->stack);
+  currentFiber_->ensureStack(mainClosure->proto->maxStackSize);
+  currentFiber_->ensureFrames(1);
 
-  fiber->ensureStack(mainClosure->proto->maxStackSize);
-  fiber->ensureFrames(1);
+  int slotsBaseOffset = static_cast<int>(currentFiber_->stackTop - currentFiber_->stack);
 
-  CallFrame *frame = &fiber->frames[fiber->frameCount++];
+  for (int i = 0; i < mainClosure->proto->maxStackSize; ++i) {
+    currentFiber_->push(Value::nil());
+  }
+
+  CallFrame *frame = &currentFiber_->frames[currentFiber_->frameCount++];
   frame->closure = mainClosure;
   frame->ip = mainClosure->proto->code.data();
-  frame->slots = fiber->stack + frameStartOffset;
-  frame->expectedResults = 0;
+  frame->slots = currentFiber_->stack + slotsBaseOffset;
+  frame->expectedResults = 1;
   frame->returnTo = nullptr;
-  frame->deferBase = fiber->deferTop;
+  frame->deferBase = currentFiber_->deferTop;
 
-  Value *frameStart = fiber->stack + frameStartOffset;
-  Value *frameEnd = frameStart + mainClosure->proto->maxStackSize;
-  for (Value *slot = frameStart; slot < frameEnd; ++slot) {
-    *slot = Value::nil();
-  }
-  fiber->stackTop = frameEnd;
+  exitFrameCount_ = currentFiber_->frameCount;
 
-  int savedExitFrameCount = exitFrameCount_;
-  exitFrameCount_ = fiber->frameCount;
+  migratePreRegisteredGlobals();
 
   InterpretResult result = run();
 
-  exitFrameCount_ = savedExitFrameCount;
-
-  fiber = currentFiber_;
-
-  if (result == InterpretResult::OK && fiber->frameCount >= 0) {
-    fiber->stackTop = fiber->stack + frameStartOffset;
-  }
-
-  unprotect(1);
-
+  exitFrameCount_ = 0;
   return result;
 }
 
@@ -454,31 +467,90 @@ void VM::closeUpvalues(Value *last) {
   }
 }
 
-void VM::defineGlobal(StringObject *name, Value value) { globals_[name] = value; }
+void VM::defineGlobal(StringObject *name, Value value) {
 
-Value VM::getGlobal(StringObject *name) {
-  auto it = globals_.find(name);
-  return (it != globals_.end()) ? it->second : Value::nil();
+  if (mainFiber_ && mainFiber_->frameCount > 0) {
+    Value envValue = mainFiber_->frames[0].slots[0];
+    if (envValue.isMap()) {
+      MapObject *envMap = static_cast<MapObject *>(envValue.asGC());
+      envMap->set(Value::object(name), value);
+      return;
+    }
+  }
+
+  globals_[name] = value;
 }
-
-void VM::setGlobal(StringObject *name, Value value) { globals_[name] = value; }
 
 void VM::defineGlobal(const std::string &name, Value value) {
   StringObject *nameStr = allocateString(name);
-  globals_[nameStr] = value;
+  defineGlobal(nameStr, value);
+}
+
+Value VM::getGlobal(StringObject *name) {
+
+  if (mainFiber_ && mainFiber_->frameCount > 0) {
+    Value envValue = mainFiber_->frames[0].slots[0];
+    if (envValue.isMap()) {
+      MapObject *envMap = static_cast<MapObject *>(envValue.asGC());
+      Value result = envMap->get(Value::object(name));
+      if (!result.isNil()) {
+        return result;
+      }
+    }
+  }
+
+  auto it = globals_.find(name);
+  if (it != globals_.end()) {
+    return it->second;
+  }
+
+  return Value::nil();
 }
 
 Value VM::getGlobal(const std::string &name) {
   StringObject *nameStr = stringPool_->find(name);
-  if (!nameStr)
-    return Value::nil();
-  auto it = globals_.find(nameStr);
-  return (it != globals_.end()) ? it->second : Value::nil();
+
+  if (mainFiber_ && mainFiber_->frameCount > 0) {
+    Value envValue = mainFiber_->frames[0].slots[0];
+    if (envValue.isMap()) {
+      MapObject *envMap = static_cast<MapObject *>(envValue.asGC());
+      if (!nameStr) {
+        nameStr = allocateString(name);
+      }
+      Value result = envMap->get(Value::object(nameStr));
+      if (!result.isNil()) {
+        return result;
+      }
+    }
+  }
+
+  if (nameStr) {
+    auto it = globals_.find(nameStr);
+    if (it != globals_.end()) {
+      return it->second;
+    }
+  }
+
+  return Value::nil();
+}
+
+void VM::setGlobal(StringObject *name, Value value) {
+
+  if (mainFiber_ && mainFiber_->frameCount > 0) {
+    Value envValue = mainFiber_->frames[0].slots[0];
+    if (envValue.isMap()) {
+      MapObject *envMap = static_cast<MapObject *>(envValue.asGC());
+      envMap->set(Value::object(name), value);
+      return;
+    }
+  }
+
+  globals_[name] = value;
 }
 
 void VM::setGlobal(const std::string &name, Value value) {
   StringObject *nameStr = allocateString(name);
-  globals_[nameStr] = value;
+  setGlobal(nameStr, value);
 }
 
 void VM::registerNative(const std::string &name, NativeFn fn, int arity) {
