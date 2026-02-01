@@ -349,6 +349,8 @@ private:
   //  === C API Trampoline 链表头  ===
   JmpBufNode *c_jump_head_ = nullptr;
   void migratePreRegisteredGlobals();
+
+  bool inDeferExecution_ = false;
 };
 
 // ============================================================================

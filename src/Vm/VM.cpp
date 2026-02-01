@@ -338,11 +338,11 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
     }
   }
 
+  currentFiber_ = fiber;
+
   if (caller->state == FiberState::RUNNING) {
     caller->state = FiberState::SUSPENDED;
   }
-
-  currentFiber_ = fiber;
 
   int savedExitFrameCount = exitFrameCount_;
   exitFrameCount_ = fiber->frameCount;
@@ -372,6 +372,12 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
 void VM::invokeDefers(int targetDeferBase) {
   FiberObject *fiber = currentFiber_;
 
+  bool inDefer = inDeferExecution_; // 新增成员变量
+  if (inDefer) {
+    runtimeError("Cannot use defer inside defer execution");
+    return;
+  }
+  inDeferExecution_ = true;
   while (fiber->deferTop > targetDeferBase) {
     Value deferVal = fiber->deferStack[--fiber->deferTop];
 
@@ -382,9 +388,12 @@ void VM::invokeDefers(int targetDeferBase) {
       unprotect(1);
     }
 
-    if (hasError_)
+    if (hasError_) {
+      inDeferExecution_ = false;
       return;
+    }
   }
+  inDeferExecution_ = false;
 }
 
 void VM::fiberYield(Value value) {

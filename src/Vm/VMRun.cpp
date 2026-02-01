@@ -1333,7 +1333,7 @@ InterpretResult VM::run() {
         try {
           PROTECT(numResults = closure->function(this, closure, userArgCount, argsStart));
         } catch (const CExtensionException &e) {
-
+          unprotect(1);
           closure->receiver = savedReceiver;
 
           fiber->stackTop = fiber->stack + oldTopOffset;

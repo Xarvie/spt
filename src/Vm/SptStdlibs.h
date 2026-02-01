@@ -105,10 +105,6 @@
 `pairs(collection)` → iterator
 返回集合的迭代器，用于 for-each 循环。collection: 列表或映射
 
-`apply(fn, argList?, receiver?)` → value
-使用列表中的元素作为参数调用函数。fn: 要调用的函数（闭包或原生函数）, receiver：可选，args:
-可选,参数列表
-
 ### 错误处理
 
 `assert(condition, message?)`
