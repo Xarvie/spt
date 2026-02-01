@@ -244,7 +244,8 @@ void GC::markRoots() {
 
 void GC::markValue(Value &value) {
   if (value.type == ValueType::Nil || value.type == ValueType::Bool ||
-      value.type == ValueType::Int || value.type == ValueType::Float) {
+      value.type == ValueType::Int || value.type == ValueType::Float ||
+      value.type == ValueType::LightUserData) {
     return;
   }
   if (value.as.gc) {
@@ -294,9 +295,7 @@ void GC::traceReferences() {
         markObject(closure->name);
       }
 
-      if (!closure->receiver.isNil() && closure->receiver.as.gc) {
-        markObject(closure->receiver.as.gc);
-      }
+      markValue(closure->receiver);
 
       if (closure->isScript()) {
         for (int i = 0; i < closure->upvalueCount; i++) {

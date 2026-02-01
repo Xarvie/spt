@@ -167,7 +167,8 @@ struct Value {
     bool boolean;
     int64_t integer;
     double number;
-    GCObject *gc; // 存储堆对象指针：String, List, Map, Object, Closure, Fiber 等
+    GCObject *gc;        // 存储堆对象指针：String, List, Map, Object, Closure, Fiber 等
+    void *lightUserData; // 轻量级用户数据（原始指针，不参与 GC）
   } as;
 
   // ========================================================================
@@ -208,6 +209,13 @@ struct Value {
     return v;
   }
 
+  static Value lightUserData(void *ptr) {
+    Value v;
+    v.type = ValueType::LightUserData;
+    v.as.lightUserData = ptr;
+    return v;
+  }
+
   // ========================================================================
   // 类型检查
   // ========================================================================
@@ -237,6 +245,8 @@ struct Value {
 
   bool isNativeInstance() const { return type == ValueType::NativeObject; }
 
+  bool isLightUserData() const { return type == ValueType::LightUserData; }
+
   // 检查是否可调用（闭包、类构造函数等）
   bool isCallable() const { return type == ValueType::Closure || type == ValueType::Class; }
 
@@ -258,6 +268,11 @@ struct Value {
 
   // 字符串专用提取器
   StringObject *asString() const { return static_cast<StringObject *>(as.gc); }
+
+  // 轻量级用户数据提取器
+  void *asLightUserData() const { return as.lightUserData; }
+
+  template <typename T> T *asLightUserData() const { return static_cast<T *>(as.lightUserData); }
 
   // ========================================================================
   // 转换与逻辑判断
@@ -318,6 +333,8 @@ inline bool Value::isTruthy() const {
     return as.integer != 0;
   if (type == ValueType::Float)
     return as.number != 0.0;
+  if (type == ValueType::LightUserData)
+    return as.lightUserData != nullptr;
   // 所有其他引用类型（对象、闭包等）均为真
   return true;
 }

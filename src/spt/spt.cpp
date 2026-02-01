@@ -43,8 +43,6 @@ struct StateExtra {
 
   spt::MapObject *registry = nullptr;
 
-  std::unordered_map<void *, bool> lightUserdata;
-
   void *userData = nullptr;
 
   std::unordered_map<std::string, std::vector<spt_Reg>> cModules;
@@ -163,6 +161,8 @@ inline int valueTypeToSptType(spt::ValueType type) {
     return SPT_TFIBER;
   case spt::ValueType::NativeObject:
     return SPT_TCINSTANCE;
+  case spt::ValueType::LightUserData:
+    return SPT_TLIGHTUSERDATA;
   default:
     return SPT_TNONE;
   }
@@ -552,9 +552,7 @@ SPT_API void spt_pushlightuserdata(spt_State *S, void *p) {
   if (!S)
     return;
 
-  pushValue(S, spt::Value::integer(reinterpret_cast<intptr_t>(p)));
-
-  getExtra(S)->lightUserdata[p] = true;
+  pushValue(S, spt::Value::lightUserData(p));
 }
 
 SPT_API int spt_type(spt_State *S, int idx) {
@@ -599,6 +597,8 @@ SPT_API const char *spt_typename(spt_State *S, int tp) {
     return "fiber";
   case SPT_TCINSTANCE:
     return "cinstance";
+  case SPT_TLIGHTUSERDATA:
+    return "lightuserdata";
   default:
     return "unknown";
   }
@@ -640,6 +640,10 @@ SPT_API int spt_isobject(spt_State *S, int idx) { return spt_type(S, idx) == SPT
 SPT_API int spt_iscinstance(spt_State *S, int idx) { return spt_type(S, idx) == SPT_TCINSTANCE; }
 
 SPT_API int spt_isfiber(spt_State *S, int idx) { return spt_type(S, idx) == SPT_TFIBER; }
+
+SPT_API int spt_islightuserdata(spt_State *S, int idx) {
+  return spt_type(S, idx) == SPT_TLIGHTUSERDATA;
+}
 
 SPT_API int spt_toboolean(spt_State *S, int idx) {
   if (!S)
@@ -780,6 +784,8 @@ SPT_API const void *spt_topointer(spt_State *S, int idx) {
   case spt::ValueType::Fiber:
   case spt::ValueType::NativeObject:
     return v.asGC();
+  case spt::ValueType::LightUserData:
+    return v.asLightUserData();
   default:
     return nullptr;
   }
@@ -790,17 +796,10 @@ SPT_API void *spt_tolightuserdata(spt_State *S, int idx) {
     return nullptr;
 
   spt::Value v = getValue(S, idx);
-  if (!v.isInt())
+  if (!v.isLightUserData())
     return nullptr;
 
-  void *ptr = reinterpret_cast<void *>(static_cast<intptr_t>(v.asInt()));
-
-  StateExtra *extra = getExtra(S);
-  if (extra->lightUserdata.find(ptr) == extra->lightUserdata.end()) {
-    return nullptr;
-  }
-
-  return ptr;
+  return v.asLightUserData();
 }
 
 SPT_API int spt_compare(spt_State *S, int idx1, int idx2) {
@@ -826,6 +825,13 @@ SPT_API int spt_compare(spt_State *S, int idx1, int idx2) {
       return 0;
     case spt::ValueType::String:
       return std::strcmp(a.asString()->c_str(), b.asString()->c_str());
+    case spt::ValueType::LightUserData: {
+      void *pa = a.asLightUserData();
+      void *pb = b.asLightUserData();
+      if (pa == pb)
+        return 0;
+      return pa < pb ? -1 : 1;
+    }
     default:
       return a.equals(b) ? 0 : (a.asGC() < b.asGC() ? -1 : 1);
     }
@@ -869,6 +875,8 @@ SPT_API int spt_rawequal(spt_State *S, int idx1, int idx2) {
     return a.asInt() == b.asInt() ? 1 : 0;
   case spt::ValueType::Float:
     return a.asFloat() == b.asFloat() ? 1 : 0;
+  case spt::ValueType::LightUserData:
+    return a.asLightUserData() == b.asLightUserData() ? 1 : 0;
   default:
     return a.asGC() == b.asGC() ? 1 : 0;
   }
@@ -2655,6 +2663,20 @@ SPT_API const char *spt_optstring(spt_State *S, int arg, const char *def) {
   if (spt_isnoneornil(S, arg))
     return def;
   return spt_checkstring(S, arg, nullptr);
+}
+
+SPT_API void *spt_checklightuserdata(spt_State *S, int arg) {
+  if (!spt_islightuserdata(S, arg)) {
+    spt_typeerror(S, arg, "lightuserdata");
+    return nullptr;
+  }
+  return spt_tolightuserdata(S, arg);
+}
+
+SPT_API void *spt_optlightuserdata(spt_State *S, int arg, void *def) {
+  if (spt_isnoneornil(S, arg))
+    return def;
+  return spt_checklightuserdata(S, arg);
 }
 
 SPT_API int spt_listiter(spt_State *S, int idx) {

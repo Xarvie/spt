@@ -152,7 +152,8 @@ enum {
   SPT_TCLASS = 9,
   SPT_TUPVALUE = 10,
   SPT_TFIBER = 11,
-  SPT_TCINSTANCE = 12 /* C Instance (NativeObject) */
+  SPT_TCINSTANCE = 12,    /* C Instance (NativeObject) */
+  SPT_TLIGHTUSERDATA = 13 /* Light userdata (raw pointer, not GC managed) */
 };
 
 /* Fiber states */
@@ -358,6 +359,7 @@ SPT_API int spt_isclass(spt_State *S, int idx);
 SPT_API int spt_isobject(spt_State *S, int idx);    /* script instance */
 SPT_API int spt_iscinstance(spt_State *S, int idx); /* native instance */
 SPT_API int spt_isfiber(spt_State *S, int idx);
+SPT_API int spt_islightuserdata(spt_State *S, int idx); /* light userdata */
 
 /*
  * Check if value is "truthy" (non-nil, non-false, non-zero).
@@ -1080,6 +1082,9 @@ SPT_API void spt_checkany(spt_State *S, int arg);
 SPT_API spt_Int spt_optint(spt_State *S, int arg, spt_Int def);
 SPT_API spt_Float spt_optfloat(spt_State *S, int arg, spt_Float def);
 SPT_API const char *spt_optstring(spt_State *S, int arg, const char *def);
+
+SPT_API void *spt_checklightuserdata(spt_State *S, int arg);
+SPT_API void *spt_optlightuserdata(spt_State *S, int arg, void *def);
 
 /* ============================================================================
  * 22. ITERATION SUPPORT

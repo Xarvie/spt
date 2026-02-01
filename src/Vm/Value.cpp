@@ -1,6 +1,7 @@
 #include "Value.h"
 #include "Object.h"
 #include <cmath>
+#include <cstdio>
 
 namespace spt {
 
@@ -43,6 +44,11 @@ std::string Value::toString() const {
     }
     return "<native instance>";
   }
+  case ValueType::LightUserData: {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "<lightuserdata: %p>", as.lightUserData);
+    return buf;
+  }
   default:
     return "<unknown>";
   }
@@ -77,9 +83,10 @@ const char *Value::typeName() const {
     return "class";
   case ValueType::Fiber:
     return "fiber";
-
   case ValueType::NativeObject:
     return "native_instance";
+  case ValueType::LightUserData:
+    return "lightuserdata";
   default:
     return "unknown";
   }
@@ -104,6 +111,8 @@ bool Value::equals(const Value &other) const {
   case ValueType::String:
 
     return as.gc == other.as.gc;
+  case ValueType::LightUserData:
+    return as.lightUserData == other.as.lightUserData;
   default:
     return as.gc == other.as.gc;
   }
@@ -128,6 +137,8 @@ size_t Value::hash() const noexcept {
       return static_cast<StringObject *>(as.gc)->hash;
     }
     return 0;
+  case ValueType::LightUserData:
+    return std::hash<void *>()(as.lightUserData);
   default:
 
     return std::hash<void *>()(as.gc);
