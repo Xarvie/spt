@@ -9,6 +9,8 @@
 #include "Value.h"
 #include "config.h"
 #include "unordered_dense.h"
+#include <csetjmp>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <string>
@@ -42,6 +44,24 @@ struct ProtectedCallContext {
   Value *stackTop;       // 进入 pcall 时的栈顶位置
   UpValue *openUpvalues; // 进入 pcall 时的开放 upvalue 链表头部
   bool active = false;   // 此上下文是否处于激活状态
+};
+
+struct JmpBufNode {
+  std::jmp_buf buf;     // setjmp/longjmp 的跳转缓冲区
+  JmpBufNode *prev;     // 指向上一个节点（栈的下一层）
+  std::string errorMsg; // 错误信息（如果有）
+
+  JmpBufNode() : prev(nullptr) {}
+};
+
+class CExtensionException : public std::exception {
+public:
+  explicit CExtensionException(std::string msg) : message_(std::move(msg)) {}
+
+  const char *what() const noexcept override { return message_.c_str(); }
+
+private:
+  std::string message_;
 };
 
 // 虚拟机配置参数
@@ -260,6 +280,11 @@ public:
   // invokeDefers 公开访问（用于 pcall 错误恢复）
   void invokeDefersPublic(int targetDeferBase) { invokeDefers(targetDeferBase); }
 
+  // level1 capi跳转
+  JmpBufNode *getCJumpHead() const { return c_jump_head_; }
+
+  void setCJumpHead(JmpBufNode *node) { c_jump_head_ = node; }
+
 private:
   InterpretResult run();
   void registerBuiltinFunctions();
@@ -320,6 +345,9 @@ private:
 
   // === 用户数据指针 - 供 C API 等嵌入层使用 ===
   void *userData_ = nullptr;
+
+  //  === C API Trampoline 链表头  ===
+  JmpBufNode *c_jump_head_ = nullptr;
 };
 
 // ============================================================================

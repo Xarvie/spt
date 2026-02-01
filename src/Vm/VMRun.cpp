@@ -432,8 +432,14 @@ InterpretResult VM::run() {
           size_t oldTopOffset = fiber->stackTop - fiber->stack;
 
           int numResults;
-          PROTECT(numResults = closure->function(this, closure, C, argsStart));
-
+          try {
+            PROTECT(numResults = closure->function(this, closure, C, argsStart));
+          } catch (const CExtensionException &e) {
+            fiber->stackTop = fiber->stack + oldTopOffset;
+            if (!hasError_)
+              runtimeError("%s", e.what());
+            return InterpretResult::RUNTIME_ERROR;
+          }
           (void)numResults;
 
           fiber->stackTop = fiber->stack + oldTopOffset;
@@ -961,11 +967,19 @@ InterpretResult VM::run() {
         }
 
         Value *argsStart = &slots[A + 1];
-
         size_t oldTopOffset = fiber->stackTop - fiber->stack;
 
         int numResults;
-        PROTECT(numResults = closure->function(this, closure, argCount, argsStart));
+
+        try {
+          PROTECT(numResults = closure->function(this, closure, argCount, argsStart));
+        } catch (const CExtensionException &e) {
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
+          if (!hasError_)
+            runtimeError("%s", e.what());
+          return InterpretResult::RUNTIME_ERROR;
+        }
 
         if (yieldPending_) {
           yieldPending_ = false;
@@ -1316,8 +1330,17 @@ InterpretResult VM::run() {
         closure->receiver = receiver;
 
         int numResults;
-        PROTECT(numResults = closure->function(this, closure, userArgCount, argsStart));
+        try {
+          PROTECT(numResults = closure->function(this, closure, userArgCount, argsStart));
+        } catch (const CExtensionException &e) {
 
+          closure->receiver = savedReceiver;
+
+          fiber->stackTop = fiber->stack + oldTopOffset;
+          if (!hasError_)
+            runtimeError("%s", e.what());
+          return InterpretResult::RUNTIME_ERROR;
+        }
         closure->receiver = savedReceiver;
 
         if (yieldPending_) {
@@ -1986,7 +2009,14 @@ InterpretResult VM::run() {
 
         int numResults;
 
-        PROTECT(numResults = closure->function(this, closure, 2, &base[1]));
+        try {
+          PROTECT(numResults = closure->function(this, closure, 2, &base[1]));
+        } catch (const CExtensionException &e) {
+          fiber->stackTop = fiber->stack + oldTopOffset;
+          if (!hasError_)
+            runtimeError("%s", e.what());
+          return InterpretResult::RUNTIME_ERROR;
+        }
 
         if (yieldPending_) {
           SAVE_PC();

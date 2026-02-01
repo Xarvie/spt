@@ -100,6 +100,32 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
 InterpretResult VM::call(Closure *closure, int argCount) {
   FiberObject *fiber = currentFiber_;
 
+  if (closure->isNative()) {
+
+    if (closure->arity != -1 && argCount != closure->arity) {
+      runtimeError("Native function '%s' expects %d arguments, got %d", closure->getName(),
+                   closure->arity, argCount);
+      return InterpretResult::RUNTIME_ERROR;
+    }
+
+    Value *argsStart = fiber->stackTop - argCount;
+
+    try {
+
+      int numResults = closure->function(this, closure, argCount, argsStart);
+
+      return InterpretResult::OK;
+
+    } catch (const CExtensionException &e) {
+
+      if (!hasError_) {
+        runtimeError("%s", e.what());
+      }
+
+      return InterpretResult::RUNTIME_ERROR;
+    }
+  }
+
   if (!closure->proto->isVararg && argCount != closure->proto->numParams) {
     runtimeError("Function '%s' expects %d arguments, got %d", closure->proto->name.c_str(),
                  closure->proto->numParams, argCount);

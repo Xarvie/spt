@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
   registerStackReallocationTests(runner);
 
   // 原生绑定
-  //  registerNativeBindingTests(runner);
+  registerNativeBindingTests(runner);
 
   // GC 测试
   // registerGCTests(runner);
