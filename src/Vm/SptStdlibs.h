@@ -172,13 +172,16 @@
 ## String
 
 `length`
-字符串长度（只读属性）
+字符串字符数量（Code Points，只读属性）。注意：需扫描 UTF-8 序列 (O(N))
+
+`byteLength`
+字符串底层字节长度（只读属性）。返回实际内存占用大小 (O(1))
 
 `slice(start, end)` → string
-返回子串。start: 起始索引（包含），end: 结束索引（不包含），支持负索引
+返回子串。基于字符索引。start: 起始索引（包含），end: 结束索引（不包含），支持负索引
 
 `indexOf(substring)` → int
-返回子串首次出现的位置。substring: 要查找的字符串，未找到返回 -1
+返回子串首次出现的字符索引。substring: 要查找的字符串，未找到返回 -1
 
 `find(substring)` → int
 同 indexOf。substring: 要查找的字符串
@@ -202,7 +205,7 @@
 返回去除首尾空白字符后的新字符串
 
 `split(delimiter?)` → list
-按分隔符分割成列表。delimiter: 分隔字符串，默认按单字符分割
+按分隔符分割成列表。delimiter: 分隔字符串，若为空字符串则按字符拆分
 
 `replace(old, new)` → string
 替换所有匹配项。old: 要替换的子串，new: 替换后的子串
