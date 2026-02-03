@@ -64,6 +64,7 @@
 #include "TestMultiReturn.h"
 
 // 编译测试
+#include "TestBytes.h"
 #include "TestCompiler.h"
 
 // =========================================================
@@ -113,6 +114,9 @@ int main(int argc, char *argv[]) {
 
   // Fiber 协程
   registerFiberTests(runner);
+
+  // Bytes
+  registerBytesTests(runner);
 
   // 栈重分配安全
   registerStackReallocationTests(runner);

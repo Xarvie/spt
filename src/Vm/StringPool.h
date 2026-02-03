@@ -159,6 +159,34 @@ struct SymbolTable {
   StringObject *error = nullptr;
   StringObject *Fiber = nullptr;
 
+  // === Bytes 相关 ===
+  StringObject *Bytes = nullptr;
+  StringObject *resize = nullptr;
+  StringObject *fill = nullptr;
+  StringObject *readInt8 = nullptr;
+  StringObject *readUInt8 = nullptr;
+  StringObject *readInt16 = nullptr;
+  StringObject *readUInt16 = nullptr;
+  StringObject *readInt32 = nullptr;
+  StringObject *readUInt32 = nullptr;
+  StringObject *readFloat = nullptr;
+  StringObject *readDouble = nullptr;
+  StringObject *readString = nullptr;
+  StringObject *writeInt8 = nullptr;
+  StringObject *writeUInt8 = nullptr;
+  StringObject *writeInt16 = nullptr;
+  StringObject *writeUInt16 = nullptr;
+  StringObject *writeInt32 = nullptr;
+  StringObject *writeUInt32 = nullptr;
+  StringObject *writeFloat = nullptr;
+  StringObject *writeDouble = nullptr;
+  StringObject *writeString = nullptr;
+  StringObject *toHex = nullptr;
+  StringObject *fromList = nullptr;
+  StringObject *fromStr = nullptr;
+  StringObject *toStr = nullptr;
+  StringObject *fromHex = nullptr;
+
   // =========================================================================
   // 内置类型方法表 - 以 StringObject* 为键，实现 O(1) 指针查找
   // =========================================================================
@@ -166,6 +194,7 @@ struct SymbolTable {
   StringMap<BuiltinMethodDesc> mapMethods;
   StringMap<BuiltinMethodDesc> stringMethods;
   StringMap<BuiltinMethodDesc> fiberMethods;
+  StringMap<BuiltinMethodDesc> bytesMethods;
 
   // 初始化符号（仅驻留字符串，不注册方法）
   void initialize(StringPool &pool) {
@@ -246,6 +275,34 @@ struct SymbolTable {
 
     // 类型
     Fiber = pool.intern("Fiber");
+
+    // Bytes 相关
+    Bytes = pool.intern("Bytes");
+    resize = pool.intern("resize");
+    fill = pool.intern("fill");
+    readInt8 = pool.intern("readInt8");
+    readUInt8 = pool.intern("readUInt8");
+    readInt16 = pool.intern("readInt16");
+    readUInt16 = pool.intern("readUInt16");
+    readInt32 = pool.intern("readInt32");
+    readUInt32 = pool.intern("readUInt32");
+    readFloat = pool.intern("readFloat");
+    readDouble = pool.intern("readDouble");
+    readString = pool.intern("readString");
+    writeInt8 = pool.intern("writeInt8");
+    writeUInt8 = pool.intern("writeUInt8");
+    writeInt16 = pool.intern("writeInt16");
+    writeUInt16 = pool.intern("writeUInt16");
+    writeInt32 = pool.intern("writeInt32");
+    writeUInt32 = pool.intern("writeUInt32");
+    writeFloat = pool.intern("writeFloat");
+    writeDouble = pool.intern("writeDouble");
+    writeString = pool.intern("writeString");
+    toHex = pool.intern("toHex");
+    fromList = pool.intern("fromList");
+    fromStr = pool.intern("fromStr");
+    toStr = pool.intern("toStr");
+    fromHex = pool.intern("fromHex");
   }
 
   // 注册内置方法表（在 VM 初始化时调用）

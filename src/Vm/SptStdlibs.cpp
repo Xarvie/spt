@@ -1,4 +1,5 @@
 #include "SptStdlibs.h"
+#include "Bytes.h"
 #include "Fiber.h"
 #include "Object.h"
 #include "StringPool.h"
@@ -10,6 +11,10 @@
 #include <sstream>
 
 namespace spt {
+
+extern bool getBytesProperty(VM *vm, Value object, StringObject *fieldName, Value &outValue);
+extern bool invokeBytesMethod(VM *vm, Value receiver, StringObject *methodName, int argc,
+                              Value *argv, Value &outResult);
 
 static int boundMethodDispatcher(VM *vm, Closure *self, int argc, Value *argv) {
 
@@ -700,6 +705,10 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, StringObject *fieldName
     return false;
   }
 
+  if (object.isBytes()) {
+    return getBytesProperty(vm, object, fieldName, outValue);
+  }
+
   if (object.isNativeInstance()) {
     auto *instance = static_cast<NativeInstance *>(object.asGC());
     auto it = instance->fields.find(fieldName);
@@ -758,6 +767,10 @@ bool StdlibDispatcher::invokeMethod(VM *vm, Value receiver, StringObject *method
       return true;
     }
     return false;
+  }
+
+  if (receiver.isBytes()) {
+    return invokeBytesMethod(vm, receiver, methodName, argc, argv, outResult);
   }
 
   if (receiver.isNativeInstance()) {

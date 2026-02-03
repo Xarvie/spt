@@ -1,4 +1,5 @@
 #include "Value.h"
+#include "Bytes.h"
 #include "Object.h"
 #include <cmath>
 #include <cstdio>
@@ -49,6 +50,13 @@ std::string Value::toString() const {
     std::snprintf(buf, sizeof(buf), "<lightuserdata: %p>", as.lightUserData);
     return buf;
   }
+  case ValueType::Bytes: {
+    BytesObject *bytes = static_cast<BytesObject *>(as.gc);
+    if (bytes) {
+      return "<bytes[" + std::to_string(bytes->data.size()) + "]>";
+    }
+    return "<bytes>";
+  }
   default:
     return "<unknown>";
   }
@@ -87,6 +95,8 @@ const char *Value::typeName() const {
     return "native_instance";
   case ValueType::LightUserData:
     return "lightuserdata";
+  case ValueType::Bytes:
+    return "bytes";
   default:
     return "unknown";
   }

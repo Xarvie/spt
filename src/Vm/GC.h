@@ -13,6 +13,7 @@ struct NativeInstance;
 struct Closure;
 struct StringObject;
 struct FiberObject;
+struct BytesObject;
 class StringPool;
 
 // ============================================================================
@@ -38,6 +39,7 @@ public:
   Closure *allocateNativeClosure(int nupvalues = 0);
   StringObject *allocateString(std::string_view sv, uint32_t hash);
   FiberObject *allocateFiber();
+  BytesObject *allocateBytes(size_t size = 0);
 
   // === 回收控制 ===
   void collect();

@@ -28,6 +28,7 @@ namespace spt {
 
 struct ClassObject;
 struct NativeInstance;
+struct BytesObject;
 class StringPool;
 struct SymbolTable;
 
@@ -155,6 +156,7 @@ public:
   ListObject *allocateList(int capacity);
   MapObject *allocateMap(int capacity);
   FiberObject *allocateFiber(Closure *closure);
+  BytesObject *allocateBytes(size_t size = 0);
 
   // 原生 C++ 绑定对象创建
   NativeInstance *allocateNativeInstance(ClassObject *klass, void *data = nullptr);

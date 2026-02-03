@@ -223,6 +223,102 @@
 
 `try(value?)` → value
 安全调用协程，出错返回错误值而非抛出。value: 传递给协程的值，可选
+
+## Bytes
+
+可变长度字节数组，提供类似 DataView 的二进制读写能力，支持大小端字节序。
+`length`
+字节数组长度（只读属性）
+
+`Bytes.create(size)` → Bytes
+创建指定大小的字节数组，初始值为 0。size: 非负整数
+
+`Bytes.fromList(list)` → Bytes
+从整数列表创建字节数组。list: 整数列表，每个元素取低 8 位
+
+`Bytes.fromStr(str)` → Bytes
+从字符串创建字节数组（UTF-8 编码）。str: 字符串
+
+`Bytes.fromHex(hexStr)` → Bytes
+从十六进制字符串创建字节数组。hexStr: 十六进制字符串，可含空格，长度必须为偶数
+
+`push(byte)`
+添加字节到末尾。byte: 整数，取低 8 位
+
+`pop()` → int | nil
+移除并返回最后一个字节，空数组返回 nil
+
+`clear()`
+清空字节数组
+
+`resize(newSize)`
+调整数组大小。newSize: 非负整数，扩展部分填充 0
+
+`slice(start, end)` → Bytes
+返回子数组。start: 起始索引（包含），end: 结束索引（不包含），支持负索引
+
+`fill(value, start, end)`
+填充指定范围。value: 填充值（取低 8 位），start: 起始索引，end: 结束索引
+
+`readInt8(offset)` → int
+读取有符号 8 位整数。offset: 字节偏移量
+
+`readUInt8(offset)` → int
+读取无符号 8 位整数。offset: 字节偏移量
+
+`readInt16(offset, bigEndian?)` → int
+读取有符号 16 位整数。offset: 字节偏移量，bigEndian: 大端序（默认 false）
+
+`readUInt16(offset, bigEndian?)` → int
+读取无符号 16 位整数。offset: 字节偏移量，bigEndian: 大端序（默认 false）
+
+`readInt32(offset, bigEndian?)` → int
+读取有符号 32 位整数。offset: 字节偏移量，bigEndian: 大端序（默认 false）
+
+`readUInt32(offset, bigEndian?)` → int
+读取无符号 32 位整数。offset: 字节偏移量，bigEndian: 大端序（默认 false）
+
+`readFloat(offset, bigEndian?)` → float
+读取 32 位浮点数。offset: 字节偏移量，bigEndian: 大端序（默认 false）
+
+`readDouble(offset, bigEndian?)` → float
+读取 64 位浮点数。offset: 字节偏移量，bigEndian: 大端序（默认 false）
+
+`readString(offset, length)` → string
+读取指定长度的字符串。offset: 字节偏移量，length: 读取字节数
+
+`writeInt8(offset, value)`
+写入有符号 8 位整数。offset: 字节偏移量，value: 整数值
+
+`writeUInt8(offset, value)`
+写入无符号 8 位整数。offset: 字节偏移量，value: 整数值（取低 8 位）
+
+`writeInt16(offset, value, bigEndian?)`
+写入有符号 16 位整数。offset: 字节偏移量，value: 整数值，bigEndian: 大端序（默认 false）
+
+`writeUInt16(offset, value, bigEndian?)`
+写入无符号 16 位整数。offset: 字节偏移量，value: 整数值，bigEndian: 大端序（默认 false）
+
+`writeInt32(offset, value, bigEndian?)`
+写入有符号 32 位整数。offset: 字节偏移量，value: 整数值，bigEndian: 大端序（默认 false）
+
+`writeUInt32(offset, value, bigEndian?)`
+写入无符号 32 位整数。offset: 字节偏移量，value: 整数值，bigEndian: 大端序（默认 false）
+
+`writeFloat(offset, value, bigEndian?)`
+写入 32 位浮点数。offset: 字节偏移量，value: 数字，bigEndian: 大端序（默认 false）
+
+`writeDouble(offset, value, bigEndian?)`
+写入 64 位浮点数。offset: 字节偏移量，value: 数字，bigEndian: 大端序（默认 false）
+
+`writeString(offset, str)` → int
+写入字符串，返回实际写入字节数。offset: 字节偏移量，str: 字符串
+
+`toStr()` → string
+将字节数组转换为字符串（UTF-8 解码）
+
+`toHex()` → string
+将字节数组转换为大写十六进制字符串
 */
 
 namespace spt {

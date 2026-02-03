@@ -12,6 +12,7 @@
 namespace spt {
 struct Value;
 struct StringObject;
+struct BytesObject;
 } // namespace spt
 
 namespace std {
@@ -246,6 +247,8 @@ struct Value {
   bool isNativeInstance() const { return type == ValueType::NativeObject; }
 
   bool isLightUserData() const { return type == ValueType::LightUserData; }
+
+  bool isBytes() const { return type == ValueType::Bytes; }
 
   // 检查是否可调用（闭包、类构造函数等）
   bool isCallable() const { return type == ValueType::Closure || type == ValueType::Class; }

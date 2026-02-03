@@ -1,4 +1,5 @@
 #include "VM.h"
+#include "Bytes.h"
 #include "Fiber.h"
 #include "SptDebug.hpp"
 #include "SptStdlibs.h"
@@ -45,6 +46,7 @@ VM::VM(const VMConfig &config) : config_(config), gc_(this, {}) {
   registerBuiltinFunctions();
   SptDebug::load(this);
   SptFiber::load(this);
+  SptBytes::load(this);
 }
 
 VM::~VM() {
@@ -235,6 +237,8 @@ FiberObject *VM::allocateFiber(Closure *closure) {
   return fiber;
 }
 
+BytesObject *VM::allocateBytes(size_t size) { return gc_.allocateBytes(size); }
+
 void VM::initFiberForCall(FiberObject *fiber, Value arg) {
   fiber->stackTop = fiber->stack;
   fiber->frameCount = 0;
@@ -372,7 +376,7 @@ Value VM::fiberCall(FiberObject *fiber, Value arg, bool isTry) {
 void VM::invokeDefers(int targetDeferBase) {
   FiberObject *fiber = currentFiber_;
 
-  bool inDefer = inDeferExecution_; // 新增成员变量
+  bool inDefer = inDeferExecution_;
   if (inDefer) {
     runtimeError("Cannot use defer inside defer execution");
     return;

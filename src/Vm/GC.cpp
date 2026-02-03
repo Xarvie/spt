@@ -1,4 +1,5 @@
 #include "GC.h"
+#include "Bytes.h"
 #include "Fiber.h"
 #include "Object.h"
 #include "StringPool.h"
@@ -127,6 +128,19 @@ FiberObject *GC::allocateFiber() {
   objects_ = fiber;
 
   return fiber;
+}
+
+BytesObject *GC::allocateBytes(size_t size) {
+  collectIfNeeded();
+
+  BytesObject *bytes = new BytesObject(size);
+  bytesAllocated_ += sizeof(BytesObject) + size;
+  objectCount_++;
+
+  bytes->next = objects_;
+  objects_ = bytes;
+
+  return bytes;
 }
 
 void GC::collect() {
@@ -268,6 +282,33 @@ void GC::markRoots() {
   markSymbol(syms.isDone);
   markSymbol(syms.error);
   markSymbol(syms.Fiber);
+
+  markSymbol(syms.Bytes);
+  markSymbol(syms.resize);
+  markSymbol(syms.fill);
+  markSymbol(syms.readInt8);
+  markSymbol(syms.readUInt8);
+  markSymbol(syms.readInt16);
+  markSymbol(syms.readUInt16);
+  markSymbol(syms.readInt32);
+  markSymbol(syms.readUInt32);
+  markSymbol(syms.readFloat);
+  markSymbol(syms.readDouble);
+  markSymbol(syms.readString);
+  markSymbol(syms.writeInt8);
+  markSymbol(syms.writeUInt8);
+  markSymbol(syms.writeInt16);
+  markSymbol(syms.writeUInt16);
+  markSymbol(syms.writeInt32);
+  markSymbol(syms.writeUInt32);
+  markSymbol(syms.writeFloat);
+  markSymbol(syms.writeDouble);
+  markSymbol(syms.writeString);
+  markSymbol(syms.toHex);
+  markSymbol(syms.fromList);
+  markSymbol(syms.fromStr);
+  markSymbol(syms.toStr);
+  markSymbol(syms.fromHex);
 }
 
 void GC::markValue(Value &value) {
@@ -296,6 +337,9 @@ void GC::traceReferences() {
 
     switch (obj->type) {
     case ValueType::String:
+      break;
+
+    case ValueType::Bytes:
       break;
 
     case ValueType::List: {
@@ -484,6 +528,12 @@ void GC::freeObject(GCObject *obj) {
     size_t size = str->allocationSize();
     bytesAllocated_ -= size;
     ::operator delete(str);
+    break;
+  }
+  case ValueType::Bytes: {
+    BytesObject *bytes = static_cast<BytesObject *>(obj);
+    bytesAllocated_ -= sizeof(BytesObject) + bytes->data.capacity();
+    delete bytes;
     break;
   }
   case ValueType::List: {

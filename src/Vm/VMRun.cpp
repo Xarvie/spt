@@ -634,7 +634,8 @@ InterpretResult VM::run() {
 
     StringObject *fieldName = keyVal.asString();
 
-    if (object.isList() || object.isMap() || object.isString() || object.isFiber()) {
+    if (object.isList() || object.isMap() || object.isString() || object.isFiber() ||
+        object.isBytes()) {
       Value result;
       bool success;
 
@@ -1785,8 +1786,8 @@ InterpretResult VM::run() {
       }
     }
 
-    else if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber()) {
-
+    else if (receiver.isList() || receiver.isMap() || receiver.isString() || receiver.isFiber() ||
+             receiver.isBytes()) {
       size_t oldTopOffset = fiber->stackTop - fiber->stack;
 
       Value resultValue;
