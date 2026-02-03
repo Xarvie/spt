@@ -8,6 +8,12 @@ namespace spt {
 class VM;
 struct Closure;
 struct UpValue;
+struct spt_State;
+
+// 1. 定义 Context 和 Continuation 类型
+using KContext = intptr_t;
+// KFunction: 接收 State, 状态码, 上下文
+using KFunction = int (*)(spt_State *S, int status, KContext ctx);
 
 // ============================================================================
 // CallFrame - 调用帧 (POD 类型，无析构函数)
@@ -21,6 +27,15 @@ struct CallFrame {
 
   int expectedResults = 1;
   int deferBase = 0;
+
+  // 当从 yield 恢复(yieldk) 或 尾调用返回(callk) 时，
+  // VM 会检查这个函数指针。如果不为空，则调用它而不是恢复 ip。
+  KFunction continuation = nullptr;
+  KContext ctx = 0;
+
+  // 用于记录 yield 时的状态 (例如 SPT_YIELD, SPT_OK)
+  // 以便传给 continuation 函数
+  int status = 0;
 };
 
 // ============================================================================

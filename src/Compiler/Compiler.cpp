@@ -543,6 +543,13 @@ void Compiler::compileClassDecl(ClassDeclNode *decl) {
       int methodNameIdx = cg_->addStringConstant(func->name);
       int tempSlot = cg_->allocSlot();
 
+      bool isStaticMethod = member->isStatic;
+      if (!isStaticMethod) {
+        UserType *userTypeNode = new UserType({decl->name}, {});
+        func->params.insert(func->params.begin(), new ParameterDeclNode("this", userTypeNode, {}));
+        func->params[0]->name = "this";
+      }
+
       int numParams = static_cast<int>(func->params.size());
       bool useDefer = checkPresenceDefer(func->body);
       cg_->beginFunction(source_, func->name, numParams, func->isVariadic, useDefer, func);

@@ -60,19 +60,19 @@ class Task {
     any payload; // 'any' type can hold data of any type
 
     // Constructor
-    void init(Task this, string id, int prio, any data) {
+    void __init(string id, int prio, any data) {
         this.id = id;
         this.priority = prio;
         this.status = STATUS_PENDING;
         this.payload = data;
     }
 
-    void setStatus(Task this, int newStatus) {
+    void setStatus(int newStatus) {
         this.status = newStatus;
     }
     
     // Returns a string representation of the object
-    string toString(Task this) {
+    string toString() {
         return "[Task " .. this.id .. "] Prio:" .. this.priority;
     }
 }
@@ -86,21 +86,21 @@ class Processor {
     map<string, int> stats;
     string name;
 
-    void init(Processor this, string name) {
+    void __init(string name) {
         this.name = name;
         this.queue = [];
         this.stats = {"success": 0, "fail": 0};
     }
 
     // Fluent Interface: Returns 'this' to allow method chaining
-    Processor add(Processor this, Task t) {
+    Processor add(Task t) {
         this.queue.push(t);
         g_total_tasks += 1; 
         return this;
     }
 
     // Process all tasks in the queue
-    void runAll(Processor this) {
+    void runAll() {
         print("--- Processor " .. this.name .. " Started ---");
         
         // 'defer': Ensures this block runs when the function exits,
@@ -133,7 +133,7 @@ class Processor {
     }
 
     // Internal processing logic that might throw an error
-    void processSingle(Processor this, Task t) {
+    void processSingle(Task t) {
         if (t.priority < 0) {
             error("Invalid priority!"); // Throws a runtime error
         }

@@ -43,11 +43,11 @@ inline void registerModules(TestRunner &runner) {
                 export class Rectangle {
                     int width;
                     int height;
-                    void init(Rectangle this, int w, int h) {
+                    void __init(int w, int h) {
                         this.width = w;
                         this.height = h;
                     }
-                    int area(Rectangle this) {
+                    int area() {
                         return this.width * this.height;
                     }
                 }

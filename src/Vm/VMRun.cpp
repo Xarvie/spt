@@ -293,6 +293,90 @@ InterpretResult VM::run() {
   (void)stackLimit;
   (void)trap;
 
+  if (fiber->frameCount > 0) {
+    // 重新获取 frame 指针，确保安全
+    frame = &fiber->frames[fiber->frameCount - 1];
+
+    // 检查是否是从 yieldk 恢复的原生函数
+    if (frame->closure && frame->closure->isNative() && frame->continuation) {
+
+      KFunction k = frame->continuation;
+      KContext ctx = frame->ctx;
+      int status = frame->status;
+
+      // 1. 清除 continuation 防止重入
+      frame->continuation = nullptr;
+
+      // 2. 获取 spt_State 指针
+      // 确保你在创建 VM 时调用过 spt_setuserdata(S, S) 或者 vm->setUserData(S)
+      auto *S = static_cast<spt_State *>(userData_);
+
+      // 3. 执行 Continuation
+      int nResults = 0;
+      size_t oldTopOffset = fiber->stackTop - fiber->stack;
+
+      try {
+        nResults = k(S, status, ctx);
+      } catch (const CExtensionException &e) {
+        fiber->stackTop = fiber->stack + oldTopOffset;
+        if (!hasError_)
+          runtimeError("%s", e.what());
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      // 4. 处理再次 yield 的情况
+      if (yieldPending_) {
+        yieldPending_ = false;
+        return InterpretResult::OK;
+      }
+
+      if (hasError_)
+        return InterpretResult::RUNTIME_ERROR;
+
+      // 5. 模拟 OP_RETURN 退栈逻辑
+      Value *resultsStart = fiber->stackTop - nResults;
+      Value *returnTo = frame->returnTo;
+      int expectedResults = frame->expectedResults;
+
+      fiber->frameCount--; // 退栈
+
+      // A. 根栈帧结束
+      if (fiber->frameCount == 0) {
+        fiber->state = FiberState::DONE;
+        fiber->yieldValue = (nResults > 0) ? resultsStart[0] : Value::nil();
+        lastModuleResult_ = fiber->yieldValue;
+
+        if (fiber->caller) {
+          FiberObject *caller = fiber->caller;
+          fiber->caller = nullptr;
+          currentFiber_ = caller;
+          caller->state = FiberState::RUNNING;
+          return InterpretResult::OK;
+        }
+        unprotect(1);
+        return InterpretResult::OK;
+      }
+
+      // B. 返回给调用者
+      if (returnTo) {
+        if (expectedResults == -1) {
+          for (int i = 0; i < nResults; ++i)
+            returnTo[i] = resultsStart[i];
+          fiber->stackTop = returnTo + nResults;
+        } else {
+          for (int i = 0; i < expectedResults; ++i) {
+            returnTo[i] = (i < nResults) ? resultsStart[i] : Value::nil();
+          }
+          // 这里不需要重置 stackTop，因为 RESTORE_POINTERS 会根据新的 frame 重置
+        }
+      }
+
+      // 6. 刷新寄存器，准备执行 Caller 的下一条指令
+      RESTORE_POINTERS(); // 宏：重置 frame, slots, stackBase 等本地变量
+      LOAD_PC();          // 宏：重置 ip 指针
+    }
+  }
+
   SPT_DISPATCH_LOOP_BEGIN()
 
   SPT_OPCODE(OP_MOVE) {
@@ -2243,9 +2327,12 @@ InterpretResult VM::run() {
       slots[A] = Value::integer(b.asInt() + sC);
     } else if (b.isFloat()) {
       slots[A] = Value::number(b.asFloat() + sC);
+    } else if (hasMagicMethod(b, MM_ADD)) {
+      Value rightVal = Value::integer(sC);
+      INVOKE_BINARY_MAGIC_METHOD(A, b, rightVal, MM_ADD, "+");
     } else {
       SAVE_PC();
-      runtimeError("ADDI requires numeric operand");
+      runtimeError("ADDI requires numeric operand or __add method");
       return InterpretResult::RUNTIME_ERROR;
     }
     SPT_DISPATCH();
@@ -2295,6 +2382,9 @@ InterpretResult VM::run() {
       result = (a.asInt() < sB);
     } else if (a.isFloat()) {
       result = (a.asFloat() < static_cast<double>(sB));
+    } else if (hasMagicMethod(a, MM_LT)) {
+      Value rightVal = Value::integer(sB);
+      INVOKE_COMPARE_MAGIC_METHOD(a, rightVal, MM_LT, result);
     } else {
       SAVE_PC();
       runtimeError("Cannot compare %s with integer", a.typeName());
@@ -2316,6 +2406,9 @@ InterpretResult VM::run() {
       result = (a.asInt() <= sB);
     } else if (a.isFloat()) {
       result = (a.asFloat() <= static_cast<double>(sB));
+    } else if (hasMagicMethod(a, MM_LE)) {
+      Value rightVal = Value::integer(sB);
+      INVOKE_COMPARE_MAGIC_METHOD(a, rightVal, MM_LE, result);
     } else {
       SAVE_PC();
       runtimeError("Cannot compare %s with integer", a.typeName());

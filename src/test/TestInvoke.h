@@ -62,10 +62,10 @@ inline void registerInvokeTests(TestRunner &runner) {
   runner.addTest("Invoke - Class Method Multiple Args",
                  R"(
             class Math {
-                int add3(Math this, int a, int b, int c) {
+                int add3(int a, int b, int c) {
                     return a + b + c;
                 }
-                int mul3(Math this, int a, int b, int c) {
+                int mul3(int a, int b, int c) {
                     return a * b * c;
                 }
             }
@@ -79,14 +79,14 @@ inline void registerInvokeTests(TestRunner &runner) {
                  R"(
             class Builder {
                 list<any> items;
-                void init(Builder this) {
+                void __init() {
                     this.items = [];
                 }
-                Builder add(Builder this, any item) {
+                Builder add(any item) {
                     this.items.push(item);
                     return this;
                 }
-                list<any> build(Builder this) {
+                list<any> build() {
                     return this.items;
                 }
             }
@@ -103,7 +103,7 @@ inline void registerInvokeTests(TestRunner &runner) {
   runner.addTest("Invoke - Method with Closure Argument",
                  R"(
             class Processor {
-                int process(Processor this, function f, int value) {
+                int process(function f, int value) {
                     return f(value);
                 }
             }
@@ -117,7 +117,7 @@ inline void registerInvokeTests(TestRunner &runner) {
   runner.addTest("Invoke - Recursive Method",
                  R"(
             class Factorial {
-                int calc(Factorial this, int n) {
+                int calc(int n) {
                     if (n <= 1) { return 1; }
                     return n * this.calc(n - 1);
                 }
@@ -132,16 +132,16 @@ inline void registerInvokeTests(TestRunner &runner) {
                  R"(
             class Stack {
                 list<any> data;
-                void init(Stack this) {
+                void __init() {
                     this.data = [];
                 }
-                void push(Stack this, any val) {
+                void push(any val) {
                     this.data.push(val);
                 }
-                any pop(Stack this) {
+                any pop() {
                     return this.data.pop();
                 }
-                int size(Stack this) {
+                int size() {
                     return this.data.length;
                 }
             }

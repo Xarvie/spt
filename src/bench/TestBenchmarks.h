@@ -12,12 +12,12 @@ inline void registerBench(TestRunner &runner) {
                 float x;
                 float y;
 
-                void init(Vector this, float x, float y) {
+                void init(float x, float y) {
                     this.x = x;
                     this.y = y;
                 }
 
-                void add(Vector this, float dx, float dy) {
+                void add(float dx, float dy) {
                     this.x += dx;
                     this.y += dy;
                 }
@@ -28,14 +28,14 @@ inline void registerBench(TestRunner &runner) {
                 Vector vel;
                 int id;
 
-                void init(Particle this, int id) {
+                void init(int id) {
                     this.id = id;
                     // 嵌套对象创建
                     this.pos = new Vector(0.0, 0.0);
                     this.vel = new Vector(1.5, 0.5);
                 }
 
-                void update(Particle this) {
+                void update() {
                     // 核心热点：方法调用 (OP_INVOKE)
                     this.pos.add(this.vel.x, this.vel.y);
 
@@ -48,7 +48,7 @@ inline void registerBench(TestRunner &runner) {
                     }
                 }
 
-                float checksum(Particle this) {
+                float checksum() {
                     return this.pos.x + this.pos.y;
                 }
             }
@@ -148,11 +148,11 @@ inline void registerBench3(TestRunner &runner) {
                  R"spt(
 class Adder {
     int sum;
-    void init(Adder this, int sum){
+    void __init(int sum){
         this.sum = sum;
     }
 
-    void add(Adder this, int i) {
+    void add(int i) {
         this.sum = this.sum + i;
     }
 }

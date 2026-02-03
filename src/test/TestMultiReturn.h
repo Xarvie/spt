@@ -78,11 +78,11 @@ inline void registerMultiReturnTests(TestRunner &runner) {
             class Pair {
                 int x;
                 int y;
-                void init(Pair this, int a, int b) {
+                void __init(int a, int b) {
                     this.x = a;
                     this.y = b;
                 }
-                vars getBoth(Pair this) {
+                vars getBoth() {
                     return this.x, this.y;
                 }
             }
@@ -96,11 +96,11 @@ inline void registerMultiReturnTests(TestRunner &runner) {
             class Point {
                 int x;
                 int y;
-                void init(Point this, int a, int b) {
+                void __init(int a, int b) {
                     this.x = a;
                     this.y = b;
                 }
-                vars coords(Point this) {
+                vars coords() {
                     return this.x, this.y;
                 }
             }

@@ -56,7 +56,7 @@ inline void registerGCTests(TestRunner &runner) {
             class Node {
                 any next;
                 int value;
-                void init(Node this, int v) {
+                void __init(int v) {
                     this.value = v;
                     this.next = null;
                 }
@@ -79,11 +79,11 @@ inline void registerGCTests(TestRunner &runner) {
             class GraphNode {
                 list<any> neighbors;
                 int id;
-                void init(GraphNode this, int id) {
+                void __init(int id) {
                     this.id = id;
                     this.neighbors = [];
                 }
-                void connect(GraphNode this, any other) {
+                void connect(any other) {
                     this.neighbors.push(other);
                 }
             }
@@ -112,7 +112,7 @@ inline void registerGCTests(TestRunner &runner) {
                  R"(
             class SelfRef {
                 any self;
-                void init(SelfRef this) {
+                void __init() {
                     this.self = this;
                 }
             }
@@ -394,7 +394,7 @@ inline void registerGCTests(TestRunner &runner) {
             class Point {
                 int x;
                 int y;
-                void init(Point this, int x, int y) {
+                void __init(int x, int y) {
                     this.x = x;
                     this.y = y;
                 }
@@ -413,12 +413,12 @@ inline void registerGCTests(TestRunner &runner) {
                 list<any> items;
                 map<string, any> data;
                 
-                void init(Container this) {
+                void __init() {
                     this.items = [];
                     this.data = {};
                 }
                 
-                void add(Container this, any item) {
+                void add(any item) {
                     this.items.push(item);
                     this.data["item_" .. this.items.length] = item;
                 }
@@ -594,13 +594,13 @@ inline void registerGCTests(TestRunner &runner) {
                 list<any> children;
                 any parent;
 
-                void init(Node this, int v) {
+                void __init(int v) {
                     this.value = v;
                     this.children = [];
                     this.parent = null;
                 }
 
-                void addChild(Node this, any child) {
+                void addChild(any child) {
                     this.children.push(child);
                     child.parent = this;
                 }

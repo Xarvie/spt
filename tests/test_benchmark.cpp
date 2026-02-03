@@ -13,12 +13,12 @@ TEST_CASE("old benchmark all", "[benchmark][old]") {
                 float x;
                 float y;
 
-                void init(Vector this, float x, float y) {
+                void __init(float x, float y) {
                     this.x = x;
                     this.y = y;
                 }
 
-                void add(Vector this, float dx, float dy) {
+                void add(float dx, float dy) {
                     this.x += dx;
                     this.y += dy;
                 }
@@ -29,14 +29,14 @@ TEST_CASE("old benchmark all", "[benchmark][old]") {
                 Vector vel;
                 int id;
 
-                void init(Particle this, int id) {
+                void __init(int id) {
                     this.id = id;
                     // 嵌套对象创建
                     this.pos = new Vector(0.0, 0.0);
                     this.vel = new Vector(1.5, 0.5);
                 }
 
-                void update(Particle this) {
+                void update() {
                     // 核心热点：方法调用 (OP_INVOKE)
                     this.pos.add(this.vel.x, this.vel.y);
 
@@ -49,7 +49,7 @@ TEST_CASE("old benchmark all", "[benchmark][old]") {
                     }
                 }
 
-                float checksum(Particle this) {
+                float checksum() {
                     return this.pos.x + this.pos.y;
                 }
             }

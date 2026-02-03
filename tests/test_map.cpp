@@ -362,8 +362,8 @@ TEST_CASE("test_map", "[stdlibs][map]") {
   runner.runTest("Map Class as Key",
                  R"(
             map<any, int> m = {};
-            class Point { int x; int y; void init(Point this, int x, int y) { this.x = x; this.y = y; } }
-            class Circle { float radius; void init(Circle this, float r) { this.radius = r; } }
+            class Point { int x; int y; void __init(int x, int y) { this.x = x; this.y = y; } }
+            class Circle { float radius; void __init(float r) { this.radius = r; } }
             m[Point] = 1;
             m[Circle] = 2;
             print(m[Point]);
@@ -466,7 +466,7 @@ TEST_CASE("test_map", "[stdlibs][map]") {
   runner.runTest("Map Class Key Value - Instance as Value",
                  R"(
             map<any, string> m = {};
-            class Point { int x; int y; void init(Point this, int x, int y) { this.x = x; this.y = y; } }
+            class Point { int x; int y; void __init(int x, int y) { this.x = x; this.y = y; } }
             m[Point] = "Point class";
             
             Point p = new Point(10, 20);

@@ -448,7 +448,7 @@ void registerClasses(TestRunner &runner) {
             class Point {
                 int x;
                 int y;
-                void init(Point this, int x, int y) {
+                void __init(int x, int y) {
                     this.x = x;
                     this.y = y;
                 }
@@ -463,16 +463,16 @@ void registerClasses(TestRunner &runner) {
                  R"(
             class Counter {
                 int value;
-                void init(Counter this, int start) {
+                void __init(int start) {
                     this.value = start;
                 }
-                void increment(Counter this) {
+                void increment() {
                     this.value = this.value + 1;
                 }
-                void add(Counter this, int n) {
+                void add(int n) {
                     this.value = this.value + n;
                 }
-                int get(Counter this) {
+                int get() {
                     return this.value;
                 }
             }
@@ -491,7 +491,7 @@ void registerClasses(TestRunner &runner) {
             class Point {
                 int x;
                 int y;
-                void init(Point this, int x, int y) {
+                void __init(int x, int y) {
                     this.x = x;
                     this.y = y;
                 }
@@ -516,7 +516,7 @@ void registerClasses(TestRunner &runner) {
                  R"(
             class Box {
                 int value;
-                void init(Box this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
             }
@@ -536,7 +536,7 @@ void registerClasses(TestRunner &runner) {
                  R"(
             class Container {
                 any data;
-                void init(Container this, any d) {
+                void __init(any d) {
                     this.data = d;
                 }
             }
@@ -554,7 +554,7 @@ void registerClasses(TestRunner &runner) {
             class Node {
                 any next;
                 int value;
-                void init(Node this, int v) {
+                void __init(int v) {
                     this.value = v;
                     this.next = null;
                 }
@@ -586,13 +586,13 @@ void registerClasses(TestRunner &runner) {
                  R"(
             class Calculator {
                 int value;
-                void init(Calculator this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
-                int double(Calculator this) {
+                int double() {
                     return this.value * 2;
                 }
-                int addTo(Calculator this, int other) {
+                int addTo(int other) {
                     return this.value + other;
                 }
             }
@@ -606,13 +606,13 @@ void registerClasses(TestRunner &runner) {
                  R"(
             class Inner {
                 int value;
-                void init(Inner this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
             }
             class Outer {
                 any inner;
-                void init(Outer this, int v) {
+                void __init(int v) {
                     this.inner = new Inner(v);
                 }
             }
@@ -625,7 +625,7 @@ void registerClasses(TestRunner &runner) {
                  R"(
             class Receiver {
                 int value;
-                void init(Receiver this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
             }
@@ -1064,11 +1064,11 @@ void registerModules(TestRunner &runner) {
                 export class Rectangle {
                     int width;
                     int height;
-                    void init(Rectangle this, int w, int h) {
+                    void __init(int w, int h) {
                         this.width = w;
                         this.height = h;
                     }
-                    int area(Rectangle this) {
+                    int area() {
                         return this.width * this.height;
                     }
                 }
@@ -1188,14 +1188,14 @@ void registerInvokeTests(TestRunner &runner) {
                  R"(
             class Builder {
                 list<any> items;
-                void init(Builder this) {
+                void __init() {
                     this.items = [];
                 }
-                Builder add(Builder this, any item) {
+                Builder add(any item) {
                     this.items.push(item);
                     return this;
                 }
-                list<any> build(Builder this) {
+                list<any> build() {
                     return this.items;
                 }
             }
@@ -1241,16 +1241,16 @@ void registerInvokeTests(TestRunner &runner) {
                  R"(
             class Stack {
                 list<any> data;
-                void init(Stack this) {
+                void __init() {
                     this.data = [];
                 }
-                void push(Stack this, any val) {
+                void push(any val) {
                     this.data.push(val);
                 }
-                any pop(Stack this) {
+                any pop() {
                     return this.data.pop();
                 }
-                int size(Stack this) {
+                int size() {
                     return this.data.length;
                 }
             }
@@ -1401,22 +1401,22 @@ void registerIntegrationTests(TestRunner &runner) {
                  R"(
             class Calculator {
                 int value;
-                void init(Calculator this) {
+                void __init() {
                     this.value = 0;
                 }
-                void set(Calculator this, int v) {
+                void set(int v) {
                     this.value = v;
                 }
-                void add(Calculator this, int v) {
+                void add(int v) {
                     this.value = this.value + v;
                 }
-                void sub(Calculator this, int v) {
+                void sub(int v) {
                     this.value = this.value - v;
                 }
-                void mul(Calculator this, int v) {
+                void mul(int v) {
                     this.value = this.value * v;
                 }
-                int result(Calculator this) {
+                int result() {
                     return this.value;
                 }
             }
@@ -1434,7 +1434,7 @@ void registerIntegrationTests(TestRunner &runner) {
             class Node {
                 int value;
                 any next;
-                void init(Node this, int v) {
+                void __init(int v) {
                     this.value = v;
                     this.next = null;
                 }
@@ -1477,13 +1477,13 @@ void registerIntegrationTests(TestRunner &runner) {
                  R"(
             class EventEmitter {
                 list<any> listeners;
-                void init(EventEmitter this) {
+                void __init() {
                     this.listeners = [];
                 }
-                void on(EventEmitter this, function callback) {
+                void on(function callback) {
                     this.listeners.push(callback);
                 }
-                void emit(EventEmitter this, any data) {
+                void emit(any data) {
                     for (int i = 0; i < this.listeners.length; i = i + 1) {
                         this.listeners[i](data);
                     }
@@ -1549,10 +1549,10 @@ void registerIntegrationTests(TestRunner &runner) {
                  R"(
             class StateMachine {
                 string state;
-                void init(StateMachine this) {
+                void __init() {
                     this.state = "idle";
                 }
-                void transition(StateMachine this, string event) {
+                void transition(string event) {
                     if (this.state == "idle" && event == "start") {
                         this.state = "running";
                     } else if (this.state == "running" && event == "pause") {
@@ -1563,7 +1563,7 @@ void registerIntegrationTests(TestRunner &runner) {
                         this.state = "stopped";
                     }
                 }
-                string getState(StateMachine this) {
+                string getState() {
                     return this.state;
                 }
             }

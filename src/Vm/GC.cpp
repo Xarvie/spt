@@ -205,6 +205,32 @@ void GC::markRoots() {
   markSymbol(syms.gc);
   markSymbol(syms.str);
   markSymbol(syms.len);
+
+  markSymbol(syms.geter);
+  markSymbol(syms.seter);
+  markSymbol(syms.getitem);
+  markSymbol(syms.setitem);
+
+  markSymbol(syms.add);
+  markSymbol(syms.sub);
+  markSymbol(syms.mul);
+  markSymbol(syms.div);
+  markSymbol(syms.mod);
+  markSymbol(syms.pow);
+  markSymbol(syms.unm);
+  markSymbol(syms.idiv);
+
+  markSymbol(syms.eq);
+  markSymbol(syms.lt);
+  markSymbol(syms.le);
+
+  markSymbol(syms.band);
+  markSymbol(syms.bor);
+  markSymbol(syms.bxor);
+  markSymbol(syms.bnot);
+  markSymbol(syms.shl);
+  markSymbol(syms.shr);
+
   markSymbol(syms.push);
   markSymbol(syms.pop);
   markSymbol(syms.length);

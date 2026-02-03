@@ -37,15 +37,28 @@ extern "C" {
 #define SPT_VERSION_NUM (SPT_VERSION_MAJOR * 10000 + SPT_VERSION_MINOR * 100 + SPT_VERSION_PATCH)
 #define SPT_VERSION_STRING "1.0.0"
 
-#if defined(_WIN32)
-#ifdef SPT_BUILD_DLL
+#if defined(_WIN32) || defined(_WIN64) /* { */
+#if defined(SPT_BUILD_AS_DLL)          /* { */
+#if defined(SPT_EXPORTS)               /* { */
 #define SPT_API __declspec(dllexport)
-#else
+#else /* }{ */
 #define SPT_API __declspec(dllimport)
-#endif
-#else
+#endif /* } */
+#define SPT_API_CLASS SPT_API
+#else /* }{ */
 #define SPT_API extern
-#endif
+#define SPT_API_CLASS
+#endif                        /* } */
+#else                         /* }{ */
+// 非 Windows 平台（Linux/macOS）
+#if defined(SPT_BUILD_AS_DLL) /* { */
+#define SPT_API __attribute__((visibility("default")))
+#define SPT_API_CLASS __attribute__((visibility("default")))
+#else /* }{ */
+#define SPT_API extern
+#define SPT_API_CLASS
+#endif /* } */
+#endif /* } */
 
 /* ============================================================================
  * 2. BASIC TYPES
@@ -77,6 +90,26 @@ typedef int spt_Index;
  *   Number of return values pushed onto the stack
  */
 typedef int (*spt_CFunction)(spt_State *S);
+
+/* Context type (capable of holding a pointer or an integer) */
+typedef intptr_t spt_KContext;
+
+/* Continuation function type.
+ * Parameters:
+ * S      - The state
+ * status - Status code upon resumption (usually SPT_OK or SPT_YIELD)
+ * ctx    - Saved context data
+ */
+typedef int (*spt_KFunction)(spt_State *S, int status, spt_KContext ctx);
+
+/* Error handler callback
+ * Parameters:
+ * S       - The state
+ * message - Error message
+ * line    - Line number (-1 if unknown)
+ * ud      - User data passed to spt_seterrorhandler
+ */
+typedef void (*spt_ErrorHandler)(spt_State *S, const char *message, int line, void *ud);
 
 /* Error handler callback
  * Parameters:
@@ -258,6 +291,9 @@ enum {
 /* Pseudo-indices for special locations */
 #define SPT_REGISTRYINDEX (-1000000)
 #define SPT_GLOBALSINDEX (-1000001)
+
+/* Upvalue pseudo-index - accesses upvalues in C closures */
+#define SPT_UPVALUEINDEX(i) (SPT_GLOBALSINDEX - (i))
 
 /* Multiple return values marker */
 #define SPT_MULTRET (-1)
@@ -507,6 +543,22 @@ SPT_API int spt_equal(spt_State *S, int idx1, int idx2);
  * Check raw equality (pointer comparison for objects).
  */
 SPT_API int spt_rawequal(spt_State *S, int idx1, int idx2);
+
+/*
+ * Get value from table/object without invoking magic methods (__get/__index).
+ * Supported types: Map, List, Instance, NativeInstance.
+ * Stack: [..., key] -> spt_rawget(S, idx) -> [..., result]
+ * Pops key, pushes result. Returns the type of the pushed value.
+ */
+SPT_API int spt_rawget(spt_State *S, int idx);
+
+/*
+ * Set value in table/object without invoking magic methods (__set/__newindex).
+ * Supported types: Map, List, Instance, NativeInstance.
+ * Stack: [..., key, value] -> spt_rawset(S, idx) -> [...]
+ * Pops both key and value.
+ */
+SPT_API void spt_rawset(spt_State *S, int idx);
 
 /* ============================================================================
  * 8. LIST OPERATIONS

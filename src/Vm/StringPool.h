@@ -84,11 +84,40 @@ struct BuiltinMethodDesc {
 // ============================================================================
 struct SymbolTable {
   // 类相关
-  StringObject *init = nullptr; // "init" - 构造函数
-  StringObject *gc = nullptr;   // "__gc" - 终结器（Finalizer）
+  // 基础生命周期与转换
+  StringObject *init = nullptr; // "__init" - 构造函数
+  StringObject *gc = nullptr;   // "__gc" - 终结器 (Finalizer)
   StringObject *str = nullptr;  // "__str" - 字符串转换
   StringObject *len = nullptr;  // "__len" - 长度操作符
 
+  // 属性与索引访问
+  StringObject *geter = nullptr;   // "__get" - 属性获取
+  StringObject *seter = nullptr;   // "__set" - 属性设置
+  StringObject *getitem = nullptr; // "__getitem" - 索引获取
+  StringObject *setitem = nullptr; // "__setitem" - 索引设置
+
+  // 算术运算符
+  StringObject *add = nullptr;  // "__add" - 加法 (+)
+  StringObject *sub = nullptr;  // "__sub" - 减法 (-)
+  StringObject *mul = nullptr;  // "__mul" - 乘法 (*)
+  StringObject *div = nullptr;  // "__div" - 除法 (/)
+  StringObject *mod = nullptr;  // "__mod" - 取模 (%)
+  StringObject *pow = nullptr;  // "__pow" - 幂运算 (^)
+  StringObject *unm = nullptr;  // "__unm" - 一元负号 (-)
+  StringObject *idiv = nullptr; // "__idiv" - 整除 (//)
+
+  // 关系运算符
+  StringObject *eq = nullptr; // "__eq" - 等于 (==)
+  StringObject *lt = nullptr; // "__lt" - 小于 (<)
+  StringObject *le = nullptr; // "__le" - 小于等于 (<=)
+
+  // 位运算符
+  StringObject *band = nullptr; // "__band" - 位与 (&)
+  StringObject *bor = nullptr;  // "__bor" - 位或 (|)
+  StringObject *bxor = nullptr; // "__bxor" - 位异或 (^)
+  StringObject *bnot = nullptr; // "__bnot" - 位取反 (~)
+  StringObject *shl = nullptr;  // "__shl" - 左移 (<<)
+  StringObject *shr = nullptr;  // "__shr" - 右移 (>>)
   // === 通用方法名 ===
   StringObject *push = nullptr;
   StringObject *pop = nullptr;
@@ -138,11 +167,40 @@ struct SymbolTable {
 
   // 初始化符号（仅驻留字符串，不注册方法）
   void initialize(StringPool &pool) {
-    // 类相关
-    init = pool.intern("init");
+    // 生命周期与基础转换
+    init = pool.intern("__init");
     gc = pool.intern("__gc");
     str = pool.intern("__str");
     len = pool.intern("__len");
+
+    // 属性与索引访问
+    geter = pool.intern("__get");
+    seter = pool.intern("__set");
+    getitem = pool.intern("__getitem");
+    setitem = pool.intern("__setitem");
+
+    // 算术运算符
+    add = pool.intern("__add");
+    sub = pool.intern("__sub");
+    mul = pool.intern("__mul");
+    div = pool.intern("__div");
+    mod = pool.intern("__mod");
+    pow = pool.intern("__pow");
+    unm = pool.intern("__unm");
+    idiv = pool.intern("__idiv");
+
+    // 关系运算符
+    eq = pool.intern("__eq");
+    lt = pool.intern("__lt");
+    le = pool.intern("__le");
+
+    // 位运算符
+    band = pool.intern("__band");
+    bor = pool.intern("__bor");
+    bxor = pool.intern("__bxor");
+    bnot = pool.intern("__bnot");
+    shl = pool.intern("__shl");
+    shr = pool.intern("__shr");
 
     // 常用方法
     push = pool.intern("push");

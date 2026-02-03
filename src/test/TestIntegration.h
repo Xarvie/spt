@@ -10,22 +10,22 @@ inline void registerIntegrationTests(TestRunner &runner) {
                  R"(
             class Calculator {
                 int value;
-                void init(Calculator this) {
+                void __init() {
                     this.value = 0;
                 }
-                void set(Calculator this, int v) {
+                void set(int v) {
                     this.value = v;
                 }
-                void add(Calculator this, int v) {
+                void add(int v) {
                     this.value = this.value + v;
                 }
-                void sub(Calculator this, int v) {
+                void sub(int v) {
                     this.value = this.value - v;
                 }
-                void mul(Calculator this, int v) {
+                void mul(int v) {
                     this.value = this.value * v;
                 }
-                int result(Calculator this) {
+                int result() {
                     return this.value;
                 }
             }
@@ -43,7 +43,7 @@ inline void registerIntegrationTests(TestRunner &runner) {
             class Node {
                 int value;
                 any next;
-                void init(Node this, int v) {
+                void __init(int v) {
                     this.value = v;
                     this.next = null;
                 }
@@ -86,13 +86,13 @@ inline void registerIntegrationTests(TestRunner &runner) {
                  R"(
             class EventEmitter {
                 list<any> listeners;
-                void init(EventEmitter this) {
+                void __init() {
                     this.listeners = [];
                 }
-                void on(EventEmitter this, function callback) {
+                void on(function callback) {
                     this.listeners.push(callback);
                 }
-                void emit(EventEmitter this, any data) {
+                void emit(any data) {
                     for (int i = 0; i < this.listeners.length; i = i + 1) {
                         this.listeners[i](data);
                     }
@@ -158,10 +158,10 @@ inline void registerIntegrationTests(TestRunner &runner) {
                  R"(
             class StateMachine {
                 string state;
-                void init(StateMachine this) {
+                void __init() {
                     this.state = "idle";
                 }
-                void transition(StateMachine this, string event) {
+                void transition(string event) {
                     if (this.state == "idle" && event == "start") {
                         this.state = "running";
                     } else if (this.state == "running" && event == "pause") {
@@ -172,7 +172,7 @@ inline void registerIntegrationTests(TestRunner &runner) {
                         this.state = "stopped";
                     }
                 }
-                string getState(StateMachine this) {
+                string getState() {
                     return this.state;
                 }
             }

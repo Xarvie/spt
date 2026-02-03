@@ -126,7 +126,6 @@ int main(int argc, char *argv[]) {
 
   registerShortCircuitDiagnostics(runner);
 
-
   registerMultiReturnTests(runner);
   registerNativeMultiReturnTests(runner);
 

@@ -11,7 +11,7 @@ inline void registerClasses(TestRunner &runner) {
             class Point {
                 int x;
                 int y;
-                void init(Point this, int x, int y) {
+                void __init(int x, int y) {
                     this.x = x;
                     this.y = y;
                 }
@@ -26,16 +26,16 @@ inline void registerClasses(TestRunner &runner) {
                  R"(
             class Counter {
                 int value;
-                void init(Counter this, int start) {
+                void __init(int start) {
                     this.value = start;
                 }
-                void increment(Counter this) {
+                void increment() {
                     this.value = this.value + 1;
                 }
-                void add(Counter this, int n) {
+                void add(int n) {
                     this.value = this.value + n;
                 }
-                int get(Counter this) {
+                int get() {
                     return this.value;
                 }
             }
@@ -54,15 +54,15 @@ inline void registerClasses(TestRunner &runner) {
             class Point {
                 int x;
                 int y;
-                void init(Point this, int x, int y) {
+                void __init(int x, int y) {
                     this.x = x;
                     this.y = y;
                 }
-                void move(Point this, int dx, int dy) {
+                void move(int dx, int dy) {
                     this.x = this.x + dx;
                     this.y = this.y + dy;
                 }
-                void scale(Point this, int factor) {
+                void scale(int factor) {
                     this.x = this.x * factor;
                     this.y = this.y * factor;
                 }
@@ -79,7 +79,7 @@ inline void registerClasses(TestRunner &runner) {
                  R"(
             class Box {
                 int value;
-                void init(Box this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
             }
@@ -99,7 +99,7 @@ inline void registerClasses(TestRunner &runner) {
                  R"(
             class Container {
                 any data;
-                void init(Container this, any d) {
+                void __init(any d) {
                     this.data = d;
                 }
             }
@@ -117,7 +117,7 @@ inline void registerClasses(TestRunner &runner) {
             class Node {
                 any next;
                 int value;
-                void init(Node this, int v) {
+                void __init(int v) {
                     this.value = v;
                     this.next = null;
                 }
@@ -149,13 +149,13 @@ inline void registerClasses(TestRunner &runner) {
                  R"(
             class Calculator {
                 int value;
-                void init(Calculator this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
-                int double(Calculator this) {
+                int double() {
                     return this.value * 2;
                 }
-                int addTo(Calculator this, int other) {
+                int addTo(int other) {
                     return this.value + other;
                 }
             }
@@ -168,7 +168,7 @@ inline void registerClasses(TestRunner &runner) {
   runner.addTest("Method Returning Values",
                  R"(
             class Calculator {
-                vars values(Calculator this) {
+                vars values() {
                     return 1,2;
                 }
             }
@@ -182,13 +182,13 @@ inline void registerClasses(TestRunner &runner) {
                  R"(
             class Inner {
                 int value;
-                void init(Inner this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
             }
             class Outer {
                 any inner;
-                void init(Outer this, int v) {
+                void __init(int v) {
                     this.inner = new Inner(v);
                 }
             }
@@ -201,7 +201,7 @@ inline void registerClasses(TestRunner &runner) {
                  R"(
             class Receiver {
                 int value;
-                void init(Receiver this, int v) {
+                void __init(int v) {
                     this.value = v;
                 }
             }

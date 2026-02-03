@@ -180,6 +180,7 @@ enum class OpCode : uint8_t {
 #define POS_Ax POS_A
 #define SIZE_Ax (SIZE_A + SIZE_B + SIZE_C + 1) // 25 bits (也就是除了 OpCode 7bit 外的全部空间)
 
-#define GETARG_Ax(i) (((i) >> POS_Ax) & 0x1FFFFFF)
 #define MAKE_Ax(op, ax)                                                                            \
   ((static_cast<uint32_t>(op) & 0x7F) | ((static_cast<uint32_t>(ax) & 0x1FFFFFF) << POS_Ax))
+
+#define GETARG_Ax(i) (((i) >> POS_Ax) & 0x1FFFFFF)
