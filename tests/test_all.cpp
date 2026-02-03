@@ -1226,7 +1226,7 @@ void registerInvokeTests(TestRunner &runner) {
   runner.runTest("Invoke - Recursive Method",
                  R"(
             class Factorial {
-                int calc(Factorial this, int n) {
+                int calc(int n) {
                     if (n <= 1) { return 1; }
                     return n * this.calc(n - 1);
                 }
