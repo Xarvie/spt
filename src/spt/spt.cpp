@@ -2168,11 +2168,14 @@ SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
 
   spt::FiberObject *fiber = S->fiber;
 
-  // 【新增】记录调用前状态
+  // 1. 计算基准位置（用于错误恢复或手动校验）
+  // topBefore 指向参数之后的下一个空槽
+  // 栈布局: [func] [arg1] ... [argN] [topBefore]
+  // baseHeight 是 func 之前的栈高度，即 func 所在的索引
   int topBefore = static_cast<int>(fiber->stackTop - fiber->stack);
-  int funcAbsIdx = topBefore - nargs;     // 函数的绝对位置 (0-based: funcAbsIdx - 1)
-  int baseHeight = topBefore - nargs - 1; // 函数之前的栈高度
+  int baseHeight = topBefore - nargs - 1;
 
+  // 2. 获取并检查函数对象
   int funcIdx = -(nargs + 1);
   spt::Value funcVal = getValue(S, funcIdx);
 
@@ -2184,20 +2187,24 @@ SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
 
   spt::Closure *closure = static_cast<spt::Closure *>(funcVal.asGC());
 
+  // 3. 栈空间检查
   if (!ensureStack(S, nargs + 1)) {
     setError(S, "Stack overflow");
     spt_pushstring(S, "Stack overflow");
     return SPT_ERRRUN;
   }
 
-  spt::InterpretResult result = S->vm->call(closure, nargs);
+  // 4. 执行调用
+  // 修正：直接传入 nresults，让 VM 处理返回值数量对齐 (VM.cpp 中已实现此逻辑)
+  spt::InterpretResult result = S->vm->call(closure, nargs, nresults);
 
+  // 5. 错误处理
   if (result != spt::InterpretResult::OK) {
     if (S->vm->hasError()) {
       spt::Value err = S->vm->getErrorValue();
-      // 【修复】清理栈到基准位置
+      // 发生错误时，VM 可能没有清理参数，这里手动重置栈顶到函数之前
       fiber->stackTop = fiber->stack + baseHeight;
-      pushValue(S, err);
+      pushValue(S, err); // 将错误对象压栈
       S->vm->clearError();
     } else {
       fiber->stackTop = fiber->stack + baseHeight;
@@ -2206,55 +2213,13 @@ SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
     return SPT_ERRRUN;
   }
 
-  // 【关键修复】检查并修正栈布局
-  int topAfter = static_cast<int>(fiber->stackTop - fiber->stack);
+  // 6. 成功返回
+  // VM::call 已经保证了：
+  // a. 如果 nresults == SPT_MULTRET (-1)，所有返回值都在栈顶。
+  // b. 如果 nresults >= 0，栈顶恰好有 nresults 个值（VM 自动补 nil 或截断）。
+  // c. 返回值起始位置已被移动到 baseHeight (即覆盖了原来的 func 位置)。
 
-  // 如果栈上还有函数和参数，需要整理
-  // 预期: 返回值从 baseHeight 开始
-  // 实际: 返回值可能在 topBefore 之后
-
-  if (topAfter > baseHeight + 1) {
-    // 计算返回值数量（假设在最顶部）
-    int numResults = topAfter - topBefore;
-    if (numResults < 0)
-      numResults = 0;
-
-    if (numResults > 0) {
-      // 收集返回值
-      std::vector<spt::Value> results;
-      results.reserve(numResults);
-      for (int i = 0; i < numResults; ++i) {
-        results.push_back(fiber->stack[topBefore + i]);
-      }
-
-      // 重置栈
-      fiber->stackTop = fiber->stack + baseHeight;
-
-      // 重新 push 返回值
-      for (auto &v : results) {
-        fiber->push(v);
-      }
-    } else {
-      // 没有返回值，清理函数和参数
-      fiber->stackTop = fiber->stack + baseHeight;
-    }
-  }
-
-  // 处理 nresults
-  if (nresults == SPT_MULTRET) {
-    return SPT_OK;
-  }
-
-  int currentTop = static_cast<int>(fiber->stackTop - fiber->stack);
-  int currentResults = currentTop - baseHeight;
-
-  if (nresults > currentResults) {
-    for (int i = currentResults; i < nresults; ++i) {
-      spt_pushnil(S);
-    }
-  } else if (nresults < currentResults && nresults >= 0) {
-    fiber->stackTop = fiber->stack + baseHeight + nresults;
-  }
+  // 这里不再需要任何手动的栈调整代码，直接返回即可。
 
   return SPT_OK;
 }

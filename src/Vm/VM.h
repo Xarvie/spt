@@ -93,7 +93,7 @@ public:
 
   // === 执行接口 ===
   InterpretResult interpret(const CompiledChunk &chunk); // 解释执行一段字节码块
-  InterpretResult call(Closure *closure, int argCount);  // 调用一个闭包对象
+  InterpretResult call(Closure *closure, int argCount, int expectedResults); // 调用一个闭包对象
 
   // === 热更新 ===
   // 重新加载指定模块的代码块而不重启 VM

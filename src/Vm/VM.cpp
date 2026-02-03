@@ -125,8 +125,11 @@ InterpretResult VM::interpret(const CompiledChunk &chunk) {
   return run();
 }
 
-InterpretResult VM::call(Closure *closure, int argCount) {
+InterpretResult VM::call(Closure *closure, int argCount, int expectedResults) {
   FiberObject *fiber = currentFiber_;
+
+  Value *argsStart = fiber->stackTop - argCount;
+  Value *funcSlot = argsStart - 1;
 
   if (closure->isNative()) {
 
@@ -136,22 +139,35 @@ InterpretResult VM::call(Closure *closure, int argCount) {
       return InterpretResult::RUNTIME_ERROR;
     }
 
-    Value *argsStart = fiber->stackTop - argCount;
-
+    int numResults = 0;
     try {
-
-      int numResults = closure->function(this, closure, argCount, argsStart);
-
-      return InterpretResult::OK;
-
+      numResults = closure->function(this, closure, argCount, argsStart);
     } catch (const CExtensionException &e) {
-
       if (!hasError_) {
         runtimeError("%s", e.what());
       }
-
       return InterpretResult::RUNTIME_ERROR;
     }
+
+    if (numResults > 0) {
+      Value *resultsStart = fiber->stackTop - numResults;
+      if (funcSlot != resultsStart) {
+        for (int i = 0; i < numResults; ++i) {
+          funcSlot[i] = resultsStart[i];
+        }
+      }
+    }
+
+    if (expectedResults == -1) {
+      fiber->stackTop = funcSlot + numResults;
+    } else {
+      for (int i = numResults; i < expectedResults; ++i) {
+        funcSlot[i] = Value::nil();
+      }
+      fiber->stackTop = funcSlot + expectedResults;
+    }
+
+    return InterpretResult::OK;
   }
 
   if (!closure->proto->isVararg && argCount != closure->proto->numParams) {
@@ -165,12 +181,15 @@ InterpretResult VM::call(Closure *closure, int argCount) {
     return InterpretResult::RUNTIME_ERROR;
   }
 
-  int slotsBaseOffset = static_cast<int>((fiber->stackTop - argCount) - fiber->stack);
+  int slotsBaseOffset = static_cast<int>(argsStart - fiber->stack);
+  int funcSlotOffset = slotsBaseOffset - 1;
 
   fiber->ensureStack(closure->proto->maxStackSize);
   fiber->ensureFrames(1);
 
-  Value *argsStart = fiber->stack + slotsBaseOffset;
+  argsStart = fiber->stack + slotsBaseOffset;
+  funcSlot = fiber->stack + funcSlotOffset;
+
   Value *frameEnd = argsStart + closure->proto->maxStackSize;
   int numParams = closure->proto->numParams;
   Value *slot = argsStart + argCount;
@@ -182,10 +201,10 @@ InterpretResult VM::call(Closure *closure, int argCount) {
   CallFrame *newFrame = &fiber->frames[fiber->frameCount++];
   newFrame->closure = closure;
   newFrame->ip = closure->proto->code.data();
-  newFrame->expectedResults = 1;
   newFrame->slots = argsStart;
-  newFrame->returnTo = nullptr;
   newFrame->deferBase = fiber->deferTop;
+  newFrame->returnTo = funcSlot;
+  newFrame->expectedResults = expectedResults;
 
   int savedExitFrameCount = exitFrameCount_;
   exitFrameCount_ = fiber->frameCount;
@@ -388,7 +407,7 @@ void VM::invokeDefers(int targetDeferBase) {
     if (deferVal.isClosure()) {
       Closure *closure = static_cast<Closure *>(deferVal.asGC());
       protect(Value::object(closure));
-      call(closure, 0);
+      call(closure, 0, 1);
       unprotect(1);
     }
 

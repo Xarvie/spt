@@ -2119,6 +2119,7 @@ InterpretResult VM::run() {
           for (int i = 0; i < expectedResults; ++i) {
             destSlot[i] = (i < returnCount) ? returnValues[i] : Value::nil();
           }
+          STACK_TOP = destSlot + expectedResults;
         }
       }
       return InterpretResult::OK;

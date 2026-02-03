@@ -658,7 +658,7 @@ void GC::invokeGCMethod(Instance *instance) {
   int savedFrameCount = fiber->frameCount;
 
   fiber->push(Value::object(instance));
-  InterpretResult result = vm_->call(closure, 1);
+  InterpretResult result = vm_->call(closure, 1, 1);
 
   if (result != InterpretResult::OK) {
     fiber->stackTop = savedStackTop;
