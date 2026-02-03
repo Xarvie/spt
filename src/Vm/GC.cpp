@@ -234,6 +234,7 @@ void GC::markRoots() {
   markSymbol(syms.push);
   markSymbol(syms.pop);
   markSymbol(syms.length);
+  markSymbol(syms.byteLength);
   markSymbol(syms.size);
   markSymbol(syms.get);
   markSymbol(syms.set);
@@ -242,6 +243,7 @@ void GC::markRoots() {
   markSymbol(syms.values);
   markSymbol(syms.clear);
   markSymbol(syms.slice);
+  markSymbol(syms.byteSlice);
   markSymbol(syms.indexOf);
   markSymbol(syms.contains);
   markSymbol(syms.join);

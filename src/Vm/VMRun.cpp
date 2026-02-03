@@ -294,24 +294,19 @@ InterpretResult VM::run() {
   (void)trap;
 
   if (fiber->frameCount > 0) {
-    // 重新获取 frame 指针，确保安全
+
     frame = &fiber->frames[fiber->frameCount - 1];
 
-    // 检查是否是从 yieldk 恢复的原生函数
     if (frame->closure && frame->closure->isNative() && frame->continuation) {
 
       KFunction k = frame->continuation;
       KContext ctx = frame->ctx;
       int status = frame->status;
 
-      // 1. 清除 continuation 防止重入
       frame->continuation = nullptr;
 
-      // 2. 获取 spt_State 指针
-      // 确保你在创建 VM 时调用过 spt_setuserdata(S, S) 或者 vm->setUserData(S)
       auto *S = static_cast<spt_State *>(userData_);
 
-      // 3. 执行 Continuation
       int nResults = 0;
       size_t oldTopOffset = fiber->stackTop - fiber->stack;
 
@@ -324,7 +319,6 @@ InterpretResult VM::run() {
         return InterpretResult::RUNTIME_ERROR;
       }
 
-      // 4. 处理再次 yield 的情况
       if (yieldPending_) {
         yieldPending_ = false;
         return InterpretResult::OK;
@@ -333,14 +327,12 @@ InterpretResult VM::run() {
       if (hasError_)
         return InterpretResult::RUNTIME_ERROR;
 
-      // 5. 模拟 OP_RETURN 退栈逻辑
       Value *resultsStart = fiber->stackTop - nResults;
       Value *returnTo = frame->returnTo;
       int expectedResults = frame->expectedResults;
 
-      fiber->frameCount--; // 退栈
+      fiber->frameCount--;
 
-      // A. 根栈帧结束
       if (fiber->frameCount == 0) {
         fiber->state = FiberState::DONE;
         fiber->yieldValue = (nResults > 0) ? resultsStart[0] : Value::nil();
@@ -357,7 +349,6 @@ InterpretResult VM::run() {
         return InterpretResult::OK;
       }
 
-      // B. 返回给调用者
       if (returnTo) {
         if (expectedResults == -1) {
           for (int i = 0; i < nResults; ++i)
@@ -367,13 +358,11 @@ InterpretResult VM::run() {
           for (int i = 0; i < expectedResults; ++i) {
             returnTo[i] = (i < nResults) ? resultsStart[i] : Value::nil();
           }
-          // 这里不需要重置 stackTop，因为 RESTORE_POINTERS 会根据新的 frame 重置
         }
       }
 
-      // 6. 刷新寄存器，准备执行 Caller 的下一条指令
-      RESTORE_POINTERS(); // 宏：重置 frame, slots, stackBase 等本地变量
-      LOAD_PC();          // 宏：重置 ip 指针
+      RESTORE_POINTERS();
+      LOAD_PC();
     }
   }
 
@@ -466,6 +455,75 @@ InterpretResult VM::run() {
       SAVE_PC();
       runtimeError("Cannot index type: %s", container.typeName());
       return InterpretResult::RUNTIME_ERROR;
+    } else if (container.isString()) {
+      if (!index.isInt()) {
+        SAVE_PC();
+        runtimeError("String index must be integer");
+        return InterpretResult::RUNTIME_ERROR;
+      }
+
+      StringObject *strObj = static_cast<StringObject *>(container.asGC());
+      const std::string &str = strObj->str();
+      int64_t idx = index.asInt();
+
+      int64_t charLen = 0;
+      size_t len = str.length();
+      size_t i = 0;
+      const char *data = str.data();
+
+      while (i < len) {
+        unsigned char c = static_cast<unsigned char>(data[i]);
+        int seqLen = 1;
+        if ((c & 0x80) == 0)
+          seqLen = 1;
+        else if ((c & 0xE0) == 0xC0)
+          seqLen = 2;
+        else if ((c & 0xF0) == 0xE0)
+          seqLen = 3;
+        else if ((c & 0xF8) == 0xF0)
+          seqLen = 4;
+        i += seqLen;
+        charLen++;
+      }
+
+      if (idx < 0)
+        idx = charLen + idx;
+
+      if (idx < 0 || idx >= charLen) {
+        slots[A] = Value::nil();
+      } else {
+
+        size_t bytePos = 0;
+        int64_t currentIdx = 0;
+        i = 0;
+        int targetSeqLen = 1;
+
+        while (i < len) {
+          unsigned char c = static_cast<unsigned char>(data[i]);
+          int seqLen = 1;
+          if ((c & 0x80) == 0)
+            seqLen = 1;
+          else if ((c & 0xE0) == 0xC0)
+            seqLen = 2;
+          else if ((c & 0xF0) == 0xE0)
+            seqLen = 3;
+          else if ((c & 0xF8) == 0xF0)
+            seqLen = 4;
+
+          if (currentIdx == idx) {
+            bytePos = i;
+            targetSeqLen = seqLen;
+            break;
+          }
+          i += seqLen;
+          currentIdx++;
+        }
+
+        std::string sub = str.substr(bytePos, targetSeqLen);
+        StringObject *resStr;
+        PROTECT(resStr = allocateString(sub));
+        slots[A] = Value::object(resStr);
+      }
     } else {
       SAVE_PC();
       runtimeError("Cannot index type: %s", container.typeName());

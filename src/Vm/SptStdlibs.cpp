@@ -244,38 +244,247 @@ static Value mapRemove(VM *vm, Value receiver, int argc, Value *argv) {
   return Value::nil();
 }
 
+namespace Utf8Utils {
+
+inline int sequenceLength(unsigned char c) {
+  if ((c & 0x80) == 0)
+    return 1;
+  if ((c & 0xE0) == 0xC0)
+    return 2;
+  if ((c & 0xF0) == 0xE0)
+    return 3;
+  if ((c & 0xF8) == 0xF0)
+    return 4;
+  return 1;
+}
+
+int64_t countCharacters(const std::string &str) {
+  int64_t count = 0;
+  size_t i = 0;
+  size_t len = str.length();
+  const char *data = str.data();
+
+  while (i < len) {
+    count++;
+    i += sequenceLength(static_cast<unsigned char>(data[i]));
+  }
+  return count;
+}
+
+size_t charIndexToByteOffset(const std::string &str, int64_t charIndex) {
+  if (charIndex <= 0)
+    return 0;
+
+  size_t bytePos = 0;
+  size_t len = str.length();
+  int64_t currentStrIdx = 0;
+  const char *data = str.data();
+
+  while (bytePos < len && currentStrIdx < charIndex) {
+    bytePos += sequenceLength(static_cast<unsigned char>(data[bytePos]));
+    currentStrIdx++;
+  }
+
+  return bytePos;
+}
+
+int64_t byteOffsetToCharIndex(const std::string &str, size_t targetByteOffset) {
+  int64_t charIdx = 0;
+  size_t bytePos = 0;
+  const char *data = str.data();
+
+  while (bytePos < targetByteOffset && bytePos < str.length()) {
+    bytePos += sequenceLength(static_cast<unsigned char>(data[bytePos]));
+    charIdx++;
+  }
+  return charIdx;
+}
+
+void getSliceByteRange(const std::string &str, int64_t startChar, int64_t endChar,
+                       size_t &outStartByte, size_t &outEndByte) {
+  size_t bytePos = 0;
+  int64_t currentChar = 0;
+  size_t len = str.length();
+  const char *data = str.data();
+
+  outStartByte = len;
+  outEndByte = len;
+
+  while (bytePos < len) {
+    if (currentChar == startChar)
+      outStartByte = bytePos;
+    if (currentChar == endChar) {
+      outEndByte = bytePos;
+      return;
+    }
+
+    bytePos += sequenceLength(static_cast<unsigned char>(data[bytePos]));
+    currentChar++;
+  }
+
+  if (currentChar == startChar)
+    outStartByte = bytePos;
+  if (currentChar == endChar)
+    outEndByte = bytePos;
+}
+} // namespace Utf8Utils
+
+static Value stringLengthGetter(VM *vm, Value receiver) {
+  if (!receiver.isString())
+    return Value::integer(0);
+  auto *str = static_cast<StringObject *>(receiver.asGC());
+
+  return Value::integer(Utf8Utils::countCharacters(str->str()));
+}
+
+static Value stringByteLengthGetter(VM *vm, Value receiver) {
+  if (!receiver.isString())
+    return Value::integer(0);
+  return Value::integer(static_cast<StringObject *>(receiver.asGC())->length);
+}
+
 static Value stringSlice(VM *vm, Value receiver, int argc, Value *argv) {
   Value arg0 = (argc > 0) ? argv[0] : Value::nil();
   Value arg1 = (argc > 1) ? argv[1] : Value::nil();
 
   if (!receiver.isString())
     return Value::object(vm->allocateString(""));
-  auto *str = static_cast<StringObject *>(receiver.asGC());
-  if (argc < 2 || !arg0.isInt() || !arg1.isInt())
-    return Value::object(vm->allocateString(""));
-  int64_t start = arg0.asInt(), end = arg1.asInt();
-  int64_t len = str->length;
+  const std::string &strData = static_cast<StringObject *>(receiver.asGC())->str();
+
+  if (!arg0.isInt())
+    return receiver;
+
+  int64_t charLen = Utf8Utils::countCharacters(strData);
+
+  int64_t start = arg0.asInt();
+  int64_t end = (argc > 1 && arg1.isInt()) ? arg1.asInt() : charLen;
+
   if (start < 0)
-    start = std::max(int64_t(0), len + start);
+    start = charLen + start;
   if (end < 0)
-    end = std::max(int64_t(0), len + end);
-  start = std::clamp(start, int64_t(0), len);
-  end = std::clamp(end, int64_t(0), len);
+    end = charLen + end;
+
+  start = std::clamp(start, int64_t(0), charLen);
+  end = std::clamp(end, int64_t(0), charLen);
+
+  if (end <= start) {
+    return Value::object(vm->allocateString(""));
+  }
+
+  size_t byteStart = 0;
+  size_t byteEnd = 0;
+  Utf8Utils::getSliceByteRange(strData, start, end, byteStart, byteEnd);
+
+  return Value::object(vm->allocateString(strData.substr(byteStart, byteEnd - byteStart)));
+}
+
+static Value stringByteSlice(VM *vm, Value receiver, int argc, Value *argv) {
+  Value arg0 = (argc > 0) ? argv[0] : Value::nil();
+  Value arg1 = (argc > 1) ? argv[1] : Value::nil();
+
+  if (!receiver.isString())
+    return Value::nil();
+  const std::string &strData = static_cast<StringObject *>(receiver.asGC())->str();
+  size_t byteLen = strData.length();
+
+  int64_t start = (arg0.isInt()) ? arg0.asInt() : 0;
+  int64_t end = (argc > 1 && arg1.isInt()) ? arg1.asInt() : byteLen;
+
+  if (start < 0)
+    start = byteLen + start;
+  if (end < 0)
+    end = byteLen + end;
+
+  start = std::clamp(start, int64_t(0), (int64_t)byteLen);
+  end = std::clamp(end, int64_t(0), (int64_t)byteLen);
+
   if (end <= start)
     return Value::object(vm->allocateString(""));
-  std::string sub(str->chars() + start, end - start);
-  return Value::object(vm->allocateString(sub));
+
+  return Value::object(vm->allocateString(strData.substr(start, end - start)));
 }
 
 static Value stringIndexOf(VM *vm, Value receiver, int argc, Value *argv) {
   Value arg0 = (argc > 0) ? argv[0] : Value::nil();
 
-  if (!receiver.isString() || argc < 1 || !arg0.isString())
+  if (!receiver.isString() || !arg0.isString())
     return Value::integer(-1);
-  auto strView = static_cast<StringObject *>(receiver.asGC())->view();
-  auto subView = static_cast<StringObject *>(arg0.asGC())->view();
-  size_t pos = strView.find(subView);
-  return Value::integer((pos == std::string_view::npos) ? -1 : static_cast<int64_t>(pos));
+
+  const std::string &haystack = static_cast<StringObject *>(receiver.asGC())->str();
+  const std::string &needle = static_cast<StringObject *>(arg0.asGC())->str();
+
+  if (needle.empty())
+    return Value::integer(0);
+
+  size_t bytePos = haystack.find(needle);
+  if (bytePos == std::string::npos) {
+    return Value::integer(-1);
+  }
+
+  return Value::integer(Utf8Utils::byteOffsetToCharIndex(haystack, bytePos));
+}
+
+static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
+  Value arg0 = (argc > 0) ? argv[0] : Value::nil();
+  if (!receiver.isString())
+    return Value::nil();
+
+  const std::string &strData = static_cast<StringObject *>(receiver.asGC())->str();
+  std::string delim = (arg0.isString()) ? static_cast<StringObject *>(arg0.asGC())->str() : "";
+
+  auto *list = vm->allocateList(0);
+  vm->protect(Value::object(list));
+
+  if (delim.empty()) {
+
+    size_t i = 0;
+    size_t len = strData.length();
+    const char *data = strData.data();
+
+    while (i < len) {
+      int seqLen = Utf8Utils::sequenceLength(static_cast<unsigned char>(data[i]));
+
+      list->elements.push_back(Value::object(vm->allocateString(strData.substr(i, seqLen))));
+      i += seqLen;
+    }
+  } else {
+
+    size_t start = 0;
+    size_t end = 0;
+    size_t delimLen = delim.length();
+
+    while ((end = strData.find(delim, start)) != std::string::npos) {
+      list->elements.push_back(
+          Value::object(vm->allocateString(strData.substr(start, end - start))));
+      start = end + delimLen;
+    }
+
+    list->elements.push_back(Value::object(vm->allocateString(strData.substr(start))));
+  }
+
+  vm->unprotect(1);
+  return Value::object(list);
+}
+
+Value stringGetItem(VM *vm, Value receiver, int64_t index) {
+  if (!receiver.isString())
+    return Value::nil();
+  const std::string &strData = static_cast<StringObject *>(receiver.asGC())->str();
+
+  int64_t charLen = Utf8Utils::countCharacters(strData);
+  if (index < 0)
+    index = charLen + index;
+
+  if (index < 0 || index >= charLen) {
+
+    return Value::nil();
+  }
+
+  size_t byteStart = Utf8Utils::charIndexToByteOffset(strData, index);
+
+  int seqLen = Utf8Utils::sequenceLength(static_cast<unsigned char>(strData[byteStart]));
+
+  return Value::object(vm->allocateString(strData.substr(byteStart, seqLen)));
 }
 
 static Value stringContains(VM *vm, Value receiver, int argc, Value *argv) {
@@ -344,32 +553,6 @@ static Value stringTrim(VM *vm, Value receiver, int argc, Value *argv) {
   return Value::object(vm->allocateString(data.substr(start, end - start + 1)));
 }
 
-static Value stringSplit(VM *vm, Value receiver, int argc, Value *argv) {
-  Value arg0 = (argc >= 1) ? argv[0] : Value::nil();
-
-  if (!receiver.isString())
-    return Value::nil();
-  auto *str = static_cast<StringObject *>(receiver.asGC());
-  std::string delimiter = (arg0.isString()) ? static_cast<StringObject *>(arg0.asGC())->str() : "";
-  auto *result = vm->allocateList(0);
-  vm->protect(Value::object(result));
-  std::string strData = str->str();
-  if (delimiter.empty()) {
-    for (char c : strData)
-      result->elements.push_back(Value::object(vm->allocateString(std::string(1, c))));
-  } else {
-    size_t start = 0, end;
-    while ((end = strData.find(delimiter, start)) != std::string::npos) {
-      result->elements.push_back(
-          Value::object(vm->allocateString(strData.substr(start, end - start))));
-      start = end + delimiter.length();
-    }
-    result->elements.push_back(Value::object(vm->allocateString(strData.substr(start))));
-  }
-  vm->unprotect(1);
-  return Value::object(result);
-}
-
 static Value stringReplace(VM *vm, Value receiver, int argc, Value *argv) {
   Value arg0 = (argc > 0) ? argv[0] : Value::nil();
   Value arg1 = (argc > 1) ? argv[1] : Value::nil();
@@ -432,6 +615,7 @@ void SymbolTable::registerBuiltinMethods() {
   mapMethods[remove] = {mapRemove, 1};
 
   stringMethods[slice] = {stringSlice, 2};
+  stringMethods[byteSlice] = {stringByteSlice, 2};
   stringMethods[indexOf] = {stringIndexOf, 1};
   stringMethods[find] = {stringIndexOf, 1};
   stringMethods[contains] = {stringContains, 1};
@@ -483,6 +667,10 @@ bool StdlibDispatcher::getProperty(VM *vm, Value object, StringObject *fieldName
   if (object.isString()) {
     auto *str = static_cast<StringObject *>(object.asGC());
     if (fieldName == syms.length) {
+      outValue = Value::integer(Utf8Utils::countCharacters(str->str()));
+      return true;
+    }
+    if (fieldName == syms.byteLength) {
       outValue = Value::integer(str->length);
       return true;
     }

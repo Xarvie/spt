@@ -122,6 +122,7 @@ struct SymbolTable {
   StringObject *push = nullptr;
   StringObject *pop = nullptr;
   StringObject *length = nullptr;
+  StringObject *byteLength = nullptr;
   StringObject *size = nullptr;
   StringObject *get = nullptr;
   StringObject *set = nullptr;
@@ -130,6 +131,7 @@ struct SymbolTable {
   StringObject *values = nullptr;
   StringObject *clear = nullptr;
   StringObject *slice = nullptr;
+  StringObject *byteSlice = nullptr;
   StringObject *indexOf = nullptr;
   StringObject *contains = nullptr;
   StringObject *join = nullptr;
@@ -206,6 +208,7 @@ struct SymbolTable {
     push = pool.intern("push");
     pop = pool.intern("pop");
     length = pool.intern("length");
+    byteLength = pool.intern("byteLength");
     size = pool.intern("size");
     get = pool.intern("get");
     set = pool.intern("set");
@@ -214,6 +217,7 @@ struct SymbolTable {
     values = pool.intern("values");
     clear = pool.intern("clear");
     slice = pool.intern("slice");
+    byteSlice = pool.intern("byteSlice");
     indexOf = pool.intern("indexOf");
     contains = pool.intern("contains");
     join = pool.intern("join");
