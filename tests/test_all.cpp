@@ -495,11 +495,11 @@ void registerClasses(TestRunner &runner) {
                     this.x = x;
                     this.y = y;
                 }
-                void move(Point this, int dx, int dy) {
+                void move(int dx, int dy) {
                     this.x = this.x + dx;
                     this.y = this.y + dy;
                 }
-                void scale(Point this, int factor) {
+                void scale(int factor) {
                     this.x = this.x * factor;
                     this.y = this.y * factor;
                 }
@@ -1171,10 +1171,10 @@ void registerInvokeTests(TestRunner &runner) {
   runner.runTest("Invoke - Class Method Multiple Args",
                  R"(
             class Math {
-                int add3(Math this, int a, int b, int c) {
+                int add3(int a, int b, int c) {
                     return a + b + c;
                 }
-                int mul3(Math this, int a, int b, int c) {
+                int mul3(int a, int b, int c) {
                     return a * b * c;
                 }
             }
@@ -1212,7 +1212,7 @@ void registerInvokeTests(TestRunner &runner) {
   runner.runTest("Invoke - Method with Closure Argument",
                  R"(
             class Processor {
-                int process(Processor this, function f, int value) {
+                int process(function f, int value) {
                     return f(value);
                 }
             }
