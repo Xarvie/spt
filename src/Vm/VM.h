@@ -172,6 +172,10 @@ public:
 
   FiberObject *mainFiber() const { return mainFiber_; }
 
+  // === 全局环境访问 ===
+  // 获取当前主脚本的 _ENV 表（C API 使用）
+  MapObject *getGlobalEnv() const { return globalEnv_; }
+
   const SymbolTable &symbols() const { return *symbols_; }
 
   // === Fiber 操作 ===
@@ -323,6 +327,10 @@ private:
 
   // === 全局变量表 - 使用 StringObject* 作为键提高性能 ===
   StringMap<Value> globals_;
+
+  // === 全局环境缓存 - 用于 C API 稳定访问 _ENV ===
+  // 存储当前主脚本的 _ENV 表，避免依赖栈帧状态
+  MapObject *globalEnv_ = nullptr;
 
   // === 模块缓存与加载 ===
   ankerl::unordered_dense::map<std::string, CompiledChunk> modules_;

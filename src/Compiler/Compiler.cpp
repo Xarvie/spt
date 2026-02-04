@@ -30,14 +30,8 @@ CompiledChunk Compiler::compile(AstNode *ast) {
 }
 
 CompiledChunk Compiler::compileModule(BlockNode *block) {
-
   bool useDefer = checkPresenceDefer(block);
   cg_->beginFunction(source_, moduleName_, 0, false, useDefer, block);
-
-  int envSlot = cg_->allocSlot();
-  cg_->declareLocal("__env");
-  cg_->current()->locals.push_back({"__env", envSlot, cg_->currentScopeDepth(), false});
-  cg_->emitABC(OpCode::OP_NEWMAP, envSlot, 0, 0);
 
   for (auto *stmt : block->statements) {
     if (auto *funcDecl = dynamic_cast<FunctionDeclNode *>(stmt)) {
@@ -667,18 +661,14 @@ int Compiler::compileCondition(Expression *expr) {
           op = OpCode::OP_EQK;
           optimized = true;
         }
-      }
-
-      else if (bin->op == OperatorKind::LT) {
+      } else if (bin->op == OperatorKind::LT) {
         if (isSmallInt(bin->right, imm)) {
           op = OpCode::OP_LTI;
           optimized = true;
         } else {
           op = OpCode::OP_LT;
         }
-      }
-
-      else if (bin->op == OperatorKind::LE) {
+      } else if (bin->op == OperatorKind::LE) {
         if (isSmallInt(bin->right, imm)) {
           op = OpCode::OP_LEI;
           optimized = true;
@@ -734,7 +724,6 @@ int Compiler::compileCondition(Expression *expr) {
 }
 
 void Compiler::compileIfStatement(IfStatementNode *stmt) {
-
   int jumpToElse = compileCondition(stmt->condition);
 
   compileBlock(stmt->thenBlock);
@@ -742,7 +731,6 @@ void Compiler::compileIfStatement(IfStatementNode *stmt) {
   std::vector<int> endJumps;
 
   if (!stmt->elseIfClauses.empty() || stmt->elseBlock) {
-
     int jumpToEnd = cg_->emitJump(OpCode::OP_JMP);
     endJumps.push_back(jumpToEnd);
   }
@@ -792,9 +780,7 @@ static Expression *getStepExpression(const std::string &varName, Statement *upda
         return ua->rvalue;
       }
     }
-  }
-
-  else if (auto *assign = dynamic_cast<AssignmentNode *>(updateStmt)) {
+  } else if (auto *assign = dynamic_cast<AssignmentNode *>(updateStmt)) {
     if (assign->lvalues.size() == 1 && assign->rvalues.size() == 1) {
       auto *lId = dynamic_cast<IdentifierNode *>(assign->lvalues[0]);
       if (lId && lId->name == varName) {
@@ -1061,7 +1047,6 @@ void Compiler::compileReturn(ReturnStatementNode *stmt) {
 }
 
 void Compiler::compileBreak(BreakStatementNode *) {
-
   int jump = cg_->emitJump(OpCode::OP_JMP);
 
   if (cg_->current()->loops.empty()) {
@@ -1138,7 +1123,7 @@ void Compiler::compileUpdateAssignment(UpdateAssignmentNode *stmt) {
     cg_->emitABC(OpCode::OP_GETUPVAL, leftSlot, lv.a, 0);
     break;
   case LValue::GLOBAL:
-    cg_->emitABx(OpCode::OP_GETFIELD, leftSlot, lv.a);
+    cg_->emitGetTabUp(leftSlot, cg_->getEnvUpvalueIndex(), lv.a);
     break;
   case LValue::FIELD:
     cg_->emitABC(OpCode::OP_GETFIELD, leftSlot, lv.a, lv.b);
@@ -1258,27 +1243,6 @@ void Compiler::compileLiteral(Expression *expr, int dest) {
   cg_->emitABx(OpCode::OP_LOADK, dest, idx);
 }
 
-int Compiler::emitLoadEnvironment() {
-
-  int local = cg_->resolveLocal("__env");
-  if (local >= 0) {
-    int temp = cg_->allocSlot();
-    cg_->emitABC(OpCode::OP_MOVE, temp, local, 0);
-    return temp;
-  }
-
-  int upval = cg_->resolveUpvalue("__env");
-  if (upval >= 0) {
-    int dest = cg_->allocSlot();
-    cg_->emitABC(OpCode::OP_GETUPVAL, dest, upval, 0);
-    return dest;
-  }
-
-  error("Internal Compiler Error: Global environment '__env' lost in nested "
-        "scope.");
-  return 0;
-}
-
 void Compiler::compileIdentifier(IdentifierNode *node, int dest) {
 
   int local = cg_->resolveLocal(node->name);
@@ -1294,20 +1258,9 @@ void Compiler::compileIdentifier(IdentifierNode *node, int dest) {
     return;
   }
 
-  int envSlot = emitLoadEnvironment();
-
   int nameIdx = cg_->addStringConstant(node->name);
 
-  if (nameIdx <= 255) {
-    cg_->emitABC(OpCode::OP_GETFIELD, dest, envSlot, nameIdx);
-  } else {
-    int keySlot = cg_->allocSlot();
-    cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-    cg_->emitABC(OpCode::OP_GETINDEX, dest, envSlot, keySlot);
-    cg_->freeSlots(1);
-  }
-
-  cg_->freeSlots(1);
+  cg_->emitGetTabUp(dest, cg_->getEnvUpvalueIndex(), nameIdx);
 }
 
 void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
@@ -1320,6 +1273,7 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
     cg_->patchJump(jump);
     return;
   }
+
   if (node->op == OperatorKind::OR) {
     compileExpression(node->left, dest);
     cg_->emitABC(OpCode::OP_TEST, dest, 0, 1);
@@ -1345,12 +1299,10 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
     }
 
     if (canOptimize) {
-
       int leftSlot = tryResolveLocalSlot(cg_.get(), node->left);
       bool isTemp = false;
 
       if (leftSlot == -1) {
-
         leftSlot = cg_->allocSlot();
         compileExpression(node->left, leftSlot);
         isTemp = true;
@@ -1365,7 +1317,6 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
   }
 
   if (isComparisonOp(node->op)) {
-
     int leftSlot = tryResolveLocalSlot(cg_.get(), node->left);
     bool isTemp = false;
 
@@ -1393,9 +1344,7 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
         op = OpCode::OP_EQK;
         optimized = true;
       }
-    }
-
-    else if (node->op == OperatorKind::LT) {
+    } else if (node->op == OperatorKind::LT) {
       if (isSmallInt(node->right, imm)) {
         op = OpCode::OP_LTI;
         optimized = true;
@@ -1420,7 +1369,6 @@ void Compiler::compileBinaryOp(BinaryOpNode *node, int dest) {
           (op == OpCode::OP_EQK) ? static_cast<uint8_t>(constIdx) : static_cast<uint8_t>(imm);
       cg_->emitABC(op, leftSlot, bVal, k);
     } else {
-
       int rightSlot = tryResolveLocalSlot(cg_.get(), node->right);
       bool rightTemp = false;
       if (rightSlot == -1) {
@@ -1550,14 +1498,7 @@ void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
       cg_->emitABC(OpCode::OP_GETUPVAL, classSlot, upval, 0);
     } else {
       int nameIdx = cg_->addStringConstant(className);
-      if (nameIdx <= 255) {
-        cg_->emitABC(OpCode::OP_GETFIELD, classSlot, 0, nameIdx);
-      } else {
-        int keySlot = cg_->allocSlot();
-        cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-        cg_->emitABC(OpCode::OP_GETINDEX, classSlot, 0, keySlot);
-        cg_->freeSlots(1);
-      }
+      cg_->emitGetTabUp(classSlot, cg_->getEnvUpvalueIndex(), nameIdx);
     }
   }
 
@@ -1576,7 +1517,6 @@ void Compiler::compileNewExpression(NewExpressionNode *node, int dest) {
 }
 
 void Compiler::compileThis(ThisExpressionNode *, int dest) {
-
   int local = cg_->resolveLocal("this");
   if (local >= 0) {
     cg_->emitABC(OpCode::OP_MOVE, dest, local, 0);
@@ -1663,37 +1603,14 @@ void Compiler::compileLambdaBody(LambdaNode *lambda, int dest) {
 void Compiler::emitStoreToEnv(const std::string &name, int srcSlot) {
   int nameIdx = cg_->addStringConstant(name);
 
-  bool isRootFunc = (cg_->current()->enclosing == nullptr);
-
-  if (isRootFunc) {
-
-    if (nameIdx <= 255) {
-      cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, srcSlot);
-    } else {
-      int keySlot = cg_->allocSlot();
-      cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-      cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, srcSlot);
-      cg_->freeSlots(1);
-    }
-  } else {
-
-    int envSlot = emitLoadEnvironment();
-    if (nameIdx <= 255) {
-      cg_->emitABC(OpCode::OP_SETFIELD, envSlot, nameIdx, srcSlot);
-    } else {
-      int keySlot = cg_->allocSlot();
-      cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-      cg_->emitABC(OpCode::OP_SETINDEX, envSlot, keySlot, srcSlot);
-      cg_->freeSlots(1);
-    }
-    cg_->freeSlots(1);
-  }
+  cg_->emitSetTabUp(cg_->getEnvUpvalueIndex(), nameIdx, srcSlot);
 }
 
 LValue Compiler::compileLValue(Expression *expr) {
   LValue lv;
 
   cg_->setLineGetter(expr);
+
   if (auto *id = dynamic_cast<IdentifierNode *>(expr)) {
 
     int local = cg_->resolveLocal(id->name);
@@ -1711,18 +1628,8 @@ LValue Compiler::compileLValue(Expression *expr) {
     }
 
     int nameIdx = cg_->addStringConstant(id->name);
-    bool isRootFunc = (cg_->current()->enclosing == nullptr);
-
-    if (isRootFunc && nameIdx <= 255) {
-      lv.kind = LValue::GLOBAL;
-      lv.a = nameIdx;
-    } else {
-
-      int envSlot = emitLoadEnvironment();
-      lv.kind = LValue::FIELD;
-      lv.a = envSlot;
-      lv.b = nameIdx;
-    }
+    lv.kind = LValue::GLOBAL;
+    lv.a = nameIdx;
     return lv;
   }
 
@@ -1789,7 +1696,7 @@ void Compiler::emitStore(const LValue &lv, int srcReg) {
     cg_->emitABC(OpCode::OP_SETUPVAL, srcReg, lv.a, 0);
     break;
   case LValue::GLOBAL:
-    cg_->emitABC(OpCode::OP_SETFIELD, 0, lv.a, srcReg);
+    cg_->emitSetTabUp(cg_->getEnvUpvalueIndex(), lv.a, srcReg);
     break;
   case LValue::FIELD:
     cg_->emitABC(OpCode::OP_SETFIELD, lv.a, lv.b, srcReg);
@@ -1876,7 +1783,6 @@ bool Compiler::isComparisonOp(OperatorKind op) {
 }
 
 void Compiler::compileImportNamespace(ImportNamespaceNode *node) {
-
   int moduleNameIdx = cg_->addStringConstant(node->modulePath);
 
   int destSlot = cg_->addLocal(node->alias);
@@ -1884,26 +1790,16 @@ void Compiler::compileImportNamespace(ImportNamespaceNode *node) {
   cg_->emitABx(OpCode::OP_IMPORT, destSlot, moduleNameIdx);
 
   if (cg_->currentScopeDepth() == 1) {
-    int nameIdx = cg_->addStringConstant(node->alias);
-    if (nameIdx <= 255) {
-      cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, destSlot);
-    } else {
-      int keySlot = cg_->allocSlot();
-      cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-      cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, destSlot);
-      cg_->freeSlots(1);
-    }
+    emitStoreToEnv(node->alias, destSlot);
   }
 
   cg_->markInitialized();
 }
 
 void Compiler::compileImportNamed(ImportNamedNode *node) {
-
   int moduleNameIdx = cg_->addStringConstant(node->modulePath);
 
   for (const auto *spec : node->specifiers) {
-
     if (spec->isTypeOnly) {
       continue;
     }
@@ -1916,15 +1812,7 @@ void Compiler::compileImportNamed(ImportNamedNode *node) {
     cg_->emitABC(OpCode::OP_IMPORT_FROM, destSlot, moduleNameIdx, symbolNameIdx);
 
     if (cg_->currentScopeDepth() == 1) {
-      int nameIdx = cg_->addStringConstant(localName);
-      if (nameIdx <= 255) {
-        cg_->emitABC(OpCode::OP_SETFIELD, 0, nameIdx, destSlot);
-      } else {
-        int keySlot = cg_->allocSlot();
-        cg_->emitABx(OpCode::OP_LOADK, keySlot, nameIdx);
-        cg_->emitABC(OpCode::OP_SETINDEX, 0, keySlot, destSlot);
-        cg_->freeSlots(1);
-      }
+      emitStoreToEnv(localName, destSlot);
     }
 
     cg_->markInitialized();

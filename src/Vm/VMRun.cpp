@@ -1033,6 +1033,102 @@ InterpretResult VM::run() {
     SPT_DISPATCH();
   }
 
+  // =========================================================================
+  // OP_GETTABUP - 从 upvalue 指向的表中读取字段 (Lua 5.4 _ENV 风格全局变量读取)
+  // 指令格式: A B C -> R[A] := UpValue[B][K[C]]
+  // 用途: 读取全局变量，其中 upvalue[0] 是 _ENV (全局环境表)
+  // =========================================================================
+  SPT_OPCODE(OP_GETTABUP) {
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
+
+    // 获取 upvalue[B] 指向的表
+    if (B >= frame->closure->upvalueCount) {
+      SAVE_PC();
+      runtimeError("Invalid upvalue index: %d", B);
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    UpValue *upval = frame->closure->scriptUpvalues[B];
+    Value tableVal = *upval->location;
+
+    // 获取常量表中的键
+    const Value *k = frame->closure->proto->k;
+    Value keyVal = k[C];
+
+    if (!keyVal.isString()) {
+      SAVE_PC();
+      runtimeError("GETTABUP requires string key constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    StringObject *fieldName = keyVal.asString();
+
+    // 从表中获取值
+    if (tableVal.isMap()) {
+      MapObject *envMap = static_cast<MapObject *>(tableVal.asGC());
+      Value result = envMap->get(Value::object(fieldName));
+
+      // 如果在 _ENV 中找不到，回退到预注册的全局变量
+      if (result.isNil()) {
+        auto it = globals_.find(fieldName);
+        if (it != globals_.end()) {
+          result = it->second;
+        }
+      }
+      slots[A] = result;
+    } else {
+      SAVE_PC();
+      runtimeError("GETTABUP: upvalue[%d] is not a table (got %s)", B, tableVal.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
+  // =========================================================================
+  // OP_SETTABUP - 向 upvalue 指向的表中写入字段 (Lua 5.4 _ENV 风格全局变量写入)
+  // 指令格式: A B C -> UpValue[A][K[B]] := R[C]
+  // 用途: 写入全局变量，其中 upvalue[0] 是 _ENV (全局环境表)
+  // =========================================================================
+  SPT_OPCODE(OP_SETTABUP) {
+    uint8_t A = GETARG_A(inst);
+    uint8_t B = GETARG_B(inst);
+    uint8_t C = GETARG_C(inst);
+
+    // 获取 upvalue[A] 指向的表
+    if (A >= frame->closure->upvalueCount) {
+      SAVE_PC();
+      runtimeError("Invalid upvalue index: %d", A);
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    UpValue *upval = frame->closure->scriptUpvalues[A];
+    Value tableVal = *upval->location;
+
+    // 获取常量表中的键
+    const Value *k = frame->closure->proto->k;
+    Value keyVal = k[B];
+
+    if (!keyVal.isString()) {
+      SAVE_PC();
+      runtimeError("SETTABUP requires string key constant");
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    StringObject *fieldName = static_cast<StringObject *>(keyVal.asGC());
+
+    // 获取要写入的值
+    Value value = slots[C];
+
+    // 写入表
+    if (tableVal.isMap()) {
+      MapObject *envMap = static_cast<MapObject *>(tableVal.asGC());
+      envMap->set(Value::object(fieldName), value);
+    } else {
+      SAVE_PC();
+      runtimeError("SETTABUP: upvalue[%d] is not a table (got %s)", A, tableVal.typeName());
+      return InterpretResult::RUNTIME_ERROR;
+    }
+    SPT_DISPATCH();
+  }
+
   SPT_OPCODE(OP_CLOSURE) {
     uint8_t A = GETARG_A(inst);
     uint32_t Bx = GETARG_Bx(inst);

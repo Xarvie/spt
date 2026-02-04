@@ -66,6 +66,8 @@
 // 编译测试
 #include "TestBytes.h"
 #include "TestCompiler.h"
+#include "TestSptAPI.h"
+#include "TestSptAPI2.h"
 
 // =========================================================
 // 主函数
@@ -134,6 +136,7 @@ int main(int argc, char *argv[]) {
   registerNativeMultiReturnTests(runner);
 
   registerCompilerTest(runner);
+
 #else
   // =====================================================
   // 快速测试 / 单项测试
@@ -142,7 +145,10 @@ int main(int argc, char *argv[]) {
   //  registerFib40Bench(runner);
   registerBench1(runner);
 #endif
-
   runner.runAll();
+
+  std::cout << "========================\n========================\n" << std::endl;
+  runSptCApiDirectTests();
+  runSptCApiExtendedTests();
   return 0;
 }

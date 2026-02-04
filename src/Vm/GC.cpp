@@ -187,6 +187,10 @@ void GC::markRoots() {
     markObject(vm_->currentFiber());
   }
 
+  if (vm_->getGlobalEnv()) {
+    markObject(vm_->getGlobalEnv());
+  }
+
   for (auto [nameStr, val] : vm_->globals_) {
     markObject(const_cast<StringObject *>(nameStr));
     markValue(val);

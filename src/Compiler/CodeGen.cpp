@@ -41,6 +41,9 @@ void CodeGen::beginFunction(const std::string &source, const std::string &name, 
   fs->maxStack = numParams;
 
   current_ = fs;
+
+  setupEnvUpvalue();
+
   beginScope();
 }
 
@@ -151,14 +154,15 @@ int CodeGen::resolveLocal(const std::string &name) {
 }
 
 int CodeGen::resolveUpvalue(const std::string &name) {
-  if (!current_->enclosing)
-    return -1;
 
   for (size_t i = 0; i < current_->upvalues.size(); ++i) {
     if (current_->upvalues[i].name == name) {
       return static_cast<int>(i);
     }
   }
+
+  if (!current_->enclosing)
+    return -1;
 
   FunctionState *enclosing = current_->enclosing;
   for (int i = static_cast<int>(enclosing->locals.size()) - 1; i >= 0; --i) {
@@ -280,5 +284,32 @@ void CodeGen::patchJumpTo(int jumpInst, int target) {
 }
 
 void CodeGen::emitCloseUpvalue(int slot) { emitABC(OpCode::OP_CLOSE_UPVALUE, slot, 0, 0); }
+
+void CodeGen::setupEnvUpvalue() {
+
+  if (current_->enclosing == nullptr) {
+
+    current_->upvalues.push_back({"_ENV", 0, true});
+  } else {
+
+    current_->upvalues.push_back({"_ENV", 0, false});
+  }
+}
+
+void CodeGen::emitGetTabUp(int dest, int upvalueIdx, int keyConstIdx) {
+
+  emitABC(OpCode::OP_GETTABUP, static_cast<uint8_t>(dest), static_cast<uint8_t>(upvalueIdx),
+          static_cast<uint8_t>(keyConstIdx));
+}
+
+void CodeGen::emitSetTabUp(int upvalueIdx, int keyConstIdx, int srcReg) {
+
+  emitABC(OpCode::OP_SETTABUP, static_cast<uint8_t>(upvalueIdx), static_cast<uint8_t>(keyConstIdx),
+          static_cast<uint8_t>(srcReg));
+}
+
+bool CodeGen::isMainFunction() const {
+  return current_ != nullptr && current_->enclosing == nullptr;
+}
 
 } // namespace spt

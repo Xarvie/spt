@@ -91,6 +91,8 @@ namespace spt {
   SPT_DISPATCH_TABLE_ENTRY(OP_SETUPVAL)                                                            \
   SPT_DISPATCH_TABLE_ENTRY(OP_CLOSURE)                                                             \
   SPT_DISPATCH_TABLE_ENTRY(OP_CLOSE_UPVALUE)                                                       \
+  SPT_DISPATCH_TABLE_ENTRY(OP_GETTABUP)                                                            \
+  SPT_DISPATCH_TABLE_ENTRY(OP_SETTABUP)                                                            \
   SPT_DISPATCH_TABLE_ENTRY(OP_ADD)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_SUB)                                                                 \
   SPT_DISPATCH_TABLE_ENTRY(OP_MUL)                                                                 \

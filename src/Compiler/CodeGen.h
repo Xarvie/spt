@@ -45,6 +45,17 @@ public:
   int resolveLocal(const std::string &name);
   int resolveUpvalue(const std::string &name);
 
+  // === 全局变量访问 ===
+  // 发射从 _ENV (upvalue[0]) 读取全局变量的指令
+  void emitGetTabUp(int dest, int upvalueIdx, int keyConstIdx);
+  // 发射向 _ENV (upvalue[0]) 写入全局变量的指令
+  void emitSetTabUp(int upvalueIdx, int keyConstIdx, int srcReg);
+  // 检查当前函数是否为主函数（顶层）
+  bool isMainFunction() const;
+
+  // 获取 _ENV 的 upvalue 索引（始终为 0）
+  int getEnvUpvalueIndex() const { return 0; }
+
   // === 常量管理 ===
   int addConstant(const ConstantValue &value);
   int addStringConstant(const std::string &s);
@@ -88,6 +99,8 @@ public:
 
 private:
   int addUpvalue(uint8_t index, bool isLocal, const std::string &name);
+  // 为子函数设置继承自父函数的 _ENV upvalue
+  void setupEnvUpvalue();
 
 private:
   std::string moduleName_;

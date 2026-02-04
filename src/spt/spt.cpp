@@ -59,7 +59,6 @@ struct spt_State {
   StateExtra *extra;
   bool ownsVM;
   spt_State *mainState;
-  // 修改后: 使用整数索引，-1 表示没有在调用中
   int callBase = -1;
 };
 
@@ -86,15 +85,13 @@ inline int absIndex(spt_State *S, int idx) {
   spt::FiberObject *fiber = S->fiber;
   int top = static_cast<int>(fiber->stackTop - fiber->stack);
 
-  if (idx == SPT_REGISTRYINDEX || idx == SPT_GLOBALSINDEX || idx <= SPT_UPVALUEINDEX(1)) {
+  if (idx == SPT_REGISTRYINDEX || idx <= SPT_UPVALUEINDEX(1)) {
     return idx;
   }
 
   if (idx > 0) {
     if (S->callBase >= 0) {
       int result = S->callBase + idx;
-      std::cerr << "[ABSINDEX] idx=" << idx << " callBase=" << S->callBase << " -> " << result
-                << std::endl;
       return result;
     }
     return idx;
@@ -117,28 +114,14 @@ inline spt::Value *getValuePtr(spt_State *S, int idx) {
     return &regValue;
   }
 
-  if (idx == SPT_GLOBALSINDEX) {
-    spt::FiberObject *mainFiber = S->vm->mainFiber();
-    if (mainFiber && mainFiber->frameCount > 0) {
-      return &mainFiber->frames[0].slots[0];
-    }
-    return nullptr;
-  }
-  // Upvalue 处理
   if (idx <= SPT_UPVALUEINDEX(1)) {
     StateExtra *extra = getExtra(S);
     if (!extra->currentCClosure) {
       return nullptr;
     }
 
-    // SPT_GLOBALSINDEX 是 -1000001
-    // SPT_UPVALUEINDEX(1) 是 -1000002
-    // 如果 idx 是 -1000002，upvalueIdx = 1
-    int upvalueIdx = SPT_GLOBALSINDEX - idx;
+    int upvalueIdx = SPT_REGISTRYINDEX - idx;
 
-    // 【关键修正】直接使用 upvalueIdx 作为数组下标
-    // nativeUpvalues[0] = 函数指针
-    // nativeUpvalues[1] = Upvalue 1
     int arrayIdx = upvalueIdx;
 
     if (arrayIdx >= 0 && arrayIdx < extra->currentCClosure->upvalueCount) {
@@ -151,9 +134,10 @@ inline spt::Value *getValuePtr(spt_State *S, int idx) {
   if (absIdx <= 0)
     return nullptr;
 
-  // 【关键检查】确保这里没有越界，并且 -1 的偏移量是正确的
-  // 如果 absIndex(1) 返回 base+1，这里取 stack[base]，即 stack[callBase]
-  // 必须确保 callBase 确实指向 Arg 1
+  int top = static_cast<int>(fiber->stackTop - fiber->stack);
+  if (absIdx > top)
+    return nullptr;
+
   return &fiber->stack[absIdx - 1];
 }
 
@@ -230,11 +214,6 @@ inline std::string formatString(const char *fmt, va_list ap) {
   return result;
 }
 
-// ============================================================================
-// 更新的 cFunctionTrampoline - 添加 receiver 类型打印
-// 替换 spt.cpp 中的 cFunctionTrampoline 函数
-// ============================================================================
-
 int cFunctionTrampoline(spt::VM *vm, spt::Closure *self, int argc, spt::Value *argv) {
   spt_State *S = static_cast<spt_State *>(vm->getUserData());
   if (!S) {
@@ -260,99 +239,23 @@ int cFunctionTrampoline(spt::VM *vm, spt::Closure *self, int argc, spt::Value *a
   int needed = argc + (hasReceiver ? 1 : 0);
   fiber->ensureStack(needed);
 
-  std::cerr << "\n[TRAMPOLINE] ========== CALL START ==========" << std::endl;
-  std::cerr << "[TRAMPOLINE] argc = " << argc << ", hasReceiver = " << hasReceiver << std::endl;
-  std::cerr << "[TRAMPOLINE] oldCallBase = " << oldCallBase << std::endl;
-
-  // 设置 callBase
   S->callBase = static_cast<int>(fiber->stackTop - fiber->stack);
-  std::cerr << "[TRAMPOLINE] NEW callBase = " << S->callBase << std::endl;
 
-  // Push receiver
   if (hasReceiver) {
     fiber->push(self->receiver);
-    int receiverType = static_cast<int>(self->receiver.type);
-    std::cerr << "[TRAMPOLINE] Pushed RECEIVER at stack[" << (S->callBase) << "]" << std::endl;
-    std::cerr << "[TRAMPOLINE]   receiver.type = " << receiverType;
-    // 打印类型名称
-    switch (receiverType) {
-    case 0:
-      std::cerr << " (Nil)";
-      break;
-    case 1:
-      std::cerr << " (Bool)";
-      break;
-    case 2:
-      std::cerr << " (Int)";
-      break;
-    case 3:
-      std::cerr << " (Float)";
-      break;
-    case 4:
-      std::cerr << " (String)";
-      break;
-    case 5:
-      std::cerr << " (List)";
-      break;
-    case 6:
-      std::cerr << " (Map)";
-      break;
-    case 7:
-      std::cerr << " (Object/Instance)";
-      break;
-    case 8:
-      std::cerr << " (Closure)";
-      break;
-    case 9:
-      std::cerr << " (Class)";
-      break;
-    case 10:
-      std::cerr << " (Upvalue)";
-      break;
-    case 11:
-      std::cerr << " (Fiber)";
-      break;
-    case 12:
-      std::cerr << " (NativeObject/CInstance)";
-      break;
-    case 13:
-      std::cerr << " (LightUserData)";
-      break;
-    default:
-      std::cerr << " (Unknown)";
-      break;
-    }
-    std::cerr << std::endl;
-
-    // 检查是否是 NativeInstance
-    std::cerr << "[TRAMPOLINE]   isNativeInstance() = " << self->receiver.isNativeInstance()
-              << std::endl;
-    std::cerr << "[TRAMPOLINE]   isInstance() = " << self->receiver.isInstance() << std::endl;
   }
 
-  // Push arguments
   for (int i = 0; i < argc; ++i) {
     fiber->push(argv[i]);
-    std::cerr << "[TRAMPOLINE] Pushed arg[" << i << "] at stack["
-              << (S->callBase + (hasReceiver ? 1 : 0) + i) << "] type=" << (int)argv[i].type
-              << std::endl;
   }
 
   int stackTopAfterPush = static_cast<int>(fiber->stackTop - fiber->stack);
-  std::cerr << "[TRAMPOLINE] stackTop after push = " << stackTopAfterPush << std::endl;
 
-  // 验证索引 1 对应的值
-  std::cerr << "[TRAMPOLINE] Verifying index 1 before cfunc call:" << std::endl;
   spt::Value *slot1 = getValuePtr(S, 1);
   if (slot1) {
-    std::cerr << "[TRAMPOLINE]   getValuePtr(S, 1) type = " << (int)slot1->type << std::endl;
-    std::cerr << "[TRAMPOLINE]   isNativeInstance = " << slot1->isNativeInstance() << std::endl;
     if (slot1->isNativeInstance()) {
       spt::NativeInstance *ni = static_cast<spt::NativeInstance *>(slot1->asGC());
-      std::cerr << "[TRAMPOLINE]   NativeInstance data ptr = " << ni->data << std::endl;
     }
-  } else {
-    std::cerr << "[TRAMPOLINE]   getValuePtr(S, 1) returned NULL!" << std::endl;
   }
 
   spt::JmpBufNode node;
@@ -362,9 +265,7 @@ int cFunctionTrampoline(spt::VM *vm, spt::Closure *self, int argc, spt::Value *a
   int nResults = 0;
 
   if (setjmp(node.buf) == 0) {
-    std::cerr << "[TRAMPOLINE] Calling cfunc..." << std::endl;
     nResults = cfunc(S);
-    std::cerr << "[TRAMPOLINE] cfunc returned, nResults = " << nResults << std::endl;
     vm->setCJumpHead(node.prev);
   } else {
     S->callBase = oldCallBase;
@@ -372,13 +273,8 @@ int cFunctionTrampoline(spt::VM *vm, spt::Closure *self, int argc, spt::Value *a
     vm->setCJumpHead(node.prev);
     fiber->stackTop = oldTop;
     fiber->frameCount = oldFrameCount;
-    std::cerr << "[TRAMPOLINE] EXCEPTION: " << node.errorMsg << std::endl;
-    // FIX: Use the VM's own error system so the error message is properly stored.
-    // Previously only threw CExtensionException, but the VM didn't extract e.what()
-    // into its error value, so stale error messages from prior calls leaked through.
     spt::Value errVal = spt::Value::object(vm->allocateString(node.errorMsg.c_str()));
     vm->throwError(errVal);
-    // Fallback if throwError returns (shouldn't normally happen)
     throw spt::CExtensionException(node.errorMsg);
   }
 
@@ -390,25 +286,11 @@ int cFunctionTrampoline(spt::VM *vm, spt::Closure *self, int argc, spt::Value *a
     return 0;
   }
 
-  // 处理返回值
-  std::cerr << "[TRAMPOLINE] Processing " << nResults << " return value(s)..." << std::endl;
-
   std::vector<spt::Value> results;
   results.reserve(nResults);
   for (int i = 0; i < nResults; ++i) {
     int peekIdx = nResults - 1 - i;
     spt::Value val = fiber->peek(peekIdx);
-
-    std::cerr << "[TRAMPOLINE] peek(" << peekIdx << "): type=" << (int)val.type;
-    if (val.isString()) {
-      std::cerr << " STRING=\"" << val.asString()->c_str() << "\"";
-    } else if (val.isInt()) {
-      std::cerr << " INT=" << val.asInt();
-    } else if (val.isFloat()) {
-      std::cerr << " FLOAT=" << val.asFloat();
-    }
-    std::cerr << std::endl;
-
     results.push_back(val);
   }
 
@@ -418,15 +300,8 @@ int cFunctionTrampoline(spt::VM *vm, spt::Closure *self, int argc, spt::Value *a
     fiber->push(results[i]);
   }
 
-  std::cerr << "[TRAMPOLINE] ========== CALL END ==========" << std::endl;
-
   return nResults;
 }
-
-// ============================================================================
-// 同时检查 absIndex 函数的计算是否正确
-// 在 spt.cpp 的 absIndex 函数中添加调试
-// ============================================================================
 
 spt::Closure *createCClosure(spt_State *S, spt_CFunction fn, int nupvalues) {
 
@@ -534,12 +409,8 @@ SPT_API int spt_gettop(spt_State *S) {
 
   if (S->callBase >= 0) {
     int relativeTop = absoluteTop - S->callBase;
-    std::cerr << "[SPT_GETTOP] callBase=" << S->callBase << ", absoluteTop=" << absoluteTop
-              << ", returning relative=" << relativeTop << std::endl;
     return relativeTop;
   }
-
-  std::cerr << "[SPT_GETTOP] callBase=-1, returning absolute=" << absoluteTop << std::endl;
   return absoluteTop;
 }
 
@@ -1333,7 +1204,7 @@ SPT_API void spt_mapkeys(spt_State *S, int idx) {
   }
 
   spt::MapObject *map = static_cast<spt::MapObject *>(v.asGC());
-  spt::ListObject *keys = S->vm->allocateList(static_cast<int>(map->entries.size()));
+  spt::ListObject *keys = S->vm->allocateList(0);
 
   for (const auto &[key, val] : map->entries) {
     keys->elements.push_back(key);
@@ -1353,7 +1224,7 @@ SPT_API void spt_mapvalues(spt_State *S, int idx) {
   }
 
   spt::MapObject *map = static_cast<spt::MapObject *>(v.asGC());
-  spt::ListObject *values = S->vm->allocateList(static_cast<int>(map->entries.size()));
+  spt::ListObject *values = S->vm->allocateList(0);
 
   for (const auto &[key, val] : map->entries) {
     values->elements.push_back(val);
@@ -2168,14 +2039,9 @@ SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
 
   spt::FiberObject *fiber = S->fiber;
 
-  // 1. 计算基准位置（用于错误恢复或手动校验）
-  // topBefore 指向参数之后的下一个空槽
-  // 栈布局: [func] [arg1] ... [argN] [topBefore]
-  // baseHeight 是 func 之前的栈高度，即 func 所在的索引
   int topBefore = static_cast<int>(fiber->stackTop - fiber->stack);
   int baseHeight = topBefore - nargs - 1;
 
-  // 2. 获取并检查函数对象
   int funcIdx = -(nargs + 1);
   spt::Value funcVal = getValue(S, funcIdx);
 
@@ -2187,24 +2053,20 @@ SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
 
   spt::Closure *closure = static_cast<spt::Closure *>(funcVal.asGC());
 
-  // 3. 栈空间检查
   if (!ensureStack(S, nargs + 1)) {
     setError(S, "Stack overflow");
     spt_pushstring(S, "Stack overflow");
     return SPT_ERRRUN;
   }
 
-  // 4. 执行调用
-  // 修正：直接传入 nresults，让 VM 处理返回值数量对齐 (VM.cpp 中已实现此逻辑)
   spt::InterpretResult result = S->vm->call(closure, nargs, nresults);
 
-  // 5. 错误处理
   if (result != spt::InterpretResult::OK) {
     if (S->vm->hasError()) {
       spt::Value err = S->vm->getErrorValue();
-      // 发生错误时，VM 可能没有清理参数，这里手动重置栈顶到函数之前
+
       fiber->stackTop = fiber->stack + baseHeight;
-      pushValue(S, err); // 将错误对象压栈
+      pushValue(S, err);
       S->vm->clearError();
     } else {
       fiber->stackTop = fiber->stack + baseHeight;
@@ -2212,14 +2074,6 @@ SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
     }
     return SPT_ERRRUN;
   }
-
-  // 6. 成功返回
-  // VM::call 已经保证了：
-  // a. 如果 nresults == SPT_MULTRET (-1)，所有返回值都在栈顶。
-  // b. 如果 nresults >= 0，栈顶恰好有 nresults 个值（VM 自动补 nil 或截断）。
-  // c. 返回值起始位置已被移动到 baseHeight (即覆盖了原来的 func 位置)。
-
-  // 这里不再需要任何手动的栈调整代码，直接返回即可。
 
   return SPT_OK;
 }
@@ -2708,7 +2562,25 @@ SPT_API void spt_throw(spt_State *S) {
     return;
 
   spt::Value error = S->fiber->pop();
-  S->vm->throwError(error);
+
+  std::string msg;
+  if (error.isString()) {
+    msg = error.asString()->c_str();
+  } else {
+    msg = error.toString();
+  }
+
+  spt::VM *vm = S->vm;
+  spt::JmpBufNode *node = vm->getCJumpHead();
+
+  if (node) {
+
+    node->errorMsg = msg;
+    std::longjmp(node->buf, 1);
+  } else {
+
+    vm->throwError(error);
+  }
 }
 
 SPT_API void spt_seterrorhandler(spt_State *S, spt_ErrorHandler handler, void *ud) {
@@ -3128,7 +3000,7 @@ SPT_API int spt_rawget(spt_State *S, int idx) {
 
   if (t) {
     if (t->isInstance()) {
-      // 这里的 getField 来自 Object.h，直接查哈希表，不走 Magic Method
+
       spt::Instance *inst = static_cast<spt::Instance *>(t->asGC());
       if (key.isString()) {
         result = inst->getField(key.asString());

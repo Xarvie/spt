@@ -40,6 +40,10 @@ enum class OpCode : uint8_t {
   OP_CLOSURE,       /* A Bx    | R[A] := Closure(KPROTO[Bx])                */
   OP_CLOSE_UPVALUE, /* A       | Close UpValues >= R[A]                     */
 
+  /* --- _ENV 全局变量访问 --- */
+  OP_GETTABUP, /* A B C   | R[A] := UpValue[B][K[C]]  用于全局变量读取   */
+  OP_SETTABUP, /* A B C   | UpValue[A][K[B]] := R[C]  用于全局变量写入   */
+
   /* --- 算术运算 --- */
   OP_ADD,  /* A B C   | R[A] := R[B] + R[C]                        */
   OP_SUB,  /* A B C   | R[A] := R[B] - R[C]                        */

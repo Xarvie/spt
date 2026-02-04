@@ -12,7 +12,7 @@
  * Indexing:
  * - Positive (+i): Absolute index from stack base (1 = bottom).
  * - Negative (-i): Relative index from stack top (-1 = top).
- * - Pseudo-indices: SPT_REGISTRYINDEX, SPT_GLOBALSINDEX for special tables.
+ * - Pseudo-indices: SPT_REGISTRYINDEX for special tables, SPT_UPVALUEINDEX(i) for upvalues.
  */
 
 /*
@@ -546,10 +546,11 @@ enum {
 
 /* Pseudo-indices for special locations */
 #define SPT_REGISTRYINDEX (-1000000)
-#define SPT_GLOBALSINDEX (-1000001)
 
-/* Upvalue pseudo-index - accesses upvalues in C closures */
-#define SPT_UPVALUEINDEX(i) (SPT_GLOBALSINDEX - (i))
+/* Upvalue pseudo-index - accesses upvalues in C closures
+ * SPT_UPVALUEINDEX(1) = -1000001, SPT_UPVALUEINDEX(2) = -1000002, etc.
+ */
+#define SPT_UPVALUEINDEX(i) (SPT_REGISTRYINDEX - (i))
 
 /* Multiple return values marker */
 #define SPT_MULTRET (-1)
