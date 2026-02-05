@@ -621,6 +621,125 @@ InterpretResult VM::run() {
           }
         }
       }
+
+      if (index.isString()) {
+        StringObject *fieldName = index.asString();
+
+        if (container.isInstance()) {
+          auto *instance = static_cast<Instance *>(container.asGC());
+
+          if (instance->klass && instance->klass->hasFlag(CLASS_HAS_SET)) {
+            Value mmSet = instance->klass->getMagicMethod(MM_SET);
+            if (mmSet.isClosure()) {
+              Closure *_mmClosure = static_cast<Closure *>(mmSet.asGC());
+              if (_mmClosure->isNative()) {
+                Value _mmArgs[3] = {container, index, value};
+                size_t _oldTop = fiber->stackTop - fiber->stack;
+                int _numRes;
+                try {
+                  PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 3, _mmArgs));
+                } catch (const SptPanic &) {
+                  fiber->stackTop = fiber->stack + _oldTop;
+                  return InterpretResult::RUNTIME_ERROR;
+                } catch (const CExtensionException &e) {
+                  fiber->stackTop = fiber->stack + _oldTop;
+                  if (!hasError_)
+                    runtimeError("%s", e.what());
+                  return InterpretResult::RUNTIME_ERROR;
+                }
+                if (hasError_)
+                  return InterpretResult::RUNTIME_ERROR;
+                fiber->stackTop = fiber->stack + _oldTop;
+                SPT_DISPATCH();
+              } else {
+                const Prototype *_proto = _mmClosure->proto;
+                fiber->ensureStack(_proto->maxStackSize + 4);
+                fiber->ensureFrames(1);
+                REFRESH_CACHE();
+                Value *_top = fiber->stackTop;
+                _top[0] = container;
+                _top[1] = index;
+                _top[2] = value;
+                fiber->stackTop = _top + _proto->maxStackSize;
+                for (Value *_p = _top + 3; _p < fiber->stackTop; ++_p)
+                  *_p = Value::nil();
+                SAVE_PC();
+                CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];
+                _newFrame->closure = _mmClosure;
+                _newFrame->ip = _proto->code.data();
+                _newFrame->slots = _top;
+                _newFrame->returnTo = _top;
+                _newFrame->expectedResults = 0;
+                _newFrame->deferBase = fiber->deferTop;
+                frame = _newFrame;
+                slots = frame->slots;
+                LOAD_PC();
+                SPT_DISPATCH();
+              }
+            }
+          }
+          instance->setField(fieldName, value);
+          SPT_DISPATCH();
+        }
+
+        if (container.isNativeInstance()) {
+          auto *instance = static_cast<NativeInstance *>(container.asGC());
+
+          if (instance->klass && instance->klass->hasFlag(CLASS_HAS_SET)) {
+            Value mmSet = instance->klass->getMagicMethod(MM_SET);
+            if (mmSet.isClosure()) {
+              Closure *_mmClosure = static_cast<Closure *>(mmSet.asGC());
+              if (_mmClosure->isNative()) {
+                Value _mmArgs[3] = {container, index, value};
+                size_t _oldTop = fiber->stackTop - fiber->stack;
+                int _numRes;
+                try {
+                  PROTECT(_numRes = _mmClosure->function(this, _mmClosure, 3, _mmArgs));
+                } catch (const SptPanic &) {
+                  fiber->stackTop = fiber->stack + _oldTop;
+                  return InterpretResult::RUNTIME_ERROR;
+                } catch (const CExtensionException &e) {
+                  fiber->stackTop = fiber->stack + _oldTop;
+                  if (!hasError_)
+                    runtimeError("%s", e.what());
+                  return InterpretResult::RUNTIME_ERROR;
+                }
+                if (hasError_)
+                  return InterpretResult::RUNTIME_ERROR;
+                fiber->stackTop = fiber->stack + _oldTop;
+                SPT_DISPATCH();
+              } else {
+                const Prototype *_proto = _mmClosure->proto;
+                fiber->ensureStack(_proto->maxStackSize + 4);
+                fiber->ensureFrames(1);
+                REFRESH_CACHE();
+                Value *_top = fiber->stackTop;
+                _top[0] = container;
+                _top[1] = index;
+                _top[2] = value;
+                fiber->stackTop = _top + _proto->maxStackSize;
+                for (Value *_p = _top + 3; _p < fiber->stackTop; ++_p)
+                  *_p = Value::nil();
+                SAVE_PC();
+                CallFrame *_newFrame = &fiber->frames[fiber->frameCount++];
+                _newFrame->closure = _mmClosure;
+                _newFrame->ip = _proto->code.data();
+                _newFrame->slots = _top;
+                _newFrame->returnTo = _top;
+                _newFrame->expectedResults = 0;
+                _newFrame->deferBase = fiber->deferTop;
+                frame = _newFrame;
+                slots = frame->slots;
+                LOAD_PC();
+                SPT_DISPATCH();
+              }
+            }
+          }
+          instance->setField(fieldName, value);
+          SPT_DISPATCH();
+        }
+      }
+
       SAVE_PC();
       runtimeError("Cannot index-assign to type: %s", container.typeName());
       return InterpretResult::RUNTIME_ERROR;
