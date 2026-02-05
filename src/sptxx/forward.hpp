@@ -170,7 +170,7 @@ enum class gc_mode : int {
 // ============================================================================
 
 constexpr stack_index_t registry_index = SPT_REGISTRYINDEX;
-constexpr stack_index_t globals_index = SPT_GLOBALSINDEX;
+// constexpr stack_index_t globals_index = SPT_GLOBALSINDEX;
 constexpr int multi_return = SPT_MULTRET;
 constexpr int no_ref = SPT_NOREF;
 constexpr int nil_ref = SPT_REFNIL;

@@ -489,14 +489,25 @@ static int builtin_pcall(VM *vm, Closure *self, int argc, Value *args) {
       Value *currentCallBase = fiber->stack + callBaseOffset;
       fiber->stackTop = currentCallBase;
 
-      int nresults = closure->function(vm, closure, funcArgCount, funcArgs);
+      try {
+        int nresults = closure->function(vm, closure, funcArgCount, funcArgs);
 
-      if (!vm->hasError()) {
-        currentCallBase = fiber->stack + callBaseOffset;
-        for (int i = 0; i < nresults; ++i) {
-          returnValues.push_back(currentCallBase[i]);
+        if (!vm->hasError()) {
+          currentCallBase = fiber->stack + callBaseOffset;
+          for (int i = 0; i < nresults; ++i) {
+            returnValues.push_back(currentCallBase[i]);
+          }
+        } else {
+          result = InterpretResult::RUNTIME_ERROR;
         }
-      } else {
+      } catch (const SptPanic &e) {
+
+        vm->setHasError(true);
+        vm->setErrorValue(e.errorValue);
+        result = InterpretResult::RUNTIME_ERROR;
+      } catch (const CExtensionException &e) {
+        vm->setHasError(true);
+        vm->setErrorValue(Value::object(vm->allocateString(e.what())));
         result = InterpretResult::RUNTIME_ERROR;
       }
     }

@@ -5,6 +5,7 @@
 #include "StringPool.h"
 #include "VM.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 
@@ -592,6 +593,11 @@ void GC::freeObject(GCObject *obj) {
   }
   case ValueType::NativeObject: {
     NativeInstance *nativeInstance = static_cast<NativeInstance *>(obj);
+
+    if (nativeInstance->data) {
+      std::free(nativeInstance->data);
+      nativeInstance->data = nullptr;
+    }
     bytesAllocated_ -= sizeof(NativeInstance);
     delete nativeInstance;
     break;

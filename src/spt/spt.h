@@ -17,256 +17,256 @@
 
 /*
 ================================================================================
-                    SPT 虚拟机架构与绑定层开发指南
+                   SPT 虚拟机架构与绑定层开发指南
 ================================================================================
 
 一、核心概念
 ------------
 
-    |                        spt_State                            |
-    |  +---------+  +-------------+  +-------------------------+  |
-    |  |   VM    |  | FiberObject |  |      StringPool         |  |
-    |  | (执行器) |  |  (执行上下文) |  |     (字符串池)          |  |
-    |  +---------+  +-------------+  +-------------------------+  |
-    +-------------------------------------------------------------+
+   |                        spt_State                            |
+   |  +---------+  +-------------+  +-------------------------+  |
+   |  |   VM    |  | FiberObject |  |      StringPool         |  |
+   |  | (执行器) |  |  (执行上下文) |  |     (字符串池)          |  |
+   |  +---------+  +-------------+  +-------------------------+  |
+   +-------------------------------------------------------------+
 
-                                                                                                spt_State
+                                                                                               spt_State
 - 绑定层状态，持有 VM 和当前 Fiber VM           - 字节码执行引擎，管理全局状态、GC、调用栈
-        FiberObject  - 协程/执行上下文，拥有独立的值栈和调用帧栈
-              CallFrame    - 单次函数调用的上下文（IP、局部变量槽、返回信息）
+       FiberObject  - 协程/执行上下文，拥有独立的值栈和调用帧栈
+             CallFrame    - 单次函数调用的上下文（IP、局部变量槽、返回信息）
 
 
-        二、值栈模型
-        ------------
+       二、值栈模型
+       ------------
 
-        SPT 使用基于栈的虚拟机，所有操作通过值栈进行：
+       SPT 使用基于栈的虚拟机，所有操作通过值栈进行：
 
-        低地址                              高地址
-    |                                    |
-    v                                    v
-        +---+---+---+---+---+---+---+---+---+---+---+
-    | G | G | L | L | L | T | T |   |   |   |   |
-    +---+---+---+---+---+---+---+---+---+---+---+
-    |       |           |       |
-    |       |           |       +-- stackTop (栈顶指针)
-    |       |           +-- 临时值 (表达式求值)
-    |       +-- 当前帧的局部变量 (slots)
-              +-- 上一帧的数据
+       低地址                              高地址
+   |                                    |
+   v                                    v
+       +---+---+---+---+---+---+---+---+---+---+---+
+   | G | G | L | L | L | T | T |   |   |   |   |
+   +---+---+---+---+---+---+---+---+---+---+---+
+   |       |           |       |
+   |       |           |       +-- stackTop (栈顶指针)
+   |       |           +-- 临时值 (表达式求值)
+   |       +-- 当前帧的局部变量 (slots)
+             +-- 上一帧的数据
 
-                索引规则：
-                正索引 - 从栈底开始 (1 = 第一个元素)
-                    负索引 - 从栈顶开始 (-1 = 栈顶元素)
-
-
-                    三、函数调用协议
-              ----------------
-
-              调用前准备:
-              1. push 函数
-              2. push 参数1
-              3. push 参数2
-              ...
-              4. push 参数N
-              5. 调用 spt_call(S, N, nresults)
-
-                  栈的变化:
-    调用前:  [...] [func] [arg1] [arg2] ... [argN]
-          ^                         ^
-            funcIdx                   stackTop
-
-            调用后:  [...] [ret1] [ret2] ... [retM]
-          ^                   ^
-                baseHeight          stackTop
-
-                关键规则:
-    - 函数和参数在调用后被消耗（从栈上移除）
-                - 返回值从原函数位置开始放置
-                - nresults = SPT_MULTRET (-1) 时保留所有返回值
-                             - nresults = N 时精确返回 N 个值（不足补 nil，多余丢弃）
+               索引规则：
+               正索引 - 从栈底开始 (1 = 第一个元素)
+                   负索引 - 从栈顶开始 (-1 = 栈顶元素)
 
 
-    四、CallFrame 结构详解
-    ----------------------
+                   三、函数调用协议
+             ----------------
 
-    struct CallFrame {
-  Closure *closure;       // 当前执行的函数
-  const uint32_t *ip;     // 指令指针
-  Value *slots;           // 局部变量起始位置 (参数从 slots[0] 开始)
-  Value *returnTo;        // 返回值写入位置 (nullptr 表示根帧)
-  int expectedResults;    // 期望的返回值数量 (-1 = MULTRET)
-  size_t deferBase;       // defer 栈基准
+             调用前准备:
+             1. push 函数
+             2. push 参数1
+             3. push 参数2
+             ...
+             4. push 参数N
+             5. 调用 spt_call(S, N, nresults)
+
+                 栈的变化:
+   调用前:  [...] [func] [arg1] [arg2] ... [argN]
+         ^                         ^
+           funcIdx                   stackTop
+
+           调用后:  [...] [ret1] [ret2] ... [retM]
+         ^                   ^
+               baseHeight          stackTop
+
+               关键规则:
+   - 函数和参数在调用后被消耗（从栈上移除）
+               - 返回值从原函数位置开始放置
+               - nresults = SPT_MULTRET (-1) 时保留所有返回值
+                            - nresults = N 时精确返回 N 个值（不足补 nil，多余丢弃）
+
+
+   四、CallFrame 结构详解
+   ----------------------
+
+   struct CallFrame {
+ Closure *closure;       // 当前执行的函数
+ const uint32_t *ip;     // 指令指针
+ Value *slots;           // 局部变量起始位置 (参数从 slots[0] 开始)
+ Value *returnTo;        // 返回值写入位置 (nullptr 表示根帧)
+ int expectedResults;    // 期望的返回值数量 (-1 = MULTRET)
+ size_t deferBase;       // defer 栈基准
 };
 
 returnTo 的作用:
 
-    调用者帧:  [...] [func] [arg1] [arg2]
-               ^
-               returnTo ------+
-    |
-    被调用帧:  [arg1] [arg2] [local1] [local2] ...
-               ^
-               slots
+   调用者帧:  [...] [func] [arg1] [arg2]
+              ^
+              returnTo ------+
+   |
+   被调用帧:  [arg1] [arg2] [local1] [local2] ...
+              ^
+              slots
 
-                   返回时:    [...] [ret1] [ret2]
-                            ^
-                            returnTo 位置开始写入
+                  返回时:    [...] [ret1] [ret2]
+                           ^
+                           returnTo 位置开始写入
 
 
-                                五、Native 函数开发规范
-                            -----------------------
+                               五、Native 函数开发规范
+                           -----------------------
 
-                            函数签名:
-    typedef int (*NativeFunction)(VM *vm, Closure *closure, int argCount, Value *args);
+                           函数签名:
+   typedef int (*NativeFunction)(VM *vm, Closure *closure, int argCount, Value *args);
 
 示例 - 实现 add(a, b):
 
-                        int native_add(VM *vm, Closure *closure, int argCount, Value *args) {
-  // 1. 参数验证
-  if (argCount < 2) {
-    vm->runtimeError("add expects 2 arguments");
-    return 0;
-  }
+                       int native_add(VM *vm, Closure *closure, int argCount, Value *args) {
+ // 1. 参数验证
+ if (argCount < 2) {
+   vm->runtimeError("add expects 2 arguments");
+   return 0;
+ }
 
-  // 2. 获取参数 (args[0] = 第一个参数)
-  double a = args[0].asFloat();
-  double b = args[1].asFloat();
+ // 2. 获取参数 (args[0] = 第一个参数)
+ double a = args[0].asFloat();
+ double b = args[1].asFloat();
 
-  // 3. 计算结果
-  double result = a + b;
+ // 3. 计算结果
+ double result = a + b;
 
-  // 4. push 返回值到栈顶
-  vm->currentFiber()->push(Value::number(result));
+ // 4. push 返回值到栈顶
+ vm->currentFiber()->push(Value::number(result));
 
-  // 5. 返回返回值数量
-  return 1;
+ // 5. 返回返回值数量
+ return 1;
 }
 
 Native 函数的关键规则:
-    参数访问   - 通过 args[i] 访问，不要 pop
-        返回值     - 必须 push 到栈顶
-        返回数量   - 函数返回 int 表示 push 了多少个返回值
-        错误处理   - 调用 vm->runtimeError() 后返回 0
-    不要修改   - args 指向的是栈内存，修改会破坏调用者数据
+   参数访问   - 通过 args[i] 访问，不要 pop
+       返回值     - 必须 push 到栈顶
+       返回数量   - 函数返回 int 表示 push 了多少个返回值
+       错误处理   - 调用 vm->runtimeError() 后返回 0
+   不要修改   - args 指向的是栈内存，修改会破坏调用者数据
 
 
-    六、绑定层 API 速查
-    -------------------
+   六、绑定层 API 速查
+   -------------------
 
-    栈操作:
-    spt_gettop(S)                  获取栈顶位置 (元素数量)
-        spt_settop(S, newTop)          设置栈顶 (可用于 pop 多个值)
+   栈操作:
+   spt_gettop(S)                  获取栈顶位置 (元素数量)
+       spt_settop(S, newTop)          设置栈顶 (可用于 pop 多个值)
 
-            spt_pushnil(S)                 push nil
-    spt_pushinteger(S, 42)         push 整数
-    spt_pushnumber(S, 3.14)        push 浮点数
-    spt_pushstring(S, "hello")     push 字符串
-    spt_pushboolean(S, true)       push 布尔值
-    spt_pushcfunction(S, fn, n)    push C 函数
+           spt_pushnil(S)                 push nil
+   spt_pushinteger(S, 42)         push 整数
+   spt_pushnumber(S, 3.14)        push 浮点数
+   spt_pushstring(S, "hello")     push 字符串
+   spt_pushboolean(S, true)       push 布尔值
+   spt_pushcfunction(S, fn, n)    push C 函数
 
 spt_tointeger(S, idx)          获取整数 (不移除)
-    spt_tonumber(S, idx)           获取浮点数
-    spt_tostring(S, idx)           获取字符串
+   spt_tonumber(S, idx)           获取浮点数
+   spt_tostring(S, idx)           获取字符串
 spt_toboolean(S, idx)          获取布尔值
 
-    spt_isnil(S, idx)              类型检查
+   spt_isnil(S, idx)              类型检查
 spt_isnumber(S, idx)
-        spt_isstring(S, idx)
+       spt_isstring(S, idx)
 
-            函数调用:
-    spt_call(S, nargs, nresults)           调用栈上的函数
-    spt_pcall(S, nargs, nresults, errfunc) 保护模式调用 (捕获错误)
+           函数调用:
+   spt_call(S, nargs, nresults)           调用栈上的函数
+   spt_pcall(S, nargs, nresults, errfunc) 保护模式调用 (捕获错误)
 
-        全局变量:
-    spt_getglobal(S, "name")       获取全局变量，push 到栈顶
-    spt_setglobal(S, "name")       将栈顶值设为全局变量
+       全局变量:
+   spt_getglobal(S, "name")       获取全局变量，push 到栈顶
+   spt_setglobal(S, "name")       将栈顶值设为全局变量
 
-    表操作:
-    spt_newtable(S)                创建新表
-    spt_getfield(S, idx, "key")    获取表字段 -> push
-    spt_setfield(S, idx, "key")    设置表字段，pop 栈顶值
-    spt_rawget(S, idx)             原始访问 (不触发元方法)
-        spt_rawset(S, idx)
+   表操作:
+   spt_newtable(S)                创建新表
+   spt_getfield(S, idx, "key")    获取表字段 -> push
+   spt_setfield(S, idx, "key")    设置表字段，pop 栈顶值
+   spt_rawget(S, idx)             原始访问 (不触发元方法)
+       spt_rawset(S, idx)
 
 
-            七、典型使用模式
-    ----------------
+           七、典型使用模式
+   ----------------
 
-    模式1 - 调用脚本函数:
+   模式1 - 调用脚本函数:
 
-    spt_getglobal(S, "myFunc");     // push 函数
+   spt_getglobal(S, "myFunc");     // push 函数
 spt_pushinteger(S, 10);         // push 参数1
 spt_pushstring(S, "hello");     // push 参数2
 if (spt_pcall(S, 2, 1, 0) != SPT_OK) {
-  const char *err = spt_tostring(S, -1);
-  printf("Error: %s\n", err);
-  spt_pop(S, 1);
+ const char *err = spt_tostring(S, -1);
+ printf("Error: %s\n", err);
+ spt_pop(S, 1);
 } else {
-  int result = spt_tointeger(S, -1);
-  spt_pop(S, 1);
+ int result = spt_tointeger(S, -1);
+ spt_pop(S, 1);
 }
 
 模式2 - 注册 Native 函数库:
 
-    static int math_sin(VM *vm, Closure *c, int argc, Value *args) {
-  double x = args[0].asFloat();
-  vm->currentFiber()->push(Value::number(sin(x)));
-  return 1;
+   static int math_sin(VM *vm, Closure *c, int argc, Value *args) {
+ double x = args[0].asFloat();
+ vm->currentFiber()->push(Value::number(sin(x)));
+ return 1;
 }
 
 void register_math_lib(spt_State *S) {
-  spt_newtable(S);
-  spt_pushcfunction(S, math_sin, 1);
-  spt_setfield(S, -2, "sin");
-  spt_setglobal(S, "math");
+ spt_newtable(S);
+ spt_pushcfunction(S, math_sin, 1);
+ spt_setfield(S, -2, "sin");
+ spt_setglobal(S, "math");
 }
 
 模式3 - 迭代表:
 
-    spt_pushnil(S);  // 初始 key
+   spt_pushnil(S);  // 初始 key
 while (spt_next(S, tableIdx)) {
-  // 栈: [key][value]
-  const char *key = spt_tostring(S, -2);
-  // 处理 value...
-  spt_pop(S, 1);  // 移除 value，保留 key 用于下次迭代
+ // 栈: [key][value]
+ const char *key = spt_tostring(S, -2);
+ // 处理 value...
+ spt_pop(S, 1);  // 移除 value，保留 key 用于下次迭代
 }
 
 
 八、常见陷阱
 ------------
 
-               栈不平衡       函数结束时栈元素数量与预期不符
-                   -> 使用 spt_gettop 在入口和出口检查
+              栈不平衡       函数结束时栈元素数量与预期不符
+                  -> 使用 spt_gettop 在入口和出口检查
 
-                       索引失效       在 push/pop 后使用旧的绝对索引
-        -> 优先使用负索引，或在操作后重新计算
+                      索引失效       在 push/pop 后使用旧的绝对索引
+       -> 优先使用负索引，或在操作后重新计算
 
-            GC 问题        持有 C 指针指向的对象被 GC 回收
-        -> 将需要保留的对象 push 到栈上或使用 registry
+           GC 问题        持有 C 指针指向的对象被 GC 回收
+       -> 将需要保留的对象 push 到栈上或使用 registry
 
-            Native 返回值  忘记 push 返回值或返回错误的数量
-        -> 始终确保 push 数量与返回值匹配
+           Native 返回值  忘记 push 返回值或返回错误的数量
+       -> 始终确保 push 数量与返回值匹配
 
-            字符串生命周期 spt_tostring 返回的指针可能失效
-        -> 立即复制字符串或确保不触发 GC
+           字符串生命周期 spt_tostring 返回的指针可能失效
+       -> 立即复制字符串或确保不触发 GC
 
 
-            九、调试技巧
-    ------------
+           九、调试技巧
+   ------------
 
-    void dump_stack(spt_State *S) {
-  int top = spt_gettop(S);
-  printf("Stack [%d]: ", top);
-  for (int i = 1; i <= top; i++) {
-    int t = spt_type(S, i);
-    switch (t) {
-    case SPT_TNIL:     printf("nil "); break;
-    case SPT_TNUMBER:  printf("%g ", spt_tonumber(S, i)); break;
-    case SPT_TSTRING:  printf("'%s' ", spt_tostring(S, i)); break;
-    case SPT_TBOOLEAN: printf("%s ", spt_toboolean(S, i) ? "true" : "false"); break;
-    default:           printf("[%s] ", spt_typename(S, t)); break;
-    }
-  }
-  printf("\n");
+   void dump_stack(spt_State *S) {
+ int top = spt_gettop(S);
+ printf("Stack [%d]: ", top);
+ for (int i = 1; i <= top; i++) {
+   int t = spt_type(S, i);
+   switch (t) {
+   case SPT_TNIL:     printf("nil "); break;
+   case SPT_TNUMBER:  printf("%g ", spt_tonumber(S, i)); break;
+   case SPT_TSTRING:  printf("'%s' ", spt_tostring(S, i)); break;
+   case SPT_TBOOLEAN: printf("%s ", spt_toboolean(S, i) ? "true" : "false"); break;
+   default:           printf("[%s] ", spt_typename(S, t)); break;
+   }
+ }
+ printf("\n");
 }
 
 ================================================================================
@@ -663,6 +663,9 @@ SPT_API int spt_checkstack(spt_State *S, int n);
 /*
  * Move n values from state 'from' to state 'to'.
  * Values are popped from 'from' and pushed onto 'to'.
+ *
+ * NOTE: If 'from' has fewer than n elements, the function will
+ * only move the available elements (clamped to stack depth).
  */
 SPT_API void spt_xmove(spt_State *from, spt_State *to, int n);
 
@@ -671,6 +674,23 @@ SPT_API void spt_xmove(spt_State *from, spt_State *to, int n);
  * Returns 0 if index is invalid.
  */
 SPT_API int spt_absindex(spt_State *S, int idx);
+
+/* =============================================================================
+ * IMPORTANT: Stack Pointer Safety
+ * =============================================================================
+ * Functions that return raw pointers to stack slots (internal use only) can
+ * return DANGLING POINTERS if the stack is reallocated. The stack may grow
+ * during:
+ *   - spt_push*() operations
+ *   - spt_call() / spt_pcall()
+ *   - Any function that may push values
+ *
+ * SAFE PATTERNS for C extensions:
+ *   1. Use index-based APIs: spt_copy(), spt_replace(), spt_rotate()
+ *   2. Use getter/setter functions: spt_toint(), spt_tostring(), etc.
+ *   3. Complete all read operations before any push operations
+ *   4. Re-compute indices after any operation that may grow the stack
+ * ===========================================================================*/
 
 /* Convenience macros */
 #define spt_pop(S, n) spt_settop(S, -(n) - 1)

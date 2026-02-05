@@ -258,24 +258,23 @@ int cFunctionTrampoline(spt::VM *vm, spt::Closure *self, int argc, spt::Value *a
     }
   }
 
-  spt::JmpBufNode node;
-  node.prev = vm->getCJumpHead();
-  vm->setCJumpHead(&node);
-
   int nResults = 0;
 
-  if (setjmp(node.buf) == 0) {
+  try {
     nResults = cfunc(S);
-    vm->setCJumpHead(node.prev);
-  } else {
+  } catch (const spt::SptPanic &e) {
     S->callBase = oldCallBase;
     extra->currentCClosure = oldClosure;
-    vm->setCJumpHead(node.prev);
     fiber->stackTop = oldTop;
     fiber->frameCount = oldFrameCount;
-    spt::Value errVal = spt::Value::object(vm->allocateString(node.errorMsg.c_str()));
-    vm->throwError(errVal);
-    throw spt::CExtensionException(node.errorMsg);
+    vm->throwError(e.errorValue);
+    throw spt::CExtensionException(e.errorValue.toString());
+  } catch (const spt::CExtensionException &e) {
+    S->callBase = oldCallBase;
+    extra->currentCClosure = oldClosure;
+    fiber->stackTop = oldTop;
+    fiber->frameCount = oldFrameCount;
+    throw;
   }
 
   S->callBase = oldCallBase;
@@ -341,6 +340,26 @@ SPT_API spt_State *spt_newstateex(size_t stackSize, size_t heapSize, bool enable
     S->callBase = -1;
 
     S->vm->setUserData(S);
+
+    S->vm->gc().addRoot([S](spt::Value &) {
+      StateExtra *extra = S->extra;
+      if (!extra)
+        return;
+
+      for (auto &entry : extra->refs) {
+        if (entry.inUse && !entry.value.isNil()) {
+          if (entry.value.type != spt::ValueType::Bool && entry.value.type != spt::ValueType::Int &&
+              entry.value.type != spt::ValueType::Float &&
+              entry.value.type != spt::ValueType::LightUserData) {
+            S->vm->gc().markObject(entry.value.asGC());
+          }
+        }
+      }
+
+      if (extra->registry) {
+        S->vm->gc().markObject(extra->registry);
+      }
+    });
 
     S->vm->setErrorHandler([](const std::string &msg, int line) {
 
@@ -521,6 +540,14 @@ SPT_API void spt_xmove(spt_State *from, spt_State *to, int n) {
     return;
   if (from == to)
     return;
+
+  int fromStackDepth = static_cast<int>(from->fiber->stackTop - from->fiber->stack);
+  if (n > fromStackDepth) {
+
+    n = fromStackDepth;
+    if (n <= 0)
+      return;
+  }
 
   to->fiber->ensureStack(n);
 
@@ -2019,7 +2046,16 @@ SPT_API int spt_execute(spt_State *S, spt_Chunk *chunk) {
   if (!S || !chunk)
     return SPT_ERRRUN;
 
-  spt::InterpretResult result = S->vm->interpret(chunk->chunk);
+  spt::InterpretResult result;
+  try {
+    result = S->vm->interpret(chunk->chunk);
+  } catch (const spt::SptPanic &e) {
+    S->vm->clearError();
+    return SPT_ERRRUN;
+  } catch (const spt::CExtensionException &e) {
+    S->vm->clearError();
+    return SPT_ERRRUN;
+  }
 
   switch (result) {
   case spt::InterpretResult::OK:
@@ -2059,7 +2095,20 @@ SPT_API int spt_call(spt_State *S, int nargs, int nresults) {
     return SPT_ERRRUN;
   }
 
-  spt::InterpretResult result = S->vm->call(closure, nargs, nresults);
+  spt::InterpretResult result;
+  try {
+    result = S->vm->call(closure, nargs, nresults);
+  } catch (const spt::SptPanic &e) {
+    fiber->stackTop = fiber->stack + baseHeight;
+    pushValue(S, e.errorValue);
+    S->vm->clearError();
+    return SPT_ERRRUN;
+  } catch (const spt::CExtensionException &e) {
+    fiber->stackTop = fiber->stack + baseHeight;
+    pushValue(S, spt::Value::object(S->vm->allocateString(e.what())));
+    S->vm->clearError();
+    return SPT_ERRRUN;
+  }
 
   if (result != spt::InterpretResult::OK) {
     if (S->vm->hasError()) {
@@ -2087,30 +2136,27 @@ SPT_API int spt_pcall(spt_State *S, int nargs, int nresults, int errfunc) {
   int funcIdx = spt_gettop(S) - nargs - 1;
 
   try {
-
     int status = spt_call(S, nargs, nresults);
-
-    if (status != SPT_OK) {
-
-      spt::Value errVal = S->fiber->pop();
-
-      spt_settop(S, funcIdx);
-
-      pushValue(S, errVal);
-
-      return status;
+    return status;
+  } catch (const spt::SptPanic &e) {
+    spt_settop(S, funcIdx);
+    if (e.errorValue.isString()) {
+      spt_pushstring(S, e.errorValue.asString()->c_str());
+    } else {
+      spt_pushstring(S, e.errorValue.toString().c_str());
     }
-
-    return SPT_OK;
-
+    return SPT_ERRRUN;
+  } catch (const spt::CExtensionException &e) {
+    spt_settop(S, funcIdx);
+    spt_pushstring(S, e.what());
+    return SPT_ERRRUN;
   } catch (const std::exception &e) {
-
     spt_settop(S, funcIdx);
     spt_pushstring(S, e.what());
     return SPT_ERRRUN;
   } catch (...) {
     spt_settop(S, funcIdx);
-    spt_pushstring(S, "Unknown critical error");
+    spt_pushstring(S, "Unknown error");
     return SPT_ERRERR;
   }
 }
@@ -2259,7 +2305,16 @@ SPT_API int spt_resume(spt_State *S, spt_State *from, int nargs) {
     arg = from->fiber->pop();
   }
 
-  spt::Value result = S->vm->fiberCall(fiber, arg, false);
+  spt::Value result = spt::Value::nil();
+  try {
+    result = S->vm->fiberCall(fiber, arg, false);
+  } catch (const spt::SptPanic &e) {
+
+    return SPT_ERRRUN;
+  } catch (const spt::CExtensionException &e) {
+
+    return SPT_ERRRUN;
+  }
 
   from->fiber->push(result);
 
@@ -2543,18 +2598,7 @@ SPT_API void spt_error(spt_State *S, const char *fmt, ...) {
   va_start(args, fmt);
   vsnprintf(buffer, sizeof(buffer), fmt, args);
   va_end(args);
-  std::string msg(buffer);
-
-  spt::VM *vm = S->vm;
-  spt::JmpBufNode *node = vm->getCJumpHead();
-
-  if (node) {
-    node->errorMsg = msg;
-    std::longjmp(node->buf, 1);
-  } else {
-    std::fprintf(stderr, "Unprotected panic: %s\n", buffer);
-    std::abort();
-  }
+  throw spt::CExtensionException(std::string(buffer));
 }
 
 SPT_API void spt_throw(spt_State *S) {
@@ -2563,24 +2607,9 @@ SPT_API void spt_throw(spt_State *S) {
 
   spt::Value error = S->fiber->pop();
 
-  std::string msg;
-  if (error.isString()) {
-    msg = error.asString()->c_str();
-  } else {
-    msg = error.toString();
-  }
-
   spt::VM *vm = S->vm;
-  spt::JmpBufNode *node = vm->getCJumpHead();
 
-  if (node) {
-
-    node->errorMsg = msg;
-    std::longjmp(node->buf, 1);
-  } else {
-
-    vm->throwError(error);
-  }
+  vm->throwPanic(error);
 }
 
 SPT_API void spt_seterrorhandler(spt_State *S, spt_ErrorHandler handler, void *ud) {

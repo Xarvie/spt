@@ -9,7 +9,6 @@
 #include "Value.h"
 #include "config.h"
 #include "unordered_dense.h"
-#include <csetjmp>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -47,14 +46,23 @@ struct ProtectedCallContext {
   bool active = false;   // 此上下文是否处于激活状态
 };
 
-struct JmpBufNode {
-  std::jmp_buf buf;     // setjmp/longjmp 的跳转缓冲区
-  JmpBufNode *prev;     // 指向上一个节点（栈的下一层）
-  std::string errorMsg; // 错误信息（如果有）
+// ============================================================================
+// SptPanic - 脚本运行时错误异常
+// ============================================================================
+// 用于替代 setjmp/longjmp 的 C++ 异常类
+// 当脚本发生错误且没有 pcall 保护时抛出
+class SptPanic : public std::exception {
+public:
+  Value errorValue; // 脚本错误值（可以是任意 spt 类型）
 
-  JmpBufNode() : prev(nullptr) {}
+  explicit SptPanic(Value err) : errorValue(err) {}
+
+  const char *what() const noexcept override { return "SptPanic: script runtime error"; }
 };
 
+// ============================================================================
+// CExtensionException - C 扩展异常（保留向后兼容）
+// ============================================================================
 class CExtensionException : public std::exception {
 public:
   explicit CExtensionException(std::string msg) : message_(std::move(msg)) {}
@@ -186,6 +194,9 @@ public:
   // === 错误处理 ===
   void throwError(Value errorValue);
 
+  // === 直接抛出异常（用于 C API） ===
+  [[noreturn]] void throwPanic(Value errorValue);
+
   // =========================================================================
   // 原生函数栈操作 API (Lua 风格)
   // =========================================================================
@@ -242,7 +253,7 @@ public:
   void *getUserData() const { return userData_; }
 
   // =========================================================================
-  // 内部访问 API - 供内置函数和 setjmp/longjmp 错误处理使用
+  // 内部访问 API - 供内置函数和错误处理使用
   // =========================================================================
 
   // 打印处理器访问
@@ -285,11 +296,6 @@ public:
 
   // invokeDefers 公开访问（用于 pcall 错误恢复）
   void invokeDefersPublic(int targetDeferBase) { invokeDefers(targetDeferBase); }
-
-  // level1 capi跳转
-  JmpBufNode *getCJumpHead() const { return c_jump_head_; }
-
-  void setCJumpHead(JmpBufNode *node) { c_jump_head_ = node; }
 
 private:
   InterpretResult run();
@@ -356,8 +362,6 @@ private:
   // === 用户数据指针 - 供 C API 等嵌入层使用 ===
   void *userData_ = nullptr;
 
-  //  === C API Trampoline 链表头  ===
-  JmpBufNode *c_jump_head_ = nullptr;
   void migratePreRegisteredGlobals();
 
   bool inDeferExecution_ = false;

@@ -164,7 +164,9 @@ InterpretResult VM::call(Closure *closure, int argCount, int expectedResults) {
   FiberObject *fiber = currentFiber_;
 
   Value *argsStart = fiber->stackTop - argCount;
-  Value *funcSlot = argsStart - 1;
+
+  int funcSlotOffset = static_cast<int>((argsStart - 1) - fiber->stack);
+  int argsStartOffset = static_cast<int>(argsStart - fiber->stack);
 
   if (closure->isNative()) {
 
@@ -176,13 +178,20 @@ InterpretResult VM::call(Closure *closure, int argCount, int expectedResults) {
 
     int numResults = 0;
     try {
+
+      argsStart = fiber->stack + argsStartOffset;
       numResults = closure->function(this, closure, argCount, argsStart);
+    } catch (const SptPanic &e) {
+
+      return InterpretResult::RUNTIME_ERROR;
     } catch (const CExtensionException &e) {
       if (!hasError_) {
         runtimeError("%s", e.what());
       }
       return InterpretResult::RUNTIME_ERROR;
     }
+
+    Value *funcSlot = fiber->stack + funcSlotOffset;
 
     if (numResults > 0) {
       Value *resultsStart = fiber->stackTop - numResults;
@@ -217,13 +226,13 @@ InterpretResult VM::call(Closure *closure, int argCount, int expectedResults) {
   }
 
   int slotsBaseOffset = static_cast<int>(argsStart - fiber->stack);
-  int funcSlotOffset = slotsBaseOffset - 1;
+  int scriptFuncSlotOffset = slotsBaseOffset - 1;
 
   fiber->ensureStack(closure->proto->maxStackSize);
   fiber->ensureFrames(1);
 
   argsStart = fiber->stack + slotsBaseOffset;
-  funcSlot = fiber->stack + funcSlotOffset;
+  Value *funcSlot = fiber->stack + scriptFuncSlotOffset;
 
   Value *frameEnd = argsStart + closure->proto->maxStackSize;
   int numParams = closure->proto->numParams;
@@ -336,6 +345,11 @@ void VM::initFiberForCall(FiberObject *fiber, Value arg) {
     int numResults = 0;
     try {
       numResults = closure->function(this, closure, argCount, argsStart);
+    } catch (const SptPanic &e) {
+      fiber->state = FiberState::ERROR;
+      fiber->error = e.errorValue;
+      fiber->hasError = true;
+      return;
     } catch (const CExtensionException &e) {
       fiber->state = FiberState::ERROR;
       fiber->error = Value::object(allocateString(e.what()));
@@ -786,18 +800,35 @@ void VM::resetStack() {
 void VM::collectGarbage() { gc_.collect(); }
 
 void VM::throwError(Value errorValue) {
-  if (!pcallStack_.empty()) {
-    hasError_ = true;
-    errorValue_ = errorValue;
-  } else {
+
+  hasError_ = true;
+  errorValue_ = errorValue;
+
+  if (!hasPcallContext()) {
+
     std::string errorMsg;
     if (errorValue.isString()) {
       errorMsg = static_cast<StringObject *>(errorValue.asGC())->str();
     } else {
       errorMsg = "error: " + errorValue.toString();
     }
-    runtimeError("%s", errorMsg.c_str());
+
+    std::string fullMessage = errorMsg + "\n----------------\nCall stack:" + getStackTrace();
+
+    if (errorHandler_) {
+      errorHandler_(fullMessage, 0);
+    } else {
+      fprintf(stderr, "\n[Runtime Error]\n%s\n\n", fullMessage.c_str());
+    }
+
+    throw SptPanic(errorValue);
   }
+}
+
+[[noreturn]] void VM::throwPanic(Value errorValue) {
+  hasError_ = true;
+  errorValue_ = errorValue;
+  throw SptPanic(errorValue);
 }
 
 void VM::runtimeError(const char *format, ...) {
@@ -812,7 +843,10 @@ void VM::runtimeError(const char *format, ...) {
   va_end(args);
   std::string message = buffer.data();
 
-  if (pcallStack_.empty()) {
+  hasError_ = true;
+  errorValue_ = Value::object(allocateString(message));
+
+  if (!hasPcallContext()) {
     std::string fullMessage = message;
     fullMessage += "\n----------------\nCall stack:";
     fullMessage += getStackTrace();
@@ -822,10 +856,9 @@ void VM::runtimeError(const char *format, ...) {
     } else {
       fprintf(stderr, "\n[Runtime Error]\n%s\n\n", fullMessage.c_str());
     }
-  }
 
-  hasError_ = true;
-  errorValue_ = Value::object(allocateString(message));
+    throw SptPanic(errorValue_);
+  }
 }
 
 int VM::getLine(const Prototype *proto, size_t instruction) {
