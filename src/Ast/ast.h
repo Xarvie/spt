@@ -12,7 +12,7 @@
 #include <type_traits> // 用于 std::decay_t
 #include <utility>
 #include <utility> // for std::move
-#include <variant> // 用于 ForInitializerVariant
+
 #include <vector>
 
 // --- 源码位置信息 ---
@@ -61,7 +61,7 @@ enum class NodeType {
   IF_STATEMENT,
   IF_CLAUSE, // IfClauseNode 也是一个节点
   WHILE_STATEMENT,
-  FOR_CSTYLE_STATEMENT,
+  FOR_NUMERIC_STATEMENT,
   FOR_EACH_STATEMENT,
   BREAK_STATEMENT,
   CONTINUE_STATEMENT,
@@ -127,7 +127,7 @@ protected:
 };
 
 // --- AST 节点基类 ---
-class SPT_API_CLASS AstNode : public spt::ILineGetter {
+struct SPT_API_CLASS AstNode : public spt::ILineGetter {
 public:
   SourceLocation location;
   NodeType nodeType;
@@ -664,24 +664,23 @@ public:
   virtual ~WhileStatementNode() override;
 };
 
-using ForInitializerVariant = std::variant<std::vector<Declaration *>, // 来自  variableDeclaration
-                                           AssignmentNode *,
-                                           std::vector<Expression *> // 来自 expressionList
-                                           >;
-
-class ForCStyleStatementNode : public Statement {
+class ForNumericStatementNode : public Statement {
 public:
-  std::optional<ForInitializerVariant> initializer;
-  Expression *condition = nullptr;
-  std::vector<Statement *> updateActions;
+  std::string varName;
+  AstType *typeAnnotation = nullptr; // 可选类型，无类型时为 nullptr
+  Expression *startExpr = nullptr;
+  Expression *endExpr = nullptr;
+  Expression *stepExpr = nullptr;   // 可选 step，无时为 nullptr
   BlockNode *body = nullptr;
 
-  ForCStyleStatementNode(std::optional<ForInitializerVariant> init, Expression *cond,
-                         std::vector<Statement *> updateActs, BlockNode *b, SourceLocation loc)
-      : Statement(std::move(loc), NodeType::FOR_CSTYLE_STATEMENT), initializer(std::move(init)),
-        condition(cond), updateActions(std::move(updateActs)), body(b) {} // 传递类型
+  ForNumericStatementNode(std::string name, AstType *typeAnn,
+                          Expression *start, Expression *end, Expression *step,
+                          BlockNode *b, SourceLocation loc)
+      : Statement(std::move(loc), NodeType::FOR_NUMERIC_STATEMENT),
+        varName(std::move(name)), typeAnnotation(typeAnn),
+        startExpr(start), endExpr(end), stepExpr(step), body(b) {}
 
-  virtual ~ForCStyleStatementNode() override;
+  virtual ~ForNumericStatementNode() override;
 };
 
 class ForEachStatementNode : public Statement {
@@ -792,13 +791,14 @@ public:
   bool isStatic;
   bool isVariadic;
   bool isExported;
+  bool isConst;
 
   FunctionDeclNode(std::string n, std::vector<ParameterDeclNode *> p, AstType *retType,
-                   BlockNode *b, bool isG, bool isS, bool isVar, bool isExp,
-                   SourceLocation loc) // <<< 添加 isExp 参数
+                   BlockNode *b, bool isG, bool isS, bool isVar, bool isExp, bool isC,
+                   SourceLocation loc)
       : Declaration(std::move(loc), NodeType::FUNCTION_DECL), name(std::move(n)),
         params(std::move(p)), returnType(retType), body(b), isGlobalDecl(isG), isStatic(isS),
-        isVariadic(isVar), isExported(isExp) {}
+        isVariadic(isVar), isExported(isExp), isConst(isC) {}
 
   virtual ~FunctionDeclNode() override;
 };
@@ -838,11 +838,11 @@ public:
 };
 
 // --- 顶级删除函数 ---
-SPT_API void destroyAst(AstNode *node);
+extern "C" void destroyAst(struct AstNode *node);
 
 // 用于加载源码并生成 AST 的工具函数
 // 如果 sourceCode 为空，则读取 filename 文件
 // 如果 sourceCode 不为空，filename 仅作报错显示用
-SPT_API AstNode *loadAst(const std::string &sourceCode, const std::string &filename);
+extern "C" struct AstNode *loadAst(const char* sourceCode_, const char* filename_) ;
 
 #endif // SPT_AST_CPP_RAWPTR_H

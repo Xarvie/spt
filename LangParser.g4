@@ -96,10 +96,10 @@ declaration_item
     : (type | AUTO) IDENTIFIER
     ;
 
-/** 函数声明/定义 (支持 global 和 qualifiedIdentifier, 仅支持单一返回类型或 void) */
+/** 函数声明/定义 (支持 global/const 和 qualifiedIdentifier, 仅支持单一返回类型或 void) */
 functionDeclaration
-     : GLOBAL? type qualifiedIdentifier OP parameterList? CP blockStatement #functionDeclarationDef
-     | GLOBAL? VARS qualifiedIdentifier OP parameterList? CP blockStatement #multiReturnFunctionDeclarationDef
+     : GLOBAL? CONST? type qualifiedIdentifier OP parameterList? CP blockStatement #functionDeclarationDef
+     | GLOBAL? CONST? VARS qualifiedIdentifier OP parameterList? CP blockStatement #multiReturnFunctionDeclarationDef
      ;
 
 /** 类声明/定义 */
@@ -112,8 +112,8 @@ classMember
     // 静态或实例字段声明 (类型或 auto 必须)
     : STATIC? CONST? declaration_item (ASSIGN expression)? #classFieldMember
     // 静态或实例方法声明
-    | STATIC? type IDENTIFIER OP parameterList? CP blockStatement #classMethodMember
-    | STATIC? VARS IDENTIFIER OP parameterList? CP blockStatement #multiReturnClassMethodMember // <<< 使用 VARS 关键字
+    | STATIC? CONST? type IDENTIFIER OP parameterList? CP blockStatement #classMethodMember
+    | STATIC? CONST? VARS IDENTIFIER OP parameterList? CP blockStatement #multiReturnClassMethodMember
     // 空成员 (允许只有分号)
     | SEMICOLON #classEmptyMember
     ;
@@ -304,36 +304,42 @@ whileStatement
     ;
 
 // --- For 循环 ---
-/** For 语句 (包含 C 风格和 For-Each 风格) */
+/**
+ * For 语句 (数值 for + 泛型 for-each)
+ * 去掉了 C 风格 for(init;cond;update)，改为 Lua 风格数值 for
+ */
 forStatement
     : FOR OP forControl CP blockStatement // for 块必须用 {} 包裹
     ;
 
 /** For 循环的控制部分 */
 forControl
-    // 形式一: C 风格 (init; condition; update)
-    : forInitStatement SEMICOLON expression? SEMICOLON forUpdate? #forCStyleControl
-    // 形式二：支持 for (T1 k, T1 v : iterFunc, state, initVal)
-    | declaration_item (COMMA declaration_item)* COL expressionList #forEachExplicitControl
+    // 形式一: 数值 for — 直接映射到 Lua 的 for i = start, end [, step]
+    //   for ([type|auto] i = start, end)          { ... }
+    //   for ([type|auto] i = start, end, step)    { ... }
+    : forNumericVar ASSIGN expression COMMA expression (COMMA expression)? #forNumericControl
+    // 形式二: 泛型 for-each — 映射到 Lua 的 for k, v in iterFunc, state, initVal
+    //   for ([type|auto] k, [type|auto] v : pairs(t))
+    //   for (k, v : ipairs(t))
+    | forEachVar (COMMA forEachVar)* COL expressionList #forEachControl
     ;
 
-forUpdate:
-forUpdateSingle (COMMA forUpdateSingle)*
-;
-
-forUpdateSingle:
-expression | updateStatement | assignStatement
-;
-
-forInitStatement // 代表 C 的 init-statement
-    : multiDeclaration // 允许多个 'Type ID = val'
-    | assignStatement//赋值
-    | expressionList?            // 允许表达式列表 (如 i=0, j=0) 或空
-    | // 允许完全为空
+/**
+ * 数值 for 的循环变量 (可选类型注解)
+ *   int i / auto i / i
+ */
+forNumericVar
+    : (type | AUTO) IDENTIFIER  #forNumericVarTyped   // 带类型: int i, auto i
+    | IDENTIFIER                #forNumericVarUntyped // 无类型: i (Lua 风格)
     ;
 
-multiDeclaration
-    : declaration_item (ASSIGN expression)? (COMMA declaration_item (ASSIGN expression)?)*
+/**
+ * 泛型 for-each 的循环变量 (可选类型注解)
+ *   string k / auto k / k
+ */
+forEachVar
+    : (type | AUTO) IDENTIFIER  #forEachVarTyped   // 带类型: string k
+    | IDENTIFIER                #forEachVarUntyped // 无类型: k
     ;
 
 
@@ -353,4 +359,3 @@ parameter
 arguments
     : expressionList?
     ;
-

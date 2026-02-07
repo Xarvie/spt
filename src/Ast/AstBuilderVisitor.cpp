@@ -7,7 +7,6 @@
 
 #include <optional>
 #include <utility>
-#include <variant>
 
 AstBuilderVisitor::AstBuilderVisitor(const std::string &filename) : current_filename(filename) {}
 
@@ -646,6 +645,7 @@ AstBuilderVisitor::visitFunctionDeclarationDef(LangParser::FunctionDeclarationDe
     throw std::runtime_error("AstBuilderVisitor::visitFunctionDeclarationDefnullptr");
   SourceLocation loc = getSourceLocation(ctx);
   bool is_global = (ctx->GLOBAL() != nullptr);
+  bool is_const = (ctx->CONST() != nullptr);
   AstType *returnType = nullptr;
   std::vector<ParameterDeclNode *> params;
   bool isVariadic = false;
@@ -709,7 +709,7 @@ AstBuilderVisitor::visitFunctionDeclarationDef(LangParser::FunctionDeclarationDe
 
     FunctionDeclNode *funcDecl =
         new FunctionDeclNode(std::move(funcName), std::move(params), returnType, body, is_global,
-                             false, isVariadic, false, loc);
+                             false, isVariadic, false, is_const, loc);
     if (!funcDecl)
       throw std::runtime_error("AstBuilderVisitor::visitFunctionDeclarationDefnullptr");
 
@@ -734,6 +734,7 @@ std::any AstBuilderVisitor::visitMultiReturnFunctionDeclarationDef(
     throw std::runtime_error("AstBuilderVisitor::visitMultiReturnFunctionDeclarationDefnullptr");
   SourceLocation loc = getSourceLocation(ctx);
   bool is_global = (ctx->GLOBAL() != nullptr);
+  bool is_const = (ctx->CONST() != nullptr);
   std::vector<ParameterDeclNode *> params;
   bool isVariadic = false;
   BlockNode *body = nullptr;
@@ -801,7 +802,7 @@ std::any AstBuilderVisitor::visitMultiReturnFunctionDeclarationDef(
 
     FunctionDeclNode *funcDecl =
         new FunctionDeclNode(std::move(funcName), std::move(params), returnType, body, is_global,
-                             false, isVariadic, false, loc);
+                             false, isVariadic, false, is_const, loc);
     if (!funcDecl)
       throw std::runtime_error("AstBuilderVisitor::"
                                "visitMultiReturnFunctionDeclarationDefnullptr");
@@ -824,6 +825,7 @@ std::any AstBuilderVisitor::visitClassMethodMember(LangParser::ClassMethodMember
     throw std::runtime_error("AstBuilderVisitor::visitClassMethodMembernullptr");
   SourceLocation loc = getSourceLocation(ctx);
   bool is_static = (ctx->STATIC() != nullptr);
+  bool is_const = (ctx->CONST() != nullptr);
   AstType *returnType = nullptr;
   std::vector<ParameterDeclNode *> params;
   bool isVariadic = false;
@@ -874,7 +876,7 @@ std::any AstBuilderVisitor::visitClassMethodMember(LangParser::ClassMethodMember
 
     FunctionDeclNode *funcDecl =
         new FunctionDeclNode(std::move(funcName), std::move(params), returnType, body, false,
-                             is_static, isVariadic, false, loc);
+                             is_static, isVariadic, false, is_const, loc);
     if (!funcDecl)
       throw std::runtime_error("AstBuilderVisitor::visitClassMethodMembernullptr");
 
@@ -893,6 +895,7 @@ std::any AstBuilderVisitor::visitMultiReturnClassMethodMember(
     throw std::runtime_error("AstBuilderVisitor::visitMultiReturnClassMethodMembernullptr");
   SourceLocation loc = getSourceLocation(ctx);
   bool is_static = (ctx->STATIC() != nullptr);
+  bool is_const = (ctx->CONST() != nullptr);
   std::vector<ParameterDeclNode *> params;
   bool isVariadic = false;
   BlockNode *body = nullptr;
@@ -949,7 +952,7 @@ std::any AstBuilderVisitor::visitMultiReturnClassMethodMember(
 
     FunctionDeclNode *funcDecl =
         new FunctionDeclNode(std::move(funcName), std::move(params), returnType, body, false,
-                             is_static, isVariadic, false, loc);
+                             is_static, isVariadic, false, is_const, loc);
     if (!funcDecl)
       throw std::runtime_error("AstBuilderVisitor::"
                                "visitMultiReturnClassMethodMembernullptr");
@@ -2514,115 +2517,141 @@ std::any AstBuilderVisitor::visitForStatement(LangParser::ForStatementContext *c
   return visit(ctx->forControl());
 }
 
-std::any AstBuilderVisitor::visitForUpdate(LangParser::ForUpdateContext *ctx) {
+// ===== ForNumericControl: for (type i = start, end, step) { ... } =====
+std::any AstBuilderVisitor::visitForNumericControl(LangParser::ForNumericControlContext *ctx) {
   if (!ctx)
-    throw std::runtime_error("AstBuilderVisitor::visitForUpdatenullptr");
-  std::vector<Statement *> updateActions;
-  try {
-    for (auto singleCtx : ctx->forUpdateSingle()) {
-      if (!singleCtx)
-        throw std::runtime_error("AstBuilderVisitor::visitForUpdatenullptr");
-      std::any singleResult = visit(singleCtx);
-
-      AstNode *actionStmtRaw =
-          safeAnyCastRawPtr<AstNode>(singleResult, "visitForUpdate > single action");
-      Statement *actionStmt = dynamic_cast<Statement *>(actionStmtRaw);
-      if (!actionStmt && singleResult.has_value()) {
-
-        delete actionStmtRaw;
-        throw std::runtime_error("内部错误: visitForUpdate 收到非语句节点。");
-      }
-      if (actionStmt) {
-        updateActions.push_back(actionStmt);
-      } else {
-
-        throw std::runtime_error("处理 for 循环更新动作失败。");
-      }
-    }
-
-    return std::any(std::move(updateActions));
-  } catch (...) {
-
-    deleteVectorItems(updateActions);
-    throw;
-  }
-}
-
-std::any AstBuilderVisitor::visitForUpdateSingle(LangParser::ForUpdateSingleContext *ctx) {
-  if (!ctx)
-    throw std::runtime_error("AstBuilderVisitor::visitForUpdateSinglenullptr");
-  AstNode *resultNode = nullptr;
-  Statement *resultStmt = nullptr;
-
-  try {
-    if (ctx->expression()) {
-
-      std::any exprResult = visit(ctx->expression());
-      AstNode *exprNodeRaw =
-          safeAnyCastRawPtr<AstNode>(exprResult, "visitForUpdateSingle > expression");
-      Expression *exprNode = dynamic_cast<Expression *>(exprNodeRaw);
-      if (!exprNode && exprResult.has_value()) {
-        delete exprNodeRaw;
-        throw std::runtime_error("For 更新动作中的表达式无效。");
-      }
-      if (!exprNode) {
-        throw std::runtime_error("访问 for 更新动作中的表达式失败。");
-      }
-
-      resultStmt = new ExpressionStatementNode(exprNode, getSourceLocation(ctx->expression()));
-      if (!resultStmt)
-        throw std::runtime_error("AstBuilderVisitor::visitForUpdateSinglenullptr");
-      resultNode = resultStmt;
-    } else if (ctx->updateStatement()) {
-
-      std::any updateResult = visit(ctx->updateStatement());
-
-      resultNode =
-          safeAnyCastRawPtr<AstNode>(updateResult, "visitForUpdateSingle > updateStatement");
-      resultStmt = dynamic_cast<Statement *>(resultNode);
-      if (!resultStmt && resultNode) {
-        delete resultNode;
-        throw std::runtime_error("Internal error: updateStatement visit did "
-                                 "not return a Statement.");
-      }
-      if (!resultStmt)
-        throw std::runtime_error("访问 for 更新动作中的 updateStatement 失败。");
-    } else if (ctx->assignStatement()) {
-
-      std::any assignResult = visit(ctx->assignStatement());
-
-      resultNode =
-          safeAnyCastRawPtr<AstNode>(assignResult, "visitForUpdateSingle > assignStatement");
-      resultStmt = dynamic_cast<Statement *>(resultNode);
-      if (!resultStmt && resultNode) {
-        delete resultNode;
-        throw std::runtime_error("Internal error: assignStatement visit did "
-                                 "not return a Statement.");
-      }
-      if (!resultStmt)
-        throw std::runtime_error("访问 for 更新动作中的 assignStatement 失败。");
-    } else {
-
-      throw std::runtime_error("内部错误: 未知的 forUpdateSingle 类型。");
-    }
-
-    return std::any(static_cast<AstNode *>(resultStmt));
-
-  } catch (...) {
-
-    throw;
-  }
-}
-
-std::any
-AstBuilderVisitor::visitForEachExplicitControl(LangParser::ForEachExplicitControlContext *ctx) {
-  if (!ctx)
-    throw std::runtime_error("AstBuilderVisitor::visitForEachExplicitControl nullptr context");
+    throw std::runtime_error("AstBuilderVisitor::visitForNumericControl nullptr");
 
   auto forStmtCtx = dynamic_cast<LangParser::ForStatementContext *>(ctx->parent);
-  if (!forStmtCtx) {
-    throw std::runtime_error("内部错误: ForEachExplicitControl 缺少父节点 ForStatementContext");
+  if (!forStmtCtx)
+    throw std::runtime_error("内部错误: ForNumericControl 缺少父节点 ForStatementContext");
+  SourceLocation loc = getSourceLocation(forStmtCtx);
+
+  AstType *typeAnn = nullptr;
+  std::string varName;
+  Expression *startExpr = nullptr;
+  Expression *endExpr = nullptr;
+  Expression *stepExpr = nullptr;
+  BlockNode *body = nullptr;
+
+  try {
+    // 1. 处理循环变量 (forNumericVar)
+    if (!ctx->forNumericVar())
+      throw std::runtime_error("ForNumericControl 缺少循环变量");
+
+    // visit forNumericVar 返回 pair<string, AstType*>
+    std::any varResult = visit(ctx->forNumericVar());
+    auto varInfo = std::any_cast<std::pair<std::string, AstType *>>(varResult);
+    varName = std::move(varInfo.first);
+    typeAnn = varInfo.second;
+
+    // 2. 处理表达式列表: start, end[, step]
+    auto exprs = ctx->expression();
+    if (exprs.size() < 2)
+      throw std::runtime_error("数值 for 循环至少需要 start 和 end 两个表达式");
+
+    // start
+    {
+      std::any r = visit(exprs[0]);
+      AstNode *raw = safeAnyCastRawPtr<AstNode>(r, "visitForNumericControl > start");
+      startExpr = dynamic_cast<Expression *>(raw);
+      if (!startExpr) {
+        delete raw;
+        throw std::runtime_error("数值 for 循环 start 必须是表达式");
+      }
+    }
+
+    // end
+    {
+      std::any r = visit(exprs[1]);
+      AstNode *raw = safeAnyCastRawPtr<AstNode>(r, "visitForNumericControl > end");
+      endExpr = dynamic_cast<Expression *>(raw);
+      if (!endExpr) {
+        delete raw;
+        throw std::runtime_error("数值 for 循环 end 必须是表达式");
+      }
+    }
+
+    // step (可选)
+    if (exprs.size() >= 3) {
+      std::any r = visit(exprs[2]);
+      AstNode *raw = safeAnyCastRawPtr<AstNode>(r, "visitForNumericControl > step");
+      stepExpr = dynamic_cast<Expression *>(raw);
+      if (!stepExpr) {
+        delete raw;
+        throw std::runtime_error("数值 for 循环 step 必须是表达式");
+      }
+    }
+
+    // 3. 处理循环体
+    if (!forStmtCtx->blockStatement())
+      throw std::runtime_error("For 循环体 blockStatement 为空");
+    std::any bodyResult = visit(forStmtCtx->blockStatement());
+    AstNode *bodyRaw = safeAnyCastRawPtr<AstNode>(bodyResult, "visitForNumericControl > body");
+    body = dynamic_cast<BlockNode *>(bodyRaw);
+    if (!body) {
+      delete bodyRaw;
+      throw std::runtime_error("For 体必须是代码块");
+    }
+
+    // 4. 创建节点
+    ForNumericStatementNode *forNode = new ForNumericStatementNode(
+        std::move(varName), typeAnn, startExpr, endExpr, stepExpr, body, loc);
+    return std::any(static_cast<AstNode *>(forNode));
+
+  } catch (...) {
+    delete typeAnn;
+    delete startExpr;
+    delete endExpr;
+    delete stepExpr;
+    delete body;
+    throw;
   }
+}
+
+// ===== ForNumericVar 分支 =====
+std::any AstBuilderVisitor::visitForNumericVarTyped(LangParser::ForNumericVarTypedContext *ctx) {
+  if (!ctx)
+    throw std::runtime_error("AstBuilderVisitor::visitForNumericVarTyped nullptr");
+  if (!ctx->IDENTIFIER())
+    throw std::runtime_error("ForNumericVarTyped 缺少 IDENTIFIER");
+
+  std::string name = ctx->IDENTIFIER()->getText();
+  AstType *typeAnn = nullptr;
+
+  if (ctx->type()) {
+    std::any typeResult = visit(ctx->type());
+    typeAnn = safeAnyCastRawPtr<AstType>(typeResult, "visitForNumericVarTyped > type");
+  } else if (ctx->AUTO()) {
+    typeAnn = new AutoType(getSourceLocation(ctx->AUTO()));
+  }
+
+  if (!typeAnn)
+    throw std::runtime_error("ForNumericVarTyped 无法获取类型注解");
+
+  return std::any(std::make_pair(std::move(name), typeAnn));
+}
+
+std::any AstBuilderVisitor::visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) {
+  if (!ctx)
+    throw std::runtime_error("AstBuilderVisitor::visitForNumericVarUntyped nullptr");
+  if (!ctx->IDENTIFIER())
+    throw std::runtime_error("ForNumericVarUntyped 缺少 IDENTIFIER");
+
+  std::string name = ctx->IDENTIFIER()->getText();
+  AstType *typeAnn = nullptr; // 无类型
+
+  return std::any(std::make_pair(std::move(name), typeAnn));
+}
+
+// ===== ForEachControl: for (k, v : exprs) { ... } =====
+std::any AstBuilderVisitor::visitForEachControl(LangParser::ForEachControlContext *ctx) {
+  if (!ctx)
+    throw std::runtime_error("AstBuilderVisitor::visitForEachControl nullptr");
+
+  auto forStmtCtx = dynamic_cast<LangParser::ForStatementContext *>(ctx->parent);
+  if (!forStmtCtx)
+    throw std::runtime_error("内部错误: ForEachControl 缺少父节点 ForStatementContext");
   SourceLocation loc = getSourceLocation(forStmtCtx);
 
   std::vector<ParameterDeclNode *> loopVars;
@@ -2630,82 +2659,59 @@ AstBuilderVisitor::visitForEachExplicitControl(LangParser::ForEachExplicitContro
   BlockNode *body = nullptr;
 
   try {
-    // 1. 处理循环变量
-    auto declItemsCtx = ctx->declaration_item();
-    if (declItemsCtx.empty()) {
-      throw std::runtime_error("For-each 循环缺少循环变量声明");
-    }
+    // 1. 处理循环变量 (forEachVar)
+    auto varCtxs = ctx->forEachVar();
+    if (varCtxs.empty())
+      throw std::runtime_error("For-each 循环缺少循环变量");
 
-    for (auto itemCtx : declItemsCtx) {
-      if (!itemCtx)
-        throw std::runtime_error("For-each 循环变量声明列表中存在空 context");
-      SourceLocation itemLoc = getSourceLocation(itemCtx);
-      if (!itemCtx->IDENTIFIER())
-        throw std::runtime_error("For-each 循环变量声明缺少标识符");
-      std::string name = itemCtx->IDENTIFIER()->getText();
-      AstType *typeAnn = nullptr;
+    for (auto varCtx : varCtxs) {
+      if (!varCtx)
+        throw std::runtime_error("For-each 循环变量 context 为空");
 
-      if (itemCtx->type()) {
-        std::any typeResult = visit(itemCtx->type());
-        typeAnn = safeAnyCastRawPtr<AstType>(typeResult, "visitForEachExplicitControl > type");
-      } else if (itemCtx->AUTO()) {
-        typeAnn = new AutoType(getSourceLocation(itemCtx->AUTO()));
-        if (!typeAnn)
-          throw std::runtime_error("创建 AutoType 失败");
-      } else {
-        throw std::runtime_error("内部错误: for-each 声明项无效");
-      }
-      if (!typeAnn)
-        throw std::runtime_error("无法为 for-each 循环变量获取类型注解");
+      // visit forEachVar 返回 pair<string, AstType*>
+      std::any varResult = visit(varCtx);
+      auto varInfo = std::any_cast<std::pair<std::string, AstType *>>(varResult);
 
-      ParameterDeclNode *varDecl = new ParameterDeclNode(std::move(name), typeAnn, itemLoc);
-      if (!varDecl)
-        throw std::runtime_error("创建 ParameterDeclNode 失败");
+      SourceLocation itemLoc = getSourceLocation(varCtx);
+      ParameterDeclNode *varDecl =
+          new ParameterDeclNode(std::move(varInfo.first), varInfo.second, itemLoc);
       loopVars.push_back(varDecl);
     }
 
-    // 2. 处理表达式列表 (expressionList)
-    if (ctx->expressionList()) {
-      auto exprListCtx = ctx->expressionList();
-      for (auto exprCtx : exprListCtx->expression()) {
-        std::any iterResult = visit(exprCtx);
-        AstNode *iterRaw =
-            safeAnyCastRawPtr<AstNode>(iterResult, "visitForEachExplicitControl > expression");
-        Expression *expr = dynamic_cast<Expression *>(iterRaw);
-        if (!expr && iterResult.has_value()) {
-          delete iterRaw;
-          throw std::runtime_error("For-each 迭代源必须是表达式");
-        }
-        if (expr) {
-          iterableExprs.push_back(expr);
-        }
-      }
-    } else {
+    // 2. 处理表达式列表
+    if (!ctx->expressionList())
       throw std::runtime_error("For-each 缺少表达式列表");
+
+    auto exprListCtx = ctx->expressionList();
+    for (auto exprCtx : exprListCtx->expression()) {
+      std::any iterResult = visit(exprCtx);
+      AstNode *iterRaw =
+          safeAnyCastRawPtr<AstNode>(iterResult, "visitForEachControl > expression");
+      Expression *expr = dynamic_cast<Expression *>(iterRaw);
+      if (!expr) {
+        delete iterRaw;
+        throw std::runtime_error("For-each 迭代源必须是表达式");
+      }
+      iterableExprs.push_back(expr);
     }
 
-    if (iterableExprs.empty()) {
+    if (iterableExprs.empty())
       throw std::runtime_error("For-each 至少需要一个迭代表达式");
-    }
 
     // 3. 处理循环体
     if (!forStmtCtx->blockStatement())
       throw std::runtime_error("For 循环体 blockStatement 为空");
     std::any bodyResult = visit(forStmtCtx->blockStatement());
-    AstNode *bodyRaw = safeAnyCastRawPtr<AstNode>(bodyResult, "visitForEachExplicitControl > body");
+    AstNode *bodyRaw = safeAnyCastRawPtr<AstNode>(bodyResult, "visitForEachControl > body");
     body = dynamic_cast<BlockNode *>(bodyRaw);
-    if (!body && bodyResult.has_value()) {
+    if (!body) {
       delete bodyRaw;
       throw std::runtime_error("For 体必须是代码块");
     }
-    if (!body)
-      throw std::runtime_error("For 体访问失败");
 
-    // 4. 创建节点 (传入 Vector)
+    // 4. 创建节点
     ForEachStatementNode *forNode =
         new ForEachStatementNode(std::move(loopVars), std::move(iterableExprs), body, loc);
-    if (!forNode)
-      throw std::runtime_error("创建 ForEachStatementNode 失败");
     return std::any(static_cast<AstNode *>(forNode));
 
   } catch (...) {
@@ -2716,289 +2722,39 @@ AstBuilderVisitor::visitForEachExplicitControl(LangParser::ForEachExplicitContro
   }
 }
 
-std::any AstBuilderVisitor::visitMultiDeclaration(LangParser::MultiDeclarationContext *ctx) {
+// ===== ForEachVar 分支 =====
+std::any AstBuilderVisitor::visitForEachVarTyped(LangParser::ForEachVarTypedContext *ctx) {
   if (!ctx)
-    throw std::runtime_error("AstBuilderVisitor::visitMultiDeclarationnullptr");
+    throw std::runtime_error("AstBuilderVisitor::visitForEachVarTyped nullptr");
+  if (!ctx->IDENTIFIER())
+    throw std::runtime_error("ForEachVarTyped 缺少 IDENTIFIER");
 
-  std::vector<Declaration *> declarations;
-  AstType *currentItemType = nullptr;
-  Expression *initializer = nullptr;
-  try {
-    size_t num_items = ctx->declaration_item().size();
-    for (size_t i = 0; i < num_items; ++i) {
-      currentItemType = nullptr;
-      initializer = nullptr;
+  std::string name = ctx->IDENTIFIER()->getText();
+  AstType *typeAnn = nullptr;
 
-      auto itemCtx = ctx->declaration_item(i);
-      if (!itemCtx)
-        throw std::runtime_error("AstBuilderVisitor::"
-                                 "visitMultiDeclarationnullptr");
-
-      SourceLocation itemLoc = getSourceLocation(itemCtx);
-      if (!itemCtx->IDENTIFIER())
-        throw std::runtime_error("AstBuilderVisitor::"
-                                 "visitMultiDeclarationnullptr");
-
-      std::string name = itemCtx->IDENTIFIER()->getText();
-
-      if (itemCtx->type()) {
-        std::any typeResult = visit(itemCtx->type());
-        currentItemType = safeAnyCastRawPtr<AstType>(typeResult, "visitMultiDeclaration > type");
-      } else if (itemCtx->AUTO()) {
-        currentItemType = new AutoType(getSourceLocation(itemCtx->AUTO()));
-        if (!currentItemType)
-          throw std::runtime_error("AstBuilderVisitor::"
-                                   "visitMultiDeclarationnullptr");
-
-      } else {
-        throw std::runtime_error("内部错误: for 声明项缺少类型或 auto");
-      }
-      if (!currentItemType)
-        throw std::runtime_error("无法获取 for 声明项的类型注解");
-
-      if (i < ctx->ASSIGN().size()) {
-        if (!ctx->ASSIGN(i))
-          throw std::runtime_error("AstBuilderVisitor::"
-                                   "visitMultiDeclarationnullptr");
-
-        if (i < ctx->expression().size() && ctx->expression(i)) {
-          std::any initResult = visit(ctx->expression(i));
-          AstNode *initRaw =
-              safeAnyCastRawPtr<AstNode>(initResult, "visitMultiDeclaration > initializer");
-          initializer = dynamic_cast<Expression *>(initRaw);
-          if (!initializer && initResult.has_value()) {
-            delete currentItemType;
-            delete initRaw;
-            throw std::runtime_error("For 声明初始化器必须是表达式");
-          }
-
-        } else {
-          delete currentItemType;
-          throw std::runtime_error("内部错误: For 声明中 '=' 后缺少初始化表达式");
-        }
-      }
-
-      VariableDeclNode *declNode = new VariableDeclNode(
-          std::move(name), currentItemType, initializer, false, false, false, false, itemLoc);
-      if (!declNode)
-        throw std::runtime_error("AstBuilderVisitor::"
-                                 "visitMultiDeclarationnullptr");
-
-      declarations.push_back(declNode);
-    }
-    return std::any(std::move(declarations));
-  } catch (...) {
-    deleteVectorItems(declarations);
-
-    delete currentItemType;
-    delete initializer;
-    throw;
+  if (ctx->type()) {
+    std::any typeResult = visit(ctx->type());
+    typeAnn = safeAnyCastRawPtr<AstType>(typeResult, "visitForEachVarTyped > type");
+  } else if (ctx->AUTO()) {
+    typeAnn = new AutoType(getSourceLocation(ctx->AUTO()));
   }
+
+  if (!typeAnn)
+    throw std::runtime_error("ForEachVarTyped 无法获取类型注解");
+
+  return std::any(std::make_pair(std::move(name), typeAnn));
 }
 
-std::any AstBuilderVisitor::visitForInitStatement(LangParser::ForInitStatementContext *ctx) {
-  if (!ctx) {
-    throw std::runtime_error("visitForInitStatement 收到空的 context 指针");
-  }
-
-  if (ctx->multiDeclaration()) {
-    std::any declResult = visit(ctx->multiDeclaration());
-
-    if (!declResult.has_value() || declResult.type() != typeid(std::vector<Declaration *>)) {
-      throw std::runtime_error("visitMultiDeclaration 未返回预期的 "
-                               "vector<Declaration*> 类型");
-    }
-    try {
-
-      auto declVec = std::any_cast<std::vector<Declaration *>>(std::move(declResult));
-      for (const auto &decl : declVec) {
-        if (!decl)
-          throw std::runtime_error("for init 返回的声明向量中包含空指针");
-      }
-      ForInitializerVariant variantValue(std::move(declVec));
-      return std::any(variantValue);
-    } catch (const std::bad_any_cast &e) {
-      throw std::runtime_error("无法将 for init 声明结果转换为 vector<Declaration*>");
-    } catch (...) {
-      throw;
-    }
-
-  } else if (auto assignCtx = ctx->assignStatement()) {
-    AssignmentNode *assignNode = nullptr;
-    try {
-      std::any assignResult = visit(assignCtx);
-      AstNode *assignNodeRaw =
-          safeAnyCastRawPtr<AstNode>(assignResult, "visitForInitStatement > assignStatement");
-      assignNode = dynamic_cast<AssignmentNode *>(assignNodeRaw);
-      if (!assignNode && assignResult.has_value()) {
-        delete assignNodeRaw;
-        throw std::runtime_error("for init 赋值返回类型错误");
-      }
-      if (!assignNode) {
-        throw std::runtime_error("访问 for init 赋值失败");
-      }
-
-      ForInitializerVariant variantValue(assignNode);
-      assignNode = nullptr;
-      return std::any(variantValue);
-    } catch (...) {
-      delete assignNode;
-      throw;
-    }
-
-  } else if (ctx->expressionList()) {
-    std::vector<Expression *> exprVec;
-    try {
-      auto exprListCtx = ctx->expressionList();
-      if (!exprListCtx)
-        throw std::runtime_error("内部错误：获取 for init expressionList context 失败");
-
-      for (auto exprCtx : exprListCtx->expression()) {
-        if (!exprCtx)
-          throw std::runtime_error("for init expression list 中 context 为空");
-        std::any exprResult = visit(exprCtx);
-        AstNode *exprNodeRaw =
-            safeAnyCastRawPtr<AstNode>(exprResult, "visitForInitStatement > expressionList > expr");
-        Expression *exprNode = dynamic_cast<Expression *>(exprNodeRaw);
-        if (!exprNode && exprResult.has_value()) {
-          deleteVectorItems(exprVec);
-          delete exprNodeRaw;
-          throw std::runtime_error("for init 表达式列表包含非表达式节点");
-        }
-        if (!exprNode) {
-          deleteVectorItems(exprVec);
-          throw std::runtime_error("访问 for init 表达式失败");
-        }
-        exprVec.push_back(exprNode);
-      }
-      ForInitializerVariant variantValue(std::move(exprVec));
-      return std::any(variantValue);
-    } catch (...) {
-      deleteVectorItems(exprVec);
-      throw;
-    }
-
-  } else {
-    return std::any();
-  }
-}
-
-std::any AstBuilderVisitor::visitForCStyleControl(LangParser::ForCStyleControlContext *ctx) {
+std::any AstBuilderVisitor::visitForEachVarUntyped(LangParser::ForEachVarUntypedContext *ctx) {
   if (!ctx)
-    throw std::runtime_error("AstBuilderVisitor::visitForCStyleControlnullptr");
-  auto forStmtCtx = dynamic_cast<LangParser::ForStatementContext *>(ctx->parent);
-  if (!forStmtCtx)
-    throw std::runtime_error("内部错误: ForCStyleControl 缺少父节点 ForStatementContext");
-  SourceLocation loc = getSourceLocation(forStmtCtx);
+    throw std::runtime_error("AstBuilderVisitor::visitForEachVarUntyped nullptr");
+  if (!ctx->IDENTIFIER())
+    throw std::runtime_error("ForEachVarUntyped 缺少 IDENTIFIER");
 
-  std::optional<ForInitializerVariant> initializerOpt = std::nullopt;
+  std::string name = ctx->IDENTIFIER()->getText();
+  AstType *typeAnn = nullptr; // 无类型
 
-  Expression *condition = nullptr;
-  std::vector<Statement *> updateActions;
-  BlockNode *body = nullptr;
-  try {
-
-    if (ctx->forInitStatement()) {
-      std::any initResult = visit(ctx->forInitStatement());
-      if (initResult.has_value()) {
-        try {
-
-          if (initResult.type() != typeid(ForInitializerVariant)) {
-
-            throw std::runtime_error("Internal error: visitForInitStatement "
-                                     "returned unexpected type");
-          }
-          ForInitializerVariant variantValue =
-              std::any_cast<ForInitializerVariant>(std::move(initResult));
-
-          initializerOpt.emplace(std::move(variantValue));
-        } catch (const std::bad_any_cast &e) {
-
-          throw std::runtime_error("无法转换 visitForInitStatement 的结果");
-        }
-      }
-    }
-
-    if (ctx->expression()) {
-      std::any condResult = visit(ctx->expression());
-      AstNode *condRaw =
-          safeAnyCastRawPtr<AstNode>(condResult, "visitForCStyleControl > condition");
-      condition = dynamic_cast<Expression *>(condRaw);
-      if (!condition && condResult.has_value()) {
-        throw std::runtime_error("For 条件必须是表达式");
-      }
-    }
-
-    if (ctx->forUpdate()) {
-      std::any updateResult = visit(ctx->forUpdate());
-      if (updateResult.has_value()) {
-        if (updateResult.type() == typeid(std::vector<Statement *>)) {
-          updateActions = std::any_cast<std::vector<Statement *>>(std::move(updateResult));
-
-          for (const auto &stmt : updateActions) {
-            if (!stmt)
-              throw std::runtime_error("AstBuilderVisitor::visitForCStyleControlnullptr");
-          }
-        } else {
-
-          throw std::runtime_error("内部错误: visitForUpdate 返回类型不匹配");
-        }
-      }
-    }
-
-    if (!forStmtCtx->blockStatement())
-      throw std::runtime_error("AstBuilderVisitor::visitForCStyleControlnullptr");
-
-    std::any bodyResult = visit(forStmtCtx->blockStatement());
-    AstNode *bodyRaw = safeAnyCastRawPtr<AstNode>(bodyResult, "visitForCStyleControl > body");
-    body = dynamic_cast<BlockNode *>(bodyRaw);
-    if (!body && bodyResult.has_value()) {
-      delete bodyRaw;
-      throw std::runtime_error("For 体必须是代码块");
-    }
-    if (!body) {
-      throw std::runtime_error("For 体访问失败");
-    }
-
-    ForCStyleStatementNode *forNode = new ForCStyleStatementNode(
-        std::move(initializerOpt), condition, std::move(updateActions), body, loc);
-    if (!forNode)
-      throw std::runtime_error("AstBuilderVisitor::visitForCStyleControlnullptr");
-
-    return std::any(static_cast<AstNode *>(forNode));
-  } catch (...) {
-
-    delete condition;
-    deleteVectorItems(updateActions);
-    delete body;
-
-    if (initializerOpt.has_value()) {
-      try {
-
-        std::visit(
-            [](auto &&arg) {
-              using T = std::decay_t<decltype(arg)>;
-
-              if constexpr (std::is_same_v<T, std::vector<Declaration *>> ||
-                            std::is_same_v<T, std::vector<Expression *>>) {
-
-                deleteVectorItems(arg);
-              } else if constexpr (std::is_same_v<T, AssignmentNode *>) {
-
-                delete arg;
-              }
-            },
-            initializerOpt.value());
-
-      } catch (...) {
-
-        std::cerr << "Warning: Exception occurred while cleaning up "
-                     "initializer variant during exception handling."
-                  << std::endl;
-      }
-    }
-    throw;
-  }
+  return std::any(std::make_pair(std::move(name), typeAnn));
 }
 
 std::any AstBuilderVisitor::visitQualifiedIdentifier(LangParser::QualifiedIdentifierContext *ctx) {

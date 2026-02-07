@@ -375,27 +375,28 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any visitForCStyleControl(LangParser::ForCStyleControlContext *ctx) override {
+  virtual std::any visitForNumericControl(LangParser::ForNumericControlContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitForEachExplicitControl(LangParser::ForEachExplicitControlContext *ctx) override {
+  virtual std::any visitForEachControl(LangParser::ForEachControlContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitForUpdate(LangParser::ForUpdateContext *ctx) override {
+  virtual std::any visitForNumericVarTyped(LangParser::ForNumericVarTypedContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitForUpdateSingle(LangParser::ForUpdateSingleContext *ctx) override {
+  virtual std::any
+  visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitForInitStatement(LangParser::ForInitStatementContext *ctx) override {
+  virtual std::any visitForEachVarTyped(LangParser::ForEachVarTypedContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitMultiDeclaration(LangParser::MultiDeclarationContext *ctx) override {
+  virtual std::any visitForEachVarUntyped(LangParser::ForEachVarUntypedContext *ctx) override {
     return visitChildren(ctx);
   }
 

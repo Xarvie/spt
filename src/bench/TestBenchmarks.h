@@ -139,8 +139,9 @@ while (i < limit) {
     sum = add(sum, i);
     i = i + 1;
 }
+print(sum);
        )spt",
-                 "");
+                 "499999999500000000");
 }
 
 inline void registerBench3(TestRunner &runner) {

@@ -125,12 +125,12 @@ public:
   std::any visitIfStatement(LangParser::IfStatementContext *ctx) override;
   std::any visitWhileStatement(LangParser::WhileStatementContext *ctx) override;
   std::any visitForStatement(LangParser::ForStatementContext *ctx) override;
-  std::any visitForUpdate(LangParser::ForUpdateContext *ctx) override;
-  std::any visitForUpdateSingle(LangParser::ForUpdateSingleContext *ctx) override;
-  std::any visitForCStyleControl(LangParser::ForCStyleControlContext *ctx) override;
-  std::any visitForEachExplicitControl(LangParser::ForEachExplicitControlContext *ctx) override;
-  std::any visitForInitStatement(LangParser::ForInitStatementContext *ctx) override;
-  std::any visitMultiDeclaration(LangParser::MultiDeclarationContext *ctx) override;
+  std::any visitForNumericControl(LangParser::ForNumericControlContext *ctx) override;
+  std::any visitForEachControl(LangParser::ForEachControlContext *ctx) override;
+  std::any visitForNumericVarTyped(LangParser::ForNumericVarTypedContext *ctx) override;
+  std::any visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) override;
+  std::any visitForEachVarTyped(LangParser::ForEachVarTypedContext *ctx) override;
+  std::any visitForEachVarUntyped(LangParser::ForEachVarUntypedContext *ctx) override;
   std::any visitQualifiedIdentifier(LangParser::QualifiedIdentifierContext *ctx) override;
   std::any visitTypeQualifiedIdentifier(LangParser::TypeQualifiedIdentifierContext *ctx) override;
 

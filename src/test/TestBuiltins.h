@@ -94,25 +94,25 @@ inline void registerBuiltinFunctions(TestRunner &runner) {
             i~/=3.1;
             print(i);
             print(4~/3.1);
-            print(abs(-5));
-            print(abs(5));
-            print(abs(-3.14));
-            print(floor(3.7));
-            print(floor(3.2));
-            print(ceil(3.2));
-            print(ceil(3.7));
-            print(round(3.4));
-            print(round(3.5));
-            print(round(3.6));
+            print(math.abs(-5));
+            print(math.abs(5));
+            print(math.abs(-3.14));
+            print(math.floor(3.7));
+            print(math.floor(3.2));
+            print(math.ceil(3.2));
+            print(math.ceil(3.7));
+            print(math.round(3.4));
+            print(math.round(3.5));
+            print(math.round(3.6));
        )",
                  "1\n1\n5\n5\n3.14\n3\n3\n4\n4\n3\n4\n4");
 
   runner.addTest("Builtin - sqrt pow",
                  R"(
-            print(toInt(sqrt(16)));
-            print(toInt(sqrt(9)));
-            print(toInt(pow(2, 10)));
-            print(toInt(pow(3, 3)));
+            print(toInt(math.sqrt(16)));
+            print(toInt(math.sqrt(9)));
+            print(toInt(math.pow(2, 10)));
+            print(toInt(math.pow(3, 3)));
        )",
                  "4\n3\n1024\n27");
 

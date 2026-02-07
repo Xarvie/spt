@@ -122,3 +122,4 @@ private:
 
   // Individual semantic predicate functions triggered by sempred() above.
 };
+

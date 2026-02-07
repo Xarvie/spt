@@ -1,9 +1,6 @@
 #include "ast.h"
 #include <algorithm>
-#include <optional>
 #include <stdexcept>
-#include <type_traits>
-#include <variant>
 #include <vector>
 
 static std::vector<AstType *> cloneAstTypeList(const std::vector<AstType *> &source) {
@@ -193,28 +190,11 @@ WhileStatementNode::~WhileStatementNode() {
   delete body;
 }
 
-ForCStyleStatementNode::~ForCStyleStatementNode() {
-  if (initializer.has_value()) {
-    std::visit(
-        [](auto &&arg) {
-          using T = std::decay_t<decltype(arg)>;
-
-          if constexpr (std::is_same_v<T, std::vector<Declaration *>> ||
-                        std::is_same_v<T, std::vector<Expression *>>) {
-
-            deleteVectorItems(arg);
-          } else if constexpr (std::is_same_v<T, AssignmentNode *>)
-
-          {
-
-            delete arg;
-          }
-        },
-        initializer.value());
-  }
-
-  delete condition;
-  deleteVectorItems(updateActions);
+ForNumericStatementNode::~ForNumericStatementNode() {
+  delete typeAnnotation;
+  delete startExpr;
+  delete endExpr;
+  delete stepExpr;
   delete body;
 }
 
@@ -245,7 +225,7 @@ ImportNamespaceNode::~ImportNamespaceNode() = default;
 
 ImportNamedNode::~ImportNamedNode() { deleteVectorItems(specifiers); }
 
-void destroyAst(AstNode *node) { delete node; }
+extern "C" void destroyAst(AstNode *node) { delete node; }
 
 #include <any>
 #include <fstream>
@@ -260,7 +240,9 @@ void destroyAst(AstNode *node) { delete node; }
 
 using namespace antlr4;
 
-AstNode *loadAst(const std::string &sourceCode, const std::string &filename) {
+extern "C" AstNode *loadAst(const char* sourceCode_, const char* filename_) {
+  std::string sourceCode = sourceCode_;
+  std::string filename = filename_;
   std::string codeToParse;
   std::string displayFileName = filename.empty() ? "<unknown>" : filename;
 

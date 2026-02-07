@@ -199,17 +199,18 @@ public:
 
     virtual std::any visitForStatement(LangParser::ForStatementContext *context) = 0;
 
-    virtual std::any visitForCStyleControl(LangParser::ForCStyleControlContext *context) = 0;
+    virtual std::any visitForNumericControl(LangParser::ForNumericControlContext *context) = 0;
 
-    virtual std::any visitForEachExplicitControl(LangParser::ForEachExplicitControlContext *context) = 0;
+    virtual std::any visitForEachControl(LangParser::ForEachControlContext *context) = 0;
 
-    virtual std::any visitForUpdate(LangParser::ForUpdateContext *context) = 0;
+    virtual std::any visitForNumericVarTyped(LangParser::ForNumericVarTypedContext *context) = 0;
 
-    virtual std::any visitForUpdateSingle(LangParser::ForUpdateSingleContext *context) = 0;
+    virtual std::any
+    visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *context) = 0;
 
-    virtual std::any visitForInitStatement(LangParser::ForInitStatementContext *context) = 0;
+    virtual std::any visitForEachVarTyped(LangParser::ForEachVarTypedContext *context) = 0;
 
-    virtual std::any visitMultiDeclaration(LangParser::MultiDeclarationContext *context) = 0;
+    virtual std::any visitForEachVarUntyped(LangParser::ForEachVarUntypedContext *context) = 0;
 
     virtual std::any visitParameterList(LangParser::ParameterListContext *context) = 0;
 

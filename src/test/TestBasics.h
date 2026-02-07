@@ -12,10 +12,10 @@ inline void registerBasics(TestRunner &runner) {
             int b = 20;
             print(a + b * 2);
             print((a + b) * 2);
-            print(100 / 4);
+            print(100 ~/ 4);
             print(17 % 5);
             print(-a);
-            print(10 / 3);
+            print(10 ~/ 3);
        )",
                  "50\n60\n25\n2\n-10\n3");
 
@@ -68,7 +68,7 @@ inline void registerBasics(TestRunner &runner) {
   runner.addTest(
       "Comparison NaN",
       R"(
-            float nanX = sqrt(-1);
+            float nanX = math.sqrt(-1);
             print(nanX == nanX); // false
             print(nanX != nanX); // true
             print(nanX < nanX); // false

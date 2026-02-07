@@ -10,20 +10,66 @@
 #include <string>
 #include <vector>
 
-#include "Ast/ast.h"
-#include "Common/BytecodeSerializer.h"
-#include "Compiler/Compiler.h"
-#include "Vm/VM.h"
+extern "C" {
 
-using namespace spt;
+#include "vm/lua.h"
+#include "vm/lualib.h"
+#include "vm/lauxlib.h"
+}
+
+
+
 namespace fs = std::filesystem;
 
-extern AstNode *loadAst(const std::string &sourceCode, const std::string &filename);
+// 这是一个全局辅助，用于在 Lua 的 C 函数中捕获输出
+// 注意：为了简单起见使用了线程局部存储，确保并行测试（如果有）安全
+static thread_local std::stringstream* g_currentCapture = nullptr;
+
+
+static int lua_capture_print(lua_State* L) {
+  if (!g_currentCapture) return 0;
+
+  int n = lua_gettop(L);  /* 参数个数 */
+  lua_getglobal(L, "tostring"); // index: n+1
+
+  for (int i = 2; i <= n; i++) {
+    if (i > 2) *g_currentCapture << " ";
+
+    // [修复] 单独处理数字类型，解决 5.14 显示为 5.1400000000000006 的问题
+    if (lua_type(L, i) == LUA_TNUMBER) {
+      if (lua_isinteger(L, i)) {
+        *g_currentCapture << lua_tointeger(L, i);
+      } else {
+        // 是浮点数
+        double val = lua_tonumber(L, i);
+        // 使用 %.14g 格式化。
+        // %.14g 是 Lua 5.1/5.2 的默认行为，能有效隐藏 IEEE 754 的微小误差
+        // 同时保留有意义的精度。
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.14g", val);
+        *g_currentCapture << buf;
+      }
+    } else {
+      // 其他类型（String, Table, Bool, Nil）走 Lua 原生 tostring
+      lua_pushvalue(L, n + 1);  /* 将 tostring 函数压栈 */
+      lua_pushvalue(L, i);      /* 将参数压栈 */
+      lua_call(L, 1, 1);        /* 调用 tostring */
+      const char* s = lua_tostring(L, -1);
+      if (s == NULL) return luaL_error(L, "'tostring' must return a string to 'print'");
+      *g_currentCapture << s;
+      lua_pop(L, 1);  /* 弹出结果 */
+    }
+  }
+  *g_currentCapture << "\n"; // print 默认换行
+  lua_pop(L, 1);  /* 弹出 tostring 函数 */
+  return 0;
+}
 
 class TestRunner {
 public:
-  // 原生绑定注册函数类型
-  using NativeBindingRegistrar = std::function<void(VM *)>;
+  // [注意] 原生绑定现在的参数从 VM* 变成了 lua_State*
+  // 如果你的测试用例里写了 C++ lambda，需要把参数类型改一下
+  using NativeBindingRegistrar = std::function<void(lua_State *)>;
 
   struct ModuleDef {
     std::string name;
@@ -39,38 +85,34 @@ public:
     NativeBindingRegistrar nativeRegistrar; // 原生绑定注册函数（可选）
   };
 
-  // 添加普通测试
+  // --- 接口保持不变，确保兼容性 ---
+
   void addTest(const std::string &name, const std::string &script,
                const std::string &expectedOutput) {
     tests_.push_back({name, script, expectedOutput, {}, false, nullptr});
   }
 
-  // 添加带原生绑定的测试
   void addNativeTest(const std::string &name, const std::string &script,
                      const std::string &expectedOutput, NativeBindingRegistrar registrar) {
     tests_.push_back({name, script, expectedOutput, {}, false, registrar});
   }
 
-  // 添加带模块文件的测试
   void addModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
                      const std::string &script, const std::string &expectedOutput,
                      bool expectRuntimeError = false) {
     tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError, nullptr});
   }
 
-  // 添加带模块和原生绑定的测试
   void addModuleNativeTest(const std::string &name, const std::vector<ModuleDef> &modules,
                            const std::string &script, const std::string &expectedOutput,
                            NativeBindingRegistrar registrar, bool expectRuntimeError = false) {
     tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError, registrar});
   }
 
-  // 添加预期失败的测试 (Negative Test)
   void addFailTest(const std::string &name, const std::string &script) {
     tests_.push_back({name, script, "", {}, true, nullptr});
   }
 
-  // 添加预期失败且带原生绑定的测试
   void addNativeFailTest(const std::string &name, const std::string &script,
                          NativeBindingRegistrar registrar) {
     tests_.push_back({name, script, "", {}, true, registrar});
@@ -86,7 +128,7 @@ public:
       fs::remove_all(testDir_);
     fs::create_directories(testDir_);
 
-    std::cout << "Running " << total << " tests..." << std::endl;
+    std::cout << "Running " << total << " tests (Backend: Lua 5.5 + SptAST)..." << std::endl;
 
     for (const auto &test : tests_) {
       if (runSingleTest(test)) {
@@ -130,9 +172,9 @@ private:
     return res;
   }
 
-  // 创建测试所需的辅助文件
   void setupModules(const std::vector<ModuleDef> &modules) {
     for (const auto &mod : modules) {
+      // 模块文件创建为 .spt 后缀
       std::string path = testDir_ + "/" + mod.name + ".spt";
       std::ofstream file(path);
       file << mod.content;
@@ -140,7 +182,6 @@ private:
     }
   }
 
-  // 清理辅助文件
   void cleanupModules(const std::vector<ModuleDef> &modules) {
     for (const auto &mod : modules) {
       std::string path = testDir_ + "/" + mod.name + ".spt";
@@ -149,77 +190,99 @@ private:
     }
   }
 
+  // 配置 Lua 的 package.path 以便 require 能找到测试用的 .spt 文件
+  void setupLuaPath(lua_State* L) {
+    lua_getglobal(L, "package");
+    lua_getfield(L, -1, "path");
+    std::string curPath = lua_tostring(L, -1);
+    lua_pop(L, 1); // pop old path
+
+    // 添加 ./test_env_tmp/?.spt 到搜索路径
+    // 注意：Lua 的路径分隔符是 ;
+    std::string newPath = curPath + ";" + testDir_ + "/?.spt";
+
+    lua_pushstring(L, newPath.c_str());
+    lua_setfield(L, -2, "path");
+    lua_pop(L, 1); // pop package
+  }
+
   bool runSingleTest(const TestCase &test) {
     auto start = std::chrono::high_resolution_clock::now();
 
     // 0. 环境准备
     setupModules(test.modules);
 
-    // 1. 解析
-    AstNode *ast = loadAst(test.script, "test_script");
-    if (!ast) {
-      printFail(test.name, "Parse Error", "", "");
+    // 1. 初始化 Lua 虚拟机
+    lua_State* L = luaL_newstate();
+    if (!L) {
+      printFail(test.name, "Failed to create Lua state", "", "");
       cleanupModules(test.modules);
       return false;
     }
 
-    // 2. 编译
-    Compiler compiler("main");
-    std::string compileErrors;
-    compiler.setErrorHandler([&](const CompileError &err) {
-      compileErrors += "Line " + std::to_string(err.line) + ": " + err.message + "\n";
-    });
+    luaL_openlibs(L); // 加载标准库
 
-    CompiledChunk chunk = compiler.compile(ast);
-    destroyAst(ast); // 编译完成后即可销毁 AST
-
-    if (compiler.hasError()) {
-      printFail(test.name, "Compilation Failed", "", compileErrors);
-      cleanupModules(test.modules);
-      return false;
-    }
-
-    // 3. 运行
-    VMConfig config;
-    config.debugMode = false;
-    config.modulePaths = {testDir_}; // 将临时目录加入模块搜索路径
-    VM vm(config);
-
-    // 3.5 注册原生绑定（如果有）
-    if (test.nativeRegistrar) {
-      test.nativeRegistrar(&vm);
-    }
-
+    // 2. 配置重定向
     std::stringstream capturedOutput;
-    vm.setPrintHandler([&](const std::string &msg) { capturedOutput << msg; });
-    //    spt::BytecodeDumper::dump(chunk);
-    InterpretResult result = vm.interpret(chunk);
+    g_currentCapture = &capturedOutput;
+
+    // 覆盖全局 print 函数
+    lua_pushcfunction(L, lua_capture_print);
+    lua_setglobal(L, "print");
+
+    // 配置 require 搜索路径
+    setupLuaPath(L);
+
+    // 3. 注册原生绑定（如果有）
+    // 这里调用用户的 lambda，此时传入的是 lua_State*
+    if (test.nativeRegistrar) {
+      test.nativeRegistrar(L);
+    }
+
+    // 4. 加载并运行脚本
+    // luaL_loadbuffer/loadstring 会触发 ldo.c 中你修改过的 f_parser
+    // 从而调用 loadAst -> astY_compile
+    int status = luaL_loadbuffer(L, test.script.c_str(), test.script.size(), test.name.c_str());
+
+    if (status == LUA_OK) {
+      // 编译成功，现在运行
+      status = lua_pcall(L, 0, 0, 0);
+    }
 
     // 计时结束
     auto end = std::chrono::high_resolution_clock::now();
     double duration = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // 4. 清理环境
+    // 获取错误信息（如果有）
+    std::string errorMsg;
+    if (status != LUA_OK) {
+      const char* msg = lua_tostring(L, -1);
+      errorMsg = msg ? msg : "Unknown Lua Error";
+      lua_pop(L, 1);
+    }
+
+    // 5. 资源清理
+    g_currentCapture = nullptr;
+    lua_close(L);
     cleanupModules(test.modules);
 
-    // 5. 结果判定
+    // 6. 结果判定
 
-    // 情况 A: 预期运行时错误
+    // 情况 A: 预期运行时错误 (包含编译错误)
     if (test.expectRuntimeError) {
-      if (result != InterpretResult::OK) {
-        // 成功捕获错误：移除绿色代码
+      if (status != LUA_OK) {
         std::cout << "[       OK ] " << test.name << " (Expected Error Caught)" << " (" << duration
                   << " ms)" << std::endl;
         return true;
       } else {
-        printFail(test.name, "Expected Runtime Error, but got OK", "Runtime Error", "OK");
+        printFail(test.name, "Expected Error, but run Successfully", "Runtime/Compile Error", "OK");
         return false;
       }
     }
 
     // 情况 B: 正常执行
-    if (result != InterpretResult::OK) {
-      printFail(test.name, "Unexpected Runtime Error", test.expectedOutput, capturedOutput.str());
+    if (status != LUA_OK) {
+      printFail(test.name, "Unexpected Error", test.expectedOutput, errorMsg);
       return false;
     }
 
@@ -227,7 +290,6 @@ private:
     std::string expected = trim(test.expectedOutput);
 
     if (actual == expected) {
-      // 成功：移除绿色代码
       std::cout << "[       OK ] " << test.name << " (" << duration << " ms)" << std::endl;
       return true;
     } else {

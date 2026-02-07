@@ -149,13 +149,11 @@ public:
     RuleWhileStatement = 51,
     RuleForStatement = 52,
     RuleForControl = 53,
-    RuleForUpdate = 54,
-    RuleForUpdateSingle = 55,
-    RuleForInitStatement = 56,
-    RuleMultiDeclaration = 57,
-    RuleParameterList = 58,
-    RuleParameter = 59,
-    RuleArguments = 60
+    RuleForNumericVar = 54,
+    RuleForEachVar = 55,
+    RuleParameterList = 56,
+    RuleParameter = 57,
+    RuleArguments = 58
   };
 
   explicit LangParser(antlr4::TokenStream *input);
@@ -228,10 +226,8 @@ public:
   class WhileStatementContext;
   class ForStatementContext;
   class ForControlContext;
-  class ForUpdateContext;
-  class ForUpdateSingleContext;
-  class ForInitStatementContext;
-  class MultiDeclarationContext;
+  class ForNumericVarContext;
+  class ForEachVarContext;
   class ParameterListContext;
   class ParameterContext;
   class ArgumentsContext;
@@ -702,6 +698,7 @@ public:
     antlr4::tree::TerminalNode *CP();
     BlockStatementContext *blockStatement();
     antlr4::tree::TerminalNode *GLOBAL();
+    antlr4::tree::TerminalNode *CONST();
     ParameterListContext *parameterList();
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -717,6 +714,7 @@ public:
     antlr4::tree::TerminalNode *CP();
     BlockStatementContext *blockStatement();
     antlr4::tree::TerminalNode *GLOBAL();
+    antlr4::tree::TerminalNode *CONST();
     ParameterListContext *parameterList();
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -772,6 +770,7 @@ public:
     antlr4::tree::TerminalNode *CP();
     BlockStatementContext *blockStatement();
     antlr4::tree::TerminalNode *STATIC();
+    antlr4::tree::TerminalNode *CONST();
     ParameterListContext *parameterList();
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -809,6 +808,7 @@ public:
     antlr4::tree::TerminalNode *CP();
     BlockStatementContext *blockStatement();
     antlr4::tree::TerminalNode *STATIC();
+    antlr4::tree::TerminalNode *CONST();
     ParameterListContext *parameterList();
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -1747,12 +1747,12 @@ public:
     virtual size_t getRuleIndex() const override;
   };
 
-  class ForEachExplicitControlContext : public ForControlContext {
+  class ForEachControlContext : public ForControlContext {
   public:
-    ForEachExplicitControlContext(ForControlContext *ctx);
+    ForEachControlContext(ForControlContext *ctx);
 
-    std::vector<Declaration_itemContext *> declaration_item();
-    Declaration_itemContext *declaration_item(size_t i);
+    std::vector<ForEachVarContext *> forEachVar();
+    ForEachVarContext *forEachVar(size_t i);
     antlr4::tree::TerminalNode *COL();
     ExpressionListContext *expressionList();
     std::vector<antlr4::tree::TerminalNode *> COMMA();
@@ -1761,69 +1761,12 @@ public:
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
   };
 
-  class ForCStyleControlContext : public ForControlContext {
+  class ForNumericControlContext : public ForControlContext {
   public:
-    ForCStyleControlContext(ForControlContext *ctx);
+    ForNumericControlContext(ForControlContext *ctx);
 
-    ForInitStatementContext *forInitStatement();
-    std::vector<antlr4::tree::TerminalNode *> SEMICOLON();
-    antlr4::tree::TerminalNode *SEMICOLON(size_t i);
-    ExpressionContext *expression();
-    ForUpdateContext *forUpdate();
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-  };
-
-  ForControlContext *forControl();
-
-  class ForUpdateContext : public antlr4::ParserRuleContext {
-  public:
-    ForUpdateContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    std::vector<ForUpdateSingleContext *> forUpdateSingle();
-    ForUpdateSingleContext *forUpdateSingle(size_t i);
-    std::vector<antlr4::tree::TerminalNode *> COMMA();
-    antlr4::tree::TerminalNode *COMMA(size_t i);
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-  };
-
-  ForUpdateContext *forUpdate();
-
-  class ForUpdateSingleContext : public antlr4::ParserRuleContext {
-  public:
-    ForUpdateSingleContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    ExpressionContext *expression();
-    UpdateStatementContext *updateStatement();
-    AssignStatementContext *assignStatement();
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-  };
-
-  ForUpdateSingleContext *forUpdateSingle();
-
-  class ForInitStatementContext : public antlr4::ParserRuleContext {
-  public:
-    ForInitStatementContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    MultiDeclarationContext *multiDeclaration();
-    AssignStatementContext *assignStatement();
-    ExpressionListContext *expressionList();
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-  };
-
-  ForInitStatementContext *forInitStatement();
-
-  class MultiDeclarationContext : public antlr4::ParserRuleContext {
-  public:
-    MultiDeclarationContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    std::vector<Declaration_itemContext *> declaration_item();
-    Declaration_itemContext *declaration_item(size_t i);
-    std::vector<antlr4::tree::TerminalNode *> ASSIGN();
-    antlr4::tree::TerminalNode *ASSIGN(size_t i);
+    ForNumericVarContext *forNumericVar();
+    antlr4::tree::TerminalNode *ASSIGN();
     std::vector<ExpressionContext *> expression();
     ExpressionContext *expression(size_t i);
     std::vector<antlr4::tree::TerminalNode *> COMMA();
@@ -1832,7 +1775,73 @@ public:
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
   };
 
-  MultiDeclarationContext *multiDeclaration();
+  ForControlContext *forControl();
+
+  class ForNumericVarContext : public antlr4::ParserRuleContext {
+  public:
+    ForNumericVarContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+
+    ForNumericVarContext() = default;
+    void copyFrom(ForNumericVarContext *context);
+    using antlr4::ParserRuleContext::copyFrom;
+
+    virtual size_t getRuleIndex() const override;
+  };
+
+  class ForNumericVarTypedContext : public ForNumericVarContext {
+  public:
+    ForNumericVarTypedContext(ForNumericVarContext *ctx);
+
+    antlr4::tree::TerminalNode *IDENTIFIER();
+    TypeContext *type();
+    antlr4::tree::TerminalNode *AUTO();
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+  };
+
+  class ForNumericVarUntypedContext : public ForNumericVarContext {
+  public:
+    ForNumericVarUntypedContext(ForNumericVarContext *ctx);
+
+    antlr4::tree::TerminalNode *IDENTIFIER();
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+  };
+
+  ForNumericVarContext *forNumericVar();
+
+  class ForEachVarContext : public antlr4::ParserRuleContext {
+  public:
+    ForEachVarContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+
+    ForEachVarContext() = default;
+    void copyFrom(ForEachVarContext *context);
+    using antlr4::ParserRuleContext::copyFrom;
+
+    virtual size_t getRuleIndex() const override;
+  };
+
+  class ForEachVarTypedContext : public ForEachVarContext {
+  public:
+    ForEachVarTypedContext(ForEachVarContext *ctx);
+
+    antlr4::tree::TerminalNode *IDENTIFIER();
+    TypeContext *type();
+    antlr4::tree::TerminalNode *AUTO();
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+  };
+
+  class ForEachVarUntypedContext : public ForEachVarContext {
+  public:
+    ForEachVarUntypedContext(ForEachVarContext *ctx);
+
+    antlr4::tree::TerminalNode *IDENTIFIER();
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+  };
+
+  ForEachVarContext *forEachVar();
 
   class ParameterListContext : public antlr4::ParserRuleContext {
   public:
@@ -1879,3 +1888,4 @@ public:
 
 private:
 };
+
