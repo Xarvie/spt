@@ -442,11 +442,13 @@ SPT_API void spt_settop(spt_State *S, int idx) {
 
   int newTop;
   if (idx >= 0) {
-    newTop = idx;
+    if (S->callBase >= 0) {
+      newTop = S->callBase + idx;
+    } else {
+      newTop = idx;
+    }
   } else {
     newTop = top + idx + 1;
-    if (newTop < 0)
-      newTop = 0;
   }
 
   if (newTop > top) {
@@ -2027,7 +2029,35 @@ SPT_API spt_Chunk *spt_loadstring(spt_State *S, const char *source, const char *
 }
 
 SPT_API spt_Chunk *spt_loadfile(spt_State *S, const char *filename) {
-  return spt_loadstring(S, nullptr, filename);
+  if (!S || !filename)
+    return nullptr;
+
+  std::FILE *f = std::fopen(filename, "rb");
+  if (!f) {
+    setError(S, (std::string("cannot open file: ") + filename).c_str());
+    return nullptr;
+  }
+
+  std::fseek(f, 0, SEEK_END);
+  long size = std::ftell(f);
+  std::fseek(f, 0, SEEK_SET);
+
+  if (size < 0) {
+    std::fclose(f);
+    setError(S, (std::string("cannot read file: ") + filename).c_str());
+    return nullptr;
+  }
+
+  std::string source(static_cast<size_t>(size), '\0');
+  size_t read = std::fread(&source[0], 1, static_cast<size_t>(size), f);
+  std::fclose(f);
+
+  if (static_cast<long>(read) != size) {
+    setError(S, (std::string("failed to read file: ") + filename).c_str());
+    return nullptr;
+  }
+
+  return spt_loadstring(S, source.c_str(), filename);
 }
 
 SPT_API void spt_pushchunk(spt_State *S, spt_Chunk *chunk) {
@@ -2039,6 +2069,24 @@ SPT_API void spt_pushchunk(spt_State *S, spt_Chunk *chunk) {
 
   S->vm->prepareChunk(chunk->chunk);
   spt::Closure *closure = S->vm->allocateScriptClosure(&chunk->chunk.mainProto);
+
+  if (closure->upvalueCount > 0) {
+
+    S->vm->protect(spt::Value::object(closure));
+
+    S->vm->ensureGlobalEnv();
+    spt::MapObject *globalEnv = S->vm->getGlobalEnv();
+
+    spt::UpValue *envUpvalue = S->vm->gc().allocate<spt::UpValue>();
+    envUpvalue->closed = spt::Value::object(globalEnv);
+    envUpvalue->location = &envUpvalue->closed;
+    envUpvalue->nextOpen = nullptr;
+
+    closure->scriptUpvalues[0] = envUpvalue;
+
+    S->vm->unprotect(1);
+  }
+
   pushValue(S, spt::Value::object(closure));
 }
 
@@ -2046,27 +2094,14 @@ SPT_API int spt_execute(spt_State *S, spt_Chunk *chunk) {
   if (!S || !chunk)
     return SPT_ERRRUN;
 
-  spt::InterpretResult result;
-  try {
-    result = S->vm->interpret(chunk->chunk);
-  } catch (const spt::SptPanic &e) {
-    S->vm->clearError();
-    return SPT_ERRRUN;
-  } catch (const spt::CExtensionException &e) {
-    S->vm->clearError();
+  spt_pushchunk(S, chunk);
+
+  if (spt_isnil(S, -1)) {
+    spt_pop(S, 1);
     return SPT_ERRRUN;
   }
 
-  switch (result) {
-  case spt::InterpretResult::OK:
-    return SPT_OK;
-  case spt::InterpretResult::COMPILE_ERROR:
-    return SPT_ERRCOMPILE;
-  case spt::InterpretResult::RUNTIME_ERROR:
-    return SPT_ERRRUN;
-  default:
-    return SPT_ERRRUN;
-  }
+  return spt_call(S, 0, SPT_MULTRET);
 }
 
 SPT_API int spt_call(spt_State *S, int nargs, int nresults) {

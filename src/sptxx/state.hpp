@@ -88,7 +88,7 @@ public:
   // Check if global exists
   SPTXX_NODISCARD bool has_global(const char *name) const { return spt_hasglobal(S_, name) != 0; }
 
-  // Global table access
+  // Global variable access
   SPTXX_NODISCARD global_table globals() const { return global_table(S_); }
 
   // Convenience operator[]
@@ -229,7 +229,7 @@ public:
     push_wrapped_function(name, std::move(wrapper));
   }
 
-  // Register function table as library
+  // Register function library
   void register_lib(const char *libname, const spt_Reg *funcs) { spt_register(S_, libname, funcs); }
 
   // ========================================================================
@@ -335,6 +335,12 @@ protected:
     using storage_type = detail::func_storage<Wrapper>;
     void *mem = spt_newcinstance(S_, sizeof(storage_type));
     new (mem) storage_type(std::move(wrapper));
+
+    // Ensure the cinstance has a class with __gc so the destructor runs
+    detail::ensure_func_storage_class(S_);
+    int cinst_idx = spt_gettop(S_); // cinstance is on top
+    spt_getfield(S_, registry_index, "__sptxx_func_storage_class");
+    spt_setcclass(S_, cinst_idx);
 
     // Push closure with storage as upvalue
     spt_pushcclosure(S_, detail::generic_cfunc_dispatcher, 1);

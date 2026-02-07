@@ -265,7 +265,7 @@ inline reference make_ref_pop(state_t *S) { return reference(S); }
 } // namespace detail
 
 // ============================================================================
-// Global Table Access
+// Global Variable Access
 // ============================================================================
 
 class global_table {

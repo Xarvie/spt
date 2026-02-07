@@ -337,29 +337,10 @@ public:
   SPTXX_NODISCARD int return_count() const noexcept { return return_count_; }
 
   // Get return value at index (0-based)
-
   template <typename T> SPTXX_NODISCARD T get(int index = 0) const {
-    std::cerr << "[RESULT::GET] start_index_=" << start_index_
-              << ", return_count_=" << return_count_ << ", index=" << index << std::endl;
-
     SPTXX_ASSERT(valid(), "Cannot get result from failed call");
     SPTXX_ASSERT(index < return_count_, "Return index out of bounds");
-
-    int actual_idx = start_index_ + index;
-    std::cerr << "[RESULT::GET] actual_idx = " << actual_idx << std::endl;
-
-    // 打印该位置的值
-    int t = spt_type(S_, actual_idx);
-    std::cerr << "[RESULT::GET] type at idx " << actual_idx << " = " << t << std::endl;
-
-    T result = stack::get<T>(S_, actual_idx);
-
-    // 对于 double 类型，打印值
-    if constexpr (std::is_same_v<T, double>) {
-      std::cerr << "[RESULT::GET] got double value: " << result << std::endl;
-    }
-
-    return result;
+    return stack::get<T>(S_, start_index_ + index);
   }
 
   // Get error message (if failed)
@@ -483,12 +464,10 @@ private:
 class error_handler_scope {
 public:
   error_handler_scope(state_t *S, spt_ErrorHandler handler, void *ud = nullptr) : S_(S) {
-    // Save old handler would require C API support
     spt_seterrorhandler(S, handler, ud);
   }
 
   ~error_handler_scope() {
-    // Restore old handler
     spt_seterrorhandler(S_, nullptr, nullptr);
   }
 

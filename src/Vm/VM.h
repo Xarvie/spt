@@ -184,6 +184,19 @@ public:
   // 获取当前主脚本的 _ENV 表（C API 使用）
   MapObject *getGlobalEnv() const { return globalEnv_; }
 
+  inline void ensureGlobalEnv() {
+    if (!globalEnv_) {
+      globalEnv_ = allocateMap(64);
+    }
+    // 将 globals_ 中预注册的全局变量迁移到环境 map 中
+    if (!globals_.empty()) {
+      for (const auto &[name, value] : globals_) {
+        globalEnv_->set(Value::object(name), value);
+      }
+      globals_.clear();
+    }
+  }
+
   const SymbolTable &symbols() const { return *symbols_; }
 
   // === Fiber 操作 ===

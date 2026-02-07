@@ -138,9 +138,72 @@ template <typename T> struct constructor_dispatcher<T> {
   }
 };
 
+// Runtime constructor entry: stores arity and CFunction pointer
+struct constructor_entry {
+  int arity;
+  cfunction_t func;
+};
+
+// Runtime constructor registry: holds a vector of overloaded constructors
+// Allocated on the heap and stored as a lightuserdata upvalue in the closure.
+struct constructor_registry {
+  std::vector<constructor_entry> entries;
+
+  void add(int arity, cfunction_t func) {
+    // Replace if same arity already exists
+    for (auto &e : entries) {
+      if (e.arity == arity) {
+        e.func = func;
+        return;
+      }
+    }
+    entries.push_back({arity, func});
+  }
+};
+
+// Dispatcher CFunction that reads the registry from upvalue and dispatches
+inline int runtime_constructor_dispatch(state_t *S) {
+  spt_getupvalue(S, -10003, 0); // SPT_REGISTRYINDEX-like upvalue index; use closure upvalue
+  // The upvalue is at a special index. We use the closure's first upvalue.
+  // Actually, upvalues in cclosures are accessed differently. Let's re-check.
+  // spt_getupvalue pushes the upvalue onto the stack.
+  // But the function itself is not on the stack in the usual way during a call.
+  // Let's use a different approach: store registry pointer as lightuserdata upvalue.
+
+  // We need to get the upvalue from the currently executing closure.
+  // In SPT, within a CFunction, upvalues are typically accessed via special indices
+  // or an API like spt_getupvalue with the function index.
+  // For a cclosure, upvalue index 0 is the first one pushed before spt_pushcclosure.
+
+  // Re-implementation: we'll use a static map instead.
+  (void)S;
+  return 0; // placeholder, real implementation below
+}
+
+// Per-type static registry approach: each usertype<T> stores its own registry
+// and registers a single dispatcher closure.
+template <typename T> struct typed_constructor_registry {
+  static constructor_registry &instance() {
+    static constructor_registry reg;
+    return reg;
+  }
+
+  static int dispatch(state_t *S) {
+    int nargs = spt_gettop(S) - 1; // Exclude class argument
+    auto &reg = instance();
+    for (auto &entry : reg.entries) {
+      if (entry.arity == nargs) {
+        return entry.func(S);
+      }
+    }
+    spt_error(S, "no matching constructor found for given argument count");
+    return 0;
+  }
+};
+
 // Property getter wrapper
 template <typename T, typename V, V T::*Member> int property_getter(state_t *S) {
-  T *self = static_cast<T *>(spt_tocinstance(S, 1));
+  T *self = extract_self<T>(S);
   if (!self) {
     spt_error(S, "invalid self reference");
     return 0;
@@ -151,7 +214,7 @@ template <typename T, typename V, V T::*Member> int property_getter(state_t *S) 
 
 // Property setter wrapper
 template <typename T, typename V, V T::*Member> int property_setter(state_t *S) {
-  T *self = static_cast<T *>(spt_tocinstance(S, 1));
+  T *self = extract_self<T>(S);
   if (!self) {
     spt_error(S, "invalid self reference");
     return 0;
@@ -223,6 +286,11 @@ private:
 
 // ============================================================================
 // Usertype Builder
+//
+// FIX: Destructor now properly cleans up the class from the stack if the user
+//      forgets to call set_global() or finalize(). Previous version left the
+//      class object on the stack permanently, causing stack leaks and eventual
+//      stack overflow when registering many types.
 // ============================================================================
 
 template <typename T> class usertype {
@@ -242,16 +310,26 @@ public:
     spt_setmagicmethod(S_, class_idx_, SPT_MM_GC);
   }
 
+  // FIX: Destructor now cleans up the class from the stack if not consumed
   ~usertype() {
-    // Class remains on stack, user should call set_global() or pop manually
+    if (class_idx_ > 0 && S_) {
+      // Class is still on the stack - remove it to prevent leak
+      spt_remove(S_, class_idx_);
+    }
   }
+
+  // Non-copyable, non-movable (builder pattern, use in single scope)
+  usertype(const usertype &) = delete;
+  usertype &operator=(const usertype &) = delete;
+  usertype(usertype &&) = delete;
+  usertype &operator=(usertype &&) = delete;
 
   // Set as global
   usertype &set_global() {
     spt_pushvalue(S_, class_idx_);
     spt_setglobal(S_, name_.c_str());
     spt_remove(S_, class_idx_);
-    class_idx_ = -1; // 标记为已清理
+    class_idx_ = -1; // Mark as consumed
     return *this;
   }
 
@@ -268,8 +346,14 @@ public:
   usertype &add_constructor() { return add_constructor<>(); }
 
   // Add constructor with arguments
+  // FIX: Multiple add_constructor calls now accumulate instead of overwriting.
+  //      A per-type static registry dispatches by argument count at runtime.
   template <typename... Args> usertype &add_constructor() {
-    spt_pushcclosure(S_, detail::usertype_constructor_impl<T, Args...>, 0);
+    constexpr int arity = static_cast<int>(sizeof...(Args));
+    auto &reg = detail::typed_constructor_registry<T>::instance();
+    reg.add(arity, detail::usertype_constructor_impl<T, Args...>);
+    // Re-register the unified dispatcher each time (idempotent)
+    spt_pushcclosure(S_, detail::typed_constructor_registry<T>::dispatch, 0);
     spt_setmagicmethod(S_, class_idx_, SPT_MM_INIT);
     return *this;
   }
@@ -380,10 +464,13 @@ public:
   }
 
   // Add member variable (read-write)
+  //
+  // FIX: Lambda self-extraction now uses extract_self<T> helper for
+  //      consistency with member_function_wrapper (supports lightuserdata).
   template <typename V> usertype &add_member(const char *name, V T::*member) {
     // Create getter
     auto getter = [member](state_t *S) -> int {
-      T *self = static_cast<T *>(spt_tocinstance(S, 1));
+      T *self = detail::extract_self<T>(S);
       if (!self) {
         spt_error(S, "invalid self reference");
         return 0;
@@ -394,7 +481,7 @@ public:
 
     // Create setter
     auto setter = [member](state_t *S) -> int {
-      T *self = static_cast<T *>(spt_tocinstance(S, 1));
+      T *self = detail::extract_self<T>(S);
       if (!self) {
         spt_error(S, "invalid self reference");
         return 0;
@@ -411,7 +498,7 @@ public:
   // Add readonly member
   template <typename V> usertype &add_readonly(const char *name, V T::*member) {
     auto getter = [member](state_t *S) -> int {
-      T *self = static_cast<T *>(spt_tocinstance(S, 1));
+      T *self = detail::extract_self<T>(S);
       if (!self) {
         spt_error(S, "invalid self reference");
         return 0;
@@ -429,7 +516,7 @@ public:
   // Add readonly const member
   template <typename V> usertype &add_readonly(const char *name, const V T::*member) {
     auto getter = [member](state_t *S) -> int {
-      const T *self = static_cast<const T *>(spt_tocinstance(S, 1));
+      const T *self = detail::extract_const_self<T>(S);
       if (!self) {
         spt_error(S, "invalid self reference");
         return 0;
@@ -600,7 +687,12 @@ public:
   }
 
   // Finalize and pop class from stack
-  void finalize() { spt_pop(S_, 1); }
+  void finalize() {
+    if (class_idx_ > 0) {
+      spt_remove(S_, class_idx_);
+      class_idx_ = -1; // FIX: Mark as consumed so destructor doesn't double-pop
+    }
+  }
 
   // Get state
   SPTXX_NODISCARD state_t *state() const noexcept { return S_; }
@@ -614,6 +706,11 @@ private:
     void *mem = spt_newcinstance(S_, sizeof(storage_type));
     new (mem) storage_type(std::move(wrapper));
 
+    detail::ensure_func_storage_class(S_);
+    int cinst_idx = spt_gettop(S_);
+    spt_getfield(S_, registry_index, "__sptxx_func_storage_class");
+    spt_setcclass(S_, cinst_idx);
+
     spt_pushcclosure(S_, detail::generic_cfunc_dispatcher, 1);
     spt_bindmethod(S_, class_idx_, name);
   }
@@ -622,6 +719,11 @@ private:
     using storage_type = detail::func_storage<Wrapper>;
     void *mem = spt_newcinstance(S_, sizeof(storage_type));
     new (mem) storage_type(std::move(wrapper));
+
+    detail::ensure_func_storage_class(S_);
+    int cinst_idx = spt_gettop(S_);
+    spt_getfield(S_, registry_index, "__sptxx_func_storage_class");
+    spt_setcclass(S_, cinst_idx);
 
     spt_pushcclosure(S_, detail::generic_cfunc_dispatcher, 1);
     spt_setmagicmethod(S_, class_idx_, mm_index);
@@ -632,6 +734,11 @@ private:
     void *mem = spt_newcinstance(S_, sizeof(storage_type));
     new (mem) storage_type(std::move(wrapper));
 
+    detail::ensure_func_storage_class(S_);
+    int cinst_idx = spt_gettop(S_);
+    spt_getfield(S_, registry_index, "__sptxx_func_storage_class");
+    spt_setcclass(S_, cinst_idx);
+
     spt_pushcclosure(S_, detail::generic_cfunc_dispatcher, 1);
     spt_bindstatic(S_, class_idx_, name);
   }
@@ -640,6 +747,11 @@ private:
     using storage_type = detail::func_storage<Wrapper>;
     void *mem = spt_newcinstance(S_, sizeof(storage_type));
     new (mem) storage_type(std::move(wrapper));
+
+    detail::ensure_func_storage_class(S_);
+    int cinst_idx = spt_gettop(S_);
+    spt_getfield(S_, registry_index, "__sptxx_func_storage_class");
+    spt_setcclass(S_, cinst_idx);
 
     spt_pushcclosure(S_, detail::generic_cfunc_dispatcher, 1);
     spt_setmagicmethod(S_, class_idx_, mm);
@@ -750,12 +862,28 @@ struct stack_pusher<T, std::enable_if_t<!std::is_pointer_v<T> && !std::is_refere
   static int push(state_t *S, const T &value) {
     void *mem = spt_newcinstance(S, sizeof(T));
     new (mem) T(value);
+
+    // FIX: Associate class if type is registered (enables __gc)
+    auto *info = detail::type_registry::find<T>();
+    if (info && info->class_ref != no_ref) {
+      spt_getref(S, info->class_ref);
+      spt_setcclass(S, -2);
+    }
+
     return 1;
   }
 
   static int push(state_t *S, T &&value) {
     void *mem = spt_newcinstance(S, sizeof(T));
     new (mem) T(std::move(value));
+
+    // FIX: Associate class if type is registered (enables __gc)
+    auto *info = detail::type_registry::find<T>();
+    if (info && info->class_ref != no_ref) {
+      spt_getref(S, info->class_ref);
+      spt_setcclass(S, -2);
+    }
+
     return 1;
   }
 };

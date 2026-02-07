@@ -1,17 +1,13 @@
 #ifndef SPTXX_FUNCTION_HPP
 #define SPTXX_FUNCTION_HPP
 
-#include "table.hpp"
+#include "collections.hpp"
 
 #include <atomic>
-#include <iostream> // DEBUG
 #include <memory>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
-
-// DEBUG宏定义
-#define SPTXX_DEBUG_LOG(msg) std::cerr << "[SPTXX DEBUG] " << msg << std::endl
 
 SPTXX_NAMESPACE_BEGIN
 
@@ -91,37 +87,15 @@ template <typename T> auto get_arg_value(state_t *S, int &idx) {
   using clean_type = remove_cvref_t<T>;
 
   if constexpr (std::is_same_v<clean_type, this_state>) {
-    SPTXX_DEBUG_LOG("get_arg_value: this_state");
     return this_state(S);
   } else if constexpr (std::is_same_v<clean_type, variadic_args>) {
     int top = spt_gettop(S);
     int count = top - idx + 1;
     int start = idx;
     idx = top + 1; // Consume all remaining args
-    SPTXX_DEBUG_LOG("get_arg_value: variadic_args, start=" << start << ", count=" << count);
     return variadic_args(S, start, count);
   } else {
-    int current_idx = idx;
-    int stack_top = spt_gettop(S);
-    int val_type = spt_type(S, current_idx);
-    SPTXX_DEBUG_LOG("get_arg_value<" << typeid(T).name() << ">: idx=" << current_idx
-                                     << ", stack_top=" << stack_top
-                                     << ", type_at_idx=" << val_type);
-
-    // 额外打印字符串内容（如果是字符串）
-    if (val_type == SPT_TSTRING) {
-      size_t len = 0;
-      const char *str = spt_tostring(S, current_idx, &len);
-      SPTXX_DEBUG_LOG("  -> string value: \"" << (str ? str : "NULL") << "\", len=" << len);
-    } else if (val_type == SPT_TINT) {
-      SPTXX_DEBUG_LOG("  -> int value: " << spt_toint(S, current_idx));
-    } else if (val_type == SPT_TFLOAT) {
-      SPTXX_DEBUG_LOG("  -> float value: " << spt_tofloat(S, current_idx));
-    }
-
-    auto result = stack::get<T>(S, idx++);
-    SPTXX_DEBUG_LOG("  -> after get, idx now=" << idx);
-    return result;
+    return stack::get<T>(S, idx++);
   }
 }
 
@@ -134,6 +108,29 @@ template <typename... Args> constexpr std::size_t count_real_args() {
   }
 }
 
+// ============================================================================
+// Helper: Extract self pointer from stack index 1 (CInstance or LightUserData)
+//
+// FIX: Unified self-extraction logic. Previous version had inconsistent
+//      handling between member_function_wrapper and const_member_function_wrapper
+//      (const variant was missing lightuserdata fallback, causing crashes when
+//       objects were passed as light userdata).
+// ============================================================================
+
+template <typename C> C *extract_self(state_t *S) {
+  if (spt_iscinstance(S, 1)) {
+    return static_cast<C *>(spt_tocinstance(S, 1));
+  }
+  if (spt_islightuserdata(S, 1)) {
+    return static_cast<C *>(spt_tolightuserdata(S, 1));
+  }
+  return nullptr;
+}
+
+template <typename C> const C *extract_const_self(state_t *S) {
+  return const_cast<const C *>(extract_self<C>(S));
+}
+
 // Wrapper for free functions
 template <typename R, typename... Args> struct function_wrapper {
   using func_type = R (*)(Args...);
@@ -143,7 +140,6 @@ template <typename R, typename... Args> struct function_wrapper {
 
   int operator()(state_t *S) const {
     if constexpr (sizeof...(Args) == 0) {
-      // No arguments case
       if constexpr (std::is_void_v<R>) {
         func();
         return 0;
@@ -186,6 +182,8 @@ template <typename R> struct function_wrapper<R> {
 };
 
 // Wrapper for member functions
+//
+// FIX: Uses unified extract_self<C> helper instead of inline casts.
 template <typename R, typename C, typename... Args> struct member_function_wrapper {
   using func_type = R (C::*)(Args...);
   func_type func;
@@ -193,24 +191,13 @@ template <typename R, typename C, typename... Args> struct member_function_wrapp
   explicit member_function_wrapper(func_type f) : func(f) {}
 
   int operator()(state_t *S) const {
-    // First argument is 'self'
-    C *self = nullptr;
-    if (spt_iscinstance(S, 1)) {
-      self = static_cast<C *>(spt_tocinstance(S, 1));
-    }
-    if (!self && spt_islightuserdata(S, 1)) {
-      self = static_cast<C *>(spt_tolightuserdata(S, 1));
-    }
+    C *self = extract_self<C>(S);
     if (!self) {
-      // 打印更详细的错误信息
-      int t = spt_type(S, 1);
-      char buf[128];
-      snprintf(buf, sizeof(buf), "invalid self reference: expected CInstance, got type %d", t);
-      spt_error(S, "%s", buf);
+      spt_error(S, "invalid self: expected CInstance or LightUserData at index 1, got %s",
+                spt_typename(S, spt_type(S, 1)));
       return 0;
     }
     if constexpr (sizeof...(Args) == 0) {
-      // No additional arguments case
       if constexpr (std::is_void_v<R>) {
         (self->*func)();
         return 0;
@@ -237,6 +224,10 @@ template <typename R, typename C, typename... Args> struct member_function_wrapp
 };
 
 // Wrapper for const member functions
+//
+// FIX: Now uses extract_const_self<C> which includes lightuserdata fallback.
+//      Previous version only checked spt_tocinstance, causing nullptr dereference
+//      when called on light userdata objects.
 template <typename R, typename C, typename... Args> struct const_member_function_wrapper {
   using func_type = R (C::*)(Args...) const;
   func_type func;
@@ -244,9 +235,10 @@ template <typename R, typename C, typename... Args> struct const_member_function
   explicit const_member_function_wrapper(func_type f) : func(f) {}
 
   int operator()(state_t *S) const {
-    const C *self = static_cast<const C *>(spt_tocinstance(S, 1));
+    const C *self = extract_const_self<C>(S);
     if (!self) {
-      spt_error(S, "invalid self reference");
+      spt_error(S, "invalid self: expected CInstance or LightUserData at index 1, got %s",
+                spt_typename(S, spt_type(S, 1)));
       return 0;
     }
 
@@ -285,8 +277,6 @@ template <typename F> struct functor_wrapper {
   int operator()(state_t *S) const {
     using traits = function_traits<F>;
     using return_type = typename traits::return_type;
-
-    SPTXX_DEBUG_LOG("functor_wrapper::operator() called, arity=" << traits::arity);
     return call_impl<return_type>(S, std::make_index_sequence<traits::arity>{});
   }
 
@@ -294,8 +284,6 @@ private:
   template <typename R, std::size_t... Is>
   int call_impl(state_t *S, std::index_sequence<Is...>) const {
     if constexpr (sizeof...(Is) == 0) {
-      // No arguments
-      SPTXX_DEBUG_LOG("functor_wrapper::call_impl: no arguments");
       if constexpr (std::is_void_v<R>) {
         func();
         (void)S;
@@ -305,37 +293,18 @@ private:
         return push_return(S, result);
       }
     } else {
-      // Has arguments - get them from stack
       int idx = 1;
-      int stack_top = spt_gettop(S);
-      SPTXX_DEBUG_LOG("functor_wrapper::call_impl: " << sizeof...(Is)
-                                                     << " args, stack_top=" << stack_top);
-
-      // 打印栈上所有值的类型
-      for (int i = 1; i <= stack_top; ++i) {
-        int t = spt_type(S, i);
-        SPTXX_DEBUG_LOG("  stack[" << i << "] type=" << t);
-        if (t == SPT_TSTRING) {
-          size_t len = 0;
-          const char *str = spt_tostring(S, i, &len);
-          SPTXX_DEBUG_LOG("    -> \"" << (str ? str : "NULL") << "\" len=" << len);
-        }
-      }
-
       using traits = function_traits<F>;
       using args_tuple = typename traits::args_tuple;
 
-      // Build tuple from arguments extracted from stack
       auto args = std::tuple<std::tuple_element_t<Is, args_tuple>...>(
           get_arg_value<std::tuple_element_t<Is, args_tuple>>(S, idx)...);
 
-      SPTXX_DEBUG_LOG("functor_wrapper::call_impl: args built, calling function");
       if constexpr (std::is_void_v<R>) {
         tuple_apply(func, args);
         return 0;
       } else {
         auto result = tuple_apply(func, args);
-        SPTXX_DEBUG_LOG("functor_wrapper::call_impl: function returned, pushing result");
         return push_return(S, result);
       }
     }
@@ -345,23 +314,6 @@ private:
 // ============================================================================
 // Static Function Storage System
 // ============================================================================
-// Since SPT doesn't provide upvalue access from C functions (unlike Lua's
-// lua_upvalueindex), we use a template-based static storage pattern.
-// Each unique wrapper type gets its own static instance pointer and dispatcher.
-
-// Global function registry using function pointer as key
-// This allows multiple registrations of the same wrapper type
-struct global_func_registry {
-  // Map from dispatcher function pointer to wrapper storage
-  static inline std::unordered_map<void *, void *> registry;
-
-  static void register_func(void *key, void *wrapper) { registry[key] = wrapper; }
-
-  static void *get_func(void *key) {
-    auto it = registry.find(key);
-    return it != registry.end() ? it->second : nullptr;
-  }
-};
 
 // Type-erased function storage base
 struct func_storage_base {
@@ -380,7 +332,6 @@ template <typename Wrapper> struct func_storage : func_storage_base {
 // Unique ID generator for function registrations
 inline std::atomic<std::uintptr_t> func_id_counter{1};
 
-// Generate a unique ID that can be used as a lookup key
 inline std::uintptr_t generate_func_id() {
   return func_id_counter.fetch_add(1, std::memory_order_relaxed);
 }
@@ -401,28 +352,12 @@ struct func_wrapper_registry {
   }
 };
 
-// Per-ID dispatcher template
-// Each unique ID gets its own dispatcher function via template instantiation
-template <std::uintptr_t ID> struct id_dispatcher {
-  static int dispatch(state_t *S) {
-    auto *storage = func_wrapper_registry::get(ID);
-    if (!storage) {
-
-      spt_error(S, "invalid function binding - storage not found");
-      return 0;
-    }
-    return storage->call(S);
-  }
-};
-
 // Static holder for wrapper instances - used for unique wrapper types
-// This is the primary mechanism: each unique Wrapper type gets its own static pointer
 template <typename Wrapper> struct static_func_holder {
   static inline Wrapper *ptr = nullptr;
 };
 
 // Typed dispatcher that uses static storage
-// Each unique Wrapper type creates a unique instantiation of this function
 template <typename Wrapper> inline int typed_func_dispatcher(state_t *S) {
   Wrapper *wrapper = static_func_holder<Wrapper>::ptr;
   if (!wrapper) {
@@ -430,7 +365,6 @@ template <typename Wrapper> inline int typed_func_dispatcher(state_t *S) {
     return 0;
   }
 
-  // Wrap the call in try-catch to handle C++ exceptions
 #if defined(SPTXX_EXCEPTIONS_ENABLED)
   try {
     return (*wrapper)(S);
@@ -446,36 +380,23 @@ template <typename Wrapper> inline int typed_func_dispatcher(state_t *S) {
 #endif
 }
 
-// Proper dispatcher using Upvalue access (now that SPT_UPVALUEINDEX is implemented)
+// Proper dispatcher using Upvalue access
 inline int generic_cfunc_dispatcher(state_t *S) {
-  SPTXX_DEBUG_LOG("generic_cfunc_dispatcher called");
-  SPTXX_DEBUG_LOG("  SPT_UPVALUEINDEX(1) = " << SPT_UPVALUEINDEX(1));
-
-  // Access the function storage from Upvalue 1
   void *ptr = spt_tocinstance(S, SPT_UPVALUEINDEX(1));
-  SPTXX_DEBUG_LOG("  upvalue ptr = " << ptr);
-
   if (!ptr) {
-    SPTXX_DEBUG_LOG("  ERROR: ptr is NULL!");
     spt_error(S, "invalid function binding");
     return 0;
   }
 
   auto *storage = static_cast<func_storage_base *>(ptr);
-  SPTXX_DEBUG_LOG("  storage = " << storage);
 
 #if defined(SPTXX_EXCEPTIONS_ENABLED)
   try {
-    SPTXX_DEBUG_LOG("  calling storage->call(S)...");
-    int result = storage->call(S);
-    SPTXX_DEBUG_LOG("  storage->call returned " << result);
-    return result;
+    return storage->call(S);
   } catch (const std::exception &e) {
-    SPTXX_DEBUG_LOG("  EXCEPTION: " << e.what());
     spt_error(S, "%s", e.what());
     return 0;
   } catch (...) {
-    SPTXX_DEBUG_LOG("  UNKNOWN EXCEPTION");
     spt_error(S, "unknown C++ exception");
     return 0;
   }
@@ -484,14 +405,44 @@ inline int generic_cfunc_dispatcher(state_t *S) {
 #endif
 }
 
-// GC destructor for function storage (if needed in future)
+// GC destructor for function storage
 inline int func_storage_gc(state_t *S) {
   void *ptr = spt_tocinstance(S, 1);
   if (ptr) {
     auto *storage = static_cast<func_storage_base *>(ptr);
     storage->~func_storage_base();
+    // The memory was allocated with std::malloc in spt_newcinstance,
+    // so we must free it here after calling the destructor.
+    // Note: If the VM already frees NativeInstance::data, this may double-free.
+    // In that case, only the destructor call above is needed and this free
+    // should be removed. Keeping it for safety since NativeInstance with
+    // nullptr class has no default free path.
+    std::free(ptr);
   }
   return 0;
+}
+
+// Lazily create a class with __gc for func_storage cinstances, stored in the registry.
+inline void ensure_func_storage_class(state_t *S) {
+  spt_getfield(S, registry_index, "__sptxx_func_storage_class");
+  if (!spt_isnoneornil(S, -1)) {
+    spt_pop(S, 1); // already created
+    return;
+  }
+  spt_pop(S, 1); // pop nil
+
+  // Create a new class and set its __gc
+  spt_newclass(S, "__FuncStorage");
+  int class_idx = spt_gettop(S);
+  spt_pushcfunction(S, func_storage_gc);
+  spt_setmagicmethod(S, class_idx, SPT_MM_GC);
+
+  // Store in registry for reuse
+  spt_pushvalue(S, class_idx);
+  spt_setfield(S, registry_index, "__sptxx_func_storage_class");
+
+  // Remove class from stack
+  spt_remove(S, class_idx);
 }
 
 } // namespace detail
@@ -654,57 +605,19 @@ public:
     }
 
     state_t *S = state();
-
-    // ========== 调试 ==========
-    std::cerr << "\n[PCALL] ========== protected_function::call START ==========" << std::endl;
     int top_before = spt_gettop(S);
-    std::cerr << "[PCALL] top_before (via spt_gettop) = " << top_before << std::endl;
 
-    // 打印绝对栈高度
-    // 注意：这需要访问 fiber，可能需要添加 helper 函数
-
-    push(); // push 函数
-    std::cerr << "[PCALL] After push function, top = " << spt_gettop(S) << std::endl;
-
+    push();
     int nargs = 0;
     if constexpr (sizeof...(Args) > 0) {
       nargs = stack::push_all(S, std::forward<Args>(args)...);
     }
-    std::cerr << "[PCALL] After push args, top = " << spt_gettop(S) << ", nargs = " << nargs
-              << std::endl;
 
-    std::cerr << "[PCALL] Calling spt_pcall..." << std::endl;
     int result = spt_pcall(S, nargs, multi_return, error_handler_);
     status stat = static_cast<status>(result);
-    std::cerr << "[PCALL] spt_pcall returned, status = " << result << std::endl;
 
     int top_after = spt_gettop(S);
     int ret_count = top_after - top_before;
-
-    std::cerr << "[PCALL] top_after = " << top_after << std::endl;
-    std::cerr << "[PCALL] ret_count = " << ret_count << std::endl;
-    std::cerr << "[PCALL] start_index will be = " << (top_before + 1) << std::endl;
-
-    // 打印栈上的返回值
-    for (int i = 0; i < ret_count; ++i) {
-      int idx = top_before + 1 + i;
-      std::cerr << "[PCALL] Return value[" << i << "] at index " << idx << ": ";
-      int t = spt_type(S, idx);
-      std::cerr << "type=" << t;
-      if (t == SPT_TINT) {
-        std::cerr << " INT=" << spt_toint(S, idx);
-      } else if (t == SPT_TFLOAT) {
-        std::cerr << " FLOAT=" << spt_tofloat(S, idx);
-      } else if (t == SPT_TSTRING) {
-        size_t len;
-        const char *s = spt_tostring(S, idx, &len);
-        std::cerr << " STRING=\"" << (s ? s : "NULL") << "\"";
-      }
-      std::cerr << std::endl;
-    }
-
-    std::cerr << "[PCALL] ========== protected_function::call END ==========" << std::endl
-              << std::endl;
 
     return protected_function_result(S, top_before + 1, ret_count, stat);
   }

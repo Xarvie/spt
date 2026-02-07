@@ -26,8 +26,8 @@
 // 7. Generic object wrapper
 #include "object.hpp"
 
-// 8. Table operations (map and list)
-#include "table.hpp"
+// 8. List and Map operations
+#include "collections.hpp"
 
 // 9. Function binding
 #include "function.hpp"
@@ -69,13 +69,13 @@ template <typename T, typename State> usertype<T> new_usertype(State &&s, const 
   return usertype<T>(detail::get_state(std::forward<State>(s)), name);
 }
 
-// Create table from key-value pairs
-template <typename... Pairs> map make_table(state_t *S, Pairs &&...pairs) {
-  static_assert(sizeof...(Pairs) % 2 == 0, "make_table requires key-value pairs");
+// Create map from key-value pairs
+template <typename... Pairs> map make_map(state_t *S, Pairs &&...pairs) {
+  static_assert(sizeof...(Pairs) % 2 == 0, "make_map requires key-value pairs");
 
   auto m = map::create(S);
   if constexpr (sizeof...(Pairs) > 0) {
-    make_table_impl(m, std::forward<Pairs>(pairs)...);
+    make_map_impl(m, std::forward<Pairs>(pairs)...);
   }
   return m;
 }
@@ -83,10 +83,10 @@ template <typename... Pairs> map make_table(state_t *S, Pairs &&...pairs) {
 namespace detail {
 
 template <typename Map, typename K, typename V, typename... Rest>
-void make_table_impl(Map &m, K &&key, V &&value, Rest &&...rest) {
+void make_map_impl(Map &m, K &&key, V &&value, Rest &&...rest) {
   m.set(std::forward<K>(key), std::forward<V>(value));
   if constexpr (sizeof...(Rest) > 0) {
-    make_table_impl(m, std::forward<Rest>(rest)...);
+    make_map_impl(m, std::forward<Rest>(rest)...);
   }
 }
 
@@ -137,6 +137,12 @@ public:
     using storage_type = detail::func_storage<decltype(wrapper)>;
     void *mem = spt_newcinstance(S_, sizeof(storage_type));
     new (mem) storage_type(std::move(wrapper));
+
+    // Ensure the cinstance has a class with __gc so the destructor runs
+    detail::ensure_func_storage_class(S_);
+    int cinst_idx = spt_gettop(S_);
+    spt_getfield(S_, registry_index, "__sptxx_func_storage_class");
+    spt_setcclass(S_, cinst_idx);
 
     spt_pushcclosure(S_, detail::generic_cfunc_dispatcher, 1);
     exports_.set(name, function(S_, -1));

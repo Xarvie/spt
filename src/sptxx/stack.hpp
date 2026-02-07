@@ -4,14 +4,9 @@
 #include "types.hpp"
 
 #include <algorithm>
-#include <iostream> // DEBUG
 #include <map>
 #include <unordered_map>
 #include <vector>
-
-#ifndef SPTXX_DEBUG_LOG
-#define SPTXX_DEBUG_LOG(msg) std::cerr << "[SPTXX DEBUG] " << msg << std::endl
-#endif
 
 SPTXX_NAMESPACE_BEGIN
 
@@ -80,7 +75,6 @@ inline bool is_none_or_nil(state_t *S, int idx) noexcept { return spt_isnoneorni
 // ============================================================================
 
 template <typename T, typename> struct stack_pusher {
-  // Default implementation for user types will be specialized
   static_assert(sizeof(T) == 0, "No stack_pusher specialization for this type");
 };
 
@@ -294,7 +288,6 @@ template <typename T> struct stack_pusher<std::optional<T>> {
 // ============================================================================
 
 template <typename T, typename> struct stack_getter {
-  // Default implementation for user types will be specialized
   static_assert(sizeof(T) == 0, "No stack_getter specialization for this type");
 };
 
@@ -331,18 +324,10 @@ template <> struct stack_getter<const char *> {
 template <> struct stack_getter<std::string> {
   static std::string get(state_t *S, int idx) {
     size_t len = 0;
-    int abs_idx = spt_absindex(S, idx);
-    int type_at = spt_type(S, idx);
-    SPTXX_DEBUG_LOG("stack_getter<string>::get idx=" << idx << " abs_idx=" << abs_idx
-                                                     << " type=" << type_at);
-
     const char *s = spt_tostring(S, idx, &len);
-    SPTXX_DEBUG_LOG("  spt_tostring returned: ptr=" << (void *)s << " len=" << len);
     if (s == nullptr) {
-      SPTXX_DEBUG_LOG("  -> returning empty string (s was null)");
       return std::string{};
     }
-    SPTXX_DEBUG_LOG("  -> returning: \"" << std::string(s, len) << "\"");
     return std::string(s, len);
   }
 };
@@ -408,11 +393,10 @@ struct stack_getter<std::map<K, V, Comp, Alloc>> {
 
     spt_pushnil(S);
     while (spt_mapnext(S, idx)) {
-      // Stack: key, value
       K key = stack_getter<K>::get(S, -2);
       V value = stack_getter<V>::get(S, -1);
       result[std::move(key)] = std::move(value);
-      spt_pop(S, 1); // Pop value, keep key for next iteration
+      spt_pop(S, 1);
     }
 
     return result;
@@ -498,7 +482,6 @@ template <typename T> struct stack_getter<std::optional<T>> {
 
 template <typename T, typename> struct stack_checker {
   static bool check(state_t *S, int idx) {
-    // Default: assume it's a userdata type
     return spt_iscinstance(S, idx);
   }
 };

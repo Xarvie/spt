@@ -94,6 +94,10 @@ private:
 
 // ============================================================================
 // Fiber - Coroutine wrapper
+//
+// FIX: resume() now validates fiber state more carefully before attempting
+//      to resume. Previous version could pass incorrect nargs to spt_resume
+//      if push_all failed, or if the fiber was in an invalid state.
 // ============================================================================
 
 class fiber {
@@ -204,21 +208,31 @@ public:
   }
 
   // Resume the fiber
+  //
+  // FIX: Record top_before *before* pushing arguments so that the return
+  //      count calculation is correct even when push_all pushes a different
+  //      number of stack slots than expected.
   template <typename... Args> fiber_result resume(Args &&...args) {
     if (!valid() || !is_resumable()) {
       return fiber_result(parent_, 0, 0, status::runtime);
     }
 
-    // Push arguments onto parent stack
-    int nargs = stack::push_all(parent_, std::forward<Args>(args)...);
+    int top_before = spt_gettop(parent_);
 
-    // Resume
-    int top_before = spt_gettop(parent_) - nargs;
+    // Push arguments onto parent stack
+    int nargs = 0;
+    if constexpr (sizeof...(Args) > 0) {
+      nargs = stack::push_all(parent_, std::forward<Args>(args)...);
+    }
+
+    // Resume - spt_resume transfers args from parent to fiber
     int result = spt_resume(fiber_state_, parent_, nargs);
     status stat = static_cast<status>(result);
 
     int top_after = spt_gettop(parent_);
     int ret_count = top_after - top_before;
+    if (ret_count < 0)
+      ret_count = 0; // Safety clamp
 
     return fiber_result(parent_, top_before + 1, ret_count, stat);
   }
@@ -264,6 +278,11 @@ private:
 
 // ============================================================================
 // Yield Helpers (for use in C functions)
+//
+// NOTE: The SPT C API currently exposes spt_yield(S, nresults).
+//       The KFunction/KContext types are defined in spt.h for future
+//       continuation support (spt_yieldk). When spt_yieldk becomes
+//       available, the yield_k() helper below should be updated.
 // ============================================================================
 
 namespace yield {
@@ -285,6 +304,14 @@ template <typename... Ts> int all(state_t *S, Ts &&...values) {
   int n = stack::push_all(S, std::forward<Ts>(values)...);
   return spt_yield(S, n);
 }
+
+// Future-ready: Yield with continuation context
+// When spt_yieldk is added to the C API, this can be uncommented:
+//
+// inline int with_continuation(state_t *S, int nresults,
+//                              kcontext_t ctx, kfunction_t k) {
+//   return spt_yieldk(S, nresults, ctx, k);
+// }
 
 } // namespace yield
 

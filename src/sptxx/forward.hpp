@@ -205,8 +205,7 @@ class userdata;
 template <typename T> class usertype;
 
 // Proxies
-template <typename Table, typename Key> class proxy;
-class global_proxy;
+template <typename Collection, typename Key> class collection_proxy;
 
 // Results
 template <typename... Args> struct function_result;
