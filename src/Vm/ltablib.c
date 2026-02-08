@@ -61,10 +61,10 @@ static void checktab (lua_State *L, int arg, int what) {
 /* tcreate - receiver is arg1, narray is arg2, nhash is arg3 */
 
 static int tcreate (lua_State *L) {
-  lua_Unsigned sizeseq = (lua_Unsigned)luaL_checkinteger(L, 1);
-  lua_Unsigned sizerest = (lua_Unsigned)luaL_optinteger(L, 2, 0);
-  luaL_argcheck(L, sizeseq <= cast_uint(INT_MAX), 1, "out of range");
-  luaL_argcheck(L, sizerest <= cast_uint(INT_MAX), 2, "out of range");
+  lua_Unsigned sizeseq = (lua_Unsigned)luaL_checkinteger(L, 2);
+  lua_Unsigned sizerest = (lua_Unsigned)luaL_optinteger(L, 3, 0);
+  luaL_argcheck(L, sizeseq <= cast_uint(INT_MAX), 2, "out of range");
+  luaL_argcheck(L, sizerest <= cast_uint(INT_MAX), 3, "out of range");
   lua_createtable(L, cast_int(sizeseq), cast_int(sizerest));
   return 1;
 }
@@ -103,22 +103,22 @@ static int tinsert (lua_State *L) {
 /* tremove - receiver is arg1, table is arg2, pos is arg3 */
 
 static int tremove (lua_State *L) {
-  lua_Integer size = aux_getn(L, 1, TAB_RW);
-  lua_Integer pos = luaL_optinteger(L, 2, (size > 0) ? size - 1 : 0);
+  lua_Integer size = aux_getn(L, 2, TAB_RW);
+  lua_Integer pos = luaL_optinteger(L, 3, (size > 0) ? size - 1 : 0);
   if (size == 0) {  /* empty table? */
     lua_pushnil(L);  /* return nil, do nothing */
     return 1;
   }
   /* check whether 'pos' is in [0, size - 1] */
-  luaL_argcheck(L, (lua_Unsigned)pos < (lua_Unsigned)size, 2,
+  luaL_argcheck(L, (lua_Unsigned)pos < (lua_Unsigned)size, 3,
                 "position out of bounds");
   lua_geti(L, 2, pos);  /* result = t[pos] */
   for ( ; pos < size - 1; pos++) {
     lua_geti(L, 2, pos + 1);
-    lua_seti(L, 1, pos);  /* t[pos] = t[pos + 1] */
+    lua_seti(L, 2, pos);  /* t[pos] = t[pos + 1] */
   }
   lua_pushnil(L);
-  lua_seti(L, 1, pos);  /* remove entry t[pos] */
+  lua_seti(L, 2, pos);  /* remove entry t[pos] */
   return 1;
 }
 
@@ -129,21 +129,21 @@ static int tremove (lua_State *L) {
 ** tmove - receiver is arg1, src is arg2, f is arg3, e is arg4, t is arg5, dst is arg6
 ** "possible" means destination after original range, or smaller than origin, or copying to another table.
 */
-            static int tmove (lua_State *L) {
-  lua_Integer f = luaL_checkinteger(L, 2);
-  lua_Integer e = luaL_checkinteger(L, 3);
-  lua_Integer t = luaL_checkinteger(L, 4);
-  int tt = !lua_isnoneornil(L, 5) ? 5 : 1;  /* destination table */
-  checktab(L, 1, TAB_R);
+static int tmove (lua_State *L) {
+  lua_Integer f = luaL_checkinteger(L, 3);
+  lua_Integer e = luaL_checkinteger(L, 4);
+  lua_Integer t = luaL_checkinteger(L, 5);
+  int tt = !lua_isnoneornil(L, 6) ? 6 : 2;  /* destination table */
+  checktab(L, 2, TAB_R);
   checktab(L, tt, TAB_W);
   if (e >= f) {  /* otherwise, nothing to move */
     lua_Integer n, i;
     luaL_argcheck(L, f >= 0 || e < LUA_MAXINTEGER + f, 3,
                   "too many elements to move");
     n = e - f + 1;  /* number of elements to move */
-    luaL_argcheck(L, t <= LUA_MAXINTEGER - n + 1, 4,
+    luaL_argcheck(L, t <= LUA_MAXINTEGER - n + 1, 5,
                   "destination wrap around");
-    if (t > e || t <= f || (tt != 1 && !lua_compare(L, 1, tt, LUA_OPEQ))) {
+    if (t > e || t <= f || (tt != 2 && !lua_compare(L, 2, tt, LUA_OPEQ))) {
       for (i = 0; i < n; i++) {
         lua_geti(L, 2, f + i);
         lua_seti(L, tt, t + i);
@@ -173,11 +173,11 @@ static void addfield (lua_State *L, luaL_Buffer *b, lua_Integer i) {
 
 static int tconcat (lua_State *L) {
   luaL_Buffer b;
-  lua_Integer last = aux_getn(L, 1, TAB_R);  /* length */
+  lua_Integer last = aux_getn(L, 2, TAB_R);  /* length */
   size_t lsep;
-  const char *sep = luaL_optlstring(L, 2, "", &lsep);
-  lua_Integer i = luaL_optinteger(L, 3, 0);           /* default start: 0 */
-  last = luaL_optinteger(L, 4, last - 1);             /* default end: last valid index */
+  const char *sep = luaL_optlstring(L, 3, "", &lsep);
+  lua_Integer i = luaL_optinteger(L, 4, 0);           /* default start: 0 */
+  last = luaL_optinteger(L, 5, last - 1);             /* default end: last valid index */
   luaL_buffinit(L, &b);
   for (; i < last; i++) {
     addfield(L, &b, i);
@@ -213,8 +213,8 @@ static int tpack (lua_State *L) {
 /* tunpack - receiver is arg1, table is arg2, i is arg3, e is arg4 */
 static int tunpack (lua_State *L) {
   lua_Unsigned n;
-  lua_Integer i = luaL_optinteger(L, 2, 0);           /* default start: 0 */
-  lua_Integer e = luaL_opt(L, luaL_checkinteger, 3, luaL_len(L, 1));  /* exclusive end */
+  lua_Integer i = luaL_optinteger(L, 3, 0);           /* default start: 0 */
+  lua_Integer e = luaL_opt(L, luaL_checkinteger, 4, luaL_len(L, 2));  /* exclusive end */
   if (i >= e) return 0;  /* empty range */
   n = l_castS2U(e) - l_castS2U(i);  /* number of elements */
   if (l_unlikely(n >= (unsigned int)INT_MAX  ||

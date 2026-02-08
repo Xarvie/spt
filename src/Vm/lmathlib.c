@@ -27,6 +27,7 @@
 #define PI	(l_mathop(3.141592653589793238462643383279502884))
 
 
+/* math_abs - receiver is arg1, x is arg2 */
 static int math_abs (lua_State *L) {
   if (lua_isinteger(L, 2)) {
     lua_Integer n = lua_tointeger(L, 2);
@@ -39,36 +40,42 @@ static int math_abs (lua_State *L) {
 }
 
 
+/* math_sin - receiver is arg1, x is arg2 */
 static int math_sin (lua_State *L) {
   lua_pushnumber(L, l_mathop(sin)(luaL_checknumber(L, 2)));
   return 1;
 }
 
 
+/* math_cos - receiver is arg1, x is arg2 */
 static int math_cos (lua_State *L) {
   lua_pushnumber(L, l_mathop(cos)(luaL_checknumber(L, 2)));
   return 1;
 }
 
 
+/* math_tan - receiver is arg1, x is arg2 */
 static int math_tan (lua_State *L) {
   lua_pushnumber(L, l_mathop(tan)(luaL_checknumber(L, 2)));
   return 1;
 }
 
 
+/* math_asin - receiver is arg1, x is arg2 */
 static int math_asin (lua_State *L) {
   lua_pushnumber(L, l_mathop(asin)(luaL_checknumber(L, 2)));
   return 1;
 }
 
 
+/* math_acos - receiver is arg1, x is arg2 */
 static int math_acos (lua_State *L) {
   lua_pushnumber(L, l_mathop(acos)(luaL_checknumber(L, 2)));
   return 1;
 }
 
 
+/* math_atan - receiver is arg1, y is arg2, x is arg3 (optional, default 1) */
 static int math_atan (lua_State *L) {
   lua_Number y = luaL_checknumber(L, 2);
   lua_Number x = luaL_optnumber(L, 3, 1);
@@ -77,6 +84,7 @@ static int math_atan (lua_State *L) {
 }
 
 
+/* math_toint - receiver is arg1, x is arg2 */
 static int math_toint (lua_State *L) {
   int valid;
   lua_Integer n = lua_tointegerx(L, 2, &valid);
@@ -99,6 +107,7 @@ static void pushnumint (lua_State *L, lua_Number d) {
 }
 
 
+/* math_floor - receiver is arg1, x is arg2 */
 static int math_floor (lua_State *L) {
   if (lua_isinteger(L, 2))
     lua_settop(L, 2);  /* integer is its own floor */
@@ -110,6 +119,7 @@ static int math_floor (lua_State *L) {
 }
 
 
+/* math_ceil - receiver is arg1, x is arg2 */
 static int math_ceil (lua_State *L) {
   if (lua_isinteger(L, 2))
     lua_settop(L, 2);  /* integer is its own ceiling */
@@ -121,6 +131,7 @@ static int math_ceil (lua_State *L) {
 }
 
 
+/* math_fmod - receiver is arg1, x is arg2, y is arg3 */
 static int math_fmod (lua_State *L) {
   if (lua_isinteger(L, 2) && lua_isinteger(L, 3)) {
     lua_Integer d = lua_tointeger(L, 3);
@@ -143,6 +154,7 @@ static int math_fmod (lua_State *L) {
 ** (which is not compatible with 'float*') when lua_Number is not
 ** 'double'.
 */
+/* math_modf - receiver is arg1, x is arg2 */
 static int math_modf (lua_State *L) {
   if (lua_isinteger(L ,2)) {
     lua_settop(L, 2);  /* number is its own integer part */
@@ -160,12 +172,14 @@ static int math_modf (lua_State *L) {
 }
 
 
+/* math_sqrt - receiver is arg1, x is arg2 */
 static int math_sqrt (lua_State *L) {
   lua_pushnumber(L, l_mathop(sqrt)(luaL_checknumber(L, 2)));
   return 1;
 }
 
 
+/* math_ult - receiver is arg1, m is arg2, n is arg3 */
 static int math_ult (lua_State *L) {
   lua_Integer a = luaL_checkinteger(L, 2);
   lua_Integer b = luaL_checkinteger(L, 3);
@@ -174,6 +188,7 @@ static int math_ult (lua_State *L) {
 }
 
 
+/* math_log - receiver is arg1, x is arg2, base is arg3 (optional) */
 static int math_log (lua_State *L) {
   lua_Number x = luaL_checknumber(L, 2);
   lua_Number res;
@@ -196,24 +211,28 @@ static int math_log (lua_State *L) {
 }
 
 
+/* math_exp - receiver is arg1, x is arg2 */
 static int math_exp (lua_State *L) {
   lua_pushnumber(L, l_mathop(exp)(luaL_checknumber(L, 2)));
   return 1;
 }
 
 
+/* math_deg - receiver is arg1, x is arg2 */
 static int math_deg (lua_State *L) {
   lua_pushnumber(L, luaL_checknumber(L, 2) * (l_mathop(180.0) / PI));
   return 1;
 }
 
 
+/* math_rad - receiver is arg1, x is arg2 */
 static int math_rad (lua_State *L) {
   lua_pushnumber(L, luaL_checknumber(L, 2) * (PI / l_mathop(180.0)));
   return 1;
 }
 
 
+/* math_frexp - receiver is arg1, x is arg2 */
 static int math_frexp (lua_State *L) {
   lua_Number x = luaL_checknumber(L, 2);
   int ep;
@@ -223,6 +242,7 @@ static int math_frexp (lua_State *L) {
 }
 
 
+/* math_ldexp - receiver is arg1, m is arg2, e is arg3 */
 static int math_ldexp (lua_State *L) {
   lua_Number x = luaL_checknumber(L, 2);
   int ep = (int)luaL_checkinteger(L, 3);
@@ -231,6 +251,7 @@ static int math_ldexp (lua_State *L) {
 }
 
 
+/* math_min - receiver is arg1, values start from arg2 */
 static int math_min (lua_State *L) {
   int n = lua_gettop(L) - 1;  /* number of arguments (excluding self) */
   int imin = 2;  /* index of current minimum value */
@@ -245,6 +266,7 @@ static int math_min (lua_State *L) {
 }
 
 
+/* math_max - receiver is arg1, values start from arg2 */
 static int math_max (lua_State *L) {
   int n = lua_gettop(L) - 1;  /* number of arguments (excluding self) */
   int imax = 2;  /* index of current maximum value */
@@ -259,6 +281,7 @@ static int math_max (lua_State *L) {
 }
 
 
+/* math_type - receiver is arg1, x is arg2 */
 static int math_type (lua_State *L) {
   if (lua_type(L, 2) == LUA_TNUMBER)
     lua_pushstring(L, (lua_isinteger(L, 2)) ? "integer" : "float");
@@ -579,6 +602,7 @@ static lua_Unsigned project (lua_Unsigned ran, lua_Unsigned n,
 }
 
 
+/* math_random - receiver is arg1, optional low is arg2, optional up is arg3 */
 static int math_random (lua_State *L) {
   lua_Integer low, up;
   lua_Unsigned p;
@@ -628,6 +652,8 @@ static void setseed (lua_State *L, Rand64 *state,
 }
 
 
+/* math_random - receiver is arg1, optional low is arg2, optional up is arg3 */
+/* math_randomseed - receiver is arg1, optional x is arg2, optional y is arg3 */
 static int math_randomseed (lua_State *L) {
   RanState *state = (RanState *)lua_touserdata(L, lua_upvalueindex(1));
   lua_Unsigned n1, n2;
@@ -671,21 +697,25 @@ static void setrandfunc (lua_State *L) {
 */
 #if defined(LUA_COMPAT_MATHLIB)
 
+/* math_cosh - receiver is arg1, x is arg2 */
 static int math_cosh (lua_State *L) {
   lua_pushnumber(L, l_mathop(cosh)(luaL_checknumber(L, 2)));
   return 1;
 }
 
+/* math_sinh - receiver is arg1, x is arg2 */
 static int math_sinh (lua_State *L) {
   lua_pushnumber(L, l_mathop(sinh)(luaL_checknumber(L, 2)));
   return 1;
 }
 
+/* math_tanh - receiver is arg1, x is arg2 */
 static int math_tanh (lua_State *L) {
   lua_pushnumber(L, l_mathop(tanh)(luaL_checknumber(L, 2)));
   return 1;
 }
 
+/* math_pow - receiver is arg1, x is arg2, y is arg3 */
 static int math_pow (lua_State *L) {
   lua_Number x = luaL_checknumber(L, 2);
   lua_Number y = luaL_checknumber(L, 3);
@@ -693,6 +723,7 @@ static int math_pow (lua_State *L) {
   return 1;
 }
 
+/* math_log10 - receiver is arg1, x is arg2 */
 static int math_log10 (lua_State *L) {
   lua_pushnumber(L, l_mathop(log10)(luaL_checknumber(L, 2)));
   return 1;

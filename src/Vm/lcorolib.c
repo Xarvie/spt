@@ -19,9 +19,10 @@
 #include "llimits.h"
 
 
+/* getco - receiver is arg1, co is arg2 */
 static lua_State *getco (lua_State *L) {
-  lua_State *co = lua_tothread(L, 1);
-  luaL_argexpected(L, co, 1, "thread");
+  lua_State *co = lua_tothread(L, 2);
+  luaL_argexpected(L, co, 2, "thread");
   return co;
 }
 
@@ -54,10 +55,11 @@ static int auxresume (lua_State *L, lua_State *co, int narg) {
 }
 
 
+/* luaB_coresume - receiver is arg1, co is arg2, args start from arg3 */
 static int luaB_coresume (lua_State *L) {
   lua_State *co = getco(L);
   int r;
-  r = auxresume(L, co, lua_gettop(L) - 1);
+  r = auxresume(L, co, lua_gettop(L) - 2);
   if (l_unlikely(r < 0)) {
     lua_pushboolean(L, 0);
     lua_insert(L, -2);
@@ -93,16 +95,18 @@ static int luaB_auxwrap (lua_State *L) {
 }
 
 
+/* luaB_cocreate - receiver is arg1, func is arg2 */
 static int luaB_cocreate (lua_State *L) {
   lua_State *NL;
-  luaL_checktype(L, 1, LUA_TFUNCTION);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
   NL = lua_newthread(L);
-  lua_pushvalue(L, 1);  /* move function to top */
+  lua_pushvalue(L, 2);  /* move function to top */
   lua_xmove(L, NL, 1);  /* move function from L to NL */
   return 1;
 }
 
 
+/* luaB_cowrap - receiver is arg1, func is arg2 */
 static int luaB_cowrap (lua_State *L) {
   luaB_cocreate(L);
   lua_pushcclosure(L, luaB_auxwrap, 1);
@@ -110,8 +114,9 @@ static int luaB_cowrap (lua_State *L) {
 }
 
 
+/* luaB_yield - receiver is arg1, values start from arg2 */
 static int luaB_yield (lua_State *L) {
-  return lua_yield(L, lua_gettop(L));
+  return lua_yield(L, lua_gettop(L) - 1);
 }
 
 
@@ -122,31 +127,32 @@ static int luaB_yield (lua_State *L) {
 
 
 static const char *const statname[] =
-  {"running", "dead", "suspended", "normal"};
+    {"running", "dead", "suspended", "normal"};
 
 
 static int auxstatus (lua_State *L, lua_State *co) {
   if (L == co) return COS_RUN;
   else {
     switch (lua_status(co)) {
-      case LUA_YIELD:
-        return COS_YIELD;
-      case LUA_OK: {
-        lua_Debug ar;
-        if (lua_getstack(co, 0, &ar))  /* does it have frames? */
-          return COS_NORM;  /* it is running */
-        else if (lua_gettop(co) == 0)
-            return COS_DEAD;
-        else
-          return COS_YIELD;  /* initial state */
-      }
-      default:  /* some error occurred */
+    case LUA_YIELD:
+      return COS_YIELD;
+    case LUA_OK: {
+      lua_Debug ar;
+      if (lua_getstack(co, 0, &ar))  /* does it have frames? */
+        return COS_NORM;  /* it is running */
+      else if (lua_gettop(co) == 0)
         return COS_DEAD;
+      else
+        return COS_YIELD;  /* initial state */
+    }
+    default:  /* some error occurred */
+      return COS_DEAD;
     }
   }
 }
 
 
+/* luaB_costatus - receiver is arg1, co is arg2 */
 static int luaB_costatus (lua_State *L) {
   lua_State *co = getco(L);
   lua_pushstring(L, statname[auxstatus(L, co)]);
@@ -154,11 +160,13 @@ static int luaB_costatus (lua_State *L) {
 }
 
 
+/* getoptco - receiver is arg1, optional co is arg2 */
 static lua_State *getoptco (lua_State *L) {
-  return (lua_isnone(L, 1) ? L : getco(L));
+  return (lua_isnone(L, 2) ? L : getco(L));
 }
 
 
+/* luaB_yieldable - receiver is arg1, optional co is arg2 */
 static int luaB_yieldable (lua_State *L) {
   lua_State *co = getoptco(L);
   lua_pushboolean(L, lua_isyieldable(co));
@@ -166,6 +174,7 @@ static int luaB_yieldable (lua_State *L) {
 }
 
 
+/* luaB_corunning - receiver is arg1, no other args */
 static int luaB_corunning (lua_State *L) {
   int ismain = lua_pushthread(L);
   lua_pushboolean(L, ismain);
@@ -173,47 +182,48 @@ static int luaB_corunning (lua_State *L) {
 }
 
 
+/* luaB_close - receiver is arg1, optional co is arg2 */
 static int luaB_close (lua_State *L) {
   lua_State *co = getoptco(L);
   int status = auxstatus(L, co);
   switch (status) {
-    case COS_DEAD: case COS_YIELD: {
-      status = lua_closethread(co, L);
-      if (status == LUA_OK) {
-        lua_pushboolean(L, 1);
-        return 1;
-      }
-      else {
-        lua_pushboolean(L, 0);
-        lua_xmove(co, L, 1);  /* move error message */
-        return 2;
-      }
+  case COS_DEAD: case COS_YIELD: {
+    status = lua_closethread(co, L);
+    if (status == LUA_OK) {
+      lua_pushboolean(L, 1);
+      return 1;
     }
-    case COS_NORM:
-      return luaL_error(L, "cannot close a %s coroutine", statname[status]);
-    case COS_RUN:
-      lua_geti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);  /* get main */
-      if (lua_tothread(L, -1) == co)
-        return luaL_error(L, "cannot close main thread");
-      lua_closethread(co, L);  /* close itself */
-      /* previous call does not return *//* FALLTHROUGH */
-    default:
-      lua_assert(0);
-      return 0;
+    else {
+      lua_pushboolean(L, 0);
+      lua_xmove(co, L, 1);  /* move error message */
+      return 2;
+    }
+  }
+  case COS_NORM:
+    return luaL_error(L, "cannot close a %s coroutine", statname[status]);
+  case COS_RUN:
+    lua_geti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);  /* get main */
+    if (lua_tothread(L, -1) == co)
+      return luaL_error(L, "cannot close main thread");
+    lua_closethread(co, L);  /* close itself */
+    /* previous call does not return *//* FALLTHROUGH */
+  default:
+    lua_assert(0);
+    return 0;
   }
 }
 
 
 static const luaL_Reg co_funcs[] = {
-  {"create", luaB_cocreate},
-  {"resume", luaB_coresume},
-  {"running", luaB_corunning},
-  {"status", luaB_costatus},
-  {"wrap", luaB_cowrap},
-  {"yield", luaB_yield},
-  {"isyieldable", luaB_yieldable},
-  {"close", luaB_close},
-  {NULL, NULL}
+    {"create", luaB_cocreate},
+    {"resume", luaB_coresume},
+    {"running", luaB_corunning},
+    {"status", luaB_costatus},
+    {"wrap", luaB_cowrap},
+    {"yield", luaB_yield},
+    {"isyieldable", luaB_yieldable},
+    {"close", luaB_close},
+    {NULL, NULL}
 };
 
 
@@ -222,4 +232,3 @@ LUAMOD_API int luaopen_coroutine (lua_State *L) {
   luaL_newlib(L, co_funcs);
   return 1;
 }
-
