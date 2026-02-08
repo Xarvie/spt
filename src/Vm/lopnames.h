@@ -33,6 +33,7 @@ static const char *const opnames[] = {
   "SETI",
   "SETFIELD",
   "NEWTABLE",
+  "NEWLIST",
   "SELF",
   "ADDI",
   "ADDK",

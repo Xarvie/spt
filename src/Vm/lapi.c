@@ -288,6 +288,8 @@ LUA_API int lua_type (lua_State *L, int idx) {
 LUA_API const char *lua_typename (lua_State *L, int t) {
   UNUSED(L);
   api_check(L, LUA_TNONE <= t && t < LUA_NUMTYPES, "invalid type");
+  if (t == LUA_TARRAY)
+    return "array";
   return ttypename(t);
 }
 
