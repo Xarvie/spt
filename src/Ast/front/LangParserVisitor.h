@@ -191,6 +191,10 @@ public:
 
     virtual std::any visitMapEntryStringKey(LangParser::MapEntryStringKeyContext *context) = 0;
 
+    virtual std::any visitMapEntryIntKey(LangParser::MapEntryIntKeyContext *context) = 0;
+
+    virtual std::any visitMapEntryFloatKey(LangParser::MapEntryFloatKeyContext *context) = 0;
+
     virtual std::any visitNewExpressionDef(LangParser::NewExpressionDefContext *context) = 0;
 
     virtual std::any visitIfStatement(LangParser::IfStatementContext *context) = 0;
@@ -205,8 +209,7 @@ public:
 
     virtual std::any visitForNumericVarTyped(LangParser::ForNumericVarTypedContext *context) = 0;
 
-    virtual std::any
-    visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *context) = 0;
+    virtual std::any visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *context) = 0;
 
     virtual std::any visitForEachVarTyped(LangParser::ForEachVarTypedContext *context) = 0;
 

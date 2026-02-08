@@ -2261,6 +2261,83 @@ std::any AstBuilderVisitor::visitMapEntryStringKey(LangParser::MapEntryStringKey
   }
 }
 
+std::any AstBuilderVisitor::visitMapEntryIntKey(LangParser::MapEntryIntKeyContext *ctx) {
+  if (!ctx)
+    throw std::runtime_error("AstBuilderVisitor::visitMapEntryIntKey nullptr");
+  SourceLocation loc = getSourceLocation(ctx);
+  Expression *keyNode = nullptr;
+  Expression *valueNode = nullptr;
+  try {
+    if (!ctx->INTEGER())
+      throw std::runtime_error("AstBuilderVisitor::visitMapEntryIntKey no INTEGER token");
+
+    std::string text = ctx->INTEGER()->getText();
+    int64_t val = std::stoll(text);
+    keyNode = new LiteralIntNode(val, getSourceLocation(ctx->INTEGER()));
+
+    if (!ctx->expression())
+      throw std::runtime_error("AstBuilderVisitor::visitMapEntryIntKey no expression");
+
+    std::any valResult = visit(ctx->expression());
+    AstNode *valueNodeRaw = safeAnyCastRawPtr<AstNode>(valResult, "visitMapEntryIntKey > value");
+    valueNode = dynamic_cast<Expression *>(valueNodeRaw);
+    if (!valueNode && valResult.has_value()) {
+      delete keyNode;
+      delete valueNodeRaw;
+      throw std::runtime_error("Map 值必须是表达式");
+    }
+    if (!valueNode) {
+      delete keyNode;
+      throw std::runtime_error("Map 值访问失败");
+    }
+
+    MapEntryNode *entryNode = new MapEntryNode(keyNode, valueNode, loc);
+    return std::any(static_cast<AstNode *>(entryNode));
+  } catch (...) {
+    delete keyNode;
+    delete valueNode;
+    throw;
+  }
+}
+
+std::any AstBuilderVisitor::visitMapEntryFloatKey(LangParser::MapEntryFloatKeyContext *ctx) {
+  if (!ctx)
+    throw std::runtime_error("AstBuilderVisitor::visitMapEntryFloatKey nullptr");
+  SourceLocation loc = getSourceLocation(ctx);
+  Expression *keyNode = nullptr;
+  Expression *valueNode = nullptr;
+  try {
+    if (!ctx->FLOAT_LITERAL())
+      throw std::runtime_error("AstBuilderVisitor::visitMapEntryFloatKey no FLOAT_LITERAL token");
+
+    double val = std::stod(ctx->FLOAT_LITERAL()->getText());
+    keyNode = new LiteralFloatNode(val, getSourceLocation(ctx->FLOAT_LITERAL()));
+
+    if (!ctx->expression())
+      throw std::runtime_error("AstBuilderVisitor::visitMapEntryFloatKey no expression");
+
+    std::any valResult = visit(ctx->expression());
+    AstNode *valueNodeRaw = safeAnyCastRawPtr<AstNode>(valResult, "visitMapEntryFloatKey > value");
+    valueNode = dynamic_cast<Expression *>(valueNodeRaw);
+    if (!valueNode && valResult.has_value()) {
+      delete keyNode;
+      delete valueNodeRaw;
+      throw std::runtime_error("Map 值必须是表达式");
+    }
+    if (!valueNode) {
+      delete keyNode;
+      throw std::runtime_error("Map 值访问失败");
+    }
+
+    MapEntryNode *entryNode = new MapEntryNode(keyNode, valueNode, loc);
+    return std::any(static_cast<AstNode *>(entryNode));
+  } catch (...) {
+    delete keyNode;
+    delete valueNode;
+    throw;
+  }
+}
+
 std::any AstBuilderVisitor::visitNewExpressionDef(LangParser::NewExpressionDefContext *ctx) {
   if (!ctx) {
     throw std::runtime_error("AstBuilderVisitor::visitNewExpressionDef nullptr context");

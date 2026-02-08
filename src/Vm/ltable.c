@@ -361,6 +361,34 @@ static unsigned findindex (lua_State *L, Table *t, TValue *key,
 
 int luaH_next (lua_State *L, Table *t, StkId key) {
   unsigned int asize = t->asize;
+
+  /* === 新增：list 按严格顺序遍历 === */
+  if (t->mode == TABLE_ARRAY) {
+    unsigned int i;
+    if (ttisnil(s2v(key)))
+      i = 0;
+    else if (ttisinteger(s2v(key))) {
+      lua_Integer k = ivalue(s2v(key));
+      if (k < 0 || k >= (lua_Integer)asize)
+        luaG_runerror(L, "invalid key to 'next'");
+      i = cast_uint(k) + 1;
+    }
+    else
+      luaG_runerror(L, "invalid key to 'next'");
+
+    if (i >= asize)
+      return 0;  /* 遍历结束 */
+
+    setivalue(s2v(key), cast_int(i));
+    lu_byte tag = *getArrTag(t, i);
+    if (tagisempty(tag))
+      setnilvalue(s2v(key + 1));  /* empty 当作 nil 返回 */
+    else
+      farr2val(t, i, tag, s2v(key + 1));
+    return 1;
+  }
+
+
   unsigned int i = findindex(L, t, s2v(key), asize);  /* find original key */
   for (; i < asize; i++) {  /* try first array part */
     lu_byte tag = *getArrTag(t, i);
@@ -761,6 +789,10 @@ void luaH_resizearray (lua_State *L, Table *t, unsigned int nasize) {
 ** Then, resize the table.
 */
 static void rehash (lua_State *L, Table *t, const TValue *ek) {
+  if (t->mode == TABLE_ARRAY) {
+    /* list 不应该走到 rehash，如果走到说明有 bug */
+    luaG_runerror(L, "list cannot be rehashed (internal error)");
+  }
   unsigned asize;  /* optimal size for array part */
   Counters ct;
   unsigned i;
@@ -928,6 +960,12 @@ static void newcheckedkey (Table *t, const TValue *key, TValue *value) {
 
 static void luaH_newkey (lua_State *L, Table *t, const TValue *key,
                                                  TValue *value) {
+  if (t->mode == TABLE_ARRAY) {
+    if (ttisinteger(key))
+      luaG_runerror(L, "list index out of range");
+    else
+      luaG_runerror(L, "list indices must be integers");
+  }
   if (!ttisnil(value)) {  /* do not insert nil values */
     int done = insertkey(t, key, value);
     if (!done) {  /* could not find a free place? */
@@ -972,6 +1010,14 @@ static lu_byte finishnodeget (const TValue *val, TValue *res) {
 
 
 lu_byte luaH_getint (Table *t, lua_Integer key, TValue *res) {
+  if (t->mode == TABLE_ARRAY) {
+    if (key < 0 || key >= (lua_Integer)t->asize)
+      return LUA_VEMPTY;  /* 越界，返回 empty（上层会触发 __index 或报 nil） */
+    lu_byte tag = *getArrTag(t, cast_uint(key));
+    if (!tagisempty(tag))
+      farr2val(t, cast_uint(key), tag, res);
+    return tag;
+  }
   unsigned k = ikeyinarray(t, key);
   if (k > 0) {
     lu_byte tag = *getArrTag(t, k - 1);
@@ -1033,6 +1079,17 @@ lu_byte luaH_getstr (Table *t, TString *key, TValue *res) {
 ** main search function
 */
 lu_byte luaH_get (Table *t, const TValue *key, TValue *res) {
+  /* === 新增 === */
+  if (t->mode == TABLE_ARRAY) {
+    if (ttypetag(key) == LUA_VNUMINT)
+      return luaH_getint(t, ivalue(key), res);
+    if (ttypetag(key) == LUA_VNUMFLT) {
+      lua_Integer k;
+      if (luaV_flttointeger(fltvalue(key), &k, F2Ieq))
+        return luaH_getint(t, k, res);
+    }
+    return LUA_VEMPTY;  /* 非整数键返回空 */
+  }
   const TValue *slot;
   switch (ttypetag(key)) {
     case LUA_VSHRSTR:
@@ -1090,6 +1147,8 @@ static int rawfinishnodeset (const TValue *slot, TValue *val) {
 
 
 int luaH_psetint (Table *t, lua_Integer key, TValue *val) {
+  if (t->mode == TABLE_ARRAY)
+    return HNOTFOUND;  /* list 越界，返回 HNOTFOUND，让上层处理 */
   lua_assert(!ikeyinarray(t, key));
   return finishnodeset(t, getintfromhash(t, key), val);
 }
@@ -1145,6 +1204,13 @@ int luaH_psetstr (Table *t, TString *key, TValue *val) {
 
 
 int luaH_pset (Table *t, const TValue *key, TValue *val) {
+  if (t->mode == TABLE_ARRAY) {
+    if (ttypetag(key) == LUA_VNUMINT)
+      return psetint(t, ivalue(key), val);  /* 走正常整数路径 */
+    else
+      return HNOTFOUND;  /* 非整数键，让 finishset 报错 */
+  }
+
   switch (ttypetag(key)) {
     case LUA_VSHRSTR: return luaH_psetshortstr(t, tsvalue(key), val);
     case LUA_VNUMINT: return psetint(t, ivalue(key), val);
@@ -1170,6 +1236,15 @@ void luaH_finishset (lua_State *L, Table *t, const TValue *key,
                                     TValue *value, int hres) {
   lua_assert(hres != HOK);
   if (hres == HNOTFOUND) {
+    /* === 新增：list 不允许扩展 === */
+    if (t->mode == TABLE_ARRAY) {
+      if (ttisinteger(key))
+        luaG_runerror(L, "list index out of range: %I (size: %d)",
+                      (LUAI_UACINT)ivalue(key), t->asize);
+      else
+        luaG_runerror(L, "list indices must be integers");
+    }
+    /* ====== */
     TValue aux;
     if (l_unlikely(ttisnil(key)))
       luaG_runerror(L, "table index is nil");
@@ -1219,6 +1294,14 @@ void luaH_set (lua_State *L, Table *t, const TValue *key, TValue *value) {
 ** integers cannot be keys to metamethods.)
 */
 void luaH_setint (lua_State *L, Table *t, lua_Integer key, TValue *value) {
+  /* === 新增：list 不允许越界写入 === */
+  if (t->mode == TABLE_ARRAY) {
+    if (key < 0 || key >= (lua_Integer)t->asize)
+      luaG_runerror(L, "list index out of range: %I (size: %d)",
+                    (LUAI_UACINT)key, t->asize);
+    obj2arr(t, cast_uint(key), value);  /* 直接写入数组（0-based） */
+    return;
+  }
   unsigned ik = ikeyinarray(t, key);
   if (ik > 0)
     obj2arr(t, ik - 1, value);
@@ -1315,6 +1398,10 @@ static lua_Unsigned newhint (Table *t, unsigned hint) {
 ** border may be in the hash part.
 */
 lua_Unsigned luaH_getn (lua_State *L, Table *t) {
+  /* === 新增 === */
+  if (t->mode == TABLE_ARRAY)
+    return t->asize;  /* list 长度固定 */
+  /* ====== */
   unsigned asize = t->asize;
   if (asize > 0) {  /* is there an array part? */
     const unsigned maxvicinity = 4;

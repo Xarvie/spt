@@ -283,6 +283,8 @@ mapEntry
     : IDENTIFIER COL expression      #mapEntryIdentKey     // key: value
     | OSB expression CSB COL expression #mapEntryExprKey      // [expr]: value
     | STRING_LITERAL COL expression  #mapEntryStringKey    // "key": value
+    | INTEGER COL expression         #mapEntryIntKey       // 1: value
+    | FLOAT_LITERAL COL expression   #mapEntryFloatKey     // 1.5: value
     ;
 
 /** 'new' 表达式: new ClassName(args?) - 强制带括号 */

@@ -359,6 +359,14 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitMapEntryIntKey(LangParser::MapEntryIntKeyContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitMapEntryFloatKey(LangParser::MapEntryFloatKeyContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitNewExpressionDef(LangParser::NewExpressionDefContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -387,8 +395,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) override {
+  virtual std::any visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) override {
     return visitChildren(ctx);
   }
 

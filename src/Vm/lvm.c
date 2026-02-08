@@ -743,7 +743,9 @@ void luaV_objlen (lua_State *L, StkId ra, const TValue *rb) {
       Table *h = avalue(rb);
       tm = fasttm(L, h->metatable, TM_LEN);
       if (tm) break;
-      setivalue(s2v(ra), l_castU2S(luaH_getn(L, h)));
+      /* 原来：setivalue(s2v(ra), l_castU2S(luaH_getn(L, h))); */
+      /* 改成直接用 asize，语义更清晰（其实 luaH_getn 第一阶段已经改了，效果一样） */
+      setivalue(s2v(ra), (lua_Integer)h->asize);
       return;
     }
     case LUA_VTABLE: {
@@ -1329,26 +1331,55 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         StkId ra = RA(i);
         TValue *rb = vRB(i);
         TValue *rc = vRC(i);
-        lu_byte tag;
-        if (ttisinteger(rc)) {  /* fast track for integers? */
-          luaV_fastgeti(rb, ivalue(rc), s2v(ra), tag);
+
+        if (ttisarray(rb)) {
+          /* List: 委托给 luaH_get (ltable.c 中已处理非整数 Key 返回 nil) */
+          /* 注意：luaH_get 返回 tag，但这里我们需要把值塞入 ra */
+          /* 因为 luaH_get 内部已经调用了 get/setobj，所以这里只要调用即可 */
+          /* 但 luaH_get 定义是返回 tag，它把结果写到了 res 中 */
+          luaH_get(avalue(rb), rc, s2v(ra));
         }
-        else
-          luaV_fastget(rb, rc, s2v(ra), luaH_get, tag);
-        if (tagisempty(tag))
-          Protect(luaV_finishget(L, rb, rc, ra, tag));
+        else {
+          /* Map: 原有逻辑 */
+          lu_byte tag;
+          if (ttisinteger(rc)) {
+            luaV_fastgeti(rb, ivalue(rc), s2v(ra), tag);
+          }
+          else
+            luaV_fastget(rb, rc, s2v(ra), luaH_get, tag);
+
+          if (tagisempty(tag))
+            Protect(luaV_finishget(L, rb, rc, ra, tag));
+        }
         vmbreak;
       }
       vmcase(OP_GETI) {
         StkId ra = RA(i);
         TValue *rb = vRB(i);
         int c = GETARG_C(i);
-        lu_byte tag;
-        luaV_fastgeti(rb, c, s2v(ra), tag);
-        if (tagisempty(tag)) {
-          TValue key;
-          setivalue(&key, c);
-          Protect(luaV_finishget(L, rb, &key, ra, tag));
+
+        /* [修正] 使用 if-else 分支，统一 vmbreak 出口 */
+        if (ttisarray(rb)) {
+          Table *t = avalue(rb);
+          /* List: 0-based, 越界返回 nil */
+          lua_Unsigned ukey = l_castS2U(c);
+          if (ukey < t->asize) {
+            lu_byte tag = *getArrTag(t, ukey);
+            if (tagisempty(tag)) setnilvalue(s2v(ra));
+            else farr2val(t, ukey, tag, s2v(ra));
+          } else {
+            setnilvalue(s2v(ra));
+          }
+        }
+        else {
+          /* Map: 原有逻辑 */
+          lu_byte tag;
+          luaV_fastgeti(rb, c, s2v(ra), tag);
+          if (tagisempty(tag)) {
+            TValue key;
+            setivalue(&key, c);
+            Protect(luaV_finishget(L, rb, &key, ra, tag));
+          }
         }
         vmbreak;
       }
@@ -1378,33 +1409,57 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
       }
       vmcase(OP_SETTABLE) {
         StkId ra = RA(i);
-        int hres;
-        TValue *rb = vRB(i);  /* key (table is in 'ra') */
+        TValue *rb = vRB(i);  /* key */
         TValue *rc = RKC(i);  /* value */
-        if (ttisinteger(rb)) {  /* fast track for integers? */
-          luaV_fastseti(s2v(ra), ivalue(rb), rc, hres);
+
+        if (ttisarray(s2v(ra))) {
+          /* List: 委托给 luaH_set (ltable.c 中已处理错误) */
+          /* 这里的逻辑比较重，没有 fast path 也没关系，因为 List 主要用 SETI */
+          luaH_set(L, avalue(s2v(ra)), rb, rc);
         }
         else {
-          luaV_fastset(s2v(ra), rb, rc, hres, luaH_pset);
+          /* Map: 原有逻辑 */
+          int hres;
+          if (ttisinteger(rb)) {
+            luaV_fastseti(s2v(ra), ivalue(rb), rc, hres);
+          }
+          else {
+            luaV_fastset(s2v(ra), rb, rc, hres, luaH_pset);
+          }
+          if (hres == HOK)
+            luaV_finishfastset(L, s2v(ra), rc);
+          else
+            Protect(luaV_finishset(L, s2v(ra), rb, rc, hres));
         }
-        if (hres == HOK)
-          luaV_finishfastset(L, s2v(ra), rc);
-        else
-          Protect(luaV_finishset(L, s2v(ra), rb, rc, hres));
         vmbreak;
       }
       vmcase(OP_SETI) {
         StkId ra = RA(i);
-        int hres;
         int b = GETARG_B(i);
         TValue *rc = RKC(i);
-        luaV_fastseti(s2v(ra), b, rc, hres);
-        if (hres == HOK)
-          luaV_finishfastset(L, s2v(ra), rc);
+
+        if (ttisarray(s2v(ra))) {
+          /* List: 严格检查越界，不扩容 */
+          Table *t = avalue(s2v(ra));
+          lua_Unsigned ukey = l_castS2U(b);
+          if (ukey < t->asize) {
+            obj2arr(t, ukey, rc);
+            luaC_barrierback(L, obj2gco(t), rc);
+          } else {
+            luaG_runerror(L, "list index out of range: %d", b);
+          }
+        }
         else {
-          TValue key;
-          setivalue(&key, b);
-          Protect(luaV_finishset(L, s2v(ra), &key, rc, hres));
+          /* Map: 原有逻辑 */
+          int hres;
+          luaV_fastseti(s2v(ra), b, rc, hres);
+          if (hres == HOK)
+            luaV_finishfastset(L, s2v(ra), rc);
+          else {
+            TValue key;
+            setivalue(&key, b);
+            Protect(luaV_finishset(L, s2v(ra), &key, rc, hres));
+          }
         }
         vmbreak;
       }
@@ -1436,6 +1491,7 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         pc++;  /* skip extra argument */
         L->top.p = ra + 1;  /* correct top in case of emergency GC */
         t = luaH_new(L);  /* memory allocation */
+        t->mode = TABLE_MAP;
         sethvalue2s(L, ra, t);
         if (b != 0 || c != 0)
           luaH_resize(L, t, c, b);  /* idem */

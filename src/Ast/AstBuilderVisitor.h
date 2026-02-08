@@ -120,6 +120,8 @@ public:
   std::any visitMapEntryIdentKey(LangParser::MapEntryIdentKeyContext *ctx) override;
   std::any visitMapEntryExprKey(LangParser::MapEntryExprKeyContext *ctx) override;
   std::any visitMapEntryStringKey(LangParser::MapEntryStringKeyContext *ctx) override;
+  std::any visitMapEntryIntKey(LangParser::MapEntryIntKeyContext *ctx) override;
+  std::any visitMapEntryFloatKey(LangParser::MapEntryFloatKeyContext *ctx) override;
 
   std::any visitNewExpressionDef(LangParser::NewExpressionDefContext *ctx) override;
   std::any visitIfStatement(LangParser::IfStatementContext *ctx) override;
