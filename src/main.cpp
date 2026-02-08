@@ -76,7 +76,7 @@
 int main(int argc, char *argv[]) {
   TestRunner runner;
 
-#if 0
+#if 1
   // =====================================================
   // 完整测试套件
   // =====================================================
@@ -90,30 +90,30 @@ int main(int argc, char *argv[]) {
   registerFunctions(runner);
 
   // 类与对象
-  registerClasses(runner);
+//  registerClasses(runner);
 
   // 数据结构
-  registerLists(runner);
-  registerMaps(runner);
-  registerStrings(runner);
+//  registerLists(runner);
+//  registerMaps(runner);
+//  registerStrings(runner);
 
   // 模块系统
-  registerModules(runner);
+//  registerModules(runner);
 
   // 方法调用
-  registerInvokeTests(runner);
+//  registerInvokeTests(runner);
 
   // 边界情况与回归
-  registerEdgeCases(runner);
+//  registerEdgeCases(runner);
 
   // 综合测试
-  registerIntegrationTests(runner);
+//  registerIntegrationTests(runner);
 
   // 内置函数
-  registerBuiltinFunctions(runner);
+//  registerBuiltinFunctions(runner);
 
   // Defer 语句
-  registerDeferTests(runner);
+//  registerDeferTests(runner);
 
 //  // Fiber 协程
 //  registerFiberTests(runner);

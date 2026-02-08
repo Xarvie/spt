@@ -29,7 +29,10 @@ static thread_local std::stringstream* g_currentCapture = nullptr;
 static int lua_capture_print(lua_State* L) {
   if (!g_currentCapture) return 0;
 
-  int n = lua_gettop(L);  /* 参数个数 */
+  int n = lua_gettop(L);
+
+
+
   lua_getglobal(L, "tostring"); // index: n+1
 
   for (int i = 2; i <= n; i++) {
@@ -52,8 +55,9 @@ static int lua_capture_print(lua_State* L) {
     } else {
       // 其他类型（String, Table, Bool, Nil）走 Lua 原生 tostring
       lua_pushvalue(L, n + 1);  /* 将 tostring 函数压栈 */
+      lua_pushnil(L);           /* receiver参数 */
       lua_pushvalue(L, i);      /* 将参数压栈 */
-      lua_call(L, 1, 1);        /* 调用 tostring */
+      lua_call(L, 2, 1);        /* 调用 tostring，2个参数 */
       const char* s = lua_tostring(L, -1);
       if (s == NULL) return luaL_error(L, "'tostring' must return a string to 'print'");
       *g_currentCapture << s;
@@ -128,7 +132,7 @@ public:
       fs::remove_all(testDir_);
     fs::create_directories(testDir_);
 
-    std::cout << "Running " << total << " tests (Backend: Lua 5.5 + SptAST)..." << std::endl;
+    std::cout << "Running " << total << " tests ..." << std::endl;
 
     for (const auto &test : tests_) {
       if (runSingleTest(test)) {

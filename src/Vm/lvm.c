@@ -31,7 +31,7 @@
 #include "ltm.h"
 #include "lvm.h"
 
-
+#define gettabvalue(o)  (gco2t(val_(o).gc))
 /*
 ** By default, use jump tables in the main interpreter loop on gcc
 ** and compatible compilers.
@@ -294,14 +294,14 @@ lu_byte luaV_finishget (lua_State *L, const TValue *t, TValue *key,
   const TValue *tm;  /* metamethod */
   for (loop = 0; loop < MAXTAGLOOP; loop++) {
     if (tag == LUA_VNOTABLE) {  /* 't' is not a table? */
-      lua_assert(!ttistable(t));
+      lua_assert(!ttistable(t) && !ttisarray(t));
       tm = luaT_gettmbyobj(L, t, TM_INDEX);
       if (l_unlikely(notm(tm)))
         luaG_typeerror(L, t, "index");  /* no metamethod */
       /* else will try the metamethod */
     }
-    else {  /* 't' is a table */
-      tm = fasttm(L, hvalue(t)->metatable, TM_INDEX);  /* table's metamethod */
+    else {  /* 't' is a table or array */
+      tm = fasttm(L, gettabvalue(t)->metatable, TM_INDEX);  /* table's metamethod */
       if (tm == NULL) {  /* no metamethod? */
         setnilvalue(s2v(val));  /* result is nil */
         return LUA_VNIL;
@@ -337,7 +337,7 @@ void luaV_finishset (lua_State *L, const TValue *t, TValue *key,
   for (loop = 0; loop < MAXTAGLOOP; loop++) {
     const TValue *tm;  /* '__newindex' metamethod */
     if (hres != HNOTATABLE) {  /* is 't' a table? */
-      Table *h = hvalue(t);  /* save 't' table */
+      Table *h = gettabvalue(t);  /* save 't' table */
       tm = fasttm(L, h->metatable, TM_NEWINDEX);  /* get metamethod */
       if (tm == NULL) {  /* no metamethod? */
         sethvalue2s(L, L->top.p, h);  /* anchor 't' */
@@ -638,6 +638,14 @@ int luaV_equalobj (lua_State *L, const TValue *t1, const TValue *t2) {
           tm = fasttm(L, hvalue(t2)->metatable, TM_EQ);
         break;  /* will try TM */
       }
+      case LUA_VARRAY: {
+        if (avalue(t1) == avalue(t2)) return 1;
+        else if (L == NULL) return 0;
+        tm = fasttm(L, avalue(t1)->metatable, TM_EQ);
+        if (tm == NULL)
+          tm = fasttm(L, avalue(t2)->metatable, TM_EQ);
+        break;  /* will try TM */
+      }
       case LUA_VLCF:
         return (fvalue(t1) == fvalue(t2));
       default:  /* functions and threads */
@@ -731,6 +739,13 @@ void luaV_concat (lua_State *L, int total) {
 void luaV_objlen (lua_State *L, StkId ra, const TValue *rb) {
   const TValue *tm;
   switch (ttypetag(rb)) {
+    case LUA_VARRAY: {
+      Table *h = avalue(rb);
+      tm = fasttm(L, h->metatable, TM_LEN);
+      if (tm) break;
+      setivalue(s2v(ra), l_castU2S(luaH_getn(L, h)));
+      return;
+    }
     case LUA_VTABLE: {
       Table *h = hvalue(rb);
       tm = fasttm(L, h->metatable, TM_LEN);
@@ -1217,6 +1232,8 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
   for (;;) {
     Instruction i;  /* instruction being executed */
     vmfetch();
+
+
     #if 0
     { /* low-level line tracing for debugging Lua */
       #include "lopnames.h"
@@ -1422,6 +1439,24 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         sethvalue2s(L, ra, t);
         if (b != 0 || c != 0)
           luaH_resize(L, t, c, b);  /* idem */
+        checkGC(L, ra + 1);
+        vmbreak;
+      }
+      vmcase(OP_NEWLIST) {
+        StkId ra = RA(i);
+        unsigned c = cast_uint(GETARG_vC(i));  /* array size */
+        Table *t;
+        if (TESTARG_k(i)) {  /* non-zero extra argument? */
+          lua_assert(GETARG_Ax(*pc) != 0);
+          /* add it to array size */
+          c += cast_uint(GETARG_Ax(*pc)) * (MAXARG_vC + 1);
+        }
+        pc++;  /* skip extra argument */
+        L->top.p = ra + 1;  /* correct top in case of emergency GC */
+        t = luaH_newarray(L);  /* create array */
+        setavalue2s(L, ra, t);
+        if (c != 0)
+          luaH_resizearray(L, t, c);  /* resize array part only */
         checkGC(L, ra + 1);
         vmbreak;
       }

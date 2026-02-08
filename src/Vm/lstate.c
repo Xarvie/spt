@@ -184,19 +184,40 @@ static void freestack (lua_State *L) {
 ** Create registry table and its predefined values
 */
 static void init_registry (lua_State *L, global_State *g) {
-  /* create registry */
   TValue aux;
-  Table *registry = luaH_new(L);
+  Table *registry, *globals;
+  int i;
+  
+  /* Initialize registry_array for luaL_ref/unref */
+  int initial_size = 64;
+  g->registry_array.arr = (TValue *)(*g->frealloc)(g->ud, NULL, 0, 
+                                                    initial_size * sizeof(TValue));
+  if (g->registry_array.arr == NULL) {
+    luaD_throw(L, LUA_ERRMEM);
+  }
+  g->registry_array.size = initial_size;
+  g->registry_array.free = LUA_RIDX_REFMECHANISM;
+  
+  /* Initialize all array elements to nil */
+  for (i = 0; i < initial_size; i++) {
+    setnilvalue(&g->registry_array.arr[i]);
+  }
+  
+  /* create registry */
+  registry = luaH_new(L);
+  registry->mode = TABLE_MAP;
   sethvalue(L, &g->l_registry, registry);
   luaH_resize(L, registry, LUA_RIDX_LAST, 0);
-  /* registry[1] = false */
+  /* registry[0] = false */
   setbfvalue(&aux);
-  luaH_setint(L, registry, 1, &aux);
+  luaH_setint(L, registry, LUA_RIDX_REFMECHANISM, &aux);
   /* registry[LUA_RIDX_MAINTHREAD] = L */
   setthvalue(L, &aux, L);
   luaH_setint(L, registry, LUA_RIDX_MAINTHREAD, &aux);
   /* registry[LUA_RIDX_GLOBALS] = new table (table of globals) */
-  sethvalue(L, &aux, luaH_new(L));
+  globals = luaH_new(L);
+  globals->mode = TABLE_MAP;
+  sethvalue(L, &aux, globals);
   luaH_setint(L, registry, LUA_RIDX_GLOBALS, &aux);
 }
 
@@ -264,6 +285,11 @@ static void close_state (lua_State *L) {
     luai_userstateclose(L);
   }
   luaM_freearray(L, G(L)->strt.hash, cast_sizet(G(L)->strt.size));
+  /* Free registry_array */
+  if (g->registry_array.arr != NULL) {
+    (*g->frealloc)(g->ud, g->registry_array.arr, 
+                   g->registry_array.size * sizeof(TValue), 0);
+  }
   freestack(L);
   lua_assert(gettotalbytes(g) == sizeof(global_State));
   (*g->frealloc)(g->ud, g, sizeof(global_State), 0);  /* free main block */
@@ -356,6 +382,9 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud, unsigned seed) {
   g->strt.size = g->strt.nuse = 0;
   g->strt.hash = NULL;
   setnilvalue(&g->l_registry);
+  g->registry_array.arr = NULL;
+  g->registry_array.size = 0;
+  g->registry_array.free = 0;
   g->panic = NULL;
   g->gcstate = GCSpause;
   g->gckind = KGC_INC;

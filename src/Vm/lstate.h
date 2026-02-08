@@ -332,7 +332,12 @@ typedef struct global_State {
   l_mem GCmarked;  /* number of objects marked in a GC cycle */
   l_mem GCmajorminor;  /* auxiliary counter to control major-minor shifts */
   stringtable strt;  /* hash table for strings */
-  TValue l_registry;
+  struct {  /* registry array for integer references (luaL_ref) */
+    TValue *arr;  /* dynamic array of TValues */
+    int size;     /* total allocated size */
+    int free;     /* index of first free slot */
+  } registry_array;
+  TValue l_registry;  /* registry table (points to registry_map) */
   TValue nilvalue;  /* a nil value */
   unsigned int seed;  /* randomized seed for hashes */
   lu_byte gcparams[LUA_GCPN];
@@ -418,7 +423,7 @@ union GCUnion {
 #define gco2ccl(o)  check_exp((o)->tt == LUA_VCCL, &((cast_u(o))->cl.c))
 #define gco2cl(o)  \
 	check_exp(novariant((o)->tt) == LUA_TFUNCTION, &((cast_u(o))->cl))
-#define gco2t(o)  check_exp((o)->tt == LUA_VTABLE, &((cast_u(o))->h))
+#define gco2t(o)  check_exp(((o)->tt == LUA_VTABLE || (o)->tt == LUA_VARRAY), &((cast_u(o))->h))
 #define gco2p(o)  check_exp((o)->tt == LUA_VPROTO, &((cast_u(o))->p))
 #define gco2th(o)  check_exp((o)->tt == LUA_VTHREAD, &((cast_u(o))->th))
 #define gco2upv(o)	check_exp((o)->tt == LUA_VUPVAL, &((cast_u(o))->upv))

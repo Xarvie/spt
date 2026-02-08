@@ -113,7 +113,8 @@ static void entersweep (lua_State *L);
 static l_mem objsize (GCObject *o) {
   lu_mem res;
   switch (o->tt) {
-    case LUA_VTABLE: {
+    case LUA_VTABLE:
+    case LUA_VARRAY: {
       res = luaH_size(gco2t(o));
       break;
     }
@@ -162,7 +163,8 @@ static l_mem objsize (GCObject *o) {
 
 static GCObject **getgclist (GCObject *o) {
   switch (o->tt) {
-    case LUA_VTABLE: return &gco2t(o)->gclist;
+    case LUA_VTABLE:
+    case LUA_VARRAY: return &gco2t(o)->gclist;
     case LUA_VLCL: return &gco2lcl(o)->gclist;
     case LUA_VCCL: return &gco2ccl(o)->gclist;
     case LUA_VTHREAD: return &gco2th(o)->gclist;
@@ -362,7 +364,7 @@ static void reallymarkobject (global_State *g, GCObject *o) {
       }
       /* else... */
     }  /* FALLTHROUGH */
-    case LUA_VLCL: case LUA_VCCL: case LUA_VTABLE:
+    case LUA_VLCL: case LUA_VCCL: case LUA_VTABLE: case LUA_VARRAY:
     case LUA_VTHREAD: case LUA_VPROTO: {
       linkobjgclist(o, g->gray);  /* to be visited later */
       break;
@@ -438,10 +440,15 @@ static void cleargraylists (global_State *g) {
 ** during a cycle.
 */
 static void restartcollection (global_State *g) {
+  int i;
   cleargraylists(g);
   g->GCmarked = 0;
   markobject(g, mainthread(g));
   markvalue(g, &g->l_registry);
+  /* Mark registry_array */
+  for (i = 0; i < g->registry_array.size; i++) {
+    markvalue(g, &g->registry_array.arr[i]);
+  }
   markmt(g);
   markbeingfnz(g);  /* mark any finalizing object left from previous cycle */
 }
@@ -729,7 +736,8 @@ static l_mem propagatemark (global_State *g) {
   nw2black(o);
   g->gray = *getgclist(o);  /* remove from 'gray' list */
   switch (o->tt) {
-    case LUA_VTABLE: return traversetable(g, gco2t(o));
+    case LUA_VTABLE:
+    case LUA_VARRAY: return traversetable(g, gco2t(o));
     case LUA_VUSERDATA: return traverseudata(g, gco2u(o));
     case LUA_VLCL: return traverseLclosure(g, gco2lcl(o));
     case LUA_VCCL: return traverseCclosure(g, gco2ccl(o));
@@ -853,6 +861,7 @@ static void freeobj (lua_State *L, GCObject *o) {
       break;
     }
     case LUA_VTABLE:
+    case LUA_VARRAY:
       luaH_free(L, gco2t(o));
       break;
     case LUA_VTHREAD:
@@ -1551,6 +1560,13 @@ static void atomic (lua_State *L) {
   markobject(g, L);  /* mark running thread */
   /* registry and global metatables may be changed by API */
   markvalue(g, &g->l_registry);
+  /* Mark registry_array */
+  {
+    int i;
+    for (i = 0; i < g->registry_array.size; i++) {
+      markvalue(g, &g->registry_array.arr[i]);
+    }
+  }
   markmt(g);  /* mark global metatables */
   propagateall(g);  /* empties 'gray' list */
   /* remark occasional upvalues of (maybe) dead threads */

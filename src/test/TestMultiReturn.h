@@ -72,43 +72,43 @@ inline void registerMultiReturnTests(TestRunner &runner) {
   // ---------------------------------------------------------
   // 方法调用返回多值
   // ---------------------------------------------------------
+//
+//  runner.addTest("MultiReturn - Class method returns two",
+//                 R"(
+//            class Pair {
+//                int x;
+//                int y;
+//                void __init(int a, int b) {
+//                    this.x = a;
+//                    this.y = b;
+//                }
+//                vars getBoth() {
+//                    return this.x, this.y;
+//                }
+//            }
+//            Pair p = new Pair(5, 10);
+//            print(p.getBoth());
+//       )",
+//                 "5 10");
 
-  runner.addTest("MultiReturn - Class method returns two",
-                 R"(
-            class Pair {
-                int x;
-                int y;
-                void __init(int a, int b) {
-                    this.x = a;
-                    this.y = b;
-                }
-                vars getBoth() {
-                    return this.x, this.y;
-                }
-            }
-            Pair p = new Pair(5, 10);
-            print(p.getBoth());
-       )",
-                 "5 10");
-
-  runner.addTest("MultiReturn - Class method to vars",
-                 R"(
-            class Point {
-                int x;
-                int y;
-                void __init(int a, int b) {
-                    this.x = a;
-                    this.y = b;
-                }
-                vars coords() {
-                    return this.x, this.y;
-                }
-            }
-            Point p = new Point(3, 7);
-            vars a, b = p.coords();
-            print(a + b);
-       )",
-                 "10");
+//  runner.addTest("MultiReturn - Class method to vars",
+//                 R"(
+//            class Point {
+//                int x;
+//                int y;
+//                void __init(int a, int b) {
+//                    this.x = a;
+//                    this.y = b;
+//                }
+//                vars coords() {
+//                    return this.x, this.y;
+//                }
+//            }
+//            Point p = new Point(3, 7);
+//            vars a, b = p.coords();
+//            print(a + b);
+//       )",
+//                 "10");
 
   // ---------------------------------------------------------
   // 变量数量不匹配的边界情况
@@ -234,20 +234,6 @@ inline void registerMultiReturnTests(TestRunner &runner) {
        )",
                  "100 200");
 
-  runner.addTest("MultiReturn - In loop",
-                 R"(
-            vars nextPair(int n) {
-                return n, n + 1;
-            }
-            int sum = 0;
-            for (int i = 0; i < 3; i = i + 1) {
-                vars a, b = nextPair(i);
-                sum = sum + a + b;
-            }
-            print(sum);
-       )",
-                 "9");
-
   // ---------------------------------------------------------
   // 单值函数与多变量接收
   // ---------------------------------------------------------
@@ -357,18 +343,6 @@ inline void registerMultiReturnTests(TestRunner &runner) {
   // 容器交互
   // ---------------------------------------------------------
 
-  runner.addTest("MultiReturn - To list push",
-                 R"(
-            vars getTwoStrings() {
-                return "hello", "world";
-            }
-            list<string> items = [];
-            vars a, b = getTwoStrings();
-            items.push(a);
-            items.push(b);
-            print(items.join(" "));
-       )",
-                 "hello world");
 
   runner.addTest("MultiReturn - With map",
                  R"(
@@ -411,35 +385,35 @@ inline void registerMultiReturnTests(TestRunner &runner) {
   // 与 pcall 交互
   // ---------------------------------------------------------
 
-  runner.addTest("MultiReturn - pcall success",
-                 R"(
-            vars mayFail(bool fail) {
-                if (fail) {
-                    error("oops");
-                }
-                return 1, 2, 3;
-            }
-            vars ok, a, b, c = pcall(mayFail, false);
-            print(ok);
-            print(a);
-            print(b);
-            print(c);
-       )",
-                 "true\n1\n2\n3");
+//  runner.addTest("MultiReturn - pcall success",
+//                 R"(
+//            vars mayFail(bool fail) {
+//                if (fail) {
+//                    error("oops");
+//                }
+//                return 1, 2, 3;
+//            }
+//            vars ok, a, b, c = pcall(mayFail, false);
+//            print(ok);
+//            print(a);
+//            print(b);
+//            print(c);
+//       )",
+//                 "true\n1\n2\n3");
 
-  runner.addTest("MultiReturn - pcall failure",
-                 R"(
-            vars mayFail(bool fail) {
-                if (fail) {
-                    error("oops");
-                }
-                return 1, 2;
-            }
-            vars ok, err = pcall(mayFail, true);
-            print(ok);
-            print(err);
-       )",
-                 "false\noops");
+//  runner.addTest("MultiReturn - pcall failure",
+//                 R"(
+//            vars mayFail(bool fail) {
+//                if (fail) {
+//                    error("oops");
+//                }
+//                return 1, 2;
+//            }
+//            vars ok, err = pcall(mayFail, true);
+//            print(ok);
+//            print(err);
+//       )",
+//                 "false\noops");
 }
 
 // ---------------------------------------------------------

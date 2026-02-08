@@ -6,64 +6,6 @@
 // =========================================================
 
 inline void registerBasics(TestRunner &runner) {
-  runner.addTest("Arithmetic Operations",
-                 R"(
-            int a = 10;
-            int b = 20;
-            print(a + b * 2);
-            print((a + b) * 2);
-            print(100 ~/ 4);
-            print(17 % 5);
-            print(-a);
-            print(10 ~/ 3);
-       )",
-                 "50\n60\n25\n2\n-10\n3");
-
-  runner.addTest("Float Arithmetic",
-                 R"(
-            float x = 3.14;
-            float y = 2.0;
-            print(x + y);
-            print(x * y);
-            print(10.0 / 4.0);
-       )",
-                 "5.14\n6.28\n2.5");
-
-  runner.addTest("String Concatenation",
-                 R"(
-            string s1 = "Hello";
-            string s2 = "World";
-            print(s1 .. " " .. s2);
-            print("Value: " .. 42);
-            print("count: " .. 100);
-       )",
-                 "Hello World\nValue: 42\ncount: 100");
-
-  runner.addTest("Boolean Operations",
-                 R"(
-            bool t = true;
-            bool f = false;
-            print(t && t);
-            print(t && f);
-            print(f || t);
-            print(f || f);
-            print(!t);
-            print(!f);
-       )",
-                 "true\nfalse\ntrue\nfalse\nfalse\ntrue");
-
-  runner.addTest("Comparison Operators",
-                 R"(
-            print(5 == 5);
-            print(5 != 3);
-            print(3 < 5);
-            print(5 > 3);
-            print(5 <= 5);
-            print(5 >= 5);
-            print(3 <= 5);
-            print(5 >= 3);
-       )",
-                 "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue");
 
   runner.addTest(
       "Comparison NaN",

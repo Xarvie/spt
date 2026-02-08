@@ -12,7 +12,9 @@ set (ANTLR_VERSION "4.13.1")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD  99)
-
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address  -fno-omit-frame-pointer")
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address  -fno-omit-frame-pointer")
+#set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
 option(BUILD_TESTS "Build tests" ON)          # 默认开启测试
 
 # 设置输出目录

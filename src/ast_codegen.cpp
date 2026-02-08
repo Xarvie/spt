@@ -909,7 +909,7 @@ static void compile_lambda(CompileCtx *C, LambdaNode *n, expdesc *e) {
 }
 
 /*-----------------------------------------------------------------------
- * List literal  → table constructor (array part)
+ * List literal  → array constructor (using OP_NEWLIST)
  * NOTE: VM uses 0-based table indexing — handled in VM/luaK_setlist
  *---------------------------------------------------------------------*/
 static void compile_list_literal(CompileCtx *C, LiteralListNode *n,
@@ -917,7 +917,7 @@ static void compile_list_literal(CompileCtx *C, LiteralListNode *n,
   FuncState *fs = C->fs;
   setline(C, n->location);
 
-  int pc = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+  int pc = luaK_codevABCk(fs, OP_NEWLIST, 0, 0, 0, 0);
   luaK_code(fs, 0);  /* extra arg */
 
   init_exp(e, VNONRELOC, fs->freereg);
@@ -937,8 +937,7 @@ static void compile_list_literal(CompileCtx *C, LiteralListNode *n,
   if (na > 0) {
     luaK_setlist(fs, e->u.info, (int)n->elements.size() - na, na);
   }
-  luaK_settablesize(fs, pc, e->u.info,
-                    (int)n->elements.size(), 0);
+  luaK_setlistsize(fs, pc, e->u.info, (int)n->elements.size());
 }
 
 /*-----------------------------------------------------------------------
@@ -2281,8 +2280,8 @@ static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
 extern "C"
     LClosure *astY_compile(lua_State *L, AstNode *root,
                  Dyndata *dyd, const char *name) {
-  CompileCtx ctx;
-  FuncState funcstate;
+  CompileCtx ctx{};
+  FuncState funcstate = {};
 
   LClosure *cl = luaF_newLclosure(L, 1);
   setclLvalue2s(L, L->top.p, cl);

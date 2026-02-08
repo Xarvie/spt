@@ -70,8 +70,9 @@ typedef struct lua_State lua_State;
 #define LUA_TFUNCTION		6
 #define LUA_TUSERDATA		7
 #define LUA_TTHREAD		8
+#define LUA_TARRAY		9
 
-#define LUA_NUMTYPES		9
+#define LUA_NUMTYPES		10
 
 
 
@@ -80,10 +81,11 @@ typedef struct lua_State lua_State;
 
 
 /* predefined values in the registry */
-/* index 1 is reserved for the reference mechanism */
-#define LUA_RIDX_GLOBALS	2
-#define LUA_RIDX_MAINTHREAD	3
-#define LUA_RIDX_LAST		3
+/* index 0 is reserved for the reference mechanism (0-based indexing) */
+#define LUA_RIDX_REFMECHANISM	0
+#define LUA_RIDX_GLOBALS	1
+#define LUA_RIDX_MAINTHREAD	2
+#define LUA_RIDX_LAST		2
 
 
 /* type of numbers in Lua */
@@ -403,6 +405,7 @@ LUA_API void (lua_closeslot) (lua_State *L, int idx);
 
 #define lua_isfunction(L,n)	(lua_type(L, (n)) == LUA_TFUNCTION)
 #define lua_istable(L,n)	(lua_type(L, (n)) == LUA_TTABLE)
+#define lua_isarray(L,n)	(lua_type(L, (n)) == LUA_TARRAY)
 #define lua_islightuserdata(L,n)	(lua_type(L, (n)) == LUA_TLIGHTUSERDATA)
 #define lua_isnil(L,n)		(lua_type(L, (n)) == LUA_TNIL)
 #define lua_isboolean(L,n)	(lua_type(L, (n)) == LUA_TBOOLEAN)

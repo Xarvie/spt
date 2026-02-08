@@ -802,9 +802,23 @@ Table *luaH_new (lua_State *L) {
   Table *t = gco2t(o);
   t->metatable = NULL;
   t->flags = maskflags;  /* table has no metamethod fields */
+  t->mode = 0;  /* mode not set yet (caller should set) */
   t->array = NULL;
   t->asize = 0;
   setnodevector(L, t, 0);
+  return t;
+}
+
+
+Table *luaH_newarray (lua_State *L) {
+  GCObject *o = luaC_newobj(L, LUA_VARRAY, sizeof(Table));
+  Table *t = gco2t(o);
+  t->metatable = NULL;
+  t->flags = maskflags;
+  t->mode = TABLE_ARRAY;  /* pure array mode */
+  t->array = NULL;
+  t->asize = 0;
+  setnodevector(L, t, 0);  /* no hash part for arrays */
   return t;
 }
 

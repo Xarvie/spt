@@ -729,9 +729,17 @@ typedef union Closure {
 
 #define LUA_VTABLE	makevariant(LUA_TTABLE, 0)
 
+/* Table mode definitions */
+#define TABLE_ARRAY	1  /* pure array mode */
+#define TABLE_MAP	2  /* pure map mode */
+
+#define LUA_VARRAY	makevariant(LUA_TARRAY, 0)
+
 #define ttistable(o)		checktag((o), ctb(LUA_VTABLE))
+#define ttisarray(o)		checktag((o), ctb(LUA_VARRAY))
 
 #define hvalue(o)	check_exp(ttistable(o), gco2t(val_(o).gc))
+#define avalue(o)	check_exp(ttisarray(o), gco2t(val_(o).gc))
 
 #define sethvalue(L,obj,x) \
   { TValue *io = (obj); Table *x_ = (x); \
@@ -739,6 +747,13 @@ typedef union Closure {
     checkliveness(L,io); }
 
 #define sethvalue2s(L,o,h)	sethvalue(L,s2v(o),h)
+
+#define setavalue(L,obj,x) \
+  { TValue *io = (obj); Table *x_ = (x); \
+    val_(io).gc = obj2gco(x_); settt_(io, ctb(LUA_VARRAY)); \
+    checkliveness(L,io); }
+
+#define setavalue2s(L,o,a)	setavalue(L,s2v(o),a)
 
 
 /*
@@ -777,6 +792,7 @@ typedef struct Table {
   CommonHeader;
   lu_byte flags;  /* 1<<p means tagmethod(p) is not present */
   lu_byte lsizenode;  /* log2 of number of slots of 'node' array */
+  lu_byte mode;  /* TABLE_ARRAY (1) or TABLE_MAP (2) */
   unsigned int asize;  /* number of slots in 'array' array */
   Value *array;  /* array part */
   Node *node;

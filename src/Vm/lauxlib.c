@@ -25,6 +25,8 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lstate.h"
+#include "lobject.h"
 #include "llimits.h"
 
 
@@ -688,39 +690,48 @@ LUALIB_API char *luaL_buffinitsize (lua_State *L, luaL_Buffer *B, size_t sz) {
 */
 LUALIB_API int luaL_ref (lua_State *L, int t) {
   int ref;
+  global_State *g = G(L);
   if (lua_isnil(L, -1)) {
-    lua_pop(L, 1);  /* remove from stack */
-    return LUA_REFNIL;  /* 'nil' has a unique fixed reference */
+    lua_pop(L, 1);
+    return LUA_REFNIL;
   }
-  t = lua_absindex(L, t);
-  if (lua_rawgeti(L, t, 1) == LUA_TNUMBER)  /* already initialized? */
-    ref = (int)lua_tointeger(L, -1);  /* ref = t[1] */
-  else {  /* first access */
-    lua_assert(!lua_toboolean(L, -1));  /* must be nil or false */
-    ref = 0;  /* list is empty */
-    lua_pushinteger(L, 0);  /* initialize as an empty list */
-    lua_rawseti(L, t, 1);  /* ref = t[1] = 0 */
+  if (t != LUA_REGISTRYINDEX)
+    luaL_error(L, "luaL_ref only supports LUA_REGISTRYINDEX");
+  
+  /* Get free slot from registry_array[0] */
+  if (g->registry_array.free >= g->registry_array.size) {
+    /* Expand array */
+    int newsize = g->registry_array.size * 2;
+    if (newsize < 16) newsize = 16;
+    TValue *newarr = (TValue *)(*g->frealloc)(g->ud, g->registry_array.arr,
+                                               g->registry_array.size * sizeof(TValue),
+                                               newsize * sizeof(TValue));
+    if (newarr == NULL) {
+      lua_pop(L, 1);
+      return LUA_REFNIL;
+    }
+    /* Initialize new slots */
+    int i;
+    for (i = g->registry_array.size; i < newsize; i++) {
+      setnilvalue(&newarr[i]);
+    }
+    g->registry_array.arr = newarr;
+    g->registry_array.size = newsize;
   }
-  lua_pop(L, 1);  /* remove element from stack */
-  if (ref != 0) {  /* any free element? */
-    lua_rawgeti(L, t, ref);  /* remove it from list */
-    lua_rawseti(L, t, 1);  /* (t[1] = t[ref]) */
-  }
-  else  /* no free elements */
-    ref = (int)lua_rawlen(L, t) + 1;  /* get a new reference */
-  lua_rawseti(L, t, ref);
+  
+  ref = g->registry_array.free++;
+  setobj(L, &g->registry_array.arr[ref], s2v(L->top.p - 1));
+  lua_pop(L, 1);
   return ref;
 }
 
 
 LUALIB_API void luaL_unref (lua_State *L, int t, int ref) {
-  if (ref >= 0) {
-    t = lua_absindex(L, t);
-    lua_rawgeti(L, t, 1);
-    lua_assert(lua_isinteger(L, -1));
-    lua_rawseti(L, t, ref);  /* t[ref] = t[1] */
-    lua_pushinteger(L, ref);
-    lua_rawseti(L, t, 1);  /* t[1] = ref */
+  global_State *g = G(L);
+  if (ref >= 0 && ref < g->registry_array.size) {
+    if (t != LUA_REGISTRYINDEX)
+      luaL_error(L, "luaL_unref only supports LUA_REGISTRYINDEX");
+    setnilvalue(&g->registry_array.arr[ref]);
   }
 }
 
