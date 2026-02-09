@@ -12,9 +12,9 @@
 
 extern "C" {
 
-#include "vm/lua.h"
-#include "vm/lualib.h"
-#include "vm/lauxlib.h"
+#include "Vm/lauxlib.h"
+#include "Vm/lua.h"
+#include "Vm/lualib.h"
 }
 
 

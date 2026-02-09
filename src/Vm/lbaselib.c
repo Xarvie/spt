@@ -281,7 +281,12 @@ static int luaB_type (lua_State *L) {
 
 /* luaB_next - receiver is arg1, table is arg2, key is arg3 */
 static int luaB_next (lua_State *L) {
-  luaL_checktype(L, 2, LUA_TTABLE);
+  int t = lua_type(L, 2);
+
+  // 允许 Table 或 Array
+  if (t != LUA_TTABLE && t != LUA_TARRAY) {
+    luaL_checktype(L, 2, LUA_TTABLE);
+  }
   lua_settop(L, 3);
   if (lua_next(L, 2))
     return 2;
