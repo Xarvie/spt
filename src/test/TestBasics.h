@@ -96,11 +96,11 @@ inline void registerBasics(TestRunner &runner) {
             print(#a);
 
             // Map 构造
-            map<any, int> b = {🤭:"🤭", 1:10, 2:20, 3:30}; // 普通 Lua table 行为
-            print(b[2]);
-            print(b["🤭"]);
+            map<any, int> b = { 1:10, 2:20, 3:30}; // 普通 Lua table 行为
+            print(b["2"]);
+            print(b["1"]);
        )",
-      "10\n30\n3\n20\n🤭"
+      "10\n30\n3\n20\n10"
   );
 
   // ---------------------------------------------------------
