@@ -381,7 +381,7 @@ int luaH_next (lua_State *L, Table *t, StkId key) {
 
     setivalue(s2v(key), cast_int(i));
     lu_byte tag = *getArrTag(t, i);
-    if (tagisempty(tag))
+    if (tag == LUA_VEMPTY)
       setnilvalue(s2v(key + 1));  /* empty 当作 nil 返回 */
     else
       farr2val(t, i, tag, s2v(key + 1));
@@ -1014,7 +1014,7 @@ lu_byte luaH_getint (Table *t, lua_Integer key, TValue *res) {
     if (key < 0 || key >= (lua_Integer)t->asize)
       return LUA_VEMPTY;  /* 越界，返回 empty（上层会触发 __index 或报 nil） */
     lu_byte tag = *getArrTag(t, cast_uint(key));
-    if (!tagisempty(tag))
+    if (tag != LUA_VEMPTY)
       farr2val(t, cast_uint(key), tag, res);
     return tag;
   }

@@ -83,6 +83,7 @@ int main(int argc, char *argv[]) {
 
   // 基础语法
   registerBasics(runner);
+  registerBasicsExtendedTemp(runner);
   registerControlFlow(runner);
 
 

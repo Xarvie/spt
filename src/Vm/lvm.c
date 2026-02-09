@@ -1333,11 +1333,25 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         TValue *rc = vRC(i);
 
         if (ttisarray(rb)) {
-          /* List: 委托给 luaH_get (ltable.c 中已处理非整数 Key 返回 nil) */
-          /* 注意：luaH_get 返回 tag，但这里我们需要把值塞入 ra */
-          /* 因为 luaH_get 内部已经调用了 get/setobj，所以这里只要调用即可 */
-          /* 但 luaH_get 定义是返回 tag，它把结果写到了 res 中 */
-          luaH_get(avalue(rb), rc, s2v(ra));
+          /* List: 边界检查和类型检查 */
+          Table *t = avalue(rb);
+
+          /* 检查键类型 */
+          if (!ttisinteger(rc)) {
+            if (ttisnumber(rc))
+              luaG_runerror(L, "list index must be integer, not float");
+            else
+              luaG_typeerror(L, rc, "index list with integer");
+          }
+          lua_Integer idx = ivalue(rc);
+          /* 检查负索引 */
+          if (idx < 0)
+            luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
+          /* 检查越界 */
+          if (idx >= (lua_Integer)t->asize)
+            luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx, t->asize);
+          /* 访问元素 */
+          luaH_get(t, rc, s2v(ra));
         }
         else {
           /* Map: 原有逻辑 */
@@ -1358,18 +1372,19 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         TValue *rb = vRB(i);
         int c = GETARG_C(i);
 
-        /* [修正] 使用 if-else 分支，统一 vmbreak 出口 */
         if (ttisarray(rb)) {
           Table *t = avalue(rb);
-          /* List: 0-based, 越界返回 nil */
+          /* List: 边界检查 */
+          if (c < 0)
+            luaG_runerror(L, "list index out of range: negative index %d", c);
+
           lua_Unsigned ukey = l_castS2U(c);
-          if (ukey < t->asize) {
-            lu_byte tag = *getArrTag(t, ukey);
-            if (tagisempty(tag)) setnilvalue(s2v(ra));
-            else farr2val(t, ukey, tag, s2v(ra));
-          } else {
-            setnilvalue(s2v(ra));
-          }
+          if (ukey >= t->asize)
+            luaG_runerror(L, "list index out of range: index %d >= length %u", c, t->asize);
+
+          lu_byte tag = *getArrTag(t, ukey);
+          if (tag == LUA_VEMPTY) setnilvalue(s2v(ra));
+          else farr2val(t, ukey, tag, s2v(ra));
         }
         else {
           /* Map: 原有逻辑 */
@@ -1413,9 +1428,29 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         TValue *rc = RKC(i);  /* value */
 
         if (ttisarray(s2v(ra))) {
-          /* List: 委托给 luaH_set (ltable.c 中已处理错误) */
-          /* 这里的逻辑比较重，没有 fast path 也没关系，因为 List 主要用 SETI */
-          luaH_set(L, avalue(s2v(ra)), rb, rc);
+          /* List: 边界检查和类型检查 */
+          Table *t = avalue(s2v(ra));
+
+          /* 检查键类型 */
+          if (!ttisinteger(rb)) {
+            if (ttisnumber(rb))
+              luaG_runerror(L, "list index must be integer, not float");
+            else
+              luaG_typeerror(L, rb, "index list with integer");
+          }
+
+          lua_Integer idx = ivalue(rb);
+
+          /* 检查负索引 */
+          if (idx < 0)
+            luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
+
+          /* 检查越界 */
+          if (idx >= (lua_Integer)t->asize)
+            luaG_runerror(L, "list index out of range: cannot extend fixed-length list (index %I >= length %u)", (LUAI_UACINT)idx, t->asize);
+
+          /* 设置值 */
+          luaH_set(L, t, rb, rc);
         }
         else {
           /* Map: 原有逻辑 */

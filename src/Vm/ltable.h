@@ -50,7 +50,7 @@
   { Table *h = t; lua_Unsigned u = l_castS2U(k); \
     if ((u < h->asize)) { \
       tag = *getArrTag(h, u); \
-      if (!tagisempty(tag)) { farr2val(h, u, tag, res); }} \
+      if (tag != LUA_VEMPTY) { farr2val(h, u, tag, res); }} \
     else { tag = luaH_getint(h, (k), res); }}
 
 
