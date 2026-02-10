@@ -26,10 +26,10 @@
 static int luaB_print(lua_State *L) {
   int n = lua_gettop(L); /* number of arguments */
   int i;
-  for (i = 1; i <= n; i++) { /* for each argument */
+  for (i = 2; i <= n; i++) { /* skip receiver, start from arg2 */
     size_t l;
     const char *s = luaL_tolstring(L, i, &l); /* convert it to string */
-    if (i > 1)                                /* not the first element? */
+    if (i > 2)                                /* not the first element? */
       lua_writestring("\t", 1);               /* add a tab before it */
     lua_writestring(s, l);                    /* print it */
     lua_pop(L, 1);                            /* pop result */
@@ -140,7 +140,8 @@ static int luaB_getmetatable(lua_State *L) {
 /* luaB_setmetatable - receiver is arg1, table is arg2, mt is arg3 */
 static int luaB_setmetatable(lua_State *L) {
   int t = lua_type(L, 3);
-  luaL_checktype(L, 2, LUA_TTABLE);
+  int t2 = lua_type(L, 2);
+  luaL_argexpected(L, t2 == LUA_TTABLE || t2 == LUA_TARRAY, 2, "table or list");
   luaL_argexpected(L, t == LUA_TNIL || t == LUA_TTABLE, 3, "nil or table");
   if (l_unlikely(luaL_getmetafield(L, 2, "__metatable") != LUA_TNIL))
     return luaL_error(L, "cannot change a protected metatable");
@@ -160,14 +161,16 @@ static int luaB_rawequal(lua_State *L) {
 /* luaB_rawlen - receiver is arg1, object is arg2 */
 static int luaB_rawlen(lua_State *L) {
   int t = lua_type(L, 2);
-  luaL_argexpected(L, t == LUA_TTABLE || t == LUA_TSTRING, 2, "table or string");
+  luaL_argexpected(L, t == LUA_TTABLE || t == LUA_TSTRING || t == LUA_TARRAY, 2,
+                   "table, list, or string");
   lua_pushinteger(L, l_castU2S(lua_rawlen(L, 2)));
   return 1;
 }
 
 /* luaB_rawget - receiver is arg1, table is arg2, key is arg3 */
 static int luaB_rawget(lua_State *L) {
-  luaL_checktype(L, 2, LUA_TTABLE);
+  int t = lua_type(L, 2);
+  luaL_argexpected(L, t == LUA_TTABLE || t == LUA_TARRAY, 2, "table or list");
   luaL_checkany(L, 3);
   lua_settop(L, 3);
   lua_rawget(L, 2);
@@ -176,7 +179,8 @@ static int luaB_rawget(lua_State *L) {
 
 /* luaB_rawset - receiver is arg1, table is arg2, key is arg3, value is arg4 */
 static int luaB_rawset(lua_State *L) {
-  luaL_checktype(L, 2, LUA_TTABLE);
+  int t = lua_type(L, 2);
+  luaL_argexpected(L, t == LUA_TTABLE || t == LUA_TARRAY, 2, "table or list");
   luaL_checkany(L, 3);
   luaL_checkany(L, 4);
   lua_settop(L, 4);
@@ -433,10 +437,12 @@ static int luaB_assert(lua_State *L) {
     return lua_gettop(L);            /* return all arguments */
   else {                             /* error */
     luaL_checkany(L, 2);             /* there must be a condition */
-    lua_remove(L, 1);
-    lua_remove(L, 1);                        /* remove it */
+    lua_remove(L, 1);                /* remove receiver */
+    lua_remove(L, 1);                /* remove condition */
     lua_pushliteral(L, "assertion failed!"); /* default message */
     lua_settop(L, 1);                        /* leave only message (default if no other one) */
+    lua_pushnil(L);                          /* dummy receiver for luaB_error */
+    lua_insert(L, 1);                        /* [nil(receiver), message] */
     return luaB_error(L);                    /* call 'error' */
   }
 }
@@ -497,7 +503,7 @@ static int luaB_xpcall(lua_State *L) {
   lua_pushboolean(L, 1);               /* first result */
   lua_pushvalue(L, 2);                 /* function */
   lua_rotate(L, 4, 2);                 /* move them below function's arguments */
-  status = lua_pcallk(L, n - 3, LUA_MULTRET, 2, 2, finishpcall);
+  status = lua_pcallk(L, n - 3, LUA_MULTRET, 3, 2, finishpcall);
   return finishpcall(L, status, 2);
 }
 

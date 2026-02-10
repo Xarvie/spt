@@ -1352,7 +1352,11 @@ returning: /* trap already set */
             luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx,
                           t->asize);
           /* 访问元素 */
-          luaH_get(t, rc, s2v(ra));
+          {
+            lu_byte tag = luaH_get(t, rc, s2v(ra));
+            if (tagisempty(tag))
+              setnilvalue(s2v(ra));
+          }
         } else {
           /* Map: 原有逻辑 */
           lu_byte tag;

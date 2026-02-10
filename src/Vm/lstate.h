@@ -312,10 +312,11 @@ typedef struct global_State {
   l_mem GCmajorminor; /* auxiliary counter to control major-minor shifts */
   stringtable strt;   /* hash table for strings */
 
-  struct {       /* registry array for integer references (luaL_ref) */
-    TValue *arr; /* dynamic array of TValues */
-    int size;    /* total allocated size */
-    int free;    /* index of first free slot */
+  struct {         /* registry array for integer references (luaL_ref) */
+    TValue *arr;   /* dynamic array of TValues */
+    int size;      /* total allocated size */
+    int freelist;  /* head of free-slot linked list (-1 = empty) */
+    int firstfree; /* first never-allocated slot (high-water mark) */
   } registry_array;
 
   TValue l_registry; /* registry table (points to registry_map) */

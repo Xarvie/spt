@@ -279,6 +279,20 @@ void luaC_barrierback_(lua_State *L, GCObject *o) {
     setage(o, G_TOUCHED1); /* touched in current cycle */
 }
 
+/*
+** Forward barrier for writes into registry_array (which is a GC root,
+** not a GCObject).  If the GC invariant must be kept and the value is
+** a white collectable, mark it immediately so it won't be missed.
+*/
+void luaC_barrierref(lua_State *L, const TValue *v) {
+  global_State *g = G(L);
+  if (iscollectable(v) && keepinvariant(g)) {
+    GCObject *o = gcvalue(v);
+    if (iswhite(o))
+      reallymarkobject(g, o);
+  }
+}
+
 void luaC_fix(lua_State *L, GCObject *o) {
   global_State *g = G(L);
   lua_assert(g->allgc == o); /* object must be 1st in 'allgc' list! */

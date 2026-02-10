@@ -40,7 +40,7 @@ static int checkfield(lua_State *L, const char *key, int n) {
 ** has a metatable with the required metamethods)
 */
 static void checktab(lua_State *L, int arg, int what) {
-  if (lua_type(L, arg) != LUA_TTABLE) { /* is it not a table? */
+  if (lua_type(L, arg) != LUA_TTABLE && lua_type(L, arg) != LUA_TARRAY) { /* not a table or list? */
     int n = 1;                          /* number of elements to pop */
     if (lua_getmetatable(L, arg) &&     /* must have metatable */
         (!(what & TAB_R) || checkfield(L, "__index", ++n)) &&
@@ -184,14 +184,15 @@ static int tconcat(lua_State *L) {
 /* tpack - receiver is arg1, values start from arg2 */
 static int tpack(lua_State *L) {
   int i;
-  int n = lua_gettop(L) - 1; /* number of elements to pack */
-  lua_createtable(L, n, 1);  /* create result table */
-  lua_insert(L, 1);          /* put it at index 1 */
-  for (i = n; i >= 1; i--)   /* assign elements */
-    lua_seti(L, 1, i - 1);   /* 0-based: args stored at indices 0..n-1 */
-  lua_pushinteger(L, n);
-  lua_setfield(L, 1, "n"); /* t.n = number of elements */
-  return 1;                /* return table */
+  int n = lua_gettop(L) - 1; /* number of values (excluding receiver) */
+  lua_createarray(L, n);     /* create result list */
+  /* Stack: [1:receiver, 2:val1, ..., n+1:valN, n+2:list] */
+  lua_insert(L, 2); /* put list after receiver */
+  /* Stack: [1:receiver, 2:list, 3:val1, ..., n+2:valN] */
+  for (i = n; i >= 1; i--) /* assign elements (pops from top) */
+    lua_seti(L, 2, i - 1); /* 0-based: list[i-1] = val_i */
+  /* Stack: [1:receiver, 2:list] */
+  return 1; /* return list (top of stack) */
 }
 
 /* tunpack - receiver is arg1, table is arg2, i is arg3, e is arg4 */

@@ -23,6 +23,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lgc.h"
 #include "llimits.h"
 #include "lobject.h"
 #include "lstate.h"
@@ -626,9 +627,11 @@ LUALIB_API char *luaL_buffinitsize(lua_State *L, luaL_Buffer *B, size_t sz) {
 */
 
 /*
-** The previously freed references form a linked list: t[1] is the index
-** of a first free index, t[t[1]] is the index of the second element,
-** etc. A zero signals the end of the list.
+** The previously freed references form a linked list stored inside the
+** registry_array slots themselves.  Each free slot holds an integer
+** TValue whose value is the index of the next free slot (-1 = end).
+** 'registry_array.freelist' is the head; 'registry_array.firstfree'
+** is the high-water mark for never-allocated slots.
 */
 LUALIB_API int luaL_ref(lua_State *L, int t) {
   int ref;
@@ -640,41 +643,64 @@ LUALIB_API int luaL_ref(lua_State *L, int t) {
   if (t != LUA_REGISTRYINDEX)
     luaL_error(L, "luaL_ref only supports LUA_REGISTRYINDEX");
 
-  /* Get free slot from registry_array[0] */
-  if (g->registry_array.free >= g->registry_array.size) {
-    /* Expand array */
-    int newsize = g->registry_array.size * 2;
-    if (newsize < 16)
-      newsize = 16;
-    TValue *newarr =
-        (TValue *)(*g->frealloc)(g->ud, g->registry_array.arr,
-                                 g->registry_array.size * sizeof(TValue), newsize * sizeof(TValue));
-    if (newarr == NULL) {
-      lua_pop(L, 1);
-      return LUA_REFNIL;
+  if (g->registry_array.freelist >= 0) {
+    /* Reuse a previously freed slot */
+    ref = g->registry_array.freelist;
+    lua_assert(ref < g->registry_array.size);
+    /* The slot contains an integer encoding the next free index */
+    lua_assert(ttisinteger(&g->registry_array.arr[ref]));
+    g->registry_array.freelist = (int)ivalue(&g->registry_array.arr[ref]);
+  } else {
+    /* No freed slots; use the next never-allocated slot */
+    if (g->registry_array.firstfree >= g->registry_array.size) {
+      /* Expand the array */
+      int oldsize = g->registry_array.size;
+      int newsize = oldsize * 2;
+      int i;
+      TValue *newarr;
+      if (newsize < 16)
+        newsize = 16;
+      newarr =
+          (TValue *)(*g->frealloc)(g->ud, g->registry_array.arr, (size_t)oldsize * sizeof(TValue),
+                                   (size_t)newsize * sizeof(TValue));
+      if (newarr == NULL) {
+        lua_pop(L, 1);
+        luaL_error(L, "not enough memory for luaL_ref");
+        return LUA_REFNIL; /* unreachable, but keeps compilers happy */
+      }
+      /* Initialize new slots to nil */
+      for (i = oldsize; i < newsize; i++) {
+        setnilvalue(&newarr[i]);
+      }
+      g->registry_array.arr = newarr;
+      g->registry_array.size = newsize;
     }
-    /* Initialize new slots */
-    int i;
-    for (i = g->registry_array.size; i < newsize; i++) {
-      setnilvalue(&newarr[i]);
-    }
-    g->registry_array.arr = newarr;
-    g->registry_array.size = newsize;
+    ref = g->registry_array.firstfree++;
   }
 
-  ref = g->registry_array.free++;
+  /* Store the value */
   setobj(L, &g->registry_array.arr[ref], s2v(L->top.p - 1));
+  /* GC barrier: mark the value if the collector is in its mark phase,
+     so that a white object stored here after the root scan won't be
+     missed and incorrectly swept. */
+  luaC_barrierref(L, &g->registry_array.arr[ref]);
   lua_pop(L, 1);
   return ref;
 }
 
 LUALIB_API void luaL_unref(lua_State *L, int t, int ref) {
   global_State *g = G(L);
-  if (ref >= 0 && ref < g->registry_array.size) {
-    if (t != LUA_REGISTRYINDEX)
-      luaL_error(L, "luaL_unref only supports LUA_REGISTRYINDEX");
-    setnilvalue(&g->registry_array.arr[ref]);
+  if (t != LUA_REGISTRYINDEX)
+    luaL_error(L, "luaL_unref only supports LUA_REGISTRYINDEX");
+  if (ref >= LUA_RIDX_REFMECHANISM && ref < g->registry_array.size) {
+    /* Link this slot into the free list.  Store the current head as an
+       integer TValue so the GC mark phase (which scans every slot) will
+       harmlessly skip it (integers are not collectable). */
+    setivalue(&g->registry_array.arr[ref], g->registry_array.freelist);
+    g->registry_array.freelist = ref;
   }
+  /* refs outside [LUA_RIDX_REFMECHANISM, size) are silently ignored
+     (matches the original Lua behaviour for LUA_NOREF / LUA_REFNIL). */
 }
 
 /* }====================================================== */

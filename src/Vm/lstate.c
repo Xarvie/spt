@@ -181,7 +181,8 @@ static void init_registry(lua_State *L, global_State *g) {
     luaD_throw(L, LUA_ERRMEM);
   }
   g->registry_array.size = initial_size;
-  g->registry_array.free = LUA_RIDX_REFMECHANISM;
+  g->registry_array.freelist = -1;                     /* no freed slots yet */
+  g->registry_array.firstfree = LUA_RIDX_REFMECHANISM; /* first usable slot */
 
   /* Initialize all array elements to nil */
   for (i = 0; i < initial_size; i++) {
@@ -357,7 +358,8 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   setnilvalue(&g->l_registry);
   g->registry_array.arr = NULL;
   g->registry_array.size = 0;
-  g->registry_array.free = 0;
+  g->registry_array.freelist = -1;
+  g->registry_array.firstfree = 0;
   g->panic = NULL;
   g->gcstate = GCSpause;
   g->gckind = KGC_INC;
