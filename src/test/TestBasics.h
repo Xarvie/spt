@@ -491,7 +491,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Nested Maps",
                  R"(
-            any m = {
+            map<string, any> m = {
                 "user1": {"name":"Alice", "age":"25"},
                 "user2": {"name":"Bob", "age":"30"}
             };
@@ -507,7 +507,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Modify Nested Values",
                  R"(
-            any m = {"data": {"x":"10", "y":"20"}};
+            map<string, any> m = {"data": {"x":"10", "y":"20"}};
             m["data"]["x"] = "99";
             print(m["data"]["x"]);
             print(m["data"]["y"]);
@@ -583,7 +583,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List of Maps",
                  R"(
-            any users = [
+            list<any> users = [
                 {"name":"Alice", "age":"25"},
                 {"name":"Bob", "age":"30"},
                 {"name":"Charlie", "age":"35"}
@@ -600,7 +600,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map of Lists",
                  R"(
-            any data = {
+            map<string, any> data = {
                 "numbers": [1, 2, 3],
                 "strings": ["a", "b", "c"]
             };
@@ -616,7 +616,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Complex Nested Structure",
                  R"(
-            any complex = {
+            map<string, any> complex = {
                 "users": [
                     {"name":"Alice", "scores":[85, 90, 95]},
                     {"name":"Bob", "scores":[75, 80, 85]}
@@ -634,7 +634,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Modify Mixed Structure",
                  R"(
-            any data = {
+            map<string, any> data = {
                 "items": [10, 20, 30]
             };
 

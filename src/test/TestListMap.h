@@ -633,7 +633,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Map: Nested Maps",
                  R"(
-            any m = {
+            map<string, any> m = {
                 "user1": {"name":"Alice", "age":"25"},
                 "user2": {"name":"Bob", "age":"30"}
             };
@@ -646,7 +646,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Map: Modify Nested Values",
                  R"(
-            any m = {"data": {"x":"10", "y":"20"}};
+            map<string, any> m = {"data": {"x":"10", "y":"20"}};
             m["data"]["x"] = "99";
             print(m["data"]["x"]);
             print(m["data"]["y"]);
@@ -655,7 +655,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Map: Deep Nesting",
                  R"(
-            any m = {
+            map<string, any> m = {
                 "level1": {
                     "level2": {
                         "level3": {
@@ -765,7 +765,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("List of Maps",
                  R"(
-            any users = [
+            list<any> users = [
                 {"name":"Alice", "age":"25"},
                 {"name":"Bob", "age":"30"},
                 {"name":"Charlie", "age":"35"}
@@ -779,7 +779,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Map of Lists",
                  R"(
-            any data = {
+            map<string, any> data = {
                 "numbers": [1, 2, 3],
                 "strings": ["a", "b", "c"]
             };
@@ -792,7 +792,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Complex Nested Structure",
                  R"(
-            any complex = {
+            map<string, any> complex = {
                 "users": [
                     {"name":"Alice", "scores":[85, 90, 95]},
                     {"name":"Bob", "scores":[75, 80, 85]}
@@ -807,7 +807,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Modify Mixed Structure",
                  R"(
-            any data = {
+            map<string, any> data = {
                 "items": [10, 20, 30]
             };
 
@@ -820,7 +820,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Mixed Structure with Push",
                  R"(
-            any data = {
+            map<string, any> data = {
                 "items": [1, 2, 3]
             };
             table.push(data["items"], 4);
@@ -831,7 +831,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("List in Map with Pop",
                  R"(
-            any data = {
+            map<string, any> data = {
                 "stack": [10, 20, 30]
             };
             any val = table.pop(data["stack"]);
@@ -943,7 +943,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Graph Adjacency List",
                  R"(
-            any graph = {
+            map<string, any> graph = {
                 "A": ["B", "C"],
                 "B": ["A", "D"],
                 "C": ["A"],
@@ -958,7 +958,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Configuration System",
                  R"(
-            any config = {
+            map<string, any> config = {
                 "database": {
                     "host": "localhost",
                     "port": "5432",
@@ -1070,7 +1070,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Student Grade System",
                  R"(
-            any students = {
+            map<string, any> students = {
                 "student1": {
                     "name": "Alice",
                     "grades": [85, 90, 88]
@@ -1082,7 +1082,7 @@ inline void registerListMapTest(TestRunner &runner) {
             };
 
             // Calculate average for student1
-            any grades = students["student1"]["grades"];
+            list<int> grades = students["student1"]["grades"];
             int sum = 0;
             for (i = 0, #grades - 1) {
                 sum += grades[i];
@@ -1094,7 +1094,7 @@ inline void registerListMapTest(TestRunner &runner) {
 
   runner.addTest("Inventory System",
                  R"(
-            any inventory = {
+            map<string, any> inventory = {
                 "items": [],
                 "count": "0"
             };
