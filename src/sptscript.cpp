@@ -1,7 +1,6 @@
 #include "Ast/ast.h"
 #include "BytecodeSerializer.h"
 
-
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,7 +30,7 @@ int runScript(const char *path) {
     return -1;
   }
 
-//  return (result == spt::InterpretResult::OK) ? 0 : -1;
+  //  return (result == spt::InterpretResult::OK) ? 0 : -1;
   return 0;
 }
 

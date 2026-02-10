@@ -32,7 +32,6 @@
 
 /* Lua C headers — wrapped for C++ */
 extern "C" {
-#include "lua.h"
 #include "lcode.h"
 #include "ldebug.h"
 #include "ldo.h"
@@ -46,38 +45,35 @@ extern "C" {
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
+#include "lua.h"
 }
 
 /*=======================================================================
  * Forward declarations
  *=====================================================================*/
 
-struct CompileCtx;  /* per-compilation context (replaces LexState role) */
+struct CompileCtx; /* per-compilation context (replaces LexState role) */
 
-static void compile_block        (CompileCtx *C, BlockNode *block);
-static void compile_statement    (CompileCtx *C, Statement *stmt);
-static void compile_expression   (CompileCtx *C, Expression *expr, expdesc *e);
-static void compile_exprlist     (CompileCtx *C,
-                             const std::vector<Expression *> &list,
-                             expdesc *last);
-static int  compile_exprlist_n   (CompileCtx *C,
-                              const std::vector<Expression *> &list,
-                              expdesc *last);
+static void compile_block(CompileCtx *C, BlockNode *block);
+static void compile_statement(CompileCtx *C, Statement *stmt);
+static void compile_expression(CompileCtx *C, Expression *expr, expdesc *e);
+static void compile_exprlist(CompileCtx *C, const std::vector<Expression *> &list, expdesc *last);
+static int compile_exprlist_n(CompileCtx *C, const std::vector<Expression *> &list, expdesc *last);
 
 /*=======================================================================
  * Compile Context
  *=====================================================================*/
 
 struct CompileCtx {
-  lua_State  *L;
-  LexState    ls;         /* 伪造的 LexState，用于兼容 lcode.c */
-  FuncState  *fs;        /* current function being compiled          */
-  Dyndata    *dyd;       /* dynamic data (actvar, gotos, labels)     */
-  TString    *source;    /* source name (for debug info)             */
-  TString    *envn;      /* environment name — normally "_ENV"       */
-  TString    *brkn;      /* break label name                         */
-  TString    *contn;     /* continue label name                      */
-  int         linenumber; /* current line (updated from AST locs)    */
+  lua_State *L;
+  LexState ls;     /* 伪造的 LexState，用于兼容 lcode.c */
+  FuncState *fs;   /* current function being compiled          */
+  Dyndata *dyd;    /* dynamic data (actvar, gotos, labels)     */
+  TString *source; /* source name (for debug info)             */
+  TString *envn;   /* environment name — normally "_ENV"       */
+  TString *brkn;   /* break label name                         */
+  TString *contn;  /* continue label name                      */
+  int linenumber;  /* current line (updated from AST locs)    */
 };
 
 /*-----------------------------------------------------------------------
@@ -89,15 +85,15 @@ static void setline(CompileCtx *C, const SourceLocation &loc) {
 }
 
 static void setline_node(CompileCtx *C, AstNode *n) {
-  if (n) setline(C, n->location);
+  if (n)
+    setline(C, n->location);
 }
 
 /*-----------------------------------------------------------------------
  * Helpers — error reporting
  *---------------------------------------------------------------------*/
 static l_noret compile_error(CompileCtx *C, const char *msg) {
-  luaO_pushfstring(C->L, "%s:%d: %s", getstr(C->source),
-                   C->linenumber, msg);
+  luaO_pushfstring(C->L, "%s:%d: %s", getstr(C->source), C->linenumber, msg);
   luaD_throw(C->L, LUA_ERRSYNTAX);
 }
 
@@ -106,8 +102,7 @@ static l_noret compile_errorf(CompileCtx *C, const char *fmt, ...) {
   va_start(ap, fmt);
   const char *inner = luaO_pushvfstring(C->L, fmt, ap);
   va_end(ap);
-  luaO_pushfstring(C->L, "%s:%d: %s", getstr(C->source),
-                   C->linenumber, inner);
+  luaO_pushfstring(C->L, "%s:%d: %s", getstr(C->source), C->linenumber, inner);
   luaD_throw(C->L, LUA_ERRSYNTAX);
 }
 
@@ -118,11 +113,9 @@ static TString *mkstr(CompileCtx *C, const std::string &s) {
   return luaS_newlstr(C->L, s.c_str(), s.size());
 }
 
-static TString *mkstr(CompileCtx *C, const char *s) {
-  return luaS_new(C->L, s);
-}
+static TString *mkstr(CompileCtx *C, const char *s) { return luaS_new(C->L, s); }
 
-static void init_exp (expdesc *e, expkind k, int i) {
+static void init_exp(expdesc *e, expkind k, int i) {
   e->f = e->t = NO_JUMP;
   e->k = k;
   e->u.info = i;
@@ -132,15 +125,14 @@ static void init_exp (expdesc *e, expkind k, int i) {
  * Block management
  *=====================================================================*/
 
-static void ast_enterblock(CompileCtx *C, FuncState *fs,
-                           BlockCnt *bl, lu_byte isloop) {
-  bl->isloop      = isloop;
-  bl->nactvar     = fs->nactvar;
-  bl->firstlabel  = C->dyd->label.n;
-  bl->firstgoto   = C->dyd->gt.n;
-  bl->upval       = 0;
-  bl->insidetbc   = (fs->bl != NULL && fs->bl->insidetbc);
-  bl->previous    = fs->bl;
+static void ast_enterblock(CompileCtx *C, FuncState *fs, BlockCnt *bl, lu_byte isloop) {
+  bl->isloop = isloop;
+  bl->nactvar = fs->nactvar;
+  bl->firstlabel = C->dyd->label.n;
+  bl->firstgoto = C->dyd->gt.n;
+  bl->upval = 0;
+  bl->insidetbc = (fs->bl != NULL && fs->bl->insidetbc);
+  bl->previous = fs->bl;
   fs->bl = bl;
   lua_assert(fs->freereg == luaY_nvarstack(fs));
 }
@@ -184,13 +176,12 @@ static void ast_leaveblock(CompileCtx *C, FuncState *fs) {
   if (bl->isloop == 2) {
     Labellist *ll = &C->dyd->label;
     int n = ll->n;
-    luaM_growvector(C->L, ll->arr, n, ll->size,
-                    Labeldesc, SHRT_MAX, "labels/gotos");
-    ll->arr[n].name    = C->brkn;
-    ll->arr[n].line    = C->linenumber;
+    luaM_growvector(C->L, ll->arr, n, ll->size, Labeldesc, SHRT_MAX, "labels/gotos");
+    ll->arr[n].name = C->brkn;
+    ll->arr[n].line = C->linenumber;
     ll->arr[n].nactvar = fs->nactvar;
-    ll->arr[n].close   = 0;
-    ll->arr[n].pc      = luaK_getlabel(fs);
+    ll->arr[n].close = 0;
+    ll->arr[n].pc = luaK_getlabel(fs);
     ll->n = n + 1;
   }
 
@@ -237,12 +228,11 @@ static Vardesc *ast_getvar(CompileCtx *C, FuncState *fs, int vidx) {
   return &C->dyd->actvar.arr[fs->firstlocal + vidx];
 }
 
-static short ast_registerlocalvar(CompileCtx *C, FuncState *fs,
-                                  TString *varname) {
+static short ast_registerlocalvar(CompileCtx *C, FuncState *fs, TString *varname) {
   Proto *f = fs->f;
   int oldsize = f->sizelocvars;
-  luaM_growvector(C->L, f->locvars, fs->ndebugvars, f->sizelocvars,
-                  LocVar, SHRT_MAX, "local variables");
+  luaM_growvector(C->L, f->locvars, fs->ndebugvars, f->sizelocvars, LocVar, SHRT_MAX,
+                  "local variables");
   while (oldsize < f->sizelocvars)
     f->locvars[oldsize++].varname = NULL;
   f->locvars[fs->ndebugvars].varname = varname;
@@ -255,8 +245,7 @@ static int ast_new_var(CompileCtx *C, TString *name, lu_byte kind) {
   lua_State *L = C->L;
   FuncState *fs = C->fs;
   Dyndata *dyd = C->dyd;
-  luaM_growvector(L, dyd->actvar.arr, dyd->actvar.n + 1,
-                  dyd->actvar.size, Vardesc, SHRT_MAX,
+  luaM_growvector(L, dyd->actvar.arr, dyd->actvar.n + 1, dyd->actvar.size, Vardesc, SHRT_MAX,
                   "variable declarations");
   Vardesc *var = &dyd->actvar.arr[dyd->actvar.n++];
   var->vd.kind = kind;
@@ -264,9 +253,7 @@ static int ast_new_var(CompileCtx *C, TString *name, lu_byte kind) {
   return dyd->actvar.n - 1 - fs->firstlocal;
 }
 
-static int ast_new_localvar(CompileCtx *C, TString *name) {
-  return ast_new_var(C, name, VDKREG);
-}
+static int ast_new_localvar(CompileCtx *C, TString *name) { return ast_new_var(C, name, VDKREG); }
 
 static void ast_adjustlocalvars(CompileCtx *C, int nvars) {
   FuncState *fs = C->fs;
@@ -284,13 +271,13 @@ static void ast_adjustlocalvars(CompileCtx *C, int nvars) {
  * Variable lookup
  *---------------------------------------------------------------------*/
 
-static int ast_searchvar(CompileCtx *C, FuncState *fs,
-                         TString *n, expdesc *var) {
+static int ast_searchvar(CompileCtx *C, FuncState *fs, TString *n, expdesc *var) {
   for (int i = (int)fs->nactvar - 1; i >= 0; i--) {
     Vardesc *vd = ast_getvar(C, fs, i);
     if (varglobal(vd)) {
       if (vd->vd.name == NULL) {
-        if (var->u.info < 0) var->u.info = fs->firstlocal + i;
+        if (var->u.info < 0)
+          var->u.info = fs->firstlocal + i;
       } else {
         if (n == vd->vd.name) {
           init_exp(var, VGLOBAL, fs->firstlocal + i);
@@ -318,7 +305,8 @@ static int ast_searchvar(CompileCtx *C, FuncState *fs,
 static int ast_searchupvalue(FuncState *fs, TString *name) {
   Upvaldesc *up = fs->f->upvalues;
   for (int i = 0; i < fs->nups; i++) {
-    if (up[i].name == name) return i;
+    if (up[i].name == name)
+      return i;
   }
   return -1;
 }
@@ -331,13 +319,11 @@ static void ast_markupval(FuncState *fs, int level) {
   fs->needclose = 1;
 }
 
-static int ast_newupvalue(CompileCtx *C, FuncState *fs,
-                          TString *name, expdesc *v) {
+static int ast_newupvalue(CompileCtx *C, FuncState *fs, TString *name, expdesc *v) {
   Proto *f = fs->f;
   int oldsize = f->sizeupvalues;
   luaY_checklimit(fs, fs->nups + 1, 255, "upvalues");
-  luaM_growvector(C->L, f->upvalues, fs->nups, f->sizeupvalues,
-                  Upvaldesc, 255, "upvalues");
+  luaM_growvector(C->L, f->upvalues, fs->nups, f->sizeupvalues, Upvaldesc, 255, "upvalues");
   while (oldsize < f->sizeupvalues)
     f->upvalues[oldsize++].name = NULL;
   Upvaldesc *up = &f->upvalues[fs->nups];
@@ -356,8 +342,7 @@ static int ast_newupvalue(CompileCtx *C, FuncState *fs,
   return fs->nups++;
 }
 
-static void ast_singlevaraux(CompileCtx *C, FuncState *fs,
-                             TString *n, expdesc *var, int base) {
+static void ast_singlevaraux(CompileCtx *C, FuncState *fs, TString *n, expdesc *var, int base) {
   int v = ast_searchvar(C, fs, n, var);
   if (v >= 0) {
     if (!base) {
@@ -386,8 +371,7 @@ static void ast_buildglobal(CompileCtx *C, TString *varname, expdesc *var) {
   init_exp(var, VGLOBAL, -1);
   ast_singlevaraux(C, fs, C->envn, var, 1);
   if (var->k == VGLOBAL)
-    compile_errorf(C, "%s is global when accessing variable '%s'",
-                   LUA_ENV, getstr(varname));
+    compile_errorf(C, "%s is global when accessing variable '%s'", LUA_ENV, getstr(varname));
   luaK_exp2anyregup(fs, var);
   key.f = key.t = NO_JUMP;
   key.k = VKSTR;
@@ -409,8 +393,7 @@ static void ast_buildvar(CompileCtx *C, TString *varname, expdesc *var) {
   }
 }
 
-static void ast_singlevar(CompileCtx *C, const std::string &name,
-                          expdesc *var) {
+static void ast_singlevar(CompileCtx *C, const std::string &name, expdesc *var) {
   TString *ts = mkstr(C, name);
   ast_buildvar(C, ts, var);
 }
@@ -425,25 +408,30 @@ static void ast_check_readonly(CompileCtx *C, expdesc *e) {
   case VCONST:
     varname = C->dyd->actvar.arr[e->u.info].vd.name;
     break;
-  case VLOCAL: case VVARGVAR: {
+  case VLOCAL:
+  case VVARGVAR: {
     Vardesc *vd = ast_getvar(C, fs, e->u.var.vidx);
-    if (vd->vd.kind != VDKREG) varname = vd->vd.name;
+    if (vd->vd.kind != VDKREG)
+      varname = vd->vd.name;
     break;
   }
   case VUPVAL: {
     Upvaldesc *up = &fs->f->upvalues[e->u.info];
-    if (up->kind != VDKREG) varname = up->name;
+    if (up->kind != VDKREG)
+      varname = up->name;
     break;
   }
-  case VINDEXUP: case VINDEXSTR: case VINDEXED:
+  case VINDEXUP:
+  case VINDEXSTR:
+  case VINDEXED:
     if (e->u.ind.ro)
       varname = tsvalue(&fs->f->k[e->u.ind.keystr]);
     break;
-  default: break;
+  default:
+    break;
   }
   if (varname)
-    compile_errorf(C, "attempt to assign to const variable '%s'",
-                   getstr(varname));
+    compile_errorf(C, "attempt to assign to const variable '%s'", getstr(varname));
 }
 
 /*=======================================================================
@@ -457,8 +445,7 @@ static Proto *ast_addprototype(CompileCtx *C) {
   Proto *f = fs->f;
   if (fs->np >= f->sizep) {
     int oldsize = f->sizep;
-    luaM_growvector(L, f->p, fs->np, f->sizep,
-                    Proto *, MAXARG_Bx, "functions");
+    luaM_growvector(L, f->p, fs->np, f->sizep, Proto *, MAXARG_Bx, "functions");
     while (oldsize < f->sizep)
       f->p[oldsize++] = NULL;
   }
@@ -505,12 +492,11 @@ static void ast_close_func(CompileCtx *C) {
   ast_leaveblock(C, fs);
   lua_assert(fs->bl == NULL);
   luaK_finish(fs);
-  luaM_shrinkvector(L, f->code,   f->sizecode,   fs->pc, Instruction);
+  luaM_shrinkvector(L, f->code, f->sizecode, fs->pc, Instruction);
   luaM_shrinkvector(L, f->lineinfo, f->sizelineinfo, fs->pc, ls_byte);
-  luaM_shrinkvector(L, f->abslineinfo, f->sizeabslineinfo,
-                    fs->nabslineinfo, AbsLineInfo);
-  luaM_shrinkvector(L, f->k,      f->sizek,      fs->nk, TValue);
-  luaM_shrinkvector(L, f->p,      f->sizep,      fs->np, Proto *);
+  luaM_shrinkvector(L, f->abslineinfo, f->sizeabslineinfo, fs->nabslineinfo, AbsLineInfo);
+  luaM_shrinkvector(L, f->k, f->sizek, fs->nk, TValue);
+  luaM_shrinkvector(L, f->p, f->sizep, fs->np, Proto *);
   luaM_shrinkvector(L, f->locvars, f->sizelocvars, fs->ndebugvars, LocVar);
   luaM_shrinkvector(L, f->upvalues, f->sizeupvalues, fs->nups, Upvaldesc);
   C->fs = fs->prev;
@@ -519,7 +505,7 @@ static void ast_close_func(CompileCtx *C) {
 }
 
 static void ast_codeclosure(CompileCtx *C, expdesc *v) {
-  FuncState *fs = C->fs;  /* ast_close_func already restored C->fs to the enclosing function */
+  FuncState *fs = C->fs; /* ast_close_func already restored C->fs to the enclosing function */
   init_exp(v, VRELOC, luaK_codeABx(fs, OP_CLOSURE, 0, fs->np - 1));
   luaK_exp2nextreg(fs, v);
 }
@@ -530,14 +516,14 @@ static void ast_codeclosure(CompileCtx *C, expdesc *v) {
 
 #define hasmultret(k) ((k) == VCALL || (k) == VVARARG)
 
-static void ast_adjust_assign(CompileCtx *C, int nvars, int nexps,
-                              expdesc *e) {
+static void ast_adjust_assign(CompileCtx *C, int nvars, int nexps, expdesc *e) {
   FuncState *fs = C->fs;
   int needed = nvars - nexps;
   luaK_checkstack(fs, needed);
   if (hasmultret(e->k)) {
     int extra = needed + 1;
-    if (extra < 0) extra = 0;
+    if (extra < 0)
+      extra = 0;
     luaK_setreturns(fs, e, extra);
   } else {
     if (e->k != VVOID)
@@ -558,8 +544,7 @@ static void ast_adjust_assign(CompileCtx *C, int nvars, int nexps,
  * enclosing LambdaNode / FunctionDeclNode.
  *=====================================================================*/
 static void compile_params(CompileCtx *C, FuncState *new_fs,
-                           const std::vector<ParameterDeclNode *> &params,
-                           bool isVariadic) {
+                           const std::vector<ParameterDeclNode *> &params, bool isVariadic) {
   /*------------------------------------------------------------
    * Implicit 'self' parameter — ALWAYS occupies Slot 0.
    *
@@ -574,7 +559,7 @@ static void compile_params(CompileCtx *C, FuncState *new_fs,
    *-----------------------------------------------------------*/
   TString *selfname = mkstr(C, "self");
   ast_new_localvar(C, selfname);
-  ast_adjustlocalvars(C, 1);  /* self is now at ridx 0 */
+  ast_adjustlocalvars(C, 1); /* self is now at ridx 0 */
 
   /* User-declared parameters — start from Slot 1 */
   int nparams = 0;
@@ -628,32 +613,27 @@ static void resolve_continues(CompileCtx *C, FuncState *fs, int target) {
 /*-----------------------------------------------------------------------
  * Literals
  *---------------------------------------------------------------------*/
-static void compile_literal_int(CompileCtx *C, LiteralIntNode *n,
-                                expdesc *e) {
+static void compile_literal_int(CompileCtx *C, LiteralIntNode *n, expdesc *e) {
   init_exp(e, VKINT, 0);
   e->u.ival = (lua_Integer)n->value;
 }
 
-static void compile_literal_float(CompileCtx *C, LiteralFloatNode *n,
-                                  expdesc *e) {
+static void compile_literal_float(CompileCtx *C, LiteralFloatNode *n, expdesc *e) {
   init_exp(e, VKFLT, 0);
   e->u.nval = (lua_Number)n->value;
 }
 
-static void compile_literal_string(CompileCtx *C, LiteralStringNode *n,
-                                   expdesc *e) {
+static void compile_literal_string(CompileCtx *C, LiteralStringNode *n, expdesc *e) {
   e->f = e->t = NO_JUMP;
   e->k = VKSTR;
   e->u.strval = mkstr(C, n->value);
 }
 
-static void compile_literal_bool(CompileCtx *C, LiteralBoolNode *n,
-                                 expdesc *e) {
+static void compile_literal_bool(CompileCtx *C, LiteralBoolNode *n, expdesc *e) {
   init_exp(e, n->value ? VTRUE : VFALSE, 0);
 }
 
-static void compile_literal_null(CompileCtx *C, LiteralNullNode *n,
-                                 expdesc *e) {
+static void compile_literal_null(CompileCtx *C, LiteralNullNode *n, expdesc *e) {
   (void)n;
   init_exp(e, VNIL, 0);
 }
@@ -661,8 +641,7 @@ static void compile_literal_null(CompileCtx *C, LiteralNullNode *n,
 /*-----------------------------------------------------------------------
  * Identifier
  *---------------------------------------------------------------------*/
-static void compile_identifier(CompileCtx *C, IdentifierNode *n,
-                               expdesc *e) {
+static void compile_identifier(CompileCtx *C, IdentifierNode *n, expdesc *e) {
   ast_singlevar(C, n->name, e);
 }
 
@@ -675,11 +654,21 @@ static void compile_unary(CompileCtx *C, UnaryOpNode *n, expdesc *e) {
 
   UnOpr uop;
   switch (n->op) {
-  case OperatorKind::NEGATE:  uop = OPR_MINUS; break;
-  case OperatorKind::NOT:     uop = OPR_NOT;   break;
-  case OperatorKind::BW_NOT:  uop = OPR_BNOT;  break;
-  case OperatorKind::LENGTH:  uop = OPR_LEN;   break;
-  default: compile_error(C, "unknown unary operator"); return;
+  case OperatorKind::NEGATE:
+    uop = OPR_MINUS;
+    break;
+  case OperatorKind::NOT:
+    uop = OPR_NOT;
+    break;
+  case OperatorKind::BW_NOT:
+    uop = OPR_BNOT;
+    break;
+  case OperatorKind::LENGTH:
+    uop = OPR_LEN;
+    break;
+  default:
+    compile_error(C, "unknown unary operator");
+    return;
   }
   luaK_prefix(C->fs, uop, e, C->linenumber);
 }
@@ -689,27 +678,48 @@ static void compile_unary(CompileCtx *C, UnaryOpNode *n, expdesc *e) {
  *---------------------------------------------------------------------*/
 static BinOpr ast_binopr(OperatorKind op) {
   switch (op) {
-  case OperatorKind::ADD:        return OPR_ADD;
-  case OperatorKind::SUB:        return OPR_SUB;
-  case OperatorKind::MUL:        return OPR_MUL;
-  case OperatorKind::MOD:        return OPR_MOD;
-  case OperatorKind::DIV:        return OPR_DIV;
-  case OperatorKind::IDIV:       return OPR_IDIV;
-  case OperatorKind::BW_AND:     return OPR_BAND;
-  case OperatorKind::BW_OR:      return OPR_BOR;
-  case OperatorKind::BW_XOR:     return OPR_BXOR;
-  case OperatorKind::BW_LSHIFT:  return OPR_SHL;
-  case OperatorKind::BW_RSHIFT:  return OPR_SHR;
-  case OperatorKind::CONCAT:     return OPR_CONCAT;
-  case OperatorKind::EQ:         return OPR_EQ;
-  case OperatorKind::NE:         return OPR_NE;
-  case OperatorKind::LT:         return OPR_LT;
-  case OperatorKind::LE:         return OPR_LE;
-  case OperatorKind::GT:         return OPR_GT;
-  case OperatorKind::GE:         return OPR_GE;
-  case OperatorKind::AND:        return OPR_AND;
-  case OperatorKind::OR:         return OPR_OR;
-  default: return OPR_NOBINOPR;
+  case OperatorKind::ADD:
+    return OPR_ADD;
+  case OperatorKind::SUB:
+    return OPR_SUB;
+  case OperatorKind::MUL:
+    return OPR_MUL;
+  case OperatorKind::MOD:
+    return OPR_MOD;
+  case OperatorKind::DIV:
+    return OPR_DIV;
+  case OperatorKind::IDIV:
+    return OPR_IDIV;
+  case OperatorKind::BW_AND:
+    return OPR_BAND;
+  case OperatorKind::BW_OR:
+    return OPR_BOR;
+  case OperatorKind::BW_XOR:
+    return OPR_BXOR;
+  case OperatorKind::BW_LSHIFT:
+    return OPR_SHL;
+  case OperatorKind::BW_RSHIFT:
+    return OPR_SHR;
+  case OperatorKind::CONCAT:
+    return OPR_CONCAT;
+  case OperatorKind::EQ:
+    return OPR_EQ;
+  case OperatorKind::NE:
+    return OPR_NE;
+  case OperatorKind::LT:
+    return OPR_LT;
+  case OperatorKind::LE:
+    return OPR_LE;
+  case OperatorKind::GT:
+    return OPR_GT;
+  case OperatorKind::GE:
+    return OPR_GE;
+  case OperatorKind::AND:
+    return OPR_AND;
+  case OperatorKind::OR:
+    return OPR_OR;
+  default:
+    return OPR_NOBINOPR;
   }
 }
 
@@ -746,8 +756,7 @@ static void compile_binary(CompileCtx *C, BinaryOpNode *n, expdesc *e) {
  * ALL functions receive 'self' as the first parameter.
  * For non-method calls, self = nil.
  *---------------------------------------------------------------------*/
-static void compile_funcall(CompileCtx *C, FunctionCallNode *n,
-                            expdesc *e, int nresults) {
+static void compile_funcall(CompileCtx *C, FunctionCallNode *n, expdesc *e, int nresults) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
@@ -829,8 +838,7 @@ static void compile_funcall(CompileCtx *C, FunctionCallNode *n,
   lua_assert(e->k == VNONRELOC);
   int base = e->u.info;
   /* nparams already includes the Receiver (counted as an argument) */
-  init_exp(e, VCALL,
-           luaK_codeABC(fs, OP_CALL, base, nparams + 1, nresults + 1));
+  init_exp(e, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, nresults + 1));
   luaK_fixline(fs, C->linenumber);
   fs->freereg = cast_byte(base + 1);
 }
@@ -838,8 +846,7 @@ static void compile_funcall(CompileCtx *C, FunctionCallNode *n,
 /*-----------------------------------------------------------------------
  * Member access:  obj.field
  *---------------------------------------------------------------------*/
-static void compile_member_access(CompileCtx *C, MemberAccessNode *n,
-                                  expdesc *e) {
+static void compile_member_access(CompileCtx *C, MemberAccessNode *n, expdesc *e) {
   setline(C, n->location);
   compile_expression(C, n->objectExpr, e);
   luaK_exp2anyregup(C->fs, e);
@@ -853,8 +860,7 @@ static void compile_member_access(CompileCtx *C, MemberAccessNode *n,
 /*-----------------------------------------------------------------------
  * Member lookup:  obj:method  → OP_SELF
  *---------------------------------------------------------------------*/
-static void compile_member_lookup(CompileCtx *C, MemberLookupNode *n,
-                                  expdesc *e) {
+static void compile_member_lookup(CompileCtx *C, MemberLookupNode *n, expdesc *e) {
   setline(C, n->location);
   compile_expression(C, n->objectExpr, e);
   luaK_exp2anyregup(C->fs, e);
@@ -868,8 +874,7 @@ static void compile_member_lookup(CompileCtx *C, MemberLookupNode *n,
 /*-----------------------------------------------------------------------
  * Index access:  arr[idx]
  *---------------------------------------------------------------------*/
-static void compile_index_access(CompileCtx *C, IndexAccessNode *n,
-                                 expdesc *e) {
+static void compile_index_access(CompileCtx *C, IndexAccessNode *n, expdesc *e) {
   setline(C, n->location);
   compile_expression(C, n->arrayExpr, e);
   luaK_exp2anyregup(C->fs, e);
@@ -912,13 +917,12 @@ static void compile_lambda(CompileCtx *C, LambdaNode *n, expdesc *e) {
  * List literal  → array constructor (using OP_NEWLIST)
  * NOTE: VM uses 0-based table indexing — handled in VM/luaK_setlist
  *---------------------------------------------------------------------*/
-static void compile_list_literal(CompileCtx *C, LiteralListNode *n,
-                                 expdesc *e) {
+static void compile_list_literal(CompileCtx *C, LiteralListNode *n, expdesc *e) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
   int pc = luaK_codevABCk(fs, OP_NEWLIST, 0, 0, 0, 0);
-  luaK_code(fs, 0);  /* extra arg */
+  luaK_code(fs, 0); /* extra arg */
 
   init_exp(e, VNONRELOC, fs->freereg);
   luaK_reserveregs(fs, 1);
@@ -943,8 +947,7 @@ static void compile_list_literal(CompileCtx *C, LiteralListNode *n,
 /*-----------------------------------------------------------------------
  * Map literal  → table constructor (hash part)
  *---------------------------------------------------------------------*/
-static void compile_map_literal(CompileCtx *C, LiteralMapNode *n,
-                                expdesc *e) {
+static void compile_map_literal(CompileCtx *C, LiteralMapNode *n, expdesc *e) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
@@ -961,13 +964,13 @@ static void compile_map_literal(CompileCtx *C, LiteralMapNode *n,
 
     // 检查键的类型，将整数和浮点数键转换为字符串
     if (entry->key->nodeType == NodeType::LITERAL_INT) {
-      LiteralIntNode *intKey = static_cast<LiteralIntNode*>(entry->key);
+      LiteralIntNode *intKey = static_cast<LiteralIntNode *>(entry->key);
       std::string keyStr = std::to_string(intKey->value);
       key.f = key.t = NO_JUMP;
       key.k = VKSTR;
       key.u.strval = mkstr(C, keyStr);
     } else if (entry->key->nodeType == NodeType::LITERAL_FLOAT) {
-      LiteralFloatNode *floatKey = static_cast<LiteralFloatNode*>(entry->key);
+      LiteralFloatNode *floatKey = static_cast<LiteralFloatNode *>(entry->key);
       std::string keyStr = std::to_string(floatKey->value);
       key.f = key.t = NO_JUMP;
       key.k = VKSTR;
@@ -998,8 +1001,7 @@ static void compile_map_literal(CompileCtx *C, LiteralMapNode *n,
  *   R(base+1) = nil (Receiver — consistent with non-method calls)
  *   R(base+2) = arg1 ...
  *---------------------------------------------------------------------*/
-static void compile_new_expr(CompileCtx *C, NewExpressionNode *n,
-                             expdesc *e) {
+static void compile_new_expr(CompileCtx *C, NewExpressionNode *n, expdesc *e) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
@@ -1049,8 +1051,7 @@ static void compile_new_expr(CompileCtx *C, NewExpressionNode *n,
 
   /* nparams includes the nil Receiver */
   int base = e->u.info;
-  init_exp(e, VCALL,
-           luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2));
+  init_exp(e, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2));
   luaK_fixline(fs, C->linenumber);
   fs->freereg = cast_byte(base + 1);
 }
@@ -1058,8 +1059,7 @@ static void compile_new_expr(CompileCtx *C, NewExpressionNode *n,
 /*-----------------------------------------------------------------------
  * This expression  → identifier "self"
  *---------------------------------------------------------------------*/
-static void compile_this(CompileCtx *C, ThisExpressionNode *n,
-                         expdesc *e) {
+static void compile_this(CompileCtx *C, ThisExpressionNode *n, expdesc *e) {
   setline(C, n->location);
   ast_singlevar(C, "self", e);
 }
@@ -1072,15 +1072,13 @@ static void compile_varargs(CompileCtx *C, VarArgsNode *n, expdesc *e) {
   setline(C, n->location);
   if (!isvararg(fs->f))
     compile_error(C, "cannot use '...' outside a vararg function");
-  init_exp(e, VVARARG,
-           luaK_codeABC(fs, OP_VARARG, 0, fs->f->numparams, 1));
+  init_exp(e, VVARARG, luaK_codeABC(fs, OP_VARARG, 0, fs->f->numparams, 1));
 }
 
 /*-----------------------------------------------------------------------
  * Main expression dispatch
  *---------------------------------------------------------------------*/
-static void compile_expression(CompileCtx *C, Expression *expr,
-                               expdesc *e) {
+static void compile_expression(CompileCtx *C, Expression *expr, expdesc *e) {
   if (!expr) {
     init_exp(e, VVOID, 0);
     return;
@@ -1089,62 +1087,61 @@ static void compile_expression(CompileCtx *C, Expression *expr,
 
   switch (expr->nodeType) {
   case NodeType::LITERAL_INT:
-    compile_literal_int(C, static_cast<LiteralIntNode*>(expr), e);
+    compile_literal_int(C, static_cast<LiteralIntNode *>(expr), e);
     break;
   case NodeType::LITERAL_FLOAT:
-    compile_literal_float(C, static_cast<LiteralFloatNode*>(expr), e);
+    compile_literal_float(C, static_cast<LiteralFloatNode *>(expr), e);
     break;
   case NodeType::LITERAL_STRING:
-    compile_literal_string(C, static_cast<LiteralStringNode*>(expr), e);
+    compile_literal_string(C, static_cast<LiteralStringNode *>(expr), e);
     break;
   case NodeType::LITERAL_BOOL:
-    compile_literal_bool(C, static_cast<LiteralBoolNode*>(expr), e);
+    compile_literal_bool(C, static_cast<LiteralBoolNode *>(expr), e);
     break;
   case NodeType::LITERAL_NULL:
-    compile_literal_null(C, static_cast<LiteralNullNode*>(expr), e);
+    compile_literal_null(C, static_cast<LiteralNullNode *>(expr), e);
     break;
   case NodeType::IDENTIFIER:
-    compile_identifier(C, static_cast<IdentifierNode*>(expr), e);
+    compile_identifier(C, static_cast<IdentifierNode *>(expr), e);
     break;
   case NodeType::UNARY_OP:
-    compile_unary(C, static_cast<UnaryOpNode*>(expr), e);
+    compile_unary(C, static_cast<UnaryOpNode *>(expr), e);
     break;
   case NodeType::BINARY_OP:
-    compile_binary(C, static_cast<BinaryOpNode*>(expr), e);
+    compile_binary(C, static_cast<BinaryOpNode *>(expr), e);
     break;
   case NodeType::FUNCTION_CALL:
-    compile_funcall(C, static_cast<FunctionCallNode*>(expr), e, 1);
+    compile_funcall(C, static_cast<FunctionCallNode *>(expr), e, 1);
     break;
   case NodeType::MEMBER_ACCESS:
-    compile_member_access(C, static_cast<MemberAccessNode*>(expr), e);
+    compile_member_access(C, static_cast<MemberAccessNode *>(expr), e);
     break;
   case NodeType::MEMBER_LOOKUP:
-    compile_member_lookup(C, static_cast<MemberLookupNode*>(expr), e);
+    compile_member_lookup(C, static_cast<MemberLookupNode *>(expr), e);
     break;
   case NodeType::INDEX_ACCESS:
-    compile_index_access(C, static_cast<IndexAccessNode*>(expr), e);
+    compile_index_access(C, static_cast<IndexAccessNode *>(expr), e);
     break;
   case NodeType::LAMBDA:
-    compile_lambda(C, static_cast<LambdaNode*>(expr), e);
+    compile_lambda(C, static_cast<LambdaNode *>(expr), e);
     break;
   case NodeType::LITERAL_LIST:
-    compile_list_literal(C, static_cast<LiteralListNode*>(expr), e);
+    compile_list_literal(C, static_cast<LiteralListNode *>(expr), e);
     break;
   case NodeType::LITERAL_MAP:
-    compile_map_literal(C, static_cast<LiteralMapNode*>(expr), e);
+    compile_map_literal(C, static_cast<LiteralMapNode *>(expr), e);
     break;
   case NodeType::NEW_EXPRESSION:
-    compile_new_expr(C, static_cast<NewExpressionNode*>(expr), e);
+    compile_new_expr(C, static_cast<NewExpressionNode *>(expr), e);
     break;
   case NodeType::THIS_EXPRESSION:
-    compile_this(C, static_cast<ThisExpressionNode*>(expr), e);
+    compile_this(C, static_cast<ThisExpressionNode *>(expr), e);
     break;
   case NodeType::VAR_ARGS:
-    compile_varargs(C, static_cast<VarArgsNode*>(expr), e);
+    compile_varargs(C, static_cast<VarArgsNode *>(expr), e);
     break;
   default:
-    compile_errorf(C, "unsupported expression node type %d",
-                   (int)expr->nodeType);
+    compile_errorf(C, "unsupported expression node type %d", (int)expr->nodeType);
     break;
   }
 }
@@ -1152,9 +1149,7 @@ static void compile_expression(CompileCtx *C, Expression *expr,
 /*-----------------------------------------------------------------------
  * Expression list
  *---------------------------------------------------------------------*/
-static int compile_exprlist_n(CompileCtx *C,
-                              const std::vector<Expression*> &list,
-                              expdesc *last) {
+static int compile_exprlist_n(CompileCtx *C, const std::vector<Expression *> &list, expdesc *last) {
   int n = (int)list.size();
   if (n == 0) {
     init_exp(last, VVOID, 0);
@@ -1169,9 +1164,7 @@ static int compile_exprlist_n(CompileCtx *C,
   return n;
 }
 
-static void compile_exprlist(CompileCtx *C,
-                             const std::vector<Expression*> &list,
-                             expdesc *last) {
+static void compile_exprlist(CompileCtx *C, const std::vector<Expression *> &list, expdesc *last) {
   compile_exprlist_n(C, list, last);
 }
 
@@ -1183,14 +1176,14 @@ static void compile_exprlist(CompileCtx *C,
  * Block
  *---------------------------------------------------------------------*/
 static void compile_block(CompileCtx *C, BlockNode *block) {
-  if (!block) return;
+  if (!block)
+    return;
   FuncState *fs = C->fs;
   BlockCnt bl;
   ast_enterblock(C, fs, &bl, 0);
   for (auto *stmt : block->statements) {
     compile_statement(C, stmt);
-    lua_assert(fs->f->maxstacksize >= fs->freereg &&
-               fs->freereg >= luaY_nvarstack(fs));
+    lua_assert(fs->f->maxstacksize >= fs->freereg && fs->freereg >= luaY_nvarstack(fs));
     fs->freereg = luaY_nvarstack(fs);
   }
   ast_leaveblock(C, fs);
@@ -1205,8 +1198,7 @@ static void compile_expr_stmt(CompileCtx *C, ExpressionStatementNode *n) {
 
   if (n->expression->nodeType == NodeType::FUNCTION_CALL) {
     expdesc e;
-    compile_funcall(C, static_cast<FunctionCallNode *>(n->expression),
-                    &e, 0);
+    compile_funcall(C, static_cast<FunctionCallNode *>(n->expression), &e, 0);
     Instruction *inst = &fs->f->code[e.u.info];
     SETARG_C(*inst, 1);
   } else {
@@ -1269,8 +1261,7 @@ static void compile_var_decl(CompileCtx *C, VariableDeclNode *n) {
  *   Expression *initializer;
  *   bool isExported;
  *---------------------------------------------------------------------*/
-static void compile_multi_var_decl(CompileCtx *C,
-                                   MutiVariableDeclarationNode *n) {
+static void compile_multi_var_decl(CompileCtx *C, MutiVariableDeclarationNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
@@ -1376,26 +1367,51 @@ static void compile_assignment(CompileCtx *C, AssignmentNode *n) {
  *   ASSIGN_BW_AND, ASSIGN_BW_OR, ASSIGN_BW_XOR,
  *   ASSIGN_BW_LSHIFT, ASSIGN_BW_RSHIFT
  *---------------------------------------------------------------------*/
-static void compile_update_assignment(CompileCtx *C,
-                                      UpdateAssignmentNode *n) {
+static void compile_update_assignment(CompileCtx *C, UpdateAssignmentNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
   OperatorKind binop;
   switch (n->op) {
-  case OperatorKind::ASSIGN_ADD:       binop = OperatorKind::ADD; break;
-  case OperatorKind::ASSIGN_SUB:       binop = OperatorKind::SUB; break;
-  case OperatorKind::ASSIGN_MUL:       binop = OperatorKind::MUL; break;
-  case OperatorKind::ASSIGN_DIV:       binop = OperatorKind::DIV; break;
-  case OperatorKind::ASSIGN_IDIV:      binop = OperatorKind::IDIV; break;
-  case OperatorKind::ASSIGN_MOD:       binop = OperatorKind::MOD; break;
-  case OperatorKind::ASSIGN_CONCAT:    binop = OperatorKind::CONCAT; break;
-  case OperatorKind::ASSIGN_BW_AND:    binop = OperatorKind::BW_AND; break;
-  case OperatorKind::ASSIGN_BW_OR:     binop = OperatorKind::BW_OR; break;
-  case OperatorKind::ASSIGN_BW_XOR:    binop = OperatorKind::BW_XOR; break;
-  case OperatorKind::ASSIGN_BW_LSHIFT: binop = OperatorKind::BW_LSHIFT; break;
-  case OperatorKind::ASSIGN_BW_RSHIFT: binop = OperatorKind::BW_RSHIFT; break;
-  default: compile_error(C, "unknown update assignment operator"); return;
+  case OperatorKind::ASSIGN_ADD:
+    binop = OperatorKind::ADD;
+    break;
+  case OperatorKind::ASSIGN_SUB:
+    binop = OperatorKind::SUB;
+    break;
+  case OperatorKind::ASSIGN_MUL:
+    binop = OperatorKind::MUL;
+    break;
+  case OperatorKind::ASSIGN_DIV:
+    binop = OperatorKind::DIV;
+    break;
+  case OperatorKind::ASSIGN_IDIV:
+    binop = OperatorKind::IDIV;
+    break;
+  case OperatorKind::ASSIGN_MOD:
+    binop = OperatorKind::MOD;
+    break;
+  case OperatorKind::ASSIGN_CONCAT:
+    binop = OperatorKind::CONCAT;
+    break;
+  case OperatorKind::ASSIGN_BW_AND:
+    binop = OperatorKind::BW_AND;
+    break;
+  case OperatorKind::ASSIGN_BW_OR:
+    binop = OperatorKind::BW_OR;
+    break;
+  case OperatorKind::ASSIGN_BW_XOR:
+    binop = OperatorKind::BW_XOR;
+    break;
+  case OperatorKind::ASSIGN_BW_LSHIFT:
+    binop = OperatorKind::BW_LSHIFT;
+    break;
+  case OperatorKind::ASSIGN_BW_RSHIFT:
+    binop = OperatorKind::BW_RSHIFT;
+    break;
+  default:
+    compile_error(C, "unknown update assignment operator");
+    return;
   }
 
   expdesc lhs;
@@ -1432,7 +1448,8 @@ static void compile_if(CompileCtx *C, IfStatementNode *n) {
   {
     expdesc cond;
     compile_expression(C, n->condition, &cond);
-    if (cond.k == VNIL) cond.k = VFALSE;
+    if (cond.k == VNIL)
+      cond.k = VFALSE;
     luaK_goiftrue(fs, &cond);
     int condtrue = cond.f;
 
@@ -1449,7 +1466,8 @@ static void compile_if(CompileCtx *C, IfStatementNode *n) {
     setline(C, clause->location);
     expdesc cond;
     compile_expression(C, clause->condition, &cond);
-    if (cond.k == VNIL) cond.k = VFALSE;
+    if (cond.k == VNIL)
+      cond.k = VFALSE;
     luaK_goiftrue(fs, &cond);
     int condtrue = cond.f;
 
@@ -1480,13 +1498,15 @@ static void compile_while(CompileCtx *C, WhileStatementNode *n) {
 
   expdesc cond;
   compile_expression(C, n->condition, &cond);
-  if (cond.k == VNIL) cond.k = VFALSE;
+  if (cond.k == VNIL)
+    cond.k = VFALSE;
   luaK_goiftrue(fs, &cond);
   int condexit = cond.f;
 
   BlockCnt bl;
   ast_enterblock(C, fs, &bl, 1);
-  if (n->body) compile_block(C, n->body);
+  if (n->body)
+    compile_block(C, n->body);
   /* resolve continue → jump back to condition */
   resolve_continues(C, fs, whileinit);
   luaK_jumpto(fs, whileinit);
@@ -1526,8 +1546,8 @@ static void compile_for_numeric(CompileCtx *C, ForNumericStatementNode *n) {
 
   /* 2 internal hidden variables (matches Lua 5.5 fornum) */
   TString *s_state = mkstr(C, "(for state)");
-  ast_new_localvar(C, s_state);   /* R[base+0]: for index */
-  ast_new_localvar(C, s_state);   /* R[base+1]: for limit */
+  ast_new_localvar(C, s_state); /* R[base+0]: for index */
+  ast_new_localvar(C, s_state); /* R[base+1]: for limit */
 
   /* 1 user loop variable (const — user may not reassign it) */
   TString *vname = mkstr(C, n->varName);
@@ -1562,16 +1582,17 @@ static void compile_for_numeric(CompileCtx *C, ForNumericStatementNode *n) {
 
   /* OP_FORPREP */
   int prep = luaK_codeABx(fs, OP_FORPREP, base, 0);
-  fs->freereg--;  /* FORPREP removes the step from the stack */
+  fs->freereg--; /* FORPREP removes the step from the stack */
 
   /* Body block */
   {
     BlockCnt bodybl;
     ast_enterblock(C, fs, &bodybl, 0);
-    ast_adjustlocalvars(C, 1);   /* activate user loop variable */
+    ast_adjustlocalvars(C, 1); /* activate user loop variable */
     luaK_reserveregs(fs, 1);
 
-    if (n->body) compile_block(C, n->body);
+    if (n->body)
+      compile_block(C, n->body);
 
     ast_leaveblock(C, fs);
   }
@@ -1596,7 +1617,7 @@ static void compile_for_numeric(CompileCtx *C, ForNumericStatementNode *n) {
   }
   luaK_fixline(fs, C->linenumber);
 
-  ast_leaveblock(C, fs);  /* outer block */
+  ast_leaveblock(C, fs); /* outer block */
 }
 
 /*-----------------------------------------------------------------------
@@ -1642,9 +1663,9 @@ static void compile_for_each(CompileCtx *C, ForEachStatementNode *n) {
 
   /* 3 internal hidden variables (matches Lua 5.5 forlist) */
   TString *s_state = mkstr(C, "(for state)");
-  ast_new_localvar(C, s_state);  /* R[base+0]: iterator function */
-  ast_new_localvar(C, s_state);  /* R[base+1]: state */
-  ast_new_localvar(C, s_state);  /* R[base+2]: closing var */
+  ast_new_localvar(C, s_state); /* R[base+0]: iterator function */
+  ast_new_localvar(C, s_state); /* R[base+1]: state */
+  ast_new_localvar(C, s_state); /* R[base+2]: closing var */
 
   /* User-declared loop variables: first is control (RDKCONST), rest normal */
   int nvars = (int)n->loopVariables.size();
@@ -1678,11 +1699,11 @@ static void compile_for_each(CompileCtx *C, ForEachStatementNode *n) {
    * With receiver: needs 3 extra slots (receiver + state + control)
    * So we check for 3 instead of 2
    */
-  luaK_checkstack(fs, 3);  /* extra space to call iterator with receiver */
+  luaK_checkstack(fs, 3); /* extra space to call iterator with receiver */
 
   /* OP_TFORPREP */
   int prep = luaK_codeABx(fs, OP_TFORPREP, base, 0);
-  fs->freereg--;  /* TFORPREP removes one register from the stack */
+  fs->freereg--; /* TFORPREP removes one register from the stack */
 
   /* Body block: activate user loop variables (control + others) */
   {
@@ -1691,7 +1712,8 @@ static void compile_for_each(CompileCtx *C, ForEachStatementNode *n) {
     ast_adjustlocalvars(C, nvars);
     luaK_reserveregs(fs, nvars);
 
-    if (n->body) compile_block(C, n->body);
+    if (n->body)
+      compile_block(C, n->body);
 
     ast_leaveblock(C, fs);
   }
@@ -1765,7 +1787,8 @@ static void compile_break(CompileCtx *C, BreakStatementNode *n) {
 
   BlockCnt *bl;
   for (bl = fs->bl; bl != NULL; bl = bl->previous) {
-    if (bl->isloop) goto found;
+    if (bl->isloop)
+      goto found;
   }
   compile_error(C, "break outside loop");
 found:
@@ -1775,13 +1798,12 @@ found:
 
   Labellist *gl = &C->dyd->gt;
   int idx = gl->n;
-  luaM_growvector(C->L, gl->arr, idx, gl->size,
-                  Labeldesc, SHRT_MAX, "labels/gotos");
-  gl->arr[idx].name    = C->brkn;
-  gl->arr[idx].line    = C->linenumber;
+  luaM_growvector(C->L, gl->arr, idx, gl->size, Labeldesc, SHRT_MAX, "labels/gotos");
+  gl->arr[idx].name = C->brkn;
+  gl->arr[idx].line = C->linenumber;
   gl->arr[idx].nactvar = fs->nactvar;
-  gl->arr[idx].close   = 0;
-  gl->arr[idx].pc      = pc;
+  gl->arr[idx].close = 0;
+  gl->arr[idx].pc = pc;
   gl->n = idx + 1;
 }
 
@@ -1794,7 +1816,8 @@ static void compile_continue(CompileCtx *C, ContinueStatementNode *n) {
 
   BlockCnt *bl;
   for (bl = fs->bl; bl != NULL; bl = bl->previous) {
-    if (bl->isloop) goto found;
+    if (bl->isloop)
+      goto found;
   }
   compile_error(C, "continue outside loop");
 found:
@@ -1803,13 +1826,12 @@ found:
 
   Labellist *gl = &C->dyd->gt;
   int idx = gl->n;
-  luaM_growvector(C->L, gl->arr, idx, gl->size,
-                  Labeldesc, SHRT_MAX, "labels/gotos");
-  gl->arr[idx].name    = C->contn;
-  gl->arr[idx].line    = C->linenumber;
+  luaM_growvector(C->L, gl->arr, idx, gl->size, Labeldesc, SHRT_MAX, "labels/gotos");
+  gl->arr[idx].name = C->contn;
+  gl->arr[idx].line = C->linenumber;
   gl->arr[idx].nactvar = fs->nactvar;
-  gl->arr[idx].close   = 0;
-  gl->arr[idx].pc      = pc;
+  gl->arr[idx].close = 0;
+  gl->arr[idx].pc = pc;
   gl->n = idx + 1;
 }
 
@@ -1822,7 +1844,7 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
 
   TString *fname = mkstr(C, n->name);
   bool isGlobal = n->isGlobalDecl;
-  bool isConst  = n->isConst;
+  bool isConst = n->isConst;
 
   if (isGlobal) {
     lu_byte kind = isConst ? GDKCONST : GDKREG;
@@ -1842,7 +1864,8 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
 
       compile_params(C, &new_fs, n->params, n->isVariadic);
 
-      if (n->body) compile_block(C, n->body);
+      if (n->body)
+        compile_block(C, n->body);
 
       new_fs.f->lastlinedefined = C->linenumber;
       ast_close_func(C);
@@ -1857,7 +1880,7 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
       ast_new_var(C, fname, RDKCONST);
     else
       ast_new_localvar(C, fname);
-    ast_adjustlocalvars(C, 1);  /* enter scope before compiling body */
+    ast_adjustlocalvars(C, 1); /* enter scope before compiling body */
 
     expdesc b;
     {
@@ -1869,7 +1892,8 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
 
       compile_params(C, &new_fs, n->params, n->isVariadic);
 
-      if (n->body) compile_block(C, n->body);
+      if (n->body)
+        compile_block(C, n->body);
 
       new_fs.f->lastlinedefined = C->linenumber;
       ast_close_func(C);
@@ -1925,13 +1949,14 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
 
   /* Compile members */
   for (auto *member : n->members) {
-    if (!member->memberDeclaration) continue;
+    if (!member->memberDeclaration)
+      continue;
 
     bool isStatic = member->isStatic;
     AstNode *decl = member->memberDeclaration;
 
     if (decl->nodeType == NodeType::FUNCTION_DECL) {
-      FunctionDeclNode *fdecl = static_cast<FunctionDeclNode*>(decl);
+      FunctionDeclNode *fdecl = static_cast<FunctionDeclNode *>(decl);
 
       expdesc cls;
       ast_singlevar(C, n->name, &cls);
@@ -1957,7 +1982,8 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
         /* Method parameters — use fdecl->isVariadic */
         compile_params(C, &new_fs, fdecl->params, fdecl->isVariadic);
 
-        if (fdecl->body) compile_block(C, fdecl->body);
+        if (fdecl->body)
+          compile_block(C, fdecl->body);
 
         new_fs.f->lastlinedefined = C->linenumber;
         ast_close_func(C);
@@ -1966,7 +1992,7 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
       luaK_storevar(fs, &cls, &b);
 
     } else if (decl->nodeType == NodeType::VARIABLE_DECL) {
-      VariableDeclNode *vdecl = static_cast<VariableDeclNode*>(decl);
+      VariableDeclNode *vdecl = static_cast<VariableDeclNode *>(decl);
       if (vdecl->initializer) {
         expdesc cls;
         ast_singlevar(C, n->name, &cls);
@@ -2015,8 +2041,7 @@ static void compile_import_namespace(CompileCtx *C, ImportNamespaceNode *n) {
 
   /* nparams = 2 (Receiver + modulePath), B = 3 */
   int base = req.u.info;
-  init_exp(&req, VCALL,
-           luaK_codeABC(fs, OP_CALL, base, 3, 2));
+  init_exp(&req, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
   luaK_fixline(fs, C->linenumber);
   fs->freereg = cast_byte(base + 1);
 
@@ -2048,8 +2073,7 @@ static void compile_import_named(CompileCtx *C, ImportNamedNode *n) {
 
   /* nparams = 2 (Receiver + modulePath), B = 3 */
   int base = req.u.info;
-  init_exp(&req, VCALL,
-           luaK_codeABC(fs, OP_CALL, base, 3, 2));
+  init_exp(&req, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
   luaK_fixline(fs, C->linenumber);
   fs->freereg = cast_byte(base + 1);
   ast_adjustlocalvars(C, 1);
@@ -2096,7 +2120,8 @@ static void compile_defer(CompileCtx *C, DeferStatementNode *n) {
     std::vector<ParameterDeclNode *> empty_params;
     compile_params(C, &new_fs, empty_params, false);
 
-    if (n->body) compile_block(C, n->body);
+    if (n->body)
+      compile_block(C, n->body);
 
     new_fs.f->lastlinedefined = C->linenumber;
     ast_close_func(C);
@@ -2144,8 +2169,7 @@ static void compile_defer(CompileCtx *C, DeferStatementNode *n) {
     /* Call setmetatable(_ENV, {}, mt)
        nparams = 3 (Receiver + 2 args), B = 4 */
     int smbase = sm.u.info;
-    init_exp(&sm, VCALL,
-             luaK_codeABC(fs, OP_CALL, smbase, 4, 2));
+    init_exp(&sm, VCALL, luaK_codeABC(fs, OP_CALL, smbase, 4, 2));
     luaK_fixline(fs, C->linenumber);
     fs->freereg = cast_byte(smbase + 1);
   }
@@ -2170,81 +2194,72 @@ static void compile_defer(CompileCtx *C, DeferStatementNode *n) {
  * Statement dispatch
  *---------------------------------------------------------------------*/
 static void compile_statement(CompileCtx *C, Statement *stmt) {
-  if (!stmt) return;
+  if (!stmt)
+    return;
   setline_node(C, stmt);
   FuncState *fs = C->fs;
 
   switch (stmt->nodeType) {
   case NodeType::BLOCK:
-    compile_block(C, static_cast<BlockNode*>(stmt));
+    compile_block(C, static_cast<BlockNode *>(stmt));
     break;
   case NodeType::EXPRESSION_STATEMENT:
-    compile_expr_stmt(C,
-                      static_cast<ExpressionStatementNode*>(stmt));
+    compile_expr_stmt(C, static_cast<ExpressionStatementNode *>(stmt));
     break;
   case NodeType::VARIABLE_DECL:
-    compile_var_decl(C, static_cast<VariableDeclNode*>(stmt));
+    compile_var_decl(C, static_cast<VariableDeclNode *>(stmt));
     break;
   case NodeType::MUTI_VARIABLE_DECL:
-    compile_multi_var_decl(C,
-                           static_cast<MutiVariableDeclarationNode*>(stmt));
+    compile_multi_var_decl(C, static_cast<MutiVariableDeclarationNode *>(stmt));
     break;
   case NodeType::ASSIGNMENT:
-    compile_assignment(C, static_cast<AssignmentNode*>(stmt));
+    compile_assignment(C, static_cast<AssignmentNode *>(stmt));
     break;
   case NodeType::UPDATE_ASSIGNMENT:
-    compile_update_assignment(C,
-                              static_cast<UpdateAssignmentNode*>(stmt));
+    compile_update_assignment(C, static_cast<UpdateAssignmentNode *>(stmt));
     break;
   case NodeType::IF_STATEMENT:
-    compile_if(C, static_cast<IfStatementNode*>(stmt));
+    compile_if(C, static_cast<IfStatementNode *>(stmt));
     break;
   case NodeType::WHILE_STATEMENT:
-    compile_while(C, static_cast<WhileStatementNode*>(stmt));
+    compile_while(C, static_cast<WhileStatementNode *>(stmt));
     break;
   case NodeType::FOR_NUMERIC_STATEMENT:
-    compile_for_numeric(C,
-                        static_cast<ForNumericStatementNode*>(stmt));
+    compile_for_numeric(C, static_cast<ForNumericStatementNode *>(stmt));
     break;
   case NodeType::FOR_EACH_STATEMENT:
-    compile_for_each(C,
-                     static_cast<ForEachStatementNode*>(stmt));
+    compile_for_each(C, static_cast<ForEachStatementNode *>(stmt));
     break;
   case NodeType::RETURN_STATEMENT:
-    compile_return(C, static_cast<ReturnStatementNode*>(stmt));
+    compile_return(C, static_cast<ReturnStatementNode *>(stmt));
     break;
   case NodeType::BREAK_STATEMENT:
-    compile_break(C, static_cast<BreakStatementNode*>(stmt));
+    compile_break(C, static_cast<BreakStatementNode *>(stmt));
     break;
   case NodeType::CONTINUE_STATEMENT:
-    compile_continue(C,
-                     static_cast<ContinueStatementNode*>(stmt));
+    compile_continue(C, static_cast<ContinueStatementNode *>(stmt));
     break;
   case NodeType::FUNCTION_DECL:
-    compile_func_decl(C, static_cast<FunctionDeclNode*>(stmt));
+    compile_func_decl(C, static_cast<FunctionDeclNode *>(stmt));
     break;
   case NodeType::CLASS_DECL:
-    compile_class_decl(C, static_cast<ClassDeclNode*>(stmt));
+    compile_class_decl(C, static_cast<ClassDeclNode *>(stmt));
     break;
   case NodeType::IMPORT_NAMESPACE:
-    compile_import_namespace(C,
-                             static_cast<ImportNamespaceNode*>(stmt));
+    compile_import_namespace(C, static_cast<ImportNamespaceNode *>(stmt));
     break;
   case NodeType::IMPORT_NAMED:
-    compile_import_named(C,
-                         static_cast<ImportNamedNode*>(stmt));
+    compile_import_named(C, static_cast<ImportNamedNode *>(stmt));
     break;
   case NodeType::DEFER_STATEMENT:
-    compile_defer(C, static_cast<DeferStatementNode*>(stmt));
+    compile_defer(C, static_cast<DeferStatementNode *>(stmt));
     break;
   default:
-    compile_errorf(C, "unsupported statement type %d",
-                   (int)stmt->nodeType);
+    compile_errorf(C, "unsupported statement type %d", (int)stmt->nodeType);
     break;
   }
 
-  lua_assert(fs->f->maxstacksize >= fs->freereg &&
-             fs->freereg >= luaY_nvarstack(fs));
+  lua_assert(fs->f->maxstacksize >= fs->freereg && fs->freereg >= luaY_nvarstack(fs));
   fs->freereg = luaY_nvarstack(fs);
 }
 
@@ -2266,16 +2281,15 @@ static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
     Proto *f = fs->f;
     int oldsize = f->sizeupvalues;
     luaY_checklimit(fs, fs->nups + 1, 255, "upvalues");
-    luaM_growvector(C->L, f->upvalues, fs->nups, f->sizeupvalues,
-                    Upvaldesc, 255, "upvalues");
+    luaM_growvector(C->L, f->upvalues, fs->nups, f->sizeupvalues, Upvaldesc, 255, "upvalues");
     while (oldsize < f->sizeupvalues)
       f->upvalues[oldsize++].name = NULL;
     env = &f->upvalues[fs->nups++];
   }
   env->instack = 1;
-  env->idx     = 0;
-  env->kind    = VDKREG;
-  env->name    = C->envn;
+  env->idx = 0;
+  env->kind = VDKREG;
+  env->name = C->envn;
   luaC_objbarrier(C->L, fs->f, env->name);
 
   /* Root must be a BlockNode */
@@ -2294,9 +2308,7 @@ static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
   ast_close_func(C);
 }
 
-extern "C"
-    LClosure *astY_compile(lua_State *L, AstNode *root,
-                 Dyndata *dyd, const char *name) {
+extern "C" LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *name) {
   CompileCtx ctx{};
   FuncState funcstate = {};
 
@@ -2304,17 +2316,17 @@ extern "C"
   setclLvalue2s(L, L->top.p, cl);
   luaD_inctop(L);
 
-  ctx.L          = L;
-  ctx.ls.L       = L;     // 关键：lcode.c 需要通过 fs->ls->L 访问 L
-  ctx.ls.dyd     = dyd;
-  ctx.fs         = NULL;
-  ctx.dyd        = dyd;
+  ctx.L = L;
+  ctx.ls.L = L; // 关键：lcode.c 需要通过 fs->ls->L 访问 L
+  ctx.ls.dyd = dyd;
+  ctx.fs = NULL;
+  ctx.dyd = dyd;
 
-  ctx.source     = luaS_new(L, name);
-  ctx.ls.source  = ctx.source;   /* lcode.c may access fs->ls->source */
-  ctx.envn       = luaS_newliteral(L, LUA_ENV);
-  ctx.brkn       = luaS_newliteral(L, "break");
-  ctx.contn      = luaS_newliteral(L, "(continue)");
+  ctx.source = luaS_new(L, name);
+  ctx.ls.source = ctx.source; /* lcode.c may access fs->ls->source */
+  ctx.envn = luaS_newliteral(L, LUA_ENV);
+  ctx.brkn = luaS_newliteral(L, "break");
+  ctx.contn = luaS_newliteral(L, "(continue)");
   ctx.linenumber = 1;
 
   funcstate.f = cl->p = luaF_newproto(L);
@@ -2332,29 +2344,27 @@ extern "C"
   return cl;
 }
 
-extern "C"
-    Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs,
-                         Dyndata *dyd, AstNode *funcNode,
-                         const char *name) {
+extern "C" Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
+                                       AstNode *funcNode, const char *name) {
   CompileCtx ctx;
-  ctx.L          = L;
-  ctx.ls.L       = L;
-  ctx.ls.dyd     = dyd;
-  ctx.fs         = parent_fs;
-  ctx.dyd        = dyd;
-  ctx.source     = luaS_new(L, name);
-  ctx.ls.source  = ctx.source;   /* lcode.c may access fs->ls->source */
-  ctx.envn       = luaS_newliteral(L, LUA_ENV);
-  ctx.brkn       = luaS_newliteral(L, "break");
-  ctx.contn      = luaS_newliteral(L, "(continue)");
+  ctx.L = L;
+  ctx.ls.L = L;
+  ctx.ls.dyd = dyd;
+  ctx.fs = parent_fs;
+  ctx.dyd = dyd;
+  ctx.source = luaS_new(L, name);
+  ctx.ls.source = ctx.source; /* lcode.c may access fs->ls->source */
+  ctx.envn = luaS_newliteral(L, LUA_ENV);
+  ctx.brkn = luaS_newliteral(L, "break");
+  ctx.contn = luaS_newliteral(L, "(continue)");
   ctx.linenumber = 1;
 
   if (funcNode->nodeType == NodeType::LAMBDA) {
     expdesc e;
-    compile_lambda(&ctx, static_cast<LambdaNode*>(funcNode), &e);
+    compile_lambda(&ctx, static_cast<LambdaNode *>(funcNode), &e);
     return parent_fs->f->p[parent_fs->np - 1];
   } else if (funcNode->nodeType == NodeType::FUNCTION_DECL) {
-    compile_func_decl(&ctx, static_cast<FunctionDeclNode*>(funcNode));
+    compile_func_decl(&ctx, static_cast<FunctionDeclNode *>(funcNode));
     return parent_fs->f->p[parent_fs->np - 1];
   }
   return NULL;

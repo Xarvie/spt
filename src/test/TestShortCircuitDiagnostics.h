@@ -7,7 +7,6 @@
 
 inline void registerShortCircuitDiagnostics(TestRunner &runner) {
 
-
   runner.addTest("Truthy - Integer One",
                  R"(
             if (1) {
@@ -78,7 +77,6 @@ inline void registerShortCircuitDiagnostics(TestRunner &runner) {
             }
        )",
                  "truthy");
-
 
   // 4. OR 运算符基本测试
   runner.addTest("OR - false || false",
@@ -183,19 +181,19 @@ inline void registerShortCircuitDiagnostics(TestRunner &runner) {
        )",
                  "entered\n1");
 
-//  // 7. 短路测试 - 函数调用版本 (原始失败的测试)
-//  runner.addTest("Short Circuit AND - Function Returns Zero",
-//                 R"(
-//            int check(int x) {
-//                print("check " .. x);
-//                return x;
-//            }
-//            if (check(0) && check(1)) {
-//                print("both");
-//            }
-//            print("done");
-//       )",
-//                 "check 0\ndone");
+  //  // 7. 短路测试 - 函数调用版本 (原始失败的测试)
+  //  runner.addTest("Short Circuit AND - Function Returns Zero",
+  //                 R"(
+  //            int check(int x) {
+  //                print("check " .. x);
+  //                return x;
+  //            }
+  //            if (check(0) && check(1)) {
+  //                print("both");
+  //            }
+  //            print("done");
+  //       )",
+  //                 "check 0\ndone");
 
   runner.addTest("Short Circuit OR - Function Returns One",
                  R"(

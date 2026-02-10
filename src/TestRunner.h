@@ -17,26 +17,23 @@ extern "C" {
 #include "Vm/lualib.h"
 }
 
-
-
 namespace fs = std::filesystem;
 
 // 这是一个全局辅助，用于在 Lua 的 C 函数中捕获输出
 // 注意：为了简单起见使用了线程局部存储，确保并行测试（如果有）安全
-static thread_local std::stringstream* g_currentCapture = nullptr;
+static thread_local std::stringstream *g_currentCapture = nullptr;
 
-
-static int lua_capture_print(lua_State* L) {
-  if (!g_currentCapture) return 0;
+static int lua_capture_print(lua_State *L) {
+  if (!g_currentCapture)
+    return 0;
 
   int n = lua_gettop(L);
-
-
 
   lua_getglobal(L, "tostring"); // index: n+1
 
   for (int i = 2; i <= n; i++) {
-    if (i > 2) *g_currentCapture << " ";
+    if (i > 2)
+      *g_currentCapture << " ";
 
     // [修复] 单独处理数字类型，解决 5.14 显示为 5.1400000000000006 的问题
     if (lua_type(L, i) == LUA_TNUMBER) {
@@ -54,18 +51,19 @@ static int lua_capture_print(lua_State* L) {
       }
     } else {
       // 其他类型（String, Table, Bool, Nil）走 Lua 原生 tostring
-      lua_pushvalue(L, n + 1);  /* 将 tostring 函数压栈 */
-      lua_pushnil(L);           /* receiver参数 */
-      lua_pushvalue(L, i);      /* 将参数压栈 */
-      lua_call(L, 2, 1);        /* 调用 tostring，2个参数 */
-      const char* s = lua_tostring(L, -1);
-      if (s == NULL) return luaL_error(L, "'tostring' must return a string to 'print'");
+      lua_pushvalue(L, n + 1); /* 将 tostring 函数压栈 */
+      lua_pushnil(L);          /* receiver参数 */
+      lua_pushvalue(L, i);     /* 将参数压栈 */
+      lua_call(L, 2, 1);       /* 调用 tostring，2个参数 */
+      const char *s = lua_tostring(L, -1);
+      if (s == NULL)
+        return luaL_error(L, "'tostring' must return a string to 'print'");
       *g_currentCapture << s;
-      lua_pop(L, 1);  /* 弹出结果 */
+      lua_pop(L, 1); /* 弹出结果 */
     }
   }
   *g_currentCapture << "\n"; // print 默认换行
-  lua_pop(L, 1);  /* 弹出 tostring 函数 */
+  lua_pop(L, 1);             /* 弹出 tostring 函数 */
   return 0;
 }
 
@@ -195,7 +193,7 @@ private:
   }
 
   // 配置 Lua 的 package.path 以便 require 能找到测试用的 .spt 文件
-  void setupLuaPath(lua_State* L) {
+  void setupLuaPath(lua_State *L) {
     lua_getglobal(L, "package");
     lua_getfield(L, -1, "path");
     std::string curPath = lua_tostring(L, -1);
@@ -217,7 +215,7 @@ private:
     setupModules(test.modules);
 
     // 1. 初始化 Lua 虚拟机
-    lua_State* L = luaL_newstate();
+    lua_State *L = luaL_newstate();
     if (!L) {
       printFail(test.name, "Failed to create Lua state", "", "");
       cleanupModules(test.modules);
@@ -260,7 +258,7 @@ private:
     // 获取错误信息（如果有）
     std::string errorMsg;
     if (status != LUA_OK) {
-      const char* msg = lua_tostring(L, -1);
+      const char *msg = lua_tostring(L, -1);
       errorMsg = msg ? msg : "Unknown Lua Error";
       lua_pop(L, 1);
     }

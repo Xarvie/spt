@@ -2709,7 +2709,8 @@ std::any AstBuilderVisitor::visitForNumericVarTyped(LangParser::ForNumericVarTyp
   return std::any(std::make_pair(std::move(name), typeAnn));
 }
 
-std::any AstBuilderVisitor::visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) {
+std::any
+AstBuilderVisitor::visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitForNumericVarUntyped nullptr");
   if (!ctx->IDENTIFIER())
@@ -2762,8 +2763,7 @@ std::any AstBuilderVisitor::visitForEachControl(LangParser::ForEachControlContex
     auto exprListCtx = ctx->expressionList();
     for (auto exprCtx : exprListCtx->expression()) {
       std::any iterResult = visit(exprCtx);
-      AstNode *iterRaw =
-          safeAnyCastRawPtr<AstNode>(iterResult, "visitForEachControl > expression");
+      AstNode *iterRaw = safeAnyCastRawPtr<AstNode>(iterResult, "visitForEachControl > expression");
       Expression *expr = dynamic_cast<Expression *>(iterRaw);
       if (!expr) {
         delete iterRaw;

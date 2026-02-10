@@ -20,9 +20,9 @@
 extern "C" {
 #endif
 
-#include "lua.h"
 #include "lobject.h"
-#include "lparser.h"      /* FuncState, expdesc, Dyndata, BlockCnt, etc. */
+#include "lparser.h" /* FuncState, expdesc, Dyndata, BlockCnt, etc. */
+#include "lua.h"
 #include "lzio.h"
 
 /*
@@ -38,16 +38,14 @@ extern "C" {
 **   LClosure* pushed on top of the Lua stack (caller pops it).
 **   On error, throws a Lua error through luaD_throw.
 */
-LUAI_FUNC LClosure *astY_compile(lua_State *L, AstNode *root,
-                                  Dyndata *dyd, const char *name);
+LUAI_FUNC LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *name);
 
 /*
 ** Compile a single function body from a LambdaNode or FunctionDeclNode.
 ** Mostly internal, but exposed for testing / REPL use.
 */
-LUAI_FUNC Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs,
-                                       Dyndata *dyd, AstNode *funcNode,
-                                       const char *name);
+LUAI_FUNC Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
+                                      AstNode *funcNode, const char *name);
 
 #ifdef __cplusplus
 }

@@ -3,7 +3,6 @@
 // =========================================================
 // 本文件整合所有测试模块，通过注释/取消注释来选择运行的测试
 
-
 #include "TestRunner.h"
 
 // =========================================================
@@ -14,8 +13,8 @@
 #include "bench/TestBenchmarks.h"
 
 // 原生绑定（类定义和测试）
-//#include "test/NativeBindings.h"
-//#include "test/TestNativeBindings.h"
+// #include "test/NativeBindings.h"
+// #include "test/TestNativeBindings.h"
 
 // 基础语法测试
 #include "test/TestBasics.h"
@@ -67,8 +66,9 @@
 // 编译测试
 #include "TestBytes.h"
 #include "TestCompiler.h"
-//#include "TestSptAPI.h"
-//#include "TestSptAPI2.h"
+
+// #include "TestSptAPI.h"
+// #include "TestSptAPI2.h"
 
 // =========================================================
 // 主函数
@@ -86,51 +86,50 @@ int main(int argc, char *argv[]) {
   registerBasicsExtendedTemp(runner);
   registerControlFlow(runner);
 
-
   // 函数与闭包
   registerFunctions(runner);
 
   // 类与对象
-//  registerClasses(runner);
+  //  registerClasses(runner);
 
   // 数据结构
-//  registerLists(runner);
-//  registerMaps(runner);
-//  registerStrings(runner);
+  //  registerLists(runner);
+  //  registerMaps(runner);
+  //  registerStrings(runner);
 
   // 模块系统
-//  registerModules(runner);
+  //  registerModules(runner);
 
   // 方法调用
-//  registerInvokeTests(runner);
+  //  registerInvokeTests(runner);
 
   // 边界情况与回归
-//  registerEdgeCases(runner);
+  //  registerEdgeCases(runner);
 
   // 综合测试
-//  registerIntegrationTests(runner);
+  //  registerIntegrationTests(runner);
 
   // 内置函数
-//  registerBuiltinFunctions(runner);
+  //  registerBuiltinFunctions(runner);
 
   // Defer 语句
-//  registerDeferTests(runner);
+  //  registerDeferTests(runner);
 
-//  // Fiber 协程
-//  registerFiberTests(runner);
+  //  // Fiber 协程
+  //  registerFiberTests(runner);
 
-//  // Bytes
-//  registerBytesTests(runner);
+  //  // Bytes
+  //  registerBytesTests(runner);
 
   // 栈重分配安全
   registerStackReallocationTests(runner);
-//
-//  // 原生绑定
-//  registerNativeBindingTests(runner);
+  //
+  //  // 原生绑定
+  //  registerNativeBindingTests(runner);
 
   // GC 测试
   // registerGCTests(runner);
-//  registerGCDebugTests(runner); // 需要调试输出时启用
+  //  registerGCDebugTests(runner); // 需要调试输出时启用
 
   registerShortCircuitDiagnostics(runner);
 
@@ -150,4 +149,3 @@ int main(int argc, char *argv[]) {
   runner.runAll();
   return 0;
 }
-

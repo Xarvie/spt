@@ -596,23 +596,23 @@ inline void registerControlFlow(TestRunner &runner) {
        )",
                  "1:val1\n2:val2");
 
-//  runner.addTest("Pairs - Use Only Key",
-//                 R"(
-//            list data = ["a", "b", "c"];
-//            for (auto i, auto v : pairs(data)) {
-//                print(i);
-//            }
-//       )",
-//                 "0\n1\n2");
+  //  runner.addTest("Pairs - Use Only Key",
+  //                 R"(
+  //            list data = ["a", "b", "c"];
+  //            for (auto i, auto v : pairs(data)) {
+  //                print(i);
+  //            }
+  //       )",
+  //                 "0\n1\n2");
 
-//  runner.addTest("Pairs - Use Only Value",
-//                 R"(
-//            list data = ["a", "b", "c"];
-//            for (auto i, auto v : pairs(data)) {
-//                print(v);
-//            }
-//       )",
-//                 "a\nb\nc");
+  //  runner.addTest("Pairs - Use Only Value",
+  //                 R"(
+  //            list data = ["a", "b", "c"];
+  //            for (auto i, auto v : pairs(data)) {
+  //                print(v);
+  //            }
+  //       )",
+  //                 "a\nb\nc");
 
   // =========================================================
   // 11. 作用域边界情况
@@ -639,18 +639,18 @@ inline void registerControlFlow(TestRunner &runner) {
        )",
       "outer i: 1\ninner i: 1\ninner i: 2\nouter i: 2\ninner i: 1\ninner i: 2\nfinal i: 100");
 
-//  runner.addTest("Pairs - Variable Shadowing",
-//                 R"(
-//            int i = 999;
-//            string v = "original";
-//
-//            list data = ["a", "b"];
-//            for (auto i, auto v : pairs(data)) {
-//                print(i .. ":" .. v);
-//            }
-//            print(i .. ":" .. v);
-//       )",
-//                 "0:a\n1:b\n999:original");
+  //  runner.addTest("Pairs - Variable Shadowing",
+  //                 R"(
+  //            int i = 999;
+  //            string v = "original";
+  //
+  //            list data = ["a", "b"];
+  //            for (auto i, auto v : pairs(data)) {
+  //                print(i .. ":" .. v);
+  //            }
+  //            print(i .. ":" .. v);
+  //       )",
+  //                 "0:a\n1:b\n999:original");
 
   runner.addTest("Numeric For - Variable Shadowing",
                  R"(
@@ -662,7 +662,6 @@ inline void registerControlFlow(TestRunner &runner) {
             print("outer i: " .. i);
        )",
                  "loop i: 0\nloop i: 1\nloop i: 2\nouter i: 999");
-
 
   runner.addTest("Generic For - Null State",
                  R"(
@@ -677,7 +676,6 @@ inline void registerControlFlow(TestRunner &runner) {
             }
        )",
                  "1\n2\n3");
-
 
   runner.addTest("Generic For - Complex Control Mix",
                  R"(
@@ -696,7 +694,6 @@ inline void registerControlFlow(TestRunner &runner) {
             print(sum);
        )",
                  "26"); // 1+2+4+5+6+8 = 26
-
 
   // =========================================================
   // 14. 数值For和Generic For混合

@@ -670,15 +670,13 @@ public:
   AstType *typeAnnotation = nullptr; // 可选类型，无类型时为 nullptr
   Expression *startExpr = nullptr;
   Expression *endExpr = nullptr;
-  Expression *stepExpr = nullptr;   // 可选 step，无时为 nullptr
+  Expression *stepExpr = nullptr; // 可选 step，无时为 nullptr
   BlockNode *body = nullptr;
 
-  ForNumericStatementNode(std::string name, AstType *typeAnn,
-                          Expression *start, Expression *end, Expression *step,
-                          BlockNode *b, SourceLocation loc)
-      : Statement(std::move(loc), NodeType::FOR_NUMERIC_STATEMENT),
-        varName(std::move(name)), typeAnnotation(typeAnn),
-        startExpr(start), endExpr(end), stepExpr(step), body(b) {}
+  ForNumericStatementNode(std::string name, AstType *typeAnn, Expression *start, Expression *end,
+                          Expression *step, BlockNode *b, SourceLocation loc)
+      : Statement(std::move(loc), NodeType::FOR_NUMERIC_STATEMENT), varName(std::move(name)),
+        typeAnnotation(typeAnn), startExpr(start), endExpr(end), stepExpr(step), body(b) {}
 
   virtual ~ForNumericStatementNode() override;
 };
@@ -843,6 +841,6 @@ extern "C" void destroyAst(struct AstNode *node);
 // 用于加载源码并生成 AST 的工具函数
 // 如果 sourceCode 为空，则读取 filename 文件
 // 如果 sourceCode 不为空，filename 仅作报错显示用
-extern "C" struct AstNode *loadAst(const char* sourceCode_, const char* filename_) ;
+extern "C" struct AstNode *loadAst(const char *sourceCode_, const char *filename_);
 
 #endif // SPT_AST_CPP_RAWPTR_H

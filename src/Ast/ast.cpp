@@ -240,7 +240,7 @@ extern "C" void destroyAst(AstNode *node) { delete node; }
 
 using namespace antlr4;
 
-extern "C" AstNode *loadAst(const char* sourceCode_, const char* filename_) {
+extern "C" AstNode *loadAst(const char *sourceCode_, const char *filename_) {
   std::string sourceCode = sourceCode_;
   std::string filename = filename_;
   std::string codeToParse;
