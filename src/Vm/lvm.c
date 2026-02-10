@@ -2027,7 +2027,7 @@ returning: /* trap already set */
         StkId ra = RA(i);
         unsigned n = cast_uint(GETARG_vB(i));
         unsigned last = cast_uint(GETARG_vC(i));
-        Table *h = hvalue(s2v(ra));
+        Table *h = gco2t(gcvalue(s2v(ra)));
         if (n == 0)
           n = cast_uint(L->top.p - ra) - 1; /* get up to the top */
         else
