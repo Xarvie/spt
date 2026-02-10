@@ -53,7 +53,6 @@ static void checktab(lua_State *L, int arg, int what) {
 }
 
 /* tcreate - receiver is arg1, narray is arg2, nhash is arg3 */
-
 static int tcreate(lua_State *L) {
   lua_Unsigned sizeseq = (lua_Unsigned)luaL_checkinteger(L, 2);
   lua_Unsigned sizerest = (lua_Unsigned)luaL_optinteger(L, 3, 0);
@@ -63,14 +62,21 @@ static int tcreate(lua_State *L) {
   return 1;
 }
 
-/* tinsert - receiver is arg1, table is arg2, pos/value are arg3/arg4 */
+/*
+** tinsert - receiver is arg1, table is arg2, pos/value are arg3/arg4
+*/
 static int tinsert(lua_State *L) {
   lua_Integer pos; /* where to insert new element */
   lua_Integer e = aux_getn(L, 2, TAB_RW);
+  int isarray = (lua_type(L, 2) == LUA_TARRAY);
   /* 'e' is the length; in 0-based, first empty slot is index e */
   switch (lua_gettop(L)) {
-  case 3: {  /* called with only 2 arguments */
+  case 3: {  /* called with only 2 arguments: append */
     pos = e; /* insert new element at the end */
+    if (isarray) {
+      /* Grow array by exactly 1 to maintain correct logical length */
+      lua_arrayresize(L, 2, cast_uint(e + 1));
+    }
     break;
   }
   case 4: {
@@ -78,6 +84,10 @@ static int tinsert(lua_State *L) {
     pos = luaL_checkinteger(L, 3); /* 2nd argument is the position */
     /* check whether 'pos' is in [0, e] */
     luaL_argcheck(L, (lua_Unsigned)pos <= (lua_Unsigned)e, 3, "position out of bounds");
+    if (isarray) {
+      /* Grow array by exactly 1 BEFORE shifting */
+      lua_arrayresize(L, 2, cast_uint(e + 1));
+    }
     for (i = e; i > pos; i--) { /* move up elements */
       lua_geti(L, 2, i - 1);
       lua_seti(L, 2, i); /* t[i] = t[i - 1] */
@@ -92,11 +102,13 @@ static int tinsert(lua_State *L) {
   return 0;
 }
 
-/* tremove - receiver is arg1, table is arg2, pos is arg3 */
-
+/*
+** tremove - receiver is arg1, table is arg2, pos is arg3
+*/
 static int tremove(lua_State *L) {
   lua_Integer size = aux_getn(L, 2, TAB_RW);
   lua_Integer pos = luaL_optinteger(L, 3, (size > 0) ? size - 1 : 0);
+  int isarray = (lua_type(L, 2) == LUA_TARRAY);
   if (size == 0) {  /* empty table? */
     lua_pushnil(L); /* return nil, do nothing */
     return 1;
@@ -108,8 +120,13 @@ static int tremove(lua_State *L) {
     lua_geti(L, 2, pos + 1);
     lua_seti(L, 2, pos); /* t[pos] = t[pos + 1] */
   }
-  lua_pushnil(L);
-  lua_seti(L, 2, pos); /* remove entry t[pos] */
+  if (isarray) {
+    /* Shrink array by 1: this sets asize = size - 1 (correct logical length) */
+    lua_arrayresize(L, 2, cast_uint(size - 1));
+  } else {
+    lua_pushnil(L);
+    lua_seti(L, 2, pos); /* remove entry t[pos] */
+  }
   return 1;
 }
 
@@ -149,7 +166,6 @@ static int tmove(lua_State *L) {
 }
 
 static void addfield(lua_State *L, luaL_Buffer *b, lua_Integer i) {
-  /* tconcat - receiver is arg1, table is arg2, sep is arg3, i is arg4, j is arg5 */
   lua_geti(L, 2, i);
   if (l_unlikely(!lua_isstring(L, -1)))
     luaL_error(L, "invalid value (%s) at index %I in table for 'concat'", luaL_typename(L, -1),
@@ -157,6 +173,7 @@ static void addfield(lua_State *L, luaL_Buffer *b, lua_Integer i) {
   luaL_addvalue(b);
 }
 
+/* tconcat - receiver is arg1, table is arg2, sep is arg3, i is arg4, j is arg5 */
 static int tconcat(lua_State *L) {
   luaL_Buffer b;
   lua_Integer last = aux_getn(L, 2, TAB_R); /* length */
@@ -386,9 +403,85 @@ static int sort(lua_State *L) {
 
 /* }====================================================== */
 
+/*
+** {======================================================
+** List Operations (push/pop)
+**
+** KEY DESIGN: For LIST (array mode), asize IS the logical length.
+** push/pop resize by exactly +1/-1 to keep asize correct.
+** This is O(n) per push due to reallocation, but correct.
+** Future optimization: separate logical length from capacity.
+** =======================================================
+*/
+
+/*
+** lpush - Append a value to the end of a list
+** Arguments: receiver (nil), list, value
+** Returns: nothing
+**
+** FIX: Resize to exactly size+1. Do NOT use amortized growth,
+** because asize is used as the logical length (#l).
+** Growing beyond size+1 would make #l report wrong values.
+*/
+static int lpush(lua_State *L) {
+  lua_Integer size;
+
+  /* Validate arguments */
+  luaL_checktype(L, 2, LUA_TARRAY);
+  luaL_checkany(L, 3);
+
+  /* Get current logical size (= asize for arrays) */
+  size = luaL_len(L, 2);
+
+  /* Check for overflow */
+  if (l_unlikely(size >= LUA_MAXINTEGER))
+    return luaL_error(L, "list overflow");
+
+  /* Resize to exactly size + 1 */
+  lua_arrayresize(L, 2, cast_uint(size + 1));
+
+  /* Set the new element at position 'size' (0-based) */
+  lua_pushvalue(L, 3);
+  lua_seti(L, 2, size);
+
+  return 0;
+}
+
+/*
+** lpop - Remove and return the last element from a list
+** Arguments: receiver (nil), list
+** Returns: the removed element, or nil if list is empty
+*/
+static int lpop(lua_State *L) {
+  lua_Integer size;
+
+  /* Validate arguments */
+  luaL_checktype(L, 2, LUA_TARRAY);
+
+  /* Get current size */
+  size = luaL_len(L, 2);
+
+  /* Handle empty list */
+  if (size == 0) {
+    lua_pushnil(L);
+    return 1;
+  }
+
+  /* Get the last element (0-based: size-1) */
+  lua_geti(L, 2, size - 1);
+
+  /* Shrink to size - 1 (this is the new logical length) */
+  lua_arrayresize(L, 2, cast_uint(size - 1));
+
+  return 1;
+}
+
+/* }====================================================== */
+
 static const luaL_Reg tab_funcs[] = {{"concat", tconcat}, {"create", tcreate}, {"insert", tinsert},
                                      {"pack", tpack},     {"unpack", tunpack}, {"remove", tremove},
-                                     {"move", tmove},     {"sort", sort},      {NULL, NULL}};
+                                     {"move", tmove},     {"sort", sort},      {"push", lpush},
+                                     {"pop", lpop},       {NULL, NULL}};
 
 LUAMOD_API int luaopen_table(lua_State *L) {
   luaL_newlib(L, tab_funcs);

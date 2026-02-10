@@ -26,9 +26,10 @@
 static const char udatatypename[] = "userdata";
 
 LUAI_DDEF const char *const luaT_typenames_[LUA_TOTALTYPES] = {
-    "no value", "nil",         "boolean", udatatypename, "number", "string", "table",
-    "function", udatatypename, "thread",  "upvalue",     "proto" /* these last cases are used for
-                                                                    tests only */
+    "no value", "nil",         "boolean", udatatypename, "number",  "string", "table",
+    "function", udatatypename, "thread",  "array",       "upvalue", "proto" /* these last cases are
+                                                                               used for tests only
+                                                                             */
 };
 
 void luaT_init(lua_State *L) {
@@ -64,6 +65,9 @@ const TValue *luaT_gettmbyobj(lua_State *L, const TValue *o, TMS event) {
   case LUA_TTABLE:
     mt = hvalue(o)->metatable;
     break;
+  case LUA_TARRAY:
+    mt = avalue(o)->metatable;
+    break;
   case LUA_TUSERDATA:
     mt = uvalue(o)->metatable;
     break;
@@ -74,17 +78,20 @@ const TValue *luaT_gettmbyobj(lua_State *L, const TValue *o, TMS event) {
 }
 
 /*
-** Return the name of the type of an object. For tables and userdata
-** with metatable, use their '__name' metafield, if present.
+** Return the name of the type of an object. For tables, arrays, and
+** userdata with metatable, use their '__name' metafield, if present.
 */
 const char *luaT_objtypename(lua_State *L, const TValue *o) {
   Table *mt;
   if ((ttistable(o) && (mt = hvalue(o)->metatable) != NULL) ||
+      (ttisarray(o) && (mt = avalue(o)->metatable) != NULL) ||
       (ttisfulluserdata(o) && (mt = uvalue(o)->metatable) != NULL)) {
     const TValue *name = luaH_Hgetshortstr(mt, luaS_new(L, "__name"));
     if (ttisstring(name))           /* is '__name' a string? */
       return getstr(tsvalue(name)); /* use it as type name */
   }
+  if (ttisarray(o))
+    return "array";
   return ttypename(ttype(o)); /* else use standard type name */
 }
 

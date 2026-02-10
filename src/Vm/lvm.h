@@ -64,27 +64,27 @@ typedef enum {
 ** fast track for 'gettable'
 */
 #define luaV_fastget(t, k, res, f, tag)                                                            \
-  (tag = (!ttistable(t) ? LUA_VNOTABLE : f(hvalue(t), k, res)))
+  (tag = ((!ttistable(t) && !ttisarray(t)) ? LUA_VNOTABLE : f(gco2t(gcvalue(t)), k, res)))
 
 /*
 ** Special case of 'luaV_fastget' for integers, inlining the fast case
 ** of 'luaH_getint'.
 */
 #define luaV_fastgeti(t, k, res, tag)                                                              \
-  if (!ttistable(t))                                                                               \
+  if (!ttistable(t) && !ttisarray(t))                                                              \
     tag = LUA_VNOTABLE;                                                                            \
   else {                                                                                           \
-    luaH_fastgeti(hvalue(t), k, res, tag);                                                         \
+    luaH_fastgeti(gco2t(gcvalue(t)), k, res, tag);                                                 \
   }
 
 #define luaV_fastset(t, k, val, hres, f)                                                           \
-  (hres = (!ttistable(t) ? HNOTATABLE : f(hvalue(t), k, val)))
+  (hres = ((!ttistable(t) && !ttisarray(t)) ? HNOTATABLE : f(gco2t(gcvalue(t)), k, val)))
 
 #define luaV_fastseti(t, k, val, hres)                                                             \
-  if (!ttistable(t))                                                                               \
+  if (!ttistable(t) && !ttisarray(t))                                                              \
     hres = HNOTATABLE;                                                                             \
   else {                                                                                           \
-    luaH_fastseti(hvalue(t), k, val, hres);                                                        \
+    luaH_fastseti(gco2t(gcvalue(t)), k, val, hres);                                                \
   }
 
 /*

@@ -19,6 +19,8 @@
 // 基础语法测试
 #include "test/TestBasics.h"
 
+#include "test/TestListMap.h"
+
 // 控制流测试（包含泛型循环）
 #include "test/TestControlFlow.h"
 
@@ -83,6 +85,7 @@ int main(int argc, char *argv[]) {
 
   // 基础语法
   registerBasics(runner);
+  registerListMapTest(runner);
   registerBasicsExtendedTemp(runner);
   registerControlFlow(runner);
 

@@ -817,6 +817,32 @@ LUA_API void lua_createarray (lua_State *L, int narray) {
   lua_unlock(L);
 }
 
+/*
+** Array operations
+*/
+
+LUA_API void lua_arrayresize(lua_State *L, int idx, lua_Integer newsize) {
+  Table *t;
+  const TValue *o;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  api_check(L, newsize >= 0 && newsize <= INT_MAX, "invalid size");
+  t = avalue(o);
+  luaH_resizearray(L, t, cast_uint(newsize));
+  lua_unlock(L);
+}
+
+LUA_API lua_Integer lua_arraylen(lua_State *L, int idx) {
+  const TValue *o;
+  lua_Integer len;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  len = cast_int(avalue(o)->asize);
+  lua_unlock(L);
+  return len;
+}
 
 LUA_API int lua_getmetatable (lua_State *L, int objindex) {
   const TValue *obj;

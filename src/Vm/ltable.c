@@ -738,14 +738,14 @@ void luaH_resizearray(lua_State *L, Table *t, unsigned int nasize) {
 ** Then, resize the table.
 */
 static void rehash(lua_State *L, Table *t, const TValue *ek) {
-  if (t->mode == TABLE_ARRAY) {
-    /* list 不应该走到 rehash，如果走到说明有 bug */
-    luaG_runerror(L, "list cannot be rehashed (internal error)");
-  }
   unsigned asize; /* optimal size for array part */
   Counters ct;
   unsigned i;
   unsigned nsize; /* size for the hash part */
+  if (t->mode == TABLE_ARRAY) {
+    /* list 不应该走到 rehash，如果走到说明有 bug */
+    luaG_runerror(L, "list cannot be rehashed (internal error)");
+  }
   /* reset counts */
   for (i = 0; i <= MAXABITS; i++)
     ct.nums[i] = 0;
@@ -1156,13 +1156,26 @@ int luaH_pset(Table *t, const TValue *key, TValue *val) {
 void luaH_finishset(lua_State *L, Table *t, const TValue *key, TValue *value, int hres) {
   lua_assert(hres != HOK);
   if (hres == HNOTFOUND) {
-    /* === 新增：list 不允许扩展 === */
+    /* === 新增：list 扩容支持 === */
     if (t->mode == TABLE_ARRAY) {
-      if (ttisinteger(key))
-        luaG_runerror(L, "list index out of range: %I (size: %d)", (LUAI_UACINT)ivalue(key),
-                      t->asize);
-      else
+      if (ttisinteger(key)) {
+        lua_Integer k = ivalue(key);
+        /* 只允许在末尾追加（k == asize），其他情况报错 */
+        if (k == cast_int(t->asize)) {
+          /* 扩容：增加 50% 或至少 8 个元素 */
+          unsigned int newsize = t->asize + (t->asize >> 1);
+          if (newsize < t->asize + 8)
+            newsize = t->asize + 8;
+          luaH_resizearray(L, t, newsize);
+          /* 现在可以插入了，使用 luaH_setint */
+          luaH_setint(L, t, k, value);
+          return;
+        } else {
+          luaG_runerror(L, "list index out of range: %I (size: %d)", (LUAI_UACINT)k, t->asize);
+        }
+      } else {
         luaG_runerror(L, "list indices must be integers");
+      }
     }
     /* ====== */
     TValue aux;

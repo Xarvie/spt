@@ -2271,9 +2271,9 @@ std::any AstBuilderVisitor::visitMapEntryIntKey(LangParser::MapEntryIntKeyContex
     if (!ctx->INTEGER())
       throw std::runtime_error("AstBuilderVisitor::visitMapEntryIntKey no INTEGER token");
 
+    // Create a string key for shorthand syntax: {1:"one"} becomes {"1":"one"}
     std::string text = ctx->INTEGER()->getText();
-    int64_t val = std::stoll(text);
-    keyNode = new LiteralIntNode(val, getSourceLocation(ctx->INTEGER()));
+    keyNode = new LiteralStringNode(text, getSourceLocation(ctx->INTEGER()));
 
     if (!ctx->expression())
       throw std::runtime_error("AstBuilderVisitor::visitMapEntryIntKey no expression");
@@ -2310,8 +2310,9 @@ std::any AstBuilderVisitor::visitMapEntryFloatKey(LangParser::MapEntryFloatKeyCo
     if (!ctx->FLOAT_LITERAL())
       throw std::runtime_error("AstBuilderVisitor::visitMapEntryFloatKey no FLOAT_LITERAL token");
 
-    double val = std::stod(ctx->FLOAT_LITERAL()->getText());
-    keyNode = new LiteralFloatNode(val, getSourceLocation(ctx->FLOAT_LITERAL()));
+    // Create a string key for shorthand syntax: {1.5:"one"} becomes {"1.5":"one"}
+    std::string text = ctx->FLOAT_LITERAL()->getText();
+    keyNode = new LiteralStringNode(text, getSourceLocation(ctx->FLOAT_LITERAL()));
 
     if (!ctx->expression())
       throw std::runtime_error("AstBuilderVisitor::visitMapEntryFloatKey no expression");

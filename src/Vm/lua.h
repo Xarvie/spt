@@ -259,6 +259,12 @@ LUA_API int(lua_setmetatable)(lua_State *L, int objindex);
 LUA_API int(lua_setiuservalue)(lua_State *L, int idx, int n);
 
 /*
+** array operations
+*/
+LUA_API void(lua_arrayresize)(lua_State *L, int idx, lua_Integer newsize);
+LUA_API lua_Integer(lua_arraylen)(lua_State *L, int idx);
+
+/*
 ** 'load' and 'call' functions (load and run Lua code)
 */
 LUA_API void(lua_callk)(lua_State *L, int nargs, int nresults, lua_KContext ctx, lua_KFunction k);

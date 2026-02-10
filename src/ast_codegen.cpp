@@ -962,23 +962,9 @@ static void compile_map_literal(CompileCtx *C, LiteralMapNode *n, expdesc *e) {
     expdesc tab = *e;
     expdesc key;
 
-    // 检查键的类型，将整数和浮点数键转换为字符串
-    if (entry->key->nodeType == NodeType::LITERAL_INT) {
-      LiteralIntNode *intKey = static_cast<LiteralIntNode *>(entry->key);
-      std::string keyStr = std::to_string(intKey->value);
-      key.f = key.t = NO_JUMP;
-      key.k = VKSTR;
-      key.u.strval = mkstr(C, keyStr);
-    } else if (entry->key->nodeType == NodeType::LITERAL_FLOAT) {
-      LiteralFloatNode *floatKey = static_cast<LiteralFloatNode *>(entry->key);
-      std::string keyStr = std::to_string(floatKey->value);
-      key.f = key.t = NO_JUMP;
-      key.k = VKSTR;
-      key.u.strval = mkstr(C, keyStr);
-    } else {
-      compile_expression(C, entry->key, &key);
-      luaK_exp2val(fs, &key);
-    }
+    // Compile the key expression directly - visitor handles string conversion for shorthand syntax
+    compile_expression(C, entry->key, &key);
+    luaK_exp2val(fs, &key);
 
     luaK_indexed(fs, &tab, &key);
     expdesc val;

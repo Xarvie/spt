@@ -53,7 +53,7 @@ inline void registerBasics(TestRunner &runner) {
 
   runner.addTest("Null and Type Checks",
                  R"(
-            var x = null;
+            any x = null;
             print(x);
             if (x == null) { print("is null"); }
             int a = 42;
@@ -107,7 +107,7 @@ inline void registerBasics(TestRunner &runner) {
   runner.addTest("List: Zero-Based & Nil Support",
                  R"(
             // 创建带空洞的 List
-            var l = [100, null];
+            list<any> l = [100, null];
 
             print(l[0]);
             print(l[1]); // 应该是 nil
@@ -127,7 +127,7 @@ inline void registerBasics(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addFailTest("List Error: Out of Bounds Write (Positive)",
                      R"(
-            var l = [1, 2, 3];
+            list<int> l = [1, 2, 3];
             // 你的设定：List 是定长的，下标 0,1,2 有效
             // 下标 3 越界，应该报错而不是自动扩容
             l[3] = 4;
@@ -135,7 +135,7 @@ inline void registerBasics(TestRunner &runner) {
 
   runner.addFailTest("List Error: Out of Bounds Write (Negative)",
                      R"(
-            var l = [1, 2];
+            list<int> l = [1, 2];
             l[-1] = 0;
        )");
 
@@ -144,7 +144,7 @@ inline void registerBasics(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addFailTest("List Error: Invalid Key Type",
                      R"(
-            var l = [1, 2];
+            list<int> l = [1, 2];
             l["key"] = 3; // List 只能用数字下标
        )");
 
@@ -153,7 +153,7 @@ inline void registerBasics(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Dynamic Behavior",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             m[100] = 1;   // 稀疏数组/Hash
             m["k"] = "v"; // 字符串键
 
@@ -179,7 +179,7 @@ inline void registerBasics(TestRunner &runner) {
                 else { print(k .. ":" .. v); }
             }
 
-            var m = {1:30, 3:30};
+            map<int, int> m = {1:30, 3:30};
             print("--- Map ---");
 
             for(k,v : pairs(m)){
@@ -196,7 +196,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Empty List",
                  R"(
-            var l = [];
+            list<any> l = [];
             print(#l);
             print(l == null); // false, empty list is not null
        )",
@@ -204,13 +204,13 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
 
   runner.addFailTest("List Error: Negative Index Read",
                      R"(
-             var l = [1, 2, 3];
+             list<int> l = [1, 2, 3];
              print(l[-1]);
         )");
 
   runner.addFailTest("List Error: Out of Bounds Read",
                      R"(
-             var l = [1, 2, 3];
+             list<int> l = [1, 2, 3];
              print(l[3]); // 索引 0,1,2 有效，3 越界
         )");
 
@@ -235,7 +235,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Mixed Types",
                  R"(
-            var mixed = [1, "hello", true, 3.14, null];
+            list<any> mixed = [1, "hello", true, 3.14, null];
             print(mixed[0]);
             print(mixed[1]);
             print(mixed[2]);
@@ -249,7 +249,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Nested Lists",
                  R"(
-            var matrix = [[1, 2], [3, 4], [5, 6]];
+            list<list<int>> matrix = [[1, 2], [3, 4], [5, 6]];
             print(#matrix);
             print(#matrix[0]);
             print(matrix[0][0]);
@@ -264,7 +264,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Modify Nested Elements",
                  R"(
-            var matrix = [[1, 2], [3, 4]];
+            list<list<int>> matrix = [[1, 2], [3, 4]];
             matrix[0][1] = 99;
             print(matrix[0][0]);
             print(matrix[0][1]);
@@ -277,7 +277,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Multiple Nil Elements",
                  R"(
-            var l = [null, null, 42, null];
+            list<any> l = [null, null, 42, null];
             print(#l);
             print(l[0]);
             print(l[1]);
@@ -291,7 +291,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: For Loop Iteration",
                  R"(
-            var l = [10, 20, 30];
+            list<int> l = [10, 20, 30];
             for (i = 0, #l - 1) {
                 print(l[i]);
             }
@@ -303,7 +303,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Iteration with Nil",
                  R"(
-            var l = [1, null, 3];
+            list<any> l = [1, null, 3];
             for (i = 0, #l - 1) {
                 if (l[i] == null) {
                     print("nil");
@@ -327,7 +327,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
                 return total;
             }
 
-            var nums = [1, 2, 3, 4, 5];
+            list<int> nums = [1, 2, 3, 4, 5];
             print(sum(nums));
        )",
                  "15");
@@ -341,7 +341,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
                 return [100, 200, 300];
             }
 
-            var result = makeList();
+            any result = makeList();
             print(result[0]);
             print(result[2]);
             print(#result);
@@ -353,8 +353,8 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Reference Behavior",
                  R"(
-            var a = [1, 2, 3];
-            var b = a;
+            list<int> a = [1, 2, 3];
+            list<int> b = a;
             b[0] = 99;
             print(a[0]); // 应该是 99，因为是引用
             print(b[0]);
@@ -366,9 +366,9 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Comparison",
                  R"(
-            var a = [1, 2, 3];
-            var b = [1, 2, 3];
-            var c = a;
+            list<int> a = [1, 2, 3];
+            list<int> b = [1, 2, 3];
+            list<int> c = a;
 
             print(a == c);  // 同一引用
             print(a == b);  // 不同实例，内容相同（取决于实现）
@@ -384,7 +384,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Empty Map",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             print(#m);
             print(m == null);
        )",
@@ -395,7 +395,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Delete Key",
                  R"(
-            var m = {"1":"10", "2":"20", "3":"30"};
+            map<string, string> m = {"1":"10", "2":"20", "3":"30"};
             print(m["1"]);
             m["1"] = null;  // 删除键
             print(m["1"]);
@@ -407,7 +407,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Non-existent Key",
                  R"(
-            var m = {"1":"10"};
+            map<string, string> m = {"1":"10"};
             print(m["2"]);  // 不存在的键返回 nil
             print(m["1"]);
        )",
@@ -418,7 +418,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: String Keys",
                  R"(
-            var m = {"name":"Alice", "age":"30", "city":"NYC"};
+            map<string, string> m = {"name":"Alice", "age":"30", "city":"NYC"};
             print(m["name"]);
             print(m["age"]);
             print(m["city"]);
@@ -430,7 +430,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Mixed Key Types",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             m[1] = "int key";
             m["str"] = "string key";
             m[true] = "bool key";
@@ -446,7 +446,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Float Keys",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             m[3.14] = "pi";
             m[2.71] = "e";
 
@@ -460,7 +460,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Negative Keys",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             m[-1] = "negative";
             m[-100] = "very negative";
 
@@ -474,7 +474,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Sparse Array Behavior",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             m[1] = "a";
             m[100] = "b";
             m[1000] = "c";
@@ -491,7 +491,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Nested Maps",
                  R"(
-            var m = {
+            any m = {
                 "user1": {"name":"Alice", "age":"25"},
                 "user2": {"name":"Bob", "age":"30"}
             };
@@ -507,7 +507,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Modify Nested Values",
                  R"(
-            var m = {"data": {"x":"10", "y":"20"}};
+            any m = {"data": {"x":"10", "y":"20"}};
             m["data"]["x"] = "99";
             print(m["data"]["x"]);
             print(m["data"]["y"]);
@@ -519,7 +519,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Dynamic Key Addition",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             m["key1"] = "value1";
             print(m["key1"]);
 
@@ -540,7 +540,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
                 return dict[key];
             }
 
-            var m = {"a":"100", "b":"200"};
+            map<string, string> m = {"a":"100", "b":"200"};
             print(getValue(m, "a"));
             print(getValue(m, "b"));
        )",
@@ -566,8 +566,8 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Reference Behavior",
                  R"(
-            var a = {"key":"value1"};
-            var b = a;
+            map<string, string> a = {"key":"value1"};
+            list<int> b = a;
             b["key"] = "value2";
             print(a["key"]);  // 应该是 value2
             print(b["key"]);
@@ -583,7 +583,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List of Maps",
                  R"(
-            var users = [
+            any users = [
                 {"name":"Alice", "age":"25"},
                 {"name":"Bob", "age":"30"},
                 {"name":"Charlie", "age":"35"}
@@ -600,7 +600,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map of Lists",
                  R"(
-            var data = {
+            any data = {
                 "numbers": [1, 2, 3],
                 "strings": ["a", "b", "c"]
             };
@@ -616,7 +616,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Complex Nested Structure",
                  R"(
-            var complex = {
+            any complex = {
                 "users": [
                     {"name":"Alice", "scores":[85, 90, 95]},
                     {"name":"Bob", "scores":[75, 80, 85]}
@@ -634,7 +634,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Modify Mixed Structure",
                  R"(
-            var data = {
+            any data = {
                 "items": [10, 20, 30]
             };
 
@@ -654,7 +654,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("List: Fixed Length After Creation",
                  R"(
-            var l = [1, 2, 3];
+            list<int> l = [1, 2, 3];
             print(#l);
             l[0] = 100;
             l[1] = 200;
@@ -668,14 +668,14 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Pairs: Empty Containers",
                  R"(
-            var l = [];
-            var count = 0;
+            list<any> l = [];
+            int count = 0;
             for (k, v : pairs(l)) {
                 count += 1;
             }
             print(count);
 
-            var m = {};
+            map<any, any> m = {};
             count = 0;
             for (k, v : pairs(m)) {
                 count += 1;
@@ -689,8 +689,8 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("String Concatenation with List Elements",
                  R"(
-            var l = [1, 2, 3];
-            var result = "Values: " .. l[0] .. ", " .. l[1] .. ", " .. l[2];
+            list<int> l = [1, 2, 3];
+            any result = "Values: " .. l[0] .. ", " .. l[1] .. ", " .. l[2];
             print(result);
        )",
                  "Values: 1, 2, 3");
@@ -700,17 +700,17 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Check if Containers are Empty",
                  R"(
-            var l = [];
+            list<any> l = [];
             if (#l == 0) {
                 print("List is empty");
             }
 
-            var m = {};
+            map<any, any> m = {};
             if (#m == 0) {
                 print("Map is empty");
             }
 
-            var l2 = [1];
+            list<int> l2 = [1];
             if (#l2 > 0) {
                 print("List has elements");
             }
@@ -746,7 +746,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
 
   runner.addFailTest("List Error: Float Index",
                      R"(
-             var l = [1, 2, 3];
+             list<int> l = [1, 2, 3];
              print(l[1.5]);  // 浮点数不能作为 List 索引
         )");
 
@@ -755,7 +755,7 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Map: Float Index Access",
                  R"(
-            var m = {};
+            map<any, any> m = {};
             m[0] = "zero";
             m[1] = "one";
             // 浮点数 0.0 和整数 0 应该是不同的键（取决于实现）
@@ -769,10 +769,10 @@ inline void registerBasicsExtendedTemp(TestRunner &runner) {
   // ---------------------------------------------------------
   runner.addTest("Direct Assignment of Containers",
                  R"(
-            var l1 = [1, 2, 3];
-            var l2 = l1;
-            var m1 = {"a":"1"};
-            var m2 = m1;
+            list<int> l1 = [1, 2, 3];
+            list<int> l2 = l1;
+            map<string, string> m1 = {"a":"1"};
+            map<string, string> m2 = m1;
 
             print(l2[0]);
             print(m2["a"]);
