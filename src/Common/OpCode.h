@@ -94,15 +94,15 @@ enum class OpCode : uint8_t {
 
   /* --- 优化指令 --- */
   OP_ADDI, /* iABC R[A] = R[B] + sC (C视为有符号8位整数) */
-  OP_EQK,  /* iABC if (R[A] == K[B]) != C then pc++ B: 常量表索引(0-255), C:期望结果(0或1) */
-  OP_EQI,  /* iABC if (R[A] == sB) != C then pc++  */
-  OP_LTI,  /* iABC if (R[A] < sB) != C then pc++   */
-  OP_LEI,  /* iABC: if (R[A] <= sB) != C then pc++ A: 寄存器, B: 有符号8位立即数, C: 期望结果*/
+  OP_EQK, /* iABC if (R[A] == K[B]) != C then pc++ B: 常量表索引(0-255), C:期望结果(0或1) */
+  OP_EQI, /* iABC if (R[A] == sB) != C then pc++  */
+  OP_LTI, /* iABC if (R[A] < sB) != C then pc++   */
+  OP_LEI, /* iABC: if (R[A] <= sB) != C then pc++ A: 寄存器, B: 有符号8位立即数, C: 期望结果*/
 
   OP_FORPREP, /* A sBx | R[A] -= R[A+2]; pc += sBx      初始化：预减 Step，跳转到循环尾部首次检查 */
   OP_FORLOOP, /* A sBx | R[A] += R[A+2]; if R[A] <= R[A+1] then pc += sBx 循环尾：步进 + 检查 + 回跳
                */
-  OP_LOADI,   /* A sBx | R[A] := sBx  加载17位有符号立即数 (用于优化小整数加载) */
+  OP_LOADI, /* A sBx | R[A] := sBx  加载17位有符号立即数 (用于优化小整数加载) */
 
   /* ** OP_TFORCALL
   ** 格式: A C

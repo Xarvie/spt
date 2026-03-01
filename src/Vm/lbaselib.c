@@ -433,12 +433,12 @@ static int luaB_dofile(lua_State *L) {
 
 /* luaB_assert - receiver is arg1, condition is arg2, message is arg3... */
 static int luaB_assert(lua_State *L) {
-  if (l_likely(lua_toboolean(L, 2))) /* condition is true? */
-    return lua_gettop(L);            /* return all arguments */
-  else {                             /* error */
-    luaL_checkany(L, 2);             /* there must be a condition */
-    lua_remove(L, 1);                /* remove receiver */
-    lua_remove(L, 1);                /* remove condition */
+  if (l_likely(lua_toboolean(L, 2)))         /* condition is true? */
+    return lua_gettop(L);                    /* return all arguments */
+  else {                                     /* error */
+    luaL_checkany(L, 2);                     /* there must be a condition */
+    lua_remove(L, 1);                        /* remove receiver */
+    lua_remove(L, 1);                        /* remove condition */
     lua_pushliteral(L, "assertion failed!"); /* default message */
     lua_settop(L, 1);                        /* leave only message (default if no other one) */
     lua_pushnil(L);                          /* dummy receiver for luaB_error */

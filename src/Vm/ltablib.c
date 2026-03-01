@@ -41,8 +41,8 @@ static int checkfield(lua_State *L, const char *key, int n) {
 */
 static void checktab(lua_State *L, int arg, int what) {
   if (lua_type(L, arg) != LUA_TTABLE && lua_type(L, arg) != LUA_TARRAY) { /* not a table or list? */
-    int n = 1;                          /* number of elements to pop */
-    if (lua_getmetatable(L, arg) &&     /* must have metatable */
+    int n = 1;                      /* number of elements to pop */
+    if (lua_getmetatable(L, arg) && /* must have metatable */
         (!(what & TAB_R) || checkfield(L, "__index", ++n)) &&
         (!(what & TAB_W) || checkfield(L, "__newindex", ++n)) &&
         (!(what & TAB_L) || checkfield(L, "__len", ++n))) {
@@ -62,31 +62,92 @@ static int tcreate(lua_State *L) {
   return 1;
 }
 
+///* (removed: ensurearray was incorrect; amortized growth is handled
+//   internally by luaH_finishset when lua_seti is called at index == loglen) */
+///*
+//** Ensure the array at stack index 'idx' has capacity for at least
+//** 'needed' elements. If not, grow with amortized strategy.
+//** Does NOT change loglen — caller is responsible for that.
+//*/
+// static void ensurearray(lua_State *L, int idx, lua_Integer needed) {
+//  lua_Integer cap = lua_arraylen(L, idx);  /* current capacity = asize via internal;
+//                                             but lua_arraylen returns loglen now.
+//                                             We need physical capacity. */
+//  /* NOTE: lua_arraylen returns loglen. To check physical capacity we
+//     compare needed against what arrayresize would accept.  However,
+//     the simplest approach: just try to setlen; if needed > cap (loglen),
+//     we know we might need more capacity.  But we can't query asize from
+//     here directly.
+//
+//     Simpler: just call lua_arraysetlen which will fail if newlen > asize.
+//     So we need a way to ensure capacity.  The easiest: call lua_arrayresize
+//     with max(current_resize, needed).  But lua_arrayresize requires
+//     newsize >= loglen, which is always true if we're growing.
+//
+//     Actually the cleanest approach: lua_seti on index == loglen will
+//     trigger luaH_finishset which does amortized growth internally.
+//     So for push we can just use lua_seti.
+//
+//     For insert, we need to first grow loglen by 1, then shift.
+//     We can do: lua_arraysetlen(L, idx, size+1) — but this requires
+//     asize >= size+1.  If not, we need lua_arrayresize first.
+//
+//     Let's just do: if needed > current loglen, resize capacity first. */
+//  /* Actually, let's query capacity properly. We'll use a simple approach:
+//     try to set the length, and if capacity is insufficient, grow first. */
+//  /* The robust way: always ensure capacity >= needed before setlen */
+//  (void)cap;
+//  /* We call arrayresize to at least 'needed'. If asize is already enough,
+//     resizearray is a no-op (oldasize == newasize). The amortized growth
+//     is done here. */
+//  {
+//    /* We need to read asize. Since lua_arraylen now returns loglen,
+//       we need another way. We can use lua_arrayresize speculatively,
+//       or add a capacity query. For now, let's just resize to 'needed'
+//       with amortized growth — the internal resizearray handles the
+//       case where oldasize == newasize as a no-op. */
+//    lua_Integer loglen_now = lua_arraylen(L, idx);
+//    if (needed > loglen_now) {
+//      /* We don't know asize from the API, but lua_arrayresize will
+//         only realloc if newsize != asize internally. To do amortized
+//         growth, compute a good target. */
+//      lua_Integer target = loglen_now + (loglen_now >> 1);
+//      if (target < needed) target = needed;
+//      if (target < loglen_now + 8) target = loglen_now + 8;
+//      lua_arrayresize(L, idx, target);
+//    }
+//  }
+//}
+
 /*
 ** tinsert - receiver is arg1, table is arg2, pos/value are arg3/arg4
+**
+** For arrays (lists):
+**   - Ensure capacity for size+1 elements
+**   - Set loglen to size+1
+**   - Shift elements
+**   - Write value
 */
 static int tinsert(lua_State *L) {
   lua_Integer pos; /* where to insert new element */
   lua_Integer e = aux_getn(L, 2, TAB_RW);
   int isarray = (lua_type(L, 2) == LUA_TARRAY);
-  /* 'e' is the length; in 0-based, first empty slot is index e */
+  /* 'e' is the logical length; first empty slot is index e */
   switch (lua_gettop(L)) {
   case 3: {  /* called with only 2 arguments: append */
     pos = e; /* insert new element at the end */
-    if (isarray) {
-      /* Grow array by exactly 1 to maintain correct logical length */
-      lua_arrayresize(L, 2, cast_uint(e + 1));
-    }
+    /* for arrays, lua_seti at pos==e triggers amortized growth in finishset */
     break;
   }
   case 4: {
     lua_Integer i;
     pos = luaL_checkinteger(L, 3); /* 2nd argument is the position */
-    /* check whether 'pos' is in [0, e] */
     luaL_argcheck(L, (lua_Unsigned)pos <= (lua_Unsigned)e, 3, "position out of bounds");
     if (isarray) {
-      /* Grow array by exactly 1 BEFORE shifting */
-      lua_arrayresize(L, 2, cast_uint(e + 1));
+      /* grow by appending a dummy nil at the end to trigger amortized growth,
+         then overwrite by shifting — but simpler: push nil to extend, shift, then write */
+      lua_pushnil(L);
+      lua_seti(L, 2, e); /* extend loglen to e+1 via append path */
     }
     for (i = e; i > pos; i--) { /* move up elements */
       lua_geti(L, 2, i - 1);
@@ -104,6 +165,11 @@ static int tinsert(lua_State *L) {
 
 /*
 ** tremove - receiver is arg1, table is arg2, pos is arg3
+**
+** For arrays (lists):
+**   - Shift elements down
+**   - Shrink loglen by 1 (no physical shrink)
+**   - Clear the vacated slot (done by arraysetlen)
 */
 static int tremove(lua_State *L) {
   lua_Integer size = aux_getn(L, 2, TAB_RW);
@@ -121,8 +187,8 @@ static int tremove(lua_State *L) {
     lua_seti(L, 2, pos); /* t[pos] = t[pos + 1] */
   }
   if (isarray) {
-    /* Shrink array by 1: this sets asize = size - 1 (correct logical length) */
-    lua_arrayresize(L, 2, cast_uint(size - 1));
+    /* Shrink logical length by 1. arraysetlen clears the vacated slot. */
+    lua_arraysetlen(L, 2, size - 1);
   } else {
     lua_pushnil(L);
     lua_seti(L, 2, pos); /* remove entry t[pos] */
@@ -198,11 +264,18 @@ static int tconcat(lua_State *L) {
 ** =======================================================
 */
 
-/* tpack - receiver is arg1, values start from arg2 */
+/*
+** tpack - receiver is arg1, values start from arg2
+**
+** Creates an array with capacity = n, loglen = n, then fills it.
+*/
 static int tpack(lua_State *L) {
   int i;
   int n = lua_gettop(L) - 1; /* number of values (excluding receiver) */
-  lua_createarray(L, n);     /* create result list */
+  lua_createarray(L, n);     /* create result list (capacity = n, loglen = 0) */
+  /* Set loglen = n so that seti can write into [0, n-1] */
+  if (n > 0)
+    lua_arraysetlen(L, -1, n);
   /* Stack: [1:receiver, 2:val1, ..., n+1:valN, n+2:list] */
   lua_insert(L, 2); /* put list after receiver */
   /* Stack: [1:receiver, 2:list, 3:val1, ..., n+2:valN] */
@@ -275,10 +348,16 @@ static int sort_comp(lua_State *L, int a, int b) {
     return lua_compare(L, a, b, LUA_OPLT); /* a < b */
   else {                                   /* function */
     int res;
-    lua_pushvalue(L, 3);        /* push function */
-    lua_pushvalue(L, a - 1);    /* -1 to compensate function */
-    lua_pushvalue(L, b - 2);    /* -2 to compensate function and 'a' */
-    lua_call(L, 2, 1);          /* call function */
+    lua_pushvalue(L, 3); /* push function (栈高度 +1) */
+
+    /* ========== 你的统一 Receiver 补丁 ========== */
+    lua_pushnil(L); /* push 隐式的 'self' (栈高度再 +1) */
+
+    lua_pushvalue(L, a - 2); /* 补偿 func 和 nil，所以是 a - 2 */
+    lua_pushvalue(L, b - 3); /* 补偿 func, nil 和 a，所以是 b - 3 */
+    lua_call(L, 3, 1);       /* 告诉 VM：我传了 3 个参数 (self, a, b)！ */
+    /* ============================================ */
+
     res = lua_toboolean(L, -1); /* get result */
     lua_pop(L, 1);              /* pop result */
     return res;
@@ -407,10 +486,10 @@ static int sort(lua_State *L) {
 ** {======================================================
 ** List Operations (push/pop)
 **
-** KEY DESIGN: For LIST (array mode), asize IS the logical length.
-** push/pop resize by exactly +1/-1 to keep asize correct.
-** This is O(n) per push due to reallocation, but correct.
-** Future optimization: separate logical length from capacity.
+** KEY DESIGN: loglen is the logical length, asize is physical capacity.
+** push: if loglen < asize, just write and bump loglen (O(1) amortized).
+**       if loglen == asize, grow capacity (amortized), then write.
+** pop:  decrement loglen, clear vacated slot. No physical shrink.
 ** =======================================================
 */
 
@@ -419,9 +498,8 @@ static int sort(lua_State *L) {
 ** Arguments: receiver (nil), list, value
 ** Returns: nothing
 **
-** FIX: Resize to exactly size+1. Do NOT use amortized growth,
-** because asize is used as the logical length (#l).
-** Growing beyond size+1 would make #l report wrong values.
+** Uses lua_seti at index == loglen, which triggers the amortized
+** growth path in luaH_finishset when loglen == asize.
 */
 static int lpush(lua_State *L) {
   lua_Integer size;
@@ -430,19 +508,17 @@ static int lpush(lua_State *L) {
   luaL_checktype(L, 2, LUA_TARRAY);
   luaL_checkany(L, 3);
 
-  /* Get current logical size (= asize for arrays) */
+  /* Get current logical length */
   size = luaL_len(L, 2);
 
   /* Check for overflow */
   if (l_unlikely(size >= LUA_MAXINTEGER))
     return luaL_error(L, "list overflow");
 
-  /* Resize to exactly size + 1 */
-  lua_arrayresize(L, 2, cast_uint(size + 1));
-
-  /* Set the new element at position 'size' (0-based) */
+  /* Write value at list[size]. If size == asize (capacity full),
+     luaH_finishset will do amortized growth internally. */
   lua_pushvalue(L, 3);
-  lua_seti(L, 2, size);
+  lua_seti(L, 2, size); /* triggers append path in finishset */
 
   return 0;
 }
@@ -458,7 +534,7 @@ static int lpop(lua_State *L) {
   /* Validate arguments */
   luaL_checktype(L, 2, LUA_TARRAY);
 
-  /* Get current size */
+  /* Get current logical length */
   size = luaL_len(L, 2);
 
   /* Handle empty list */
@@ -470,8 +546,8 @@ static int lpop(lua_State *L) {
   /* Get the last element (0-based: size-1) */
   lua_geti(L, 2, size - 1);
 
-  /* Shrink to size - 1 (this is the new logical length) */
-  lua_arrayresize(L, 2, cast_uint(size - 1));
+  /* Shrink logical length by 1 (clears the vacated slot for GC safety) */
+  lua_arraysetlen(L, 2, size - 1);
 
   return 1;
 }

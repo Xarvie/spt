@@ -86,6 +86,7 @@ int main(int argc, char *argv[]) {
   // 基础语法
   registerBasics(runner);
   registerListMapTest(runner);
+  registerListMapFullTest(runner);
   registerBasicsExtendedTemp(runner);
   registerControlFlow(runner);
 

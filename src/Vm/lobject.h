@@ -797,11 +797,12 @@ typedef union Node {
 
 typedef struct Table {
   CommonHeader;
-  lu_byte flags;      /* 1<<p means tagmethod(p) is not present */
-  lu_byte lsizenode;  /* log2 of number of slots of 'node' array */
-  lu_byte mode;       /* TABLE_ARRAY (1) or TABLE_MAP (2) */
-  unsigned int asize; /* number of slots in 'array' array */
-  Value *array;       /* array part */
+  lu_byte flags;       /* 1<<p means tagmethod(p) is not present */
+  lu_byte lsizenode;   /* log2 of number of slots of 'node' array */
+  lu_byte mode;        /* TABLE_ARRAY (1) or TABLE_MAP (2) */
+  unsigned int asize;  /* number of slots in 'array' array (physical capacity) */
+  unsigned int loglen; /* logical length, only used by TABLE_ARRAY */
+  Value *array;        /* array part */
   Node *node;
   struct Table *metatable;
   GCObject *gclist;

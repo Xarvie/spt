@@ -38,11 +38,18 @@
 /* returns the Node, given the value of a table entry */
 #define nodefromval(v) cast(Node *, (v))
 
+/*
+** For TABLE_ARRAY (list), the logical boundary for fast access is
+** 'loglen' (logical length).  For regular tables, it is 'asize'
+** (physical capacity of the array part).
+*/
+#define arraylimit(h) ((h)->mode == TABLE_ARRAY ? (h)->loglen : (h)->asize)
+
 #define luaH_fastgeti(t, k, res, tag)                                                              \
   {                                                                                                \
     Table *h = t;                                                                                  \
     lua_Unsigned u = l_castS2U(k);                                                                 \
-    if ((u < h->asize)) {                                                                          \
+    if ((u < arraylimit(h))) {                                                                     \
       tag = *getArrTag(h, u);                                                                      \
       if (tag != LUA_VEMPTY) {                                                                     \
         farr2val(h, u, tag, res);                                                                  \
@@ -56,7 +63,7 @@
   {                                                                                                \
     Table *h = t;                                                                                  \
     lua_Unsigned u = l_castS2U(k);                                                                 \
-    if ((u < h->asize)) {                                                                          \
+    if ((u < arraylimit(h))) {                                                                     \
       lu_byte *tag = getArrTag(h, u);                                                              \
       if (checknoTM(h->metatable, TM_NEWINDEX) || !tagisempty(*tag)) {                             \
         fval2arr(h, u, tag, val);                                                                  \

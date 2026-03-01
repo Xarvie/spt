@@ -544,7 +544,8 @@ static void ast_adjust_assign(CompileCtx *C, int nvars, int nexps, expdesc *e) {
  * enclosing LambdaNode / FunctionDeclNode.
  *=====================================================================*/
 static void compile_params(CompileCtx *C, FuncState *new_fs,
-                           const std::vector<ParameterDeclNode *> &params, bool isVariadic) {
+                           const std::vector<ParameterDeclNode *> &params, bool isVariadic,
+                           bool isMethod) {
   /*------------------------------------------------------------
    * Implicit 'self' parameter — ALWAYS occupies Slot 0.
    *
@@ -557,9 +558,10 @@ static void compile_params(CompileCtx *C, FuncState *new_fs,
    * For closure calls           →  self = the closure itself
    * For obj.method() / obj:m()  →  self = obj
    *-----------------------------------------------------------*/
-  TString *selfname = mkstr(C, "self");
+  const char *recName = isMethod ? "self" : "(receiver)";
+  TString *selfname = mkstr(C, recName);
   ast_new_localvar(C, selfname);
-  ast_adjustlocalvars(C, 1); /* self is now at ridx 0 */
+  ast_adjustlocalvars(C, 1); /* Slot 0 is now occupied */
 
   /* User-declared parameters — start from Slot 1 */
   int nparams = 0;
@@ -897,7 +899,7 @@ static void compile_lambda(CompileCtx *C, LambdaNode *n, expdesc *e) {
   ast_open_func(C, &new_fs, &bl);
 
   /* Parameters — vararg is signaled by n->isVariadic, not per-param */
-  compile_params(C, &new_fs, n->params, n->isVariadic);
+  compile_params(C, &new_fs, n->params, n->isVariadic, false);
 
   /* Body */
   if (n->body) {
@@ -1848,7 +1850,7 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
       new_fs.f->linedefined = C->linenumber;
       ast_open_func(C, &new_fs, &bl);
 
-      compile_params(C, &new_fs, n->params, n->isVariadic);
+      compile_params(C, &new_fs, n->params, n->isVariadic, false);
 
       if (n->body)
         compile_block(C, n->body);
@@ -1876,7 +1878,7 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
       new_fs.f->linedefined = C->linenumber;
       ast_open_func(C, &new_fs, &bl);
 
-      compile_params(C, &new_fs, n->params, n->isVariadic);
+      compile_params(C, &new_fs, n->params, n->isVariadic, false);
 
       if (n->body)
         compile_block(C, n->body);
@@ -1966,7 +1968,7 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
            so no special handling needed for instance methods. */
 
         /* Method parameters — use fdecl->isVariadic */
-        compile_params(C, &new_fs, fdecl->params, fdecl->isVariadic);
+        compile_params(C, &new_fs, fdecl->params, fdecl->isVariadic, !isStatic);
 
         if (fdecl->body)
           compile_block(C, fdecl->body);
@@ -2104,7 +2106,7 @@ static void compile_defer(CompileCtx *C, DeferStatementNode *n) {
 
     /* Use compile_params with empty param list — adds implicit self */
     std::vector<ParameterDeclNode *> empty_params;
-    compile_params(C, &new_fs, empty_params, false);
+    compile_params(C, &new_fs, empty_params, false, false);
 
     if (n->body)
       compile_block(C, n->body);

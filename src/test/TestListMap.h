@@ -1109,3 +1109,1001 @@ inline void registerListMapTest(TestRunner &runner) {
        )",
                  "2\nSword\nShield");
 }
+
+inline void registerListMapFullTest(TestRunner &runner) {
+
+  // =======================================================
+  // 第一组：loglen / asize 分离 —— 基础语义验证
+  // =======================================================
+
+  // 空 list，loglen=0
+  runner.addTest("Boundary: Empty list length is 0",
+                 R"(
+    list<any> l = [];
+    print(#l);
+  )",
+                 "0");
+
+  // 字面量初始化后 loglen == 元素个数
+  runner.addTest("Boundary: Literal init loglen equals element count",
+                 R"(
+    list<int> l = [10, 20, 30, 40, 50];
+    print(#l);
+  )",
+                 "5");
+
+  // push 后 loglen 增长，不是 asize
+  runner.addTest("Boundary: Push increments loglen not asize",
+                 R"(
+    list<any> l = [];
+    table.push(l, 1);
+    print(#l);
+    table.push(l, 2);
+    print(#l);
+    table.push(l, 3);
+    print(#l);
+  )",
+                 "1\n2\n3");
+
+  // pop 后 loglen 减少
+  runner.addTest("Boundary: Pop decrements loglen",
+                 R"(
+    list<int> l = [1, 2, 3];
+    print(#l);
+    table.pop(l);
+    print(#l);
+    table.pop(l);
+    print(#l);
+  )",
+                 "3\n2\n1");
+
+  // push 再 pop 到 0，loglen 归零
+  runner.addTest("Boundary: Push then pop all, loglen back to 0",
+                 R"(
+    list<any> l = [];
+    table.push(l, 100);
+    table.push(l, 200);
+    table.pop(l);
+    table.pop(l);
+    print(#l);
+  )",
+                 "0");
+
+  // =======================================================
+  // 第二组：amortized growth —— 扩容路径验证
+  // =======================================================
+
+  // 从 0 开始 push 超过初始容量（触发多次扩容），loglen 始终正确
+  runner.addTest("Boundary: Amortized growth 1..16 loglen correct",
+                 R"(
+    list<any> l = [];
+    for (i = 0, 15) {
+        table.push(l, i);
+    }
+    print(#l);
+    print(l[0]);
+    print(l[7]);
+    print(l[15]);
+  )",
+                 "16\n0\n7\n15");
+
+  // push 100 个元素，验证 loglen 和内容完整性
+  runner.addTest("Boundary: Amortized growth 100 elements integrity",
+                 R"(
+    list<any> l = [];
+    for (i = 0, 99) {
+        table.push(l, i * 3);
+    }
+    print(#l);
+    print(l[0]);
+    print(l[49]);
+    print(l[99]);
+  )",
+                 "100\n0\n147\n297");
+
+  // 扩容后读取边界元素（loglen-1），不能读到 asize 区域
+  runner.addTest("Boundary: After growth, last valid index is loglen-1",
+                 R"(
+    list<any> l = [];
+    for (i = 0, 7) {
+        table.push(l, i + 10);
+    }
+    print(l[7]);
+    print(#l);
+  )",
+                 "17\n8");
+
+  // 扩容后立刻 pop，loglen 正确缩减
+  runner.addTest("Boundary: Growth then immediate pop",
+                 R"(
+    list<any> l = [];
+    for (i = 0, 9) {
+        table.push(l, i);
+    }
+    any v = table.pop(l);
+    print(v);
+    print(#l);
+  )",
+                 "9\n9");
+
+  // =======================================================
+  // 第三组：[loglen, asize) 区间 GC 安全 —— pop 后槽位不可读
+  // =======================================================
+
+  // pop 之后原位置不再属于 list，越界读取应报错
+  runner.addFailTest("Boundary: Read popped slot is out of bounds",
+                     R"(
+    list<int> l = [1, 2, 3];
+    table.pop(l);
+    print(l[2]);
+  )");
+
+  // remove 之后 loglen 缩减，原末尾不可读
+  runner.addFailTest("Boundary: Read after remove shrinks loglen",
+                     R"(
+    list<int> l = [10, 20, 30];
+    table.remove(l, 0);
+    print(l[2]);
+  )");
+
+  // pop 到 0 后不能读任何位置
+  runner.addFailTest("Boundary: Read index 0 on empty list after pop all",
+                     R"(
+    list<int> l = [5];
+    table.pop(l);
+    print(l[0]);
+  )");
+
+  // =======================================================
+  // 第四组：越界写入必须报错
+  // =======================================================
+
+  // 写 loglen 位置（追加路径以外不允许直接赋值）
+  runner.addFailTest("Boundary: Write at index == loglen via direct assign",
+                     R"(
+    list<int> l = [1, 2, 3];
+    l[3] = 99;
+  )");
+
+  // 写负数下标
+  runner.addFailTest("Boundary: Write negative index",
+                     R"(
+    list<int> l = [1, 2, 3];
+    l[-1] = 0;
+  )");
+
+  // 写远超 loglen 的位置
+  runner.addFailTest("Boundary: Write far out of bounds",
+                     R"(
+    list<int> l = [1, 2, 3];
+    l[100] = 0;
+  )");
+
+  // 非整数下标写入
+  runner.addFailTest("Boundary: Write float index",
+                     R"(
+    list<int> l = [1, 2, 3];
+    l[1.5] = 99;
+  )");
+
+  // 字符串下标写入 list
+  runner.addFailTest("Boundary: Write string key to list",
+                     R"(
+    list<any> l = [1, 2];
+    l["key"] = 99;
+  )");
+
+  // =======================================================
+  // 第五组：越界读取必须报错
+  // =======================================================
+
+  runner.addFailTest("Boundary: Read index == loglen",
+                     R"(
+    list<int> l = [1, 2, 3];
+    print(l[3]);
+  )");
+
+  runner.addFailTest("Boundary: Read negative index",
+                     R"(
+    list<int> l = [1, 2, 3];
+    print(l[-1]);
+  )");
+
+  runner.addFailTest("Boundary: Read large out of bounds",
+                     R"(
+    list<int> l = [1, 2, 3];
+    print(l[999]);
+  )");
+
+  runner.addFailTest("Boundary: Read float index",
+                     R"(
+    list<int> l = [1, 2, 3];
+    print(l[0.5]);
+  )");
+
+  // =======================================================
+  // 第六组：#list 语义 —— 始终返回 loglen
+  // =======================================================
+
+  // 修改元素不改变 loglen
+  runner.addTest("Boundary: Modify elements does not change loglen",
+                 R"(
+    list<int> l = [1, 2, 3, 4, 5];
+    l[0] = 100;
+    l[4] = 500;
+    print(#l);
+  )",
+                 "5");
+
+  // 交替 push/pop，# 始终正确
+  runner.addTest("Boundary: Interleaved push pop hash correct",
+                 R"(
+    list<any> l = [];
+    table.push(l, 1);
+    table.push(l, 2);
+    table.push(l, 3);
+    table.pop(l);
+    print(#l);
+    table.push(l, 4);
+    print(#l);
+    table.pop(l);
+    table.pop(l);
+    print(#l);
+  )",
+                 "2\n3\n1");
+
+  // table.insert 后 # 增加 1
+  runner.addTest("Boundary: Insert increases loglen by 1",
+                 R"(
+    list<int> l = [10, 20, 30];
+    table.insert(l, 1, 99);
+    print(#l);
+  )",
+                 "4");
+
+  // table.remove 后 # 减少 1
+  runner.addTest("Boundary: Remove decreases loglen by 1",
+                 R"(
+    list<int> l = [10, 20, 30, 40];
+    table.remove(l, 0);
+    print(#l);
+  )",
+                 "3");
+
+  // table.move 目标 list 的 # 不变（move 不改变目标 loglen）
+  runner.addTest("Boundary: Move does not change source loglen",
+                 R"(
+    list<int> src = [1, 2, 3];
+    list<int> dst = [0, 0, 0, 0, 0];
+    table.move(src, 0, 2, 0, dst);
+    print(#src);
+    print(#dst);
+  )",
+                 "3\n5");
+
+  // =======================================================
+  // 第七组：table.pack / table.unpack loglen 语义
+  // =======================================================
+
+  // pack 创建的 list，# 等于参数数量
+  runner.addTest("Boundary: Pack loglen equals argument count",
+                 R"(
+    any l = table.pack(10, 20, 30, 40);
+    print(#l);
+    print(l[0]);
+    print(l[3]);
+  )",
+                 "4\n10\n40");
+
+  // pack 0 个参数，loglen = 0
+  runner.addTest("Boundary: Pack zero args loglen is 0",
+                 R"(
+    any l = table.pack();
+    print(#l);
+  )",
+                 "0");
+
+  // unpack 范围恰好是 [0, loglen)
+  runner.addTest("Boundary: Unpack full range",
+                 R"(
+    list<int> l = [5, 6, 7];
+    print(table.unpack(l, 0, #l));
+  )",
+                 "5 6 7");
+
+  // unpack 空范围返回 0 个值
+  runner.addTest("Boundary: Unpack empty range returns nothing",
+                 R"(
+    list<int> l = [1, 2, 3];
+    int count = 0;
+    any results = table.pack(table.unpack(l, 0, 0));
+    print(#results);
+  )",
+                 "0");
+
+  // =======================================================
+  // 第八组：table.sort 与 loglen
+  // =======================================================
+
+  // sort 后 loglen 不变
+  runner.addTest("Boundary: Sort preserves loglen",
+                 R"(
+    list<int> l = [5, 3, 1, 4, 2];
+    table.sort(l);
+    print(#l);
+    print(l[0]);
+    print(l[4]);
+  )",
+                 "5\n1\n5");
+
+  // sort 单元素，loglen=1
+  runner.addTest("Boundary: Sort single element",
+                 R"(
+    list<int> l = [42];
+    table.sort(l);
+    print(#l);
+    print(l[0]);
+  )",
+                 "1\n42");
+
+  // sort 两元素
+  runner.addTest("Boundary: Sort two elements",
+                 R"(
+    list<int> l = [9, 1];
+    table.sort(l);
+    print(l[0]);
+    print(l[1]);
+    print(#l);
+  )",
+                 "1\n9\n2");
+
+  // sort 自定义比较函数，loglen 不变
+  runner.addTest("Boundary: Sort custom comparator loglen intact",
+                 R"(
+    list<int> l = [1, 5, 2, 4, 3];
+    table.sort(l, function(any a, any b) -> bool { return a > b; });
+    print(#l);
+    print(l[0]);
+    print(l[4]);
+  )",
+                 "5\n5\n1");
+
+  // =======================================================
+  // 第九组：table.insert 边界
+  // =======================================================
+
+  // insert 在下标 0 处插入
+  runner.addTest("Boundary: Insert at index 0",
+                 R"(
+    list<int> l = [1, 2, 3];
+    table.insert(l, 0, 99);
+    print(#l);
+    print(l[0]);
+    print(l[1]);
+    print(l[3]);
+  )",
+                 "4\n99\n1\n3");
+
+  // insert 在末尾插入（等价于 append）
+  runner.addTest("Boundary: Insert at loglen (append)",
+                 R"(
+    list<int> l = [1, 2, 3];
+    table.insert(l, 3, 4);
+    print(#l);
+    print(l[3]);
+  )",
+                 "4\n4");
+
+  // insert 在中间插入，元素正确移位
+  runner.addTest("Boundary: Insert middle shifts elements correctly",
+                 R"(
+    list<int> l = [1, 2, 3, 4, 5];
+    table.insert(l, 2, 99);
+    print(#l);
+    print(l[2]);
+    print(l[3]);
+    print(l[5]);
+  )",
+                 "6\n99\n3\n5");
+
+  // insert 后再 pop，loglen 正确
+  runner.addTest("Boundary: Insert then pop loglen correct",
+                 R"(
+    list<int> l = [1, 2, 3];
+    table.insert(l, 1, 99);
+    table.pop(l);
+    print(#l);
+    print(l[0]);
+    print(l[1]);
+  )",
+                 "3\n1\n99");
+
+  // =======================================================
+  // 第十组：table.remove 边界
+  // =======================================================
+
+  // remove 首个元素
+  runner.addTest("Boundary: Remove first element",
+                 R"(
+    list<int> l = [10, 20, 30];
+    any v = table.remove(l, 0);
+    print(v);
+    print(#l);
+    print(l[0]);
+  )",
+                 "10\n2\n20");
+
+  // remove 最后一个元素（等价于 pop）
+  runner.addTest("Boundary: Remove last element equals pop",
+                 R"(
+    list<int> l = [10, 20, 30];
+    any v = table.remove(l, 2);
+    print(v);
+    print(#l);
+    print(l[1]);
+  )",
+                 "30\n2\n20");
+
+  // remove 中间元素，前后正确
+  runner.addTest("Boundary: Remove middle element shifts correctly",
+                 R"(
+    list<int> l = [1, 2, 3, 4, 5];
+    table.remove(l, 2);
+    print(#l);
+    print(l[1]);
+    print(l[2]);
+  )",
+                 "4\n2\n4");
+
+  // 连续 remove 直到空
+  runner.addTest("Boundary: Repeated remove until empty",
+                 R"(
+    list<int> l = [1, 2, 3];
+    table.remove(l, 0);
+    table.remove(l, 0);
+    table.remove(l, 0);
+    print(#l);
+  )",
+                 "0");
+
+  // =======================================================
+  // 第十一组：nil 元素与 loglen
+  // =======================================================
+
+  // nil 元素占据 loglen
+  runner.addTest("Boundary: Nil elements count in loglen",
+                 R"(
+    list<any> l = [null, null, null];
+    print(#l);
+  )",
+                 "3");
+
+  // push nil，loglen 增加
+  runner.addTest("Boundary: Push nil increments loglen",
+                 R"(
+    list<any> l = [];
+    table.push(l, null);
+    table.push(l, null);
+    print(#l);
+  )",
+                 "2");
+
+  // pop nil，loglen 减少
+  runner.addTest("Boundary: Pop nil decrements loglen",
+                 R"(
+    list<any> l = [null, null];
+    table.pop(l);
+    print(#l);
+  )",
+                 "1");
+
+  // nil 和非 nil 混合，loglen 包含全部
+  runner.addTest("Boundary: Mixed nil non-nil loglen correct",
+                 R"(
+    list<any> l = [1, null, 3, null, 5];
+    print(#l);
+    print(l[1]);
+    print(l[3]);
+  )",
+                 "5\nnil\nnil");
+
+  // =======================================================
+  // 第十二组：pairs 遍历与 loglen
+  // =======================================================
+
+  // pairs 遍历严格在 [0, loglen) 范围内
+  runner.addTest("Boundary: Pairs iterates exactly loglen elements",
+                 R"(
+    list<int> l = [10, 20, 30];
+    int count = 0;
+    int sum = 0;
+    for (k, v : pairs(l)) {
+        count += 1;
+        sum += v;
+    }
+    print(count);
+    print(sum);
+  )",
+                 "3\n60");
+
+  // push 后 pairs 包含新元素
+  runner.addTest("Boundary: Pairs after push includes new element",
+                 R"(
+    list<any> l = [1, 2];
+    table.push(l, 3);
+    int count = 0;
+    for (k, v : pairs(l)) {
+        count += 1;
+    }
+    print(count);
+  )",
+                 "3");
+
+  // pop 后 pairs 不包含被 pop 的元素
+  runner.addTest("Boundary: Pairs after pop excludes popped element",
+                 R"(
+    list<int> l = [1, 2, 3];
+    table.pop(l);
+    int count = 0;
+    for (k, v : pairs(l)) {
+        count += 1;
+    }
+    print(count);
+  )",
+                 "2");
+
+  // pairs 遍历 nil 元素也计入
+  runner.addTest("Boundary: Pairs counts nil elements",
+                 R"(
+    list<any> l = [1, null, 3];
+    int count = 0;
+    for (k, v : pairs(l)) {
+        count += 1;
+    }
+    print(count);
+  )",
+                 "3");
+
+  // pairs key 是 0-based 整数
+  runner.addTest("Boundary: Pairs keys are 0-based integers",
+                 R"(
+    list<int> l = [100, 200, 300];
+    for (k, v : pairs(l)) {
+        print(k .. "=" .. v);
+    }
+  )",
+                 "0=100\n1=200\n2=300");
+
+  // =======================================================
+  // 第十三组：引用语义与 loglen
+  // =======================================================
+
+  // 引用共享 loglen 变化
+  runner.addTest("Boundary: Reference shares loglen after push",
+                 R"(
+    list<int> a = [1, 2, 3];
+    list<int> b = a;
+    table.push(b, 4);
+    print(#a);
+    print(#b);
+  )",
+                 "4\n4");
+
+  // 引用共享 loglen pop
+  runner.addTest("Boundary: Reference shares loglen after pop",
+                 R"(
+    list<int> a = [1, 2, 3];
+    list<int> b = a;
+    table.pop(b);
+    print(#a);
+    print(#b);
+  )",
+                 "2\n2");
+
+  // 函数内修改 list，外部 loglen 反映
+  runner.addTest("Boundary: Function modifies list loglen visible outside",
+                 R"(
+    void addItems(list l) {
+        table.push(l, 100);
+        table.push(l, 200);
+    }
+    list<any> l = [1];
+    addItems(l);
+    print(#l);
+    print(l[1]);
+    print(l[2]);
+  )",
+                 "3\n100\n200");
+
+  // 函数内 pop，外部 loglen 减少
+  runner.addTest("Boundary: Function pops list loglen visible outside",
+                 R"(
+    void removeOne(list l) {
+        table.pop(l);
+    }
+    list<int> l = [1, 2, 3];
+    removeOne(l);
+    print(#l);
+  )",
+                 "2");
+
+  // =======================================================
+  // 第十四组：嵌套 list 的 loglen 独立性
+  // =======================================================
+
+  // 内层 push 不影响外层 loglen
+  runner.addTest("Boundary: Inner list push independent from outer loglen",
+                 R"(
+    list<any> outer = [[1, 2], [3, 4]];
+    print(#outer);
+    table.push(outer[0], 99);
+    print(#outer);
+    print(#outer[0]);
+  )",
+                 "2\n2\n3");
+
+  // 外层 push 不影响内层 loglen
+  runner.addTest("Boundary: Outer list push independent from inner loglen",
+                 R"(
+    list<any> inner = [10, 20];
+    list<any> outer = [inner];
+    table.push(outer, [30, 40, 50]);
+    print(#outer);
+    print(#inner);
+  )",
+                 "2\n2");
+
+  // pop 外层不影响内层
+  runner.addTest("Boundary: Pop outer does not affect inner loglen",
+                 R"(
+    list<any> a = [1, 2];
+    list<any> b = [3, 4, 5];
+    list<any> outer = [a, b];
+    table.pop(outer);
+    print(#outer);
+    print(#b);
+  )",
+                 "1\n3");
+
+  // =======================================================
+  // 第十五组：大规模 push/pop 压力测试
+  // =======================================================
+
+  // 千次 push，loglen 正确
+  runner.addTest("Boundary: 1000 pushes loglen correct",
+                 R"(
+    list<any> l = [];
+    for (i = 0, 999) {
+        table.push(l, i);
+    }
+    print(#l);
+    print(l[0]);
+    print(l[999]);
+  )",
+                 "1000\n0\n999");
+
+  // 千次 push 后 500 次 pop，loglen = 500
+  runner.addTest("Boundary: 1000 push 500 pop loglen is 500",
+                 R"(
+    list<any> l = [];
+    for (i = 0, 999) {
+        table.push(l, i);
+    }
+    for (i = 0, 499) {
+        table.pop(l);
+    }
+    print(#l);
+    print(l[499]);
+  )",
+                 "500\n499");
+
+  // 全部 pop，loglen = 0，再次 push 从 0 开始
+  runner.addTest("Boundary: Pop all then push again starts from 0",
+                 R"(
+    list<any> l = [1, 2, 3];
+    table.pop(l);
+    table.pop(l);
+    table.pop(l);
+    print(#l);
+    table.push(l, 99);
+    print(#l);
+    print(l[0]);
+  )",
+                 "0\n1\n99");
+
+  // 反复扩缩容，最终 loglen 正确
+  runner.addTest("Boundary: Repeated grow shrink loglen stable",
+                 R"(
+    list<any> l = [];
+    for (i = 0, 63) { table.push(l, i); }
+    for (i = 0, 31) { table.pop(l); }
+    for (i = 0, 31) { table.push(l, i * 100); }
+    print(#l);
+    print(l[32]);
+  )",
+                 "64\n0");
+
+  // =======================================================
+  // 第十六组：table.concat 与 loglen 边界
+  // =======================================================
+
+  // concat 默认范围 [0, loglen-1]
+  runner.addTest("Boundary: Concat default full range",
+                 R"(
+    list<int> l = [1, 2, 3, 4, 5];
+    print(table.concat(l, "-"));
+  )",
+                 "1-2-3-4-5");
+
+  // concat 空 list 返回空字符串
+  runner.addTest("Boundary: Concat empty list",
+                 R"(
+    list<any> l = [];
+    print(table.concat(l, ","));
+  )",
+                 "");
+
+  // concat 单元素
+  runner.addTest("Boundary: Concat single element",
+                 R"(
+    list<int> l = [42];
+    print(table.concat(l, ","));
+  )",
+                 "42");
+
+  // push 后 concat 包含新元素
+  runner.addTest("Boundary: Concat after push includes new element",
+                 R"(
+    list<any> l = ["a", "b"];
+    table.push(l, "c");
+    print(table.concat(l, ""));
+  )",
+                 "abc");
+
+  // pop 后 concat 不包含被 pop 的元素
+  runner.addTest("Boundary: Concat after pop excludes popped",
+                 R"(
+    list<any> l = ["x", "y", "z"];
+    table.pop(l);
+    print(table.concat(l, ""));
+  )",
+                 "xy");
+
+  // =======================================================
+  // 第十七组：for 数值循环与 loglen
+  // =======================================================
+
+  // 用 #l 作上界的 for 循环，push 后上界扩大（注意：此处 #l 在循环开始时求值）
+  runner.addTest("Boundary: For loop with loglen upper bound",
+                 R"(
+    list<int> l = [10, 20, 30, 40, 50];
+    int sum = 0;
+    for (i = 0, #l - 1) {
+        sum += l[i];
+    }
+    print(sum);
+  )",
+                 "150");
+
+  // 空 list 的 for 循环不执行
+  runner.addTest("Boundary: For loop on empty list not executed",
+                 R"(
+    list<any> l = [];
+    int count = 0;
+    for (i = 0, #l - 1) {
+        count += 1;
+    }
+    print(count);
+  )",
+                 "0");
+
+  // 反向遍历，边界正确
+  runner.addTest("Boundary: Reverse for loop boundary correct",
+                 R"(
+    list<int> l = [1, 2, 3, 4, 5];
+    for (i = #l - 1, 0, -1) {
+        print(l[i]);
+    }
+  )",
+                 "5\n4\n3\n2\n1");
+
+  // =======================================================
+  // 第十八组：map 的 loglen 独立性（map 不使用 loglen）
+  // =======================================================
+
+  // map 的 # 运算符不统计键数量（返回 0），与 list loglen 无关
+  runner.addTest("Boundary: Map length returns 0 (hash map not counted by #)",
+                 R"(
+    map<string, any> m = {"a": 1, "b": 2, "c": 3};
+    print(#m);
+  )",
+                 "0");
+
+  // map 内容可通过 pairs 计数验证，删 key 后 pairs 少一个
+  runner.addTest("Boundary: Map content verified via pairs count after delete",
+                 R"(
+    map<string, any> m = {"x": 1, "y": 2, "z": 3};
+    int count = 0;
+    for (k, v : pairs(m)) { count += 1; }
+    print(count);
+    m["x"] = null;
+    int count2 = 0;
+    for (k, v : pairs(m)) { count2 += 1; }
+    print(count2);
+  )",
+                 "3\n2");
+
+  // list 嵌套在 map 中，list loglen 独立，map # 返回 0
+  runner.addTest("Boundary: List in map has independent loglen map # is 0",
+                 R"(
+    map<string, any> m = {"list": [1, 2, 3]};
+    table.push(m["list"], 4);
+    print(#m["list"]);
+    print(#m);
+  )",
+                 "4\n0");
+
+  // =======================================================
+  // 第十九组：逻辑长度与物理容量分离的极端边界
+  // =======================================================
+
+  // 1 个元素 push 后读 index 0 正确
+  runner.addTest("Boundary: Single push read index 0",
+                 R"(
+    list<any> l = [];
+    table.push(l, 777);
+    print(l[0]);
+    print(#l);
+  )",
+                 "777\n1");
+
+  // push 1 个然后 pop，loglen=0，不能再读
+  runner.addFailTest("Boundary: Push one pop one then read fails",
+                     R"(
+    list<any> l = [];
+    table.push(l, 1);
+    table.pop(l);
+    print(l[0]);
+  )");
+
+  // 字面量 1 个元素，pop 后不能读 index 0
+  runner.addFailTest("Boundary: Single literal pop then read fails",
+                     R"(
+    list<int> l = [42];
+    table.pop(l);
+    print(l[0]);
+  )");
+
+  // insert 在空 list 的 index 0 处
+  runner.addTest("Boundary: Insert into empty list at 0",
+                 R"(
+    list<any> l = [];
+    table.push(l, 0);
+    table.insert(l, 0, 99);
+    print(#l);
+    print(l[0]);
+    print(l[1]);
+  )",
+                 "2\n99\n0");
+
+  // remove 只剩 1 个元素后，list 为空
+  runner.addTest("Boundary: Remove last remaining element empties list",
+                 R"(
+    list<int> l = [42];
+    table.remove(l, 0);
+    print(#l);
+  )",
+                 "0");
+
+  // =======================================================
+  // 第二十组：综合场景 —— loglen/asize 分离的完整性
+  // =======================================================
+
+  // 模拟栈：push N 次，pop N 次，loglen=0
+  runner.addTest("Boundary: Stack simulation push N pop N loglen 0",
+                 R"(
+    list<any> stack = [];
+    int N = 20;
+    for (i = 0, N - 1) {
+        table.push(stack, i);
+    }
+    for (i = 0, N - 1) {
+        table.pop(stack);
+    }
+    print(#stack);
+  )",
+                 "0");
+
+  // 模拟队列：enqueue 5，dequeue 3，loglen=2
+  runner.addTest("Boundary: Queue simulation 5 enqueue 3 dequeue loglen 2",
+                 R"(
+    list<any> queue = [];
+    table.push(queue, "a");
+    table.push(queue, "b");
+    table.push(queue, "c");
+    table.push(queue, "d");
+    table.push(queue, "e");
+    table.remove(queue, 0);
+    table.remove(queue, 0);
+    table.remove(queue, 0);
+    print(#queue);
+    print(queue[0]);
+    print(queue[1]);
+  )",
+                 "2\nd\ne");
+
+  // 多轮扩缩容后，存储内容仍然正确
+  runner.addTest("Boundary: Multi-round grow shrink content integrity",
+                 R"(
+    list<any> l = [];
+    // 第一轮：push 10
+    for (i = 0, 9) { table.push(l, i); }
+    // pop 5
+    for (i = 0, 4) { table.pop(l); }
+    // 第二轮：push 10
+    for (i = 10, 19) { table.push(l, i); }
+    print(#l);
+    print(l[0]);
+    print(l[4]);
+    print(l[14]);
+  )",
+                 "15\n0\n4\n19");
+
+  // 并发式 insert+remove 保持 loglen 一致
+  runner.addTest("Boundary: Alternating insert remove loglen consistent",
+                 R"(
+    list<int> l = [1, 2, 3, 4, 5];
+    table.insert(l, 2, 99);
+    table.remove(l, 0);
+    table.insert(l, 4, 88);
+    table.remove(l, 5);
+    print(#l);
+    print(l[2]);
+    print(l[4]);
+  )",
+                 "5\n3\n88");
+
+  // table.sort 后 loglen 不变，所有元素可访问
+  runner.addTest("Boundary: Sort then all elements accessible via loglen",
+                 R"(
+    list<int> l = [50, 10, 40, 20, 30];
+    table.sort(l);
+    int sum = 0;
+    for (i = 0, #l - 1) {
+        sum += l[i];
+    }
+    print(sum);
+    print(#l);
+  )",
+                 "150\n5");
+
+  // 验证 table.move 后源和目标的 loglen 都正确
+  runner.addTest("Boundary: Move loglen of both src and dst correct",
+                 R"(
+    list<int> src = [1, 2, 3, 4, 5];
+    list<int> dst = [0, 0, 0, 0, 0, 0, 0];
+    table.move(src, 1, 3, 2, dst);
+    print(#src);
+    print(#dst);
+    print(dst[2]);
+    print(dst[3]);
+    print(dst[4]);
+  )",
+                 "5\n7\n2\n3\n4");
+
+  // 嵌套场景：map 内 list 反复 push/pop，loglen 正确
+  runner.addTest("Boundary: Nested map-list push pop loglen correct",
+                 R"(
+    map<string, any> m = {"data": []};
+    for (i = 0, 4) {
+        table.push(m["data"], i * 10);
+    }
+    print(#m["data"]);
+    table.pop(m["data"]);
+    table.pop(m["data"]);
+    print(#m["data"]);
+    print(m["data"][0]);
+    print(m["data"][2]);
+  )",
+                 "5\n3\n0\n20");
+}

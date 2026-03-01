@@ -263,6 +263,7 @@ LUA_API int(lua_setiuservalue)(lua_State *L, int idx, int n);
 */
 LUA_API void(lua_arrayresize)(lua_State *L, int idx, lua_Integer newsize);
 LUA_API lua_Integer(lua_arraylen)(lua_State *L, int idx);
+LUA_API void(lua_arraysetlen)(lua_State *L, int idx, lua_Integer newlen);
 
 /*
 ** 'load' and 'call' functions (load and run Lua code)

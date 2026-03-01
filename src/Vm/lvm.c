@@ -713,9 +713,7 @@ void luaV_objlen(lua_State *L, StkId ra, const TValue *rb) {
     tm = fasttm(L, h->metatable, TM_LEN);
     if (tm)
       break;
-    /* 原来：setivalue(s2v(ra), l_castU2S(luaH_getn(L, h))); */
-    /* 改成直接用 asize，语义更清晰（其实 luaH_getn 第一阶段已经改了，效果一样） */
-    setivalue(s2v(ra), (lua_Integer)h->asize);
+    setivalue(s2v(ra), (lua_Integer)h->loglen);
     return;
   }
   case LUA_VTABLE: {
@@ -1348,9 +1346,9 @@ returning: /* trap already set */
           if (idx < 0)
             luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
           /* 检查越界 */
-          if (idx >= (lua_Integer)t->asize)
+          if (idx >= (lua_Integer)t->loglen)
             luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx,
-                          t->asize);
+                          t->loglen);
           /* 访问元素 */
           {
             lu_byte tag = luaH_get(t, rc, s2v(ra));
@@ -1382,8 +1380,8 @@ returning: /* trap already set */
             luaG_runerror(L, "list index out of range: negative index %d", c);
 
           lua_Unsigned ukey = l_castS2U(c);
-          if (ukey >= t->asize)
-            luaG_runerror(L, "list index out of range: index %d >= length %u", c, t->asize);
+          if (ukey >= t->loglen)
+            luaG_runerror(L, "list index out of range: index %d >= length %u", c, t->loglen);
 
           lu_byte tag = *getArrTag(t, ukey);
           if (tag == LUA_VEMPTY)
@@ -1450,11 +1448,11 @@ returning: /* trap already set */
             luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
 
           /* 检查越界 */
-          if (idx >= (lua_Integer)t->asize)
+          if (idx >= (lua_Integer)t->loglen)
             luaG_runerror(
                 L,
                 "list index out of range: cannot extend fixed-length list (index %I >= length %u)",
-                (LUAI_UACINT)idx, t->asize);
+                (LUAI_UACINT)idx, t->loglen);
 
           /* 设置值 */
           luaH_set(L, t, rb, rc);
@@ -1482,7 +1480,7 @@ returning: /* trap already set */
           /* List: 严格检查越界，不扩容 */
           Table *t = avalue(s2v(ra));
           lua_Unsigned ukey = l_castS2U(b);
-          if (ukey < t->asize) {
+          if (ukey < t->loglen) {
             obj2arr(t, ukey, rc);
             luaC_barrierback(L, obj2gco(t), rc);
           } else {
@@ -2047,12 +2045,15 @@ returning: /* trap already set */
           lua_assert(GETARG_vB(i) == 0);
           luaH_resizearray(L, h, last); /* preallocate it at once */
         }
+        unsigned setlist_end = last;
         for (; n > 0; n--) {
           TValue *val = s2v(ra + n);
           obj2arr(h, last - 1, val);
           last--;
           luaC_barrierback(L, obj2gco(h), val);
         }
+        if (h->mode == TABLE_ARRAY && setlist_end > h->loglen)
+          h->loglen = setlist_end;
         vmbreak;
       }
       vmcase(OP_CLOSURE) {
