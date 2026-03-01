@@ -1329,74 +1329,64 @@ returning: /* trap already set */
         StkId ra = RA(i);
         TValue *rb = vRB(i);
         TValue *rc = vRC(i);
+        lu_byte tag;
 
         if (ttisarray(rb)) {
-          /* List: 边界检查和类型检查 */
           Table *t = avalue(rb);
-
-          /* 检查键类型 */
-          if (!ttisinteger(rc)) {
-            if (ttisnumber(rc))
-              luaG_runerror(L, "list index must be integer, not float");
-            else
-              luaG_typeerror(L, rc, "index list with integer");
-          }
-          lua_Integer idx = ivalue(rc);
-          /* 检查负索引 */
-          if (idx < 0)
-            luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
-          /* 检查越界 */
-          if (idx >= (lua_Integer)t->loglen)
-            luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx,
-                          t->loglen);
-          /* 访问元素 */
-          {
-            lu_byte tag = luaH_get(t, rc, s2v(ra));
-            if (tagisempty(tag))
-              setnilvalue(s2v(ra));
+          if (ttisinteger(rc)) {
+            lua_Integer idx = ivalue(rc);
+            if (idx < 0)
+              luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
+            if (idx >= (lua_Integer)t->loglen)
+              luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx,
+                            t->loglen);
+            tag = luaH_getint(t, idx, s2v(ra));
+          } else if (ttisnumber(rc)) {
+            luaG_runerror(L, "list index must be integer, not float");
+          } else {
+            /* 非数字 key（如方法名），主动返回空，放行给 finishget 触发 __index */
+            tag = LUA_VEMPTY;
           }
         } else {
           /* Map: 原有逻辑 */
-          lu_byte tag;
           if (ttisinteger(rc)) {
             luaV_fastgeti(rb, ivalue(rc), s2v(ra), tag);
-          } else
+          } else {
             luaV_fastget(rb, rc, s2v(ra), luaH_get, tag);
-
-          if (tagisempty(tag))
-            Protect(luaV_finishget(L, rb, rc, ra, tag));
+          }
         }
+
+        if (tagisempty(tag))
+          Protect(luaV_finishget(L, rb, rc, ra, tag));
         vmbreak;
       }
       vmcase(OP_GETI) {
         StkId ra = RA(i);
         TValue *rb = vRB(i);
         int c = GETARG_C(i);
+        lu_byte tag;
 
         if (ttisarray(rb)) {
           Table *t = avalue(rb);
-          /* List: 边界检查 */
+          /*边界检查*/
           if (c < 0)
             luaG_runerror(L, "list index out of range: negative index %d", c);
-
           lua_Unsigned ukey = l_castS2U(c);
           if (ukey >= t->loglen)
             luaG_runerror(L, "list index out of range: index %d >= length %u", c, t->loglen);
 
-          lu_byte tag = *getArrTag(t, ukey);
-          if (tag == LUA_VEMPTY)
-            setnilvalue(s2v(ra));
-          else
+          tag = *getArrTag(t, ukey);
+          if (tag != LUA_VEMPTY)
             farr2val(t, ukey, tag, s2v(ra));
         } else {
           /* Map: 原有逻辑 */
-          lu_byte tag;
           luaV_fastgeti(rb, c, s2v(ra), tag);
-          if (tagisempty(tag)) {
-            TValue key;
-            setivalue(&key, c);
-            Protect(luaV_finishget(L, rb, &key, ra, tag));
-          }
+        }
+
+        if (tagisempty(tag)) {
+          TValue key;
+          setivalue(&key, c);
+          Protect(luaV_finishget(L, rb, &key, ra, tag));
         }
         vmbreak;
       }
@@ -1428,75 +1418,83 @@ returning: /* trap already set */
         StkId ra = RA(i);
         TValue *rb = vRB(i); /* key */
         TValue *rc = RKC(i); /* value */
+        int hres;
 
         if (ttisarray(s2v(ra))) {
-          /* List: 边界检查和类型检查 */
           Table *t = avalue(s2v(ra));
+          if (ttisinteger(rb)) {
+            lua_Integer idx = ivalue(rb);
+            if (idx < 0)
+              luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
 
-          /* 检查键类型 */
-          if (!ttisinteger(rb)) {
-            if (ttisnumber(rb))
-              luaG_runerror(L, "list index must be integer, not float");
-            else
-              luaG_typeerror(L, rb, "index list with integer");
+            /* 严格越界拦截：>= loglen 直接报错 */
+            if (idx >= (lua_Integer)t->loglen)
+              luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx,
+                            t->loglen);
+
+            lu_byte *tagp = getArrTag(t, cast_uint(idx));
+            if (checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp)) {
+              fval2arr(t, cast_uint(idx), tagp, rc);
+              hres = HOK;
+            } else {
+              hres = ~cast_int(idx);
+            }
+          } else if (ttisnumber(rb)) {
+            luaG_runerror(L, "list index must be integer, not float");
+          } else {
+            /* 仅对非数字 key（如设置方法/属性）放行，走 __newindex */
+            hres = HNOTFOUND;
           }
-
-          lua_Integer idx = ivalue(rb);
-
-          /* 检查负索引 */
-          if (idx < 0)
-            luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
-
-          /* 检查越界 */
-          if (idx >= (lua_Integer)t->loglen)
-            luaG_runerror(
-                L,
-                "list index out of range: cannot extend fixed-length list (index %I >= length %u)",
-                (LUAI_UACINT)idx, t->loglen);
-
-          /* 设置值 */
-          luaH_set(L, t, rb, rc);
         } else {
           /* Map: 原有逻辑 */
-          int hres;
           if (ttisinteger(rb)) {
             luaV_fastseti(s2v(ra), ivalue(rb), rc, hres);
           } else {
             luaV_fastset(s2v(ra), rb, rc, hres, luaH_pset);
           }
-          if (hres == HOK)
-            luaV_finishfastset(L, s2v(ra), rc);
-          else
-            Protect(luaV_finishset(L, s2v(ra), rb, rc, hres));
         }
+
+        if (hres == HOK)
+          luaV_finishfastset(L, s2v(ra), rc);
+        else
+          Protect(luaV_finishset(L, s2v(ra), rb, rc, hres));
         vmbreak;
       }
       vmcase(OP_SETI) {
         StkId ra = RA(i);
         int b = GETARG_B(i);
         TValue *rc = RKC(i);
+        int hres;
 
         if (ttisarray(s2v(ra))) {
-          /* List: 严格检查越界，不扩容 */
           Table *t = avalue(s2v(ra));
+          if (b < 0)
+            luaG_runerror(L, "list index out of range: negative index %d", b);
+
           lua_Unsigned ukey = l_castS2U(b);
-          if (ukey < t->loglen) {
-            obj2arr(t, ukey, rc);
-            luaC_barrierback(L, obj2gco(t), rc);
+
+          /* 严格越界拦截：>= loglen 直接报错 */
+          if (ukey >= t->loglen)
+            luaG_runerror(L, "list index out of range: index %d >= length %u", b, t->loglen);
+
+          lu_byte *tagp = getArrTag(t, ukey);
+          if (checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp)) {
+            fval2arr(t, ukey, tagp, rc);
+            hres = HOK;
           } else {
-            luaG_runerror(L, "list index out of range: %d", b);
+            hres = ~cast_int(ukey);
           }
         } else {
           /* Map: 原有逻辑 */
-          int hres;
           luaV_fastseti(s2v(ra), b, rc, hres);
-          if (hres == HOK)
-            luaV_finishfastset(L, s2v(ra), rc);
-          else {
-            TValue key;
-            setivalue(&key, b);
-            Protect(luaV_finishset(L, s2v(ra), &key, rc, hres));
-          }
+        }
+
+        if (hres == HOK)
+          luaV_finishfastset(L, s2v(ra), rc);
+        else {
+          TValue key;
+          setivalue(&key, b);
+          Protect(luaV_finishset(L, s2v(ra), &key, rc, hres));
         }
         vmbreak;
       }
