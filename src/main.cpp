@@ -30,9 +30,6 @@
 // 类与对象测试
 #include "test/TestClasses.h"
 
-// 数据结构测试（List, Map, String）
-#include "test/TestDataStructures.h"
-
 // 模块系统测试
 #include "test/TestModules.h"
 
@@ -94,11 +91,9 @@ int main(int argc, char *argv[]) {
   registerFunctions(runner);
 
   // 类与对象
-  //  registerClasses(runner);
+  registerClasses(runner);
 
   // 数据结构
-  //  registerLists(runner);
-  //  registerMaps(runner);
   //  registerStrings(runner);
 
   // 模块系统

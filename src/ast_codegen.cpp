@@ -547,32 +547,59 @@ static void compile_params(CompileCtx *C, FuncState *new_fs,
                            const std::vector<ParameterDeclNode *> &params, bool isVariadic,
                            bool isMethod) {
   /*------------------------------------------------------------
-   * Implicit 'self' parameter — ALWAYS occupies Slot 0.
+   * Implicit 'this' parameter — ALWAYS occupies Slot 0.
    *
    * Every function receives its Receiver in the first stack
    * slot.  The caller is responsible for pushing it (see
    * compile_funcall / compile_new_expr / etc.).
    *
-   * For class instance methods  →  self = the object instance
-   * For plain global calls      →  self = _ENV / Module
-   * For closure calls           →  self = the closure itself
-   * For obj.method() / obj:m()  →  self = obj
+   * For class instance methods  →  this = the object instance
+   * For plain global calls      →  this = _ENV / Module
+   * For closure calls           →  this = the closure itself
+   * For obj.method() / obj:m()  →  this = obj
    *-----------------------------------------------------------*/
-  const char *recName = isMethod ? "self" : "(receiver)";
-  TString *selfname = mkstr(C, recName);
-  ast_new_localvar(C, selfname);
-  ast_adjustlocalvars(C, 1); /* Slot 0 is now occupied */
+  // 1. 检查是否显式提供了 this 作为第一个参数（用于模板/Mixin）
+  bool hasExplicitThis = (!params.empty() && params[0]->name == "this");
 
-  /* User-declared parameters — start from Slot 1 */
-  int nparams = 0;
-  for (auto *p : params) {
-    TString *pname = mkstr(C, p->name);
-    ast_new_localvar(C, pname);
-    nparams++;
+  if (hasExplicitThis) {
+    /*======================================================
+     * 显式 This 模式：用户指定了第一个参数为 this
+     *======================================================*/
+    // 让用户的 explicitly named 'this' 直接占据 Slot 0
+    TString *selfname = mkstr(C, "this");
+    ast_new_localvar(C, selfname);
+    ast_adjustlocalvars(C, 1); /* Slot 0 is now occupied */
+
+    // 继续处理剩下的用户参数 (从 Slot 1 开始)
+    int nparams = 0;
+    for (size_t i = 1; i < params.size(); i++) {
+      TString *pname = mkstr(C, params[i]->name);
+      ast_new_localvar(C, pname);
+      nparams++;
+    }
+    ast_adjustlocalvars(C, nparams);
+
+  } else {
+    /*======================================================
+     * 隐式 Receiver 模式 (原生行为)
+     * 类方法分配 "this"，普通函数/闭包分配 "(receiver)"
+     *======================================================*/
+    const char *recName = isMethod ? "this" : "(receiver)";
+    TString *selfname = mkstr(C, recName);
+    ast_new_localvar(C, selfname);
+    ast_adjustlocalvars(C, 1); /* Slot 0 is now occupied */
+
+    // 处理所有用户参数 (从 Slot 1 开始)
+    int nparams = 0;
+    for (auto *p : params) {
+      TString *pname = mkstr(C, p->name);
+      ast_new_localvar(C, pname);
+      nparams++;
+    }
+    ast_adjustlocalvars(C, nparams);
   }
-  ast_adjustlocalvars(C, nparams);
 
-  /* numparams includes self */
+  /* numparams includes self/receiver */
   new_fs->f->numparams = cast_byte(C->fs->nactvar);
 
   if (isVariadic) {
@@ -1900,14 +1927,31 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
 /*-----------------------------------------------------------------------
  * Class declaration
  *---------------------------------------------------------------------*/
+/*-----------------------------------------------------------------------
+ * Helper: properly initialize a VLOCAL expdesc with correct vidx AND ridx.
+ *
+ * init_exp(&e, VLOCAL, idx) is WRONG because it writes e->u.info (int),
+ * but VLOCAL reads e->u.var.vidx (short) + e->u.var.ridx (byte).
+ * On little-endian, init_exp(e, VLOCAL, 3) gives vidx=3 but ridx=0,
+ * silently pointing to R(0) instead of the correct register.
+ *---------------------------------------------------------------------*/
+static void init_exp_local(CompileCtx *C, FuncState *fs, expdesc *e, int vidx) {
+  e->f = e->t = NO_JUMP;
+  e->k = VLOCAL;
+  e->u.var.vidx = cast_short(vidx);
+  e->u.var.ridx = ast_getvar(C, fs, vidx)->vd.ridx;
+}
+
 static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
   TString *clsname = mkstr(C, n->name);
 
-  /* Create local: ClassName = {} */
-  int vidx = ast_new_localvar(C, clsname);
+  /* ================================================================
+   * 1. local ClassName = {}
+   * ================================================================ */
+  ast_new_localvar(C, clsname);
   {
     int pc = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
     luaK_code(fs, 0);
@@ -1918,15 +1962,16 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
   }
   ast_adjustlocalvars(C, 1);
 
-  /* Set __index = self */
+  /* ================================================================
+   * 2. ClassName.__index = ClassName
+   * ================================================================ */
   {
     expdesc cls;
     ast_singlevar(C, n->name, &cls);
     luaK_exp2anyregup(fs, &cls);
 
     expdesc key;
-    key.f = key.t = NO_JUMP;
-    key.k = VKSTR;
+    init_exp(&key, VKSTR, 0);
     key.u.strval = mkstr(C, "__index");
     luaK_indexed(fs, &cls, &key);
 
@@ -1935,7 +1980,9 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
     luaK_storevar(fs, &cls, &val);
   }
 
-  /* Compile members */
+  /* ================================================================
+   * 3. First pass: bind methods & static fields onto the class table
+   * ================================================================ */
   for (auto *member : n->members) {
     if (!member->memberDeclaration)
       continue;
@@ -1945,14 +1992,12 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
 
     if (decl->nodeType == NodeType::FUNCTION_DECL) {
       FunctionDeclNode *fdecl = static_cast<FunctionDeclNode *>(decl);
-
       expdesc cls;
       ast_singlevar(C, n->name, &cls);
       luaK_exp2anyregup(fs, &cls);
 
       expdesc key;
-      key.f = key.t = NO_JUMP;
-      key.k = VKSTR;
+      init_exp(&key, VKSTR, 0);
       key.u.strval = mkstr(C, fdecl->name);
       luaK_indexed(fs, &cls, &key);
 
@@ -1964,10 +2009,6 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
         new_fs.f->linedefined = C->linenumber;
         ast_open_func(C, &new_fs, &bl);
 
-        /* compile_params now adds implicit 'self' for ALL functions,
-           so no special handling needed for instance methods. */
-
-        /* Method parameters — use fdecl->isVariadic */
         compile_params(C, &new_fs, fdecl->params, fdecl->isVariadic, !isStatic);
 
         if (fdecl->body)
@@ -1979,7 +2020,7 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
       ast_codeclosure(C, &b);
       luaK_storevar(fs, &cls, &b);
 
-    } else if (decl->nodeType == NodeType::VARIABLE_DECL) {
+    } else if (decl->nodeType == NodeType::VARIABLE_DECL && isStatic) {
       VariableDeclNode *vdecl = static_cast<VariableDeclNode *>(decl);
       if (vdecl->initializer) {
         expdesc cls;
@@ -1987,8 +2028,7 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
         luaK_exp2anyregup(fs, &cls);
 
         expdesc key;
-        key.f = key.t = NO_JUMP;
-        key.k = VKSTR;
+        init_exp(&key, VKSTR, 0);
         key.u.strval = mkstr(C, vdecl->name);
         luaK_indexed(fs, &cls, &key);
 
@@ -1998,6 +2038,232 @@ static void compile_class_decl(CompileCtx *C, ClassDeclNode *n) {
       }
     }
     fs->freereg = luaY_nvarstack(fs);
+  }
+
+  /* ================================================================
+   * 4. Second pass: generate __call metamethod for `new` instantiation
+   *
+   * Equivalent Lua:
+   *   setmetatable(ClassName, { __call = function(cls, dummy, ...)
+   *       local obj = setmetatable({}, cls)
+   *       -- assign instance field defaults --
+   *       local init = obj.__init
+   *       if init then init(obj, ...) end
+   *       return obj
+   *   end })
+   *
+   * KEY INSIGHT: when tryfuncTM fires on `new Point(10,20)`:
+   *   original stack:  [Point] [nil] [10] [20]
+   *   after shift:     [__call_closure] [Point] [nil] [10] [20]
+   *
+   * So the __call closure sees:
+   *   Slot 0 = Point (the class table)     ← pushed by tryfuncTM
+   *   Slot 1 = nil   (the dummy receiver)  ← pushed by compile_new_expr
+   *   varargs = 10, 20                     ← the real constructor args
+   * ================================================================ */
+  {
+    /* Prepare outer: setmetatable(nil, ClassName, mt) */
+    expdesc sm;
+    ast_singlevar(C, "setmetatable", &sm);
+    luaK_exp2nextreg(fs, &sm);
+
+    expdesc inil;
+    init_exp(&inil, VNIL, 0);
+    luaK_exp2nextreg(fs, &inil);
+
+    expdesc cls;
+    ast_singlevar(C, n->name, &cls);
+    luaK_exp2nextreg(fs, &cls);
+
+    /* mt = {} (the metatable that will hold __call) */
+    int pc2 = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+    luaK_code(fs, 0);
+    expdesc mt;
+    init_exp(&mt, VNONRELOC, fs->freereg);
+    luaK_reserveregs(fs, 1);
+    luaK_settablesize(fs, pc2, mt.u.info, 0, 1);
+
+    /* Build the __call closure */
+    expdesc call_closure;
+    {
+      FuncState new_fs;
+      BlockCnt bl;
+      new_fs.f = ast_addprototype(C);
+      new_fs.f->linedefined = C->linenumber;
+      ast_open_func(C, &new_fs, &bl);
+
+      /* ----------------------------------------------------------
+       * Parameters: only 2 fixed params, NOT 3.
+       *
+       * tryfuncTM shifts the original callable (Point) into Slot 0
+       * and increments narg. So:
+       *   Slot 0 = cls   (Point table)
+       *   Slot 1 = dummy (nil receiver from compile_new_expr)
+       *   hidden varargs = constructor arguments
+       * ---------------------------------------------------------- */
+      int cls_vidx = ast_new_localvar(C, mkstr(C, "cls")); /* Slot 0 */
+      ast_new_localvar(C, mkstr(C, "(dummy)"));            /* Slot 1 */
+      new_fs.f->numparams = 2;
+      ast_adjustlocalvars(C, 2);
+
+      /* Varargs — hidden mode (PF_VAHID) */
+      ast_new_var(C, mkstr(C, "(vararg table)"), RDKVAVAR);
+      new_fs.f->flag |= PF_VAHID;
+      luaK_codeABC(&new_fs, OP_VARARGPREP, 2, 0, 0);
+      ast_adjustlocalvars(C, 1);
+
+      /* Reserve registers for all params (same as compile_params does).
+       * Without this, freereg stays at 0 and obj/init locals collide
+       * with the cls/dummy parameter registers! */
+      luaK_reserveregs(&new_fs, C->fs->nactvar);
+
+      /* ----------------------------------------------------------
+       * local obj = setmetatable({}, cls)
+       * ---------------------------------------------------------- */
+      int obj_vidx = ast_new_localvar(C, mkstr(C, "obj"));
+      luaK_reserveregs(&new_fs, 1);
+      ast_adjustlocalvars(C, 1);
+
+      {
+        expdesc ism;
+        ast_singlevar(C, "setmetatable", &ism);
+        luaK_exp2nextreg(&new_fs, &ism);
+
+        /* nil receiver for setmetatable call */
+        expdesc rpad;
+        init_exp(&rpad, VNIL, 0);
+        luaK_exp2nextreg(&new_fs, &rpad);
+
+        /* arg1: {} (the new instance table) */
+        int ipc = luaK_codevABCk(&new_fs, OP_NEWTABLE, 0, 0, 0, 0);
+        luaK_code(&new_fs, 0);
+        expdesc empty;
+        init_exp(&empty, VNONRELOC, new_fs.freereg);
+        luaK_reserveregs(&new_fs, 1);
+        luaK_settablesize(&new_fs, ipc, empty.u.info, 0, 0);
+
+        /* arg2: cls — MUST use init_exp_local, NOT init_exp! */
+        expdesc icls;
+        init_exp_local(C, &new_fs, &icls, cls_vidx);
+        luaK_exp2nextreg(&new_fs, &icls);
+
+        int smbase = ism.u.info;
+        luaK_codeABC(&new_fs, OP_CALL, smbase, 4, 2); /* 4 slots, 1 result */
+
+        /* Store result into obj */
+        expdesc call_result;
+        init_exp(&call_result, VNONRELOC, smbase);
+        expdesc obj_dst;
+        init_exp_local(C, &new_fs, &obj_dst, obj_vidx);
+        luaK_storevar(&new_fs, &obj_dst, &call_result);
+        new_fs.freereg = cast_byte(smbase);
+      }
+
+      /* ----------------------------------------------------------
+       * Instance field default values: obj.field = initializer
+       * ---------------------------------------------------------- */
+      for (auto *member : n->members) {
+        if (member->memberDeclaration &&
+            member->memberDeclaration->nodeType == NodeType::VARIABLE_DECL && !member->isStatic) {
+          VariableDeclNode *vdecl = static_cast<VariableDeclNode *>(member->memberDeclaration);
+          if (vdecl->initializer) {
+            expdesc iobj;
+            init_exp_local(C, &new_fs, &iobj, obj_vidx);
+            luaK_exp2anyregup(&new_fs, &iobj);
+
+            expdesc key;
+            init_exp(&key, VKSTR, 0);
+            key.u.strval = mkstr(C, vdecl->name);
+            luaK_indexed(&new_fs, &iobj, &key);
+
+            expdesc val;
+            compile_expression(C, vdecl->initializer, &val);
+            luaK_storevar(&new_fs, &iobj, &val);
+          }
+        }
+      }
+
+      /* ----------------------------------------------------------
+       * local init = obj.__init
+       * if init then init(obj, ...) end
+       * ---------------------------------------------------------- */
+      int init_vidx = ast_new_localvar(C, mkstr(C, "init"));
+      luaK_reserveregs(&new_fs, 1);
+      ast_adjustlocalvars(C, 1);
+
+      /* init = obj.__init */
+      {
+        expdesc iobj;
+        init_exp_local(C, &new_fs, &iobj, obj_vidx);
+        luaK_exp2anyregup(&new_fs, &iobj);
+
+        expdesc key;
+        init_exp(&key, VKSTR, 0);
+        key.u.strval = mkstr(C, "__init");
+        luaK_indexed(&new_fs, &iobj, &key);
+
+        expdesc init_dst;
+        init_exp_local(C, &new_fs, &init_dst, init_vidx);
+        luaK_storevar(&new_fs, &init_dst, &iobj);
+      }
+
+      /* if init then init(obj, ...) end */
+      {
+        expdesc cond;
+        init_exp_local(C, &new_fs, &cond, init_vidx);
+        luaK_goiftrue(&new_fs, &cond);
+        int jf = cond.f; /* jump-to-false patch point */
+
+        /* Push: init, obj, ... */
+        expdesc call_func;
+        init_exp_local(C, &new_fs, &call_func, init_vidx);
+        luaK_exp2nextreg(&new_fs, &call_func);
+
+        expdesc call_self;
+        init_exp_local(C, &new_fs, &call_self, obj_vidx);
+        luaK_exp2nextreg(&new_fs, &call_self);
+
+        /* Forward varargs as remaining arguments */
+        expdesc args;
+        init_exp(&args, VVARARG, luaK_codeABC(&new_fs, OP_VARARG, 0, new_fs.f->numparams, 1));
+        luaK_setmultret(&new_fs, &args);
+
+        int base = call_func.u.info;
+        luaK_codeABC(&new_fs, OP_CALL, base, LUA_MULTRET + 1, 1);
+        new_fs.freereg = cast_byte(base);
+
+        luaK_patchtohere(&new_fs, jf);
+      }
+
+      /* ----------------------------------------------------------
+       * return obj
+       * ---------------------------------------------------------- */
+      {
+        expdesc ret;
+        init_exp_local(C, &new_fs, &ret, obj_vidx);
+        luaK_exp2nextreg(&new_fs, &ret);
+        luaK_ret(&new_fs, ret.u.info, 1);
+      }
+
+      new_fs.f->lastlinedefined = C->linenumber;
+      ast_close_func(C);
+    }
+    ast_codeclosure(C, &call_closure);
+
+    /* mt.__call = call_closure */
+    expdesc tab = mt;
+    expdesc mkey;
+    init_exp(&mkey, VKSTR, 0);
+    mkey.u.strval = mkstr(C, "__call");
+    luaK_indexed(fs, &tab, &mkey);
+    luaK_storevar(fs, &tab, &call_closure);
+    luaK_settablesize(fs, pc2, mt.u.info, 0, 1);
+
+    /* Emit: setmetatable(nil, ClassName, mt) — sets class's metatable */
+    int smbase_final = sm.u.info;
+    init_exp(&sm, VCALL, luaK_codeABC(fs, OP_CALL, smbase_final, 4, 1));
+    luaK_fixline(fs, C->linenumber);
+    fs->freereg = cast_byte(smbase_final);
   }
 }
 
