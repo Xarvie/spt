@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
   //  registerStrings(runner);
 
   // 模块系统
-  //  registerModules(runner);
+  registerModules(runner);
 
   // 方法调用
   //  registerInvokeTests(runner);
