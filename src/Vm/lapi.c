@@ -865,7 +865,7 @@ LUA_API void lua_getarrayrange(lua_State *L, int idx, lua_Integer start, lua_Int
   o = index2value(L, idx);
   api_check(L, ttisarray(o), "array expected");
   t = avalue(o);
-  api_check(L, start >= 0 && start <= end, "invalid range");
+  api_check(L, start >= 0 && end >= start && end >= 0, "invalid range");
 
   for (i = start; i < end && i < (lua_Integer)t->loglen; i++) {
     lu_byte tag = *getArrTag(t, cast_uint(i));
@@ -900,12 +900,15 @@ LUA_API void lua_setarrayrange(lua_State *L, int idx, lua_Integer start, lua_Int
   if (cast_uint(start + count) > t->asize)
     luaH_resizearray(L, t, cast_uint(start + count));
 
-  /* Set values */
+  /* Set values with proper GC barriers */
   for (i = 0; i < count; i++) {
     StkId stackVal = L->top.p - count + i;
-    lu_byte *tagp = getArrTag(t, cast_uint(start + i));
-    *tagp = stackVal->val.tt_;
-    *getArrVal(t, cast_uint(start + i)) = stackVal->val.value_;
+    TValue *slotVal = s2v(stackVal); /* Convert StackValue* to TValue* */
+    /* Use obj2arr macro to copy value to array slot */
+    obj2arr(t, cast_uint(start + i), slotVal);
+    /* Apply GC write barrier if the value is collectable */
+    /* Note: gcvalue macro already checks iscollectable internally */
+    luaC_barrierback(L, obj2gco(t), slotVal);
   }
 
   /* Update logical length if needed */
@@ -918,6 +921,7 @@ LUA_API void lua_setarrayrange(lua_State *L, int idx, lua_Integer start, lua_Int
 
 /*
 ** Move elements from one array to another.
+** Handles overlapping arrays correctly (memmove semantics).
 */
 LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer from, lua_Integer to,
                            lua_Integer count) {
@@ -937,19 +941,38 @@ LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer fro
   if (cast_uint(to + count) > tt->asize)
     luaH_resizearray(L, tt, cast_uint(to + count));
 
-  /* Move elements */
-  for (i = 0; i < count; i++) {
-    lua_Integer srcidx = from + i;
-    lua_Integer dstidx = to + i;
-    if (srcidx < (lua_Integer)ft->loglen) {
-      lu_byte tag = *getArrTag(ft, cast_uint(srcidx));
-      lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
-      *dtagp = tag;
-      if (tag != LUA_VEMPTY)
-        *getArrVal(tt, cast_uint(dstidx)) = *getArrVal(ft, cast_uint(srcidx));
-    } else {
-      lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
-      *dtagp = LUA_VEMPTY;
+  /* Handle overlapping arrays (memmove semantics) */
+  if (ft == tt && from < to && from + count > to) {
+    /* Overlapping: copy backwards to avoid overwriting source */
+    for (i = count - 1; i >= 0; i--) {
+      lua_Integer srcidx = from + i;
+      lua_Integer dstidx = to + i;
+      if (srcidx < (lua_Integer)ft->loglen) {
+        lu_byte tag = *getArrTag(ft, cast_uint(srcidx));
+        lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
+        *dtagp = tag;
+        if (tag != LUA_VEMPTY)
+          *getArrVal(tt, cast_uint(dstidx)) = *getArrVal(ft, cast_uint(srcidx));
+      } else {
+        lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
+        *dtagp = LUA_VEMPTY;
+      }
+    }
+  } else {
+    /* Non-overlapping or safe forward copy */
+    for (i = 0; i < count; i++) {
+      lua_Integer srcidx = from + i;
+      lua_Integer dstidx = to + i;
+      if (srcidx < (lua_Integer)ft->loglen) {
+        lu_byte tag = *getArrTag(ft, cast_uint(srcidx));
+        lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
+        *dtagp = tag;
+        if (tag != LUA_VEMPTY)
+          *getArrVal(tt, cast_uint(dstidx)) = *getArrVal(ft, cast_uint(srcidx));
+      } else {
+        lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
+        *dtagp = LUA_VEMPTY;
+      }
     }
   }
 
@@ -972,6 +995,7 @@ LUA_API int lua_nextarray(lua_State *L, int idx, lua_Integer *cursor) {
   lua_lock(L);
   o = index2value(L, idx);
   api_check(L, ttisarray(o), "array expected");
+  api_check(L, cursor != NULL, "cursor cannot be NULL");
   t = avalue(o);
 
   next = *cursor + 1;
