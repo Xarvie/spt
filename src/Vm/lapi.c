@@ -728,6 +728,7 @@ LUA_API void lua_createtable(lua_State *L, int narray, int nrec) {
   Table *t;
   lua_lock(L);
   t = luaH_new(L);
+  t->mode = TABLE_MAP; /* explicitly set mode to MAP */
   sethvalue2s(L, L->top.p, t);
   api_incr_top(L);
   if (narray > 0 || nrec > 0)
@@ -806,6 +807,236 @@ LUA_API void lua_arraysetlen(lua_State *L, int idx, lua_Integer newlen) {
   }
   t->loglen = cast_uint(newlen);
   lua_unlock(L);
+}
+
+/*
+** Extended array operations
+*/
+
+/*
+** Get the physical capacity of an array (asize).
+*/
+LUA_API lua_Integer lua_arraycapacity(lua_State *L, int idx) {
+  const TValue *o;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  lua_unlock(L);
+  return cast(lua_Integer, avalue(o)->asize);
+}
+
+/*
+** Check if an array is empty (loglen == 0).
+*/
+LUA_API int lua_arrayisempty(lua_State *L, int idx) {
+  const TValue *o;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  lua_unlock(L);
+  return avalue(o)->loglen == 0;
+}
+
+/*
+** Reserve capacity for an array.
+** Only grows, never shrinks.
+*/
+LUA_API void lua_arrayreserve(lua_State *L, int idx, lua_Integer cap) {
+  Table *t;
+  const TValue *o;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  t = avalue(o);
+  if (cast_uint(cap) > t->asize)
+    luaH_resizearray(L, t, cast_uint(cap));
+  lua_unlock(L);
+}
+
+/*
+** Get a range of elements from an array.
+** Pushes elements from index 'start' to 'end-1' onto the stack.
+*/
+LUA_API void lua_getarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer end) {
+  Table *t;
+  const TValue *o;
+  lua_Integer i;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  t = avalue(o);
+  api_check(L, start >= 0 && start <= end, "invalid range");
+
+  for (i = start; i < end && i < (lua_Integer)t->loglen; i++) {
+    lu_byte tag = *getArrTag(t, cast_uint(i));
+    if (tag != LUA_VEMPTY) {
+      TValue val;
+      farr2val(t, cast_uint(i), tag, &val);
+      setobj2s(L, L->top.p, &val);
+    } else {
+      setnilvalue(s2v(L->top.p));
+    }
+    api_incr_top(L);
+  }
+  lua_unlock(L);
+}
+
+/*
+** Set a range of elements in an array from stack values.
+** Expects 'count' values on the stack starting from top.
+*/
+LUA_API void lua_setarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer count) {
+  Table *t;
+  const TValue *o;
+  lua_Integer i;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  t = avalue(o);
+  api_check(L, start >= 0, "invalid start index");
+  api_check(L, L->top.p - (L->ci->func.p + 1) >= count, "not enough values on stack");
+
+  /* Ensure capacity */
+  if (cast_uint(start + count) > t->asize)
+    luaH_resizearray(L, t, cast_uint(start + count));
+
+  /* Set values */
+  for (i = 0; i < count; i++) {
+    StkId stackVal = L->top.p - count + i;
+    lu_byte *tagp = getArrTag(t, cast_uint(start + i));
+    *tagp = stackVal->val.tt_;
+    *getArrVal(t, cast_uint(start + i)) = stackVal->val.value_;
+  }
+
+  /* Update logical length if needed */
+  if (start + count > (lua_Integer)t->loglen)
+    t->loglen = cast_uint(start + count);
+
+  L->top.p -= count;
+  lua_unlock(L);
+}
+
+/*
+** Move elements from one array to another.
+*/
+LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer from, lua_Integer to,
+                           lua_Integer count) {
+  Table *ft, *tt;
+  const TValue *fo, *to_o;
+  lua_Integer i;
+  lua_lock(L);
+  fo = index2value(L, fromidx);
+  to_o = index2value(L, toidx);
+  api_check(L, ttisarray(fo) && ttisarray(to_o), "array expected");
+  api_check(L, from >= 0 && to >= 0 && count >= 0, "invalid index or count");
+
+  ft = avalue(fo);
+  tt = avalue(to_o);
+
+  /* Ensure destination capacity */
+  if (cast_uint(to + count) > tt->asize)
+    luaH_resizearray(L, tt, cast_uint(to + count));
+
+  /* Move elements */
+  for (i = 0; i < count; i++) {
+    lua_Integer srcidx = from + i;
+    lua_Integer dstidx = to + i;
+    if (srcidx < (lua_Integer)ft->loglen) {
+      lu_byte tag = *getArrTag(ft, cast_uint(srcidx));
+      lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
+      *dtagp = tag;
+      if (tag != LUA_VEMPTY)
+        *getArrVal(tt, cast_uint(dstidx)) = *getArrVal(ft, cast_uint(srcidx));
+    } else {
+      lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
+      *dtagp = LUA_VEMPTY;
+    }
+  }
+
+  /* Update destination logical length if needed */
+  if (to + count > (lua_Integer)tt->loglen)
+    tt->loglen = cast_uint(to + count);
+
+  lua_unlock(L);
+}
+
+/*
+** Iterate over array elements.
+** Returns 0 when finished, non-zero otherwise.
+** '*cursor' should be initialized to -1 before first call.
+*/
+LUA_API int lua_nextarray(lua_State *L, int idx, lua_Integer *cursor) {
+  Table *t;
+  const TValue *o;
+  lua_Integer next;
+  lua_lock(L);
+  o = index2value(L, idx);
+  api_check(L, ttisarray(o), "array expected");
+  t = avalue(o);
+
+  next = *cursor + 1;
+  if (next < 0 || next >= (lua_Integer)t->loglen) {
+    *cursor = -1;
+    lua_unlock(L);
+    return 0; /* finished */
+  }
+
+  /* Push key (index) */
+  lua_pushinteger(L, next);
+
+  /* Push value */
+  lu_byte tag = *getArrTag(t, cast_uint(next));
+  if (tag != LUA_VEMPTY) {
+    TValue val;
+    farr2val(t, cast_uint(next), tag, &val);
+    setobj2s(L, L->top.p, &val);
+  } else {
+    setnilvalue(s2v(L->top.p));
+  }
+  api_incr_top(L);
+
+  *cursor = next;
+  lua_unlock(L);
+  return 1;
+}
+
+/*
+** Table mode query operations
+*/
+
+/*
+** Get the mode of a table/array.
+** Returns: TABLE_ARRAY (1) for arrays, TABLE_MAP (2) for maps, 0 for invalid.
+*/
+LUA_API int lua_gettablemode(lua_State *L, int idx) {
+  const TValue *o;
+  lua_lock(L);
+  o = index2value(L, idx);
+  if (ttisarray(o)) {
+    lua_unlock(L);
+    return TABLE_ARRAY;
+  } else if (ttistable(o)) {
+    lua_unlock(L);
+    return hvalue(o)->mode;
+  }
+  lua_unlock(L);
+  return 0; /* invalid type */
+}
+
+/*
+** Check if object is a map (TABLE_MAP mode).
+*/
+LUA_API int lua_ismap(lua_State *L, int idx) {
+  const TValue *o;
+  lua_lock(L);
+  o = index2value(L, idx);
+  if (ttistable(o)) {
+    int ismap = hvalue(o)->mode == TABLE_MAP;
+    lua_unlock(L);
+    return ismap;
+  }
+  lua_unlock(L);
+  return 0;
 }
 
 LUA_API int lua_getmetatable(lua_State *L, int objindex) {

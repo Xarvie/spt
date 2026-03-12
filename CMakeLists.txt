@@ -84,8 +84,19 @@ if (BUILD_TESTS)
             COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/regression_test
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-    # 其他可能的测试...
-    # add_subdirectory(tests)
+    # 新增 C API 测试
+    add_executable(test_new_c_api tests/test_new_c_api.c)
+    target_include_directories(test_new_c_api PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/Vm
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src
+    )
+    target_link_libraries(test_new_c_api PRIVATE sptscript_library_static)
+
+    # 添加测试目标
+    add_test(NAME test_new_c_api
+            COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test_new_c_api
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     message(STATUS "Regression test enabled: regression_test")
+    message(STATUS "New C API test enabled: test_new_c_api")
 endif ()

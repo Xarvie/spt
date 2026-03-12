@@ -266,6 +266,24 @@ LUA_API lua_Integer(lua_arraylen)(lua_State *L, int idx);
 LUA_API void(lua_arraysetlen)(lua_State *L, int idx, lua_Integer newlen);
 
 /*
+** array extended operations
+*/
+LUA_API lua_Integer(lua_arraycapacity)(lua_State *L, int idx);
+LUA_API int(lua_arrayisempty)(lua_State *L, int idx);
+LUA_API void(lua_arrayreserve)(lua_State *L, int idx, lua_Integer cap);
+LUA_API void(lua_getarrayrange)(lua_State *L, int idx, lua_Integer start, lua_Integer end);
+LUA_API void(lua_setarrayrange)(lua_State *L, int idx, lua_Integer start, lua_Integer count);
+LUA_API void(lua_movearray)(lua_State *L, int fromidx, int toidx, lua_Integer from, lua_Integer to,
+                            lua_Integer count);
+LUA_API int(lua_nextarray)(lua_State *L, int idx, lua_Integer *cursor);
+
+/*
+** table mode query
+*/
+LUA_API int(lua_gettablemode)(lua_State *L, int idx);
+LUA_API int(lua_ismap)(lua_State *L, int idx);
+
+/*
 ** 'load' and 'call' functions (load and run Lua code)
 */
 LUA_API void(lua_callk)(lua_State *L, int nargs, int nresults, lua_KContext ctx, lua_KFunction k);
