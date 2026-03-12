@@ -1332,6 +1332,9 @@ lua_Unsigned luaH_getn(lua_State *L, Table *t) {
   /* LIST: return logical length */
   if (t->mode == TABLE_ARRAY)
     return t->loglen;
+  /* MAP: always return 0 according to design document */
+  if (t->mode == TABLE_MAP)
+    return 0;
   /* regular table logic unchanged */
   unsigned asize = t->asize;
   if (asize > 0) { /* is there an array part? */

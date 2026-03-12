@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -8,10 +9,10 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern "C" {
-
 #include "Vm/lauxlib.h"
 #include "Vm/lua.h"
 #include "Vm/lualib.h"
@@ -19,8 +20,6 @@ extern "C" {
 
 namespace fs = std::filesystem;
 
-// 这是一个全局辅助，用于在 Lua 的 C 函数中捕获输出
-// 注意：为了简单起见使用了线程局部存储，确保并行测试（如果有）安全
 static thread_local std::stringstream *g_currentCapture = nullptr;
 
 static int lua_capture_print(lua_State *L) {
@@ -35,7 +34,7 @@ static int lua_capture_print(lua_State *L) {
     if (i > 2)
       *g_currentCapture << " ";
 
-    // [修复] 单独处理数字类型，解决 5.14 显示为 5.1400000000000006 的问题
+    // 单独处理数字类型，解决 5.14 显示为 5.1400000000000006 的问题
     if (lua_type(L, i) == LUA_TNUMBER) {
       if (lua_isinteger(L, i)) {
         *g_currentCapture << lua_tointeger(L, i);
@@ -67,12 +66,9 @@ static int lua_capture_print(lua_State *L) {
   return 0;
 }
 
+// 统一的测试运行器，兼容新老接口
 class TestRunner {
 public:
-  // [注意] 原生绑定现在的参数从 VM* 变成了 lua_State*
-  // 如果你的测试用例里写了 C++ lambda，需要把参数类型改一下
-  using NativeBindingRegistrar = std::function<void(lua_State *)>;
-
   struct ModuleDef {
     std::string name;
     std::string content;
@@ -84,18 +80,18 @@ public:
     std::string expectedOutput;
     std::vector<ModuleDef> modules;         // 辅助模块文件
     bool expectRuntimeError;                // 是否预期发生运行时错误
-    NativeBindingRegistrar nativeRegistrar; // 原生绑定注册函数（可选）
+    std::function<void(lua_State *)> nativeRegistrar; // 原生绑定注册函数（可选）
   };
 
-  // --- 接口保持不变，确保兼容性 ---
-
+  // --- 新接口（保持兼容性）---
   void addTest(const std::string &name, const std::string &script,
                const std::string &expectedOutput) {
     tests_.push_back({name, script, expectedOutput, {}, false, nullptr});
   }
 
   void addNativeTest(const std::string &name, const std::string &script,
-                     const std::string &expectedOutput, NativeBindingRegistrar registrar) {
+                     const std::string &expectedOutput,
+                     std::function<void(lua_State *)> registrar) {
     tests_.push_back({name, script, expectedOutput, {}, false, registrar});
   }
 
@@ -107,7 +103,8 @@ public:
 
   void addModuleNativeTest(const std::string &name, const std::vector<ModuleDef> &modules,
                            const std::string &script, const std::string &expectedOutput,
-                           NativeBindingRegistrar registrar, bool expectRuntimeError = false) {
+                           std::function<void(lua_State *)> registrar,
+                           bool expectRuntimeError = false) {
     tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError, registrar});
   }
 
@@ -116,10 +113,33 @@ public:
   }
 
   void addNativeFailTest(const std::string &name, const std::string &script,
-                         NativeBindingRegistrar registrar) {
+                         std::function<void(lua_State *)> registrar) {
     tests_.push_back({name, script, "", {}, true, registrar});
   }
 
+  // --- 旧接口（兼容性别名）---
+  void runTest(const std::string &name, const std::string &script,
+               const std::string &expectedOutput) {
+    tests_.push_back({name, script, expectedOutput, {}, false, nullptr});
+  }
+
+  void runModuleTest(const std::string &name, const std::vector<ModuleDef> &modules,
+                     const std::string &script, const std::string &expectedOutput,
+                     bool expectRuntimeError = false) {
+    tests_.push_back({name, script, expectedOutput, modules, expectRuntimeError, nullptr});
+  }
+
+  void runFailTest(const std::string &name, const std::string &script) {
+    tests_.push_back({name, script, "", {}, true, nullptr});
+  }
+
+  void runBenchmark(const std::string &name, const std::string &script,
+                    const std::string &expectedOutput) {
+    // 基准测试暂时实现为普通测试
+    tests_.push_back({name, script, expectedOutput, {}, false, nullptr});
+  }
+
+  // 统一的运行方法
   int runAll() {
     int passed = 0;
     int total = tests_.size();
@@ -151,6 +171,9 @@ public:
 
     return (passed == total) ? 0 : 1;
   }
+
+  // 获取测试用例用于Catch2集成
+  const std::vector<TestCase> &getTests() const { return tests_; }
 
 private:
   std::vector<TestCase> tests_;
@@ -236,14 +259,11 @@ private:
     setupLuaPath(L);
 
     // 3. 注册原生绑定（如果有）
-    // 这里调用用户的 lambda，此时传入的是 lua_State*
     if (test.nativeRegistrar) {
       test.nativeRegistrar(L);
     }
 
     // 4. 加载并运行脚本
-    // luaL_loadbuffer/loadstring 会触发 ldo.c 中你修改过的 f_parser
-    // 从而调用 loadAst -> astY_compile
     int status = luaL_loadbuffer(L, test.script.c_str(), test.script.size(), test.name.c_str());
 
     if (status == LUA_OK) {

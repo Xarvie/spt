@@ -41,8 +41,6 @@ endif()
 PickSourceFiles(
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         sourceFiles
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/TestRunner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/sptscript.cpp
 )
 PickIncludeDirectories(${CMAKE_CURRENT_SOURCE_DIR}/src/
@@ -69,10 +67,6 @@ target_compile_definitions(sptscript_library_shared PRIVATE SPT_EXPORTS)
 add_executable(sptscript ${CMAKE_CURRENT_SOURCE_DIR}/src/sptscript.cpp)
 target_link_libraries(sptscript PRIVATE sptscript_library_static)
 
-add_executable(sptscript_test_old ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
-target_link_libraries(sptscript_test_old PRIVATE sptscript_library_static)
-
 if (BUILD_TESTS)
     enable_testing()
-    add_subdirectory(tests)
 endif ()

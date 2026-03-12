@@ -1,5 +1,4 @@
 #include "Ast/ast.h"
-#include "BytecodeSerializer.h"
 
 #include <filesystem>
 #include <fstream>
