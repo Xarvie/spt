@@ -17,6 +17,7 @@
 #include "TestFunctions.h"
 #include "TestListMap.h"
 #include "TestModules.h"
+#include "TestOperatorOverload.h"
 
 int main() {
   Test runner;
@@ -50,6 +51,9 @@ int main() {
 
   std::cout << "注册模块测试..." << std::endl;
   registerModules(runner);
+
+  std::cout << "注册运算符重载测试..." << std::endl;
+  registerOperatorOverloadTest(runner);
 
   // 统计测试数量
   size_t totalTests = runner.getTests().size();
