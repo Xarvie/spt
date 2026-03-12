@@ -301,14 +301,21 @@ static void hookf(lua_State *L, lua_Debug *ar) {
   static const char *const hooknames[] = {"call", "return", "line", "count", "tail call"};
   lua_getfield(L, LUA_REGISTRYINDEX, HOOKKEY);
   lua_pushthread(L);
-  if (lua_rawget(L, -2) == LUA_TFUNCTION) {       /* is there a hook function? */
+  if (lua_rawget(L, -2) == LUA_TFUNCTION) { /* is there a hook function? */
+
+    /* === SPT 专属修改：为 hook 回调垫入 nil receiver === */
+    lua_pushnil(L);
+    /* ==================================================== */
+
     lua_pushstring(L, hooknames[(int)ar->event]); /* push event name */
     if (ar->currentline >= 0)
       lua_pushinteger(L, ar->currentline); /* push current line */
     else
       lua_pushnil(L);
     lua_assert(lua_getinfo(L, "lS", ar));
-    lua_call(L, 2, 0); /* call hook function */
+
+    /* 修改：由于多压入了一个 receiver，原本的 2 个参数变成了 3 个 */
+    lua_call(L, 3, 0);
   }
 }
 

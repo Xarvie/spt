@@ -39,7 +39,7 @@ importStatement
     ;
 
 importSpecifier
-    : TYPE? IDENTIFIER (AS IDENTIFIER)?
+    : IDENTIFIER (AS IDENTIFIER)?
     ;
 
 deferStatement

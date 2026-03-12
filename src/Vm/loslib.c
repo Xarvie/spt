@@ -126,7 +126,9 @@
 /* ISO C definitions */
 #define LUA_TMPNAMBUFSIZE L_tmpnam
 #define lua_tmpnam(b, e)                                                                           \
-  { e = (tmpnam(b) == NULL); }
+  {                                                                                                \
+    e = (tmpnam(b) == NULL);                                                                       \
+  }
 
 #endif /* } */
 

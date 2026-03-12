@@ -480,7 +480,7 @@ static int finishpcall(lua_State *L, int status, lua_KContext extra) {
     lua_pushvalue(L, -2);                                    /* error message */
     return 2;                                                /* return false, msg */
   } else
-    return lua_gettop(L) - (int)extra; /* return all results */
+    return lua_gettop(L) - 1 - (int)extra; /* [修改] 减去 1 剔除 receiver */
 }
 
 /* luaB_pcall - receiver is arg1, func is arg2, args start from arg3 */
@@ -488,7 +488,13 @@ static int luaB_pcall(lua_State *L) {
   int status;
   luaL_checkany(L, 2);
   lua_pushboolean(L, 1); /* first result if no errors */
-  lua_insert(L, 2);      /* put it in place */
+  lua_insert(L, 2);      /* put it in place. 当前栈: [recv, true, func, arg1...] */
+
+  /* [修改] 强制压入 nil 作为目标函数的 receiver 垫片 */
+  lua_pushnil(L);
+  lua_insert(L, 4); /* 栈变成: [recv, true, func, nil, arg1...] */
+
+  /* 由于栈总高度增加了1，同时参数包含了新加的nil，所以 gettop - 3 依然精准等于我们需要的参数数量 */
   status = lua_pcallk(L, lua_gettop(L) - 3, LUA_MULTRET, 0, 0, finishpcall);
   return finishpcall(L, status, 0);
 }
@@ -505,8 +511,15 @@ static int luaB_xpcall(lua_State *L) {
   luaL_checktype(L, 3, LUA_TFUNCTION); /* check error function */
   lua_pushboolean(L, 1);               /* first result */
   lua_pushvalue(L, 2);                 /* function */
-  lua_rotate(L, 4, 2);                 /* move them below function's arguments */
-  status = lua_pcallk(L, n - 3, LUA_MULTRET, 3, 2, finishpcall);
+
+  /* [修改] 压入 nil 作为目标函数的 receiver 垫片 */
+  lua_pushnil(L);
+
+  /* [修改] 此时栈顶有 true, func, nil 三个元素，需要一起 rotate 到参数之前 */
+  lua_rotate(L, 4, 3); /* move them below function's arguments */
+
+  /* [修改] 目标函数的参数总量 = 原参数量(n - 3) + receiver(1) = n - 2 */
+  status = lua_pcallk(L, n - 2, LUA_MULTRET, 3, 2, finishpcall);
   return finishpcall(L, status, 2);
 }
 

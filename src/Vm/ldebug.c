@@ -798,10 +798,19 @@ l_noret luaG_errormsg(lua_State *L) {
   if (L->errfunc != 0) { /* is there an error handling function? */
     StkId errfunc = restorestack(L, L->errfunc);
     lua_assert(ttisfunction(s2v(errfunc)));
-    setobjs2s(L, L->top.p, L->top.p - 1); /* move argument */
-    setobjs2s(L, L->top.p - 1, errfunc);  /* push function */
-    L->top.p++;                           /* assume EXTRA_STACK */
-    luaD_callnoyield(L, L->top.p - 2, 1); /* call it */
+
+    /* === SPT 专属修改：为 errhandler 垫入 nil receiver === */
+    /* 进入该函数时，栈顶 (L->top.p - 1) 存放的是原错误信息 err_msg。
+       我们需要将栈结构从 [err_msg] 调整为 [errfunc, nil_receiver, err_msg] */
+
+    setobjs2s(L, L->top.p + 1, L->top.p - 1); /* 将 err_msg 往上提 2 格 */
+    setnilvalue(s2v(L->top.p));               /* 在空出的中间位置塞入 nil (Receiver) */
+    setobjs2s(L, L->top.p - 1, errfunc);      /* 在 err_msg 的原位置放入错误处理函数 */
+    L->top.p += 2;                            /* 栈高度整体增加 2 (函数 + receiver) */
+
+    /* 调用 errfunc。此时参数有两个：receiver(nil) 和 err_msg。
+       L->top.p - 3 正确指向 errfunc 的位置 */
+    luaD_callnoyield(L, L->top.p - 3, 1);
   }
   if (ttisnil(s2v(L->top.p - 1))) { /* error object is nil? */
     /* change it to a proper message */

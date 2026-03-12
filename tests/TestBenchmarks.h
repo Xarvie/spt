@@ -1,5 +1,5 @@
 #pragma once
-#include "TestRunner.h"
+#include "Test.h"
 
 // =========================================================
 // 性能基准测试 (Benchmarks)

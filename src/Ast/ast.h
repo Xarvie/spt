@@ -411,13 +411,11 @@ class ImportSpecifierNode : public AstNode {
 public:
   std::string importedName;         // 在模块中导出的原始名称
   std::optional<std::string> alias; // 本地别名 (如果使用了 'as')
-  bool isTypeOnly;                  // 标记是否为 type import
 
-  ImportSpecifierNode(std::string name, std::optional<std::string> aliasOpt, bool typeOnly,
-                      SourceLocation loc)
+  ImportSpecifierNode(std::string name, std::optional<std::string> aliasOpt, SourceLocation loc)
       : AstNode(std::move(loc), NodeType::IMPORT_SPECIFIER), importedName(std::move(name)),
-        alias(std::move(aliasOpt)), // 移动 optional
-        isTypeOnly(typeOnly) {}
+        alias(std::move(aliasOpt)) // 移动 optional
+  {}
 
   // 获取在本地作用域中使用的名称（别名优先）
   std::string getLocalName() const { return alias.value_or(importedName); }

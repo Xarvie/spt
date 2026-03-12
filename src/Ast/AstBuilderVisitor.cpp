@@ -3014,8 +3014,6 @@ std::any AstBuilderVisitor::visitImportSpecifier(LangParser::ImportSpecifierCont
     throw std::runtime_error("visitImportSpecifier nullptr context");
   SourceLocation loc = getSourceLocation(ctx);
 
-  bool isTypeOnly = (ctx->TYPE() != nullptr);
-
   auto idNodes = ctx->IDENTIFIER();
   if (idNodes.empty() || !idNodes[0]) {
     throw std::runtime_error("Import specifier missing identifier at line " +
@@ -3045,7 +3043,7 @@ std::any AstBuilderVisitor::visitImportSpecifier(LangParser::ImportSpecifierCont
 
   SourceLocation nodeLoc = getSourceLocation(originalNameNode);
   ImportSpecifierNode *node =
-      new ImportSpecifierNode(std::move(importedName), std::move(aliasOpt), isTypeOnly, nodeLoc);
+      new ImportSpecifierNode(std::move(importedName), std::move(aliasOpt), nodeLoc);
   if (!node)
     throw std::runtime_error("Failed to create ImportSpecifierNode");
   return std::any(static_cast<AstNode *>(node));

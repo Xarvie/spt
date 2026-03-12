@@ -67,7 +67,7 @@ static int lua_capture_print(lua_State *L) {
 }
 
 // 统一的测试运行器，兼容新老接口
-class TestRunner {
+class Test {
 public:
   struct ModuleDef {
     std::string name;
@@ -78,8 +78,8 @@ public:
     std::string name;
     std::string script;
     std::string expectedOutput;
-    std::vector<ModuleDef> modules;         // 辅助模块文件
-    bool expectRuntimeError;                // 是否预期发生运行时错误
+    std::vector<ModuleDef> modules;                   // 辅助模块文件
+    bool expectRuntimeError;                          // 是否预期发生运行时错误
     std::function<void(lua_State *)> nativeRegistrar; // 原生绑定注册函数（可选）
   };
 
