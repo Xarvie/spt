@@ -49,7 +49,7 @@ inline void registerBasics(Test &runner) {
             }
             print(a);
        )",
-                 "200\n300\n200\n100");
+                 "999999\n300\n200\n100");
 
   runner.addTest("Null and Type Checks",
                  R"(
