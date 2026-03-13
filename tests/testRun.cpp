@@ -18,6 +18,7 @@
 #include "TestListMap.h"
 #include "TestModules.h"
 #include "TestOperatorOverload.h"
+#include "TestSyntax.h"
 
 int main() {
   Test runner;
@@ -29,7 +30,7 @@ int main() {
   // 注册所有测试模块
   std::cout << "注册基础语法测试..." << std::endl;
   registerBasics(runner);
-
+  registerSyntaxTests(runner);
   std::cout << "注册控制流测试..." << std::endl;
   registerControlFlow(runner);
 
