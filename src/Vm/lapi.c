@@ -869,12 +869,12 @@ LUA_API void lua_getarrayrange(lua_State *L, int idx, lua_Integer start, lua_Int
 
   for (i = start; i < end && i < (lua_Integer)t->loglen; i++) {
     lu_byte tag = *getArrTag(t, cast_uint(i));
-    if (tag != LUA_VEMPTY) {
+    if (tagisempty(tag)) {
+      setnilvalue(s2v(L->top.p));
+    } else {
       TValue val;
       farr2val(t, cast_uint(i), tag, &val);
       setobj2s(L, L->top.p, &val);
-    } else {
-      setnilvalue(s2v(L->top.p));
     }
     api_incr_top(L);
   }
