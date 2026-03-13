@@ -1361,15 +1361,27 @@ static void compile_assignment(CompileCtx *C, AssignmentNode *n) {
   } else {
     expdesc lastval;
     int nexps = compile_exprlist_n(C, n->rvalues, &lastval);
-    if (nexps != nlvals)
+    if (nexps != nlvals) {
       ast_adjust_assign(C, nlvals, nexps, &lastval);
-    else {
+      // 从栈中取值赋值给每个左值
+      for (int i = nlvals - 1; i >= 0; i--) {
+        expdesc src;
+        init_exp(&src, VNONRELOC, --fs->freereg);
+        luaK_storevar(fs, &lhs[i], &src);
+      }
+    } else {
+      // 所有右侧表达式数量等于左值数量
+      // 确保最后一个表达式也被移到寄存器中
       luaK_exp2nextreg(fs, &lastval);
-    }
-    for (int i = nlvals - 1; i >= 0; i--) {
-      expdesc src;
-      init_exp(&src, VNONRELOC, --fs->freereg);
-      luaK_storevar(fs, &lhs[i], &src);
+      // 现在所有值都在连续的寄存器中，从 base 到 base + nlvals - 1
+      int base = fs->freereg - nlvals;
+      for (int i = 0; i < nlvals; i++) {
+        expdesc src;
+        init_exp(&src, VNONRELOC, base + i);
+        luaK_storevar(fs, &lhs[i], &src);
+      }
+      // 恢复 freereg
+      fs->freereg = cast_byte(base);
     }
   }
 }
