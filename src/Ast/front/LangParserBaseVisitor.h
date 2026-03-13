@@ -1,5 +1,5 @@
 
-// Generated from LangParser.g4 by ANTLR 4.13.2
+// Generated from LangParser.g4 by ANTLR 4.13.1
 
 #pragma once
 
@@ -291,11 +291,6 @@ public:
   }
 
   virtual std::any visitPostfixMemberSuffix(LangParser::PostfixMemberSuffixContext *ctx) override {
-    return visitChildren(ctx);
-  }
-
-  virtual std::any
-  visitPostfixColonLookupSuffix(LangParser::PostfixColonLookupSuffixContext *ctx) override {
     return visitChildren(ctx);
   }
 

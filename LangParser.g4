@@ -237,7 +237,6 @@ postfixExp
 postfixSuffix
     : OSB expression CSB             #postfixIndexSuffix      // 索引: expr[index]
     | DOT IDENTIFIER                 #postfixMemberSuffix     // 成员访问: expr.member
-    | COL IDENTIFIER                 #postfixColonLookupSuffix// 成员查找: expr:member
     | OP arguments? CP               #postfixCallSuffix       // 函数调用: expr(args)
     ;
 

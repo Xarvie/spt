@@ -1,5 +1,5 @@
 
-// Generated from LangParser.g4 by ANTLR 4.13.2
+// Generated from LangParser.g4 by ANTLR 4.13.1
 
 #pragma once
 
@@ -156,9 +156,6 @@ public:
   virtual std::any visitPostfixIndexSuffix(LangParser::PostfixIndexSuffixContext *context) = 0;
 
   virtual std::any visitPostfixMemberSuffix(LangParser::PostfixMemberSuffixContext *context) = 0;
-
-  virtual std::any
-  visitPostfixColonLookupSuffix(LangParser::PostfixColonLookupSuffixContext *context) = 0;
 
   virtual std::any visitPostfixCallSuffix(LangParser::PostfixCallSuffixContext *context) = 0;
 

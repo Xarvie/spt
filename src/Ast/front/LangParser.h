@@ -1,5 +1,5 @@
 
-// Generated from LangParser.g4 by ANTLR 4.13.2
+// Generated from LangParser.g4 by ANTLR 4.13.1
 
 #pragma once
 
@@ -1375,16 +1375,6 @@ public:
     PostfixMemberSuffixContext(PostfixSuffixContext *ctx);
 
     antlr4::tree::TerminalNode *DOT();
-    antlr4::tree::TerminalNode *IDENTIFIER();
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-  };
-
-  class PostfixColonLookupSuffixContext : public PostfixSuffixContext {
-  public:
-    PostfixColonLookupSuffixContext(PostfixSuffixContext *ctx);
-
-    antlr4::tree::TerminalNode *COL();
     antlr4::tree::TerminalNode *IDENTIFIER();
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;

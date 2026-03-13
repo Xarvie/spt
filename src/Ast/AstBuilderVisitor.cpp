@@ -1869,17 +1869,6 @@ std::any AstBuilderVisitor::visitPostfixExpression(LangParser::PostfixExpression
           throw std::runtime_error("AstBuilderVisitor::visitPostfixExpressionnullptr");
 
         currentExpr = newNode;
-      } else if (auto colonCtx =
-                     dynamic_cast<LangParser::PostfixColonLookupSuffixContext *>(suffixCtx)) {
-        if (!colonCtx->IDENTIFIER())
-          throw std::runtime_error("AstBuilderVisitor::visitPostfixExpressionnullptr");
-
-        MemberLookupNode *newNode =
-            new MemberLookupNode(currentExpr, colonCtx->IDENTIFIER()->getText(), suffixLoc);
-        if (!newNode)
-          throw std::runtime_error("AstBuilderVisitor::visitPostfixExpressionnullptr");
-
-        currentExpr = newNode;
       } else if (auto callCtx = dynamic_cast<LangParser::PostfixCallSuffixContext *>(suffixCtx)) {
         std::vector<Expression *> args;
         if (callCtx->arguments()) {

@@ -1,5 +1,5 @@
 
-// Generated from LangLexer.g4 by ANTLR 4.13.2
+// Generated from LangLexer.g4 by ANTLR 4.13.1
 
 #include "LangLexer.h"
 
@@ -39,8 +39,7 @@ struct LangLexerStaticData final {
 #if ANTLR4_USE_THREAD_LOCAL_CACHE
 static thread_local
 #endif
-    std::unique_ptr<LangLexerStaticData>
-        langlexerLexerStaticData = nullptr;
+    LangLexerStaticData *langlexerLexerStaticData = nullptr;
 
 void langlexerLexerInitialize() {
 #if ANTLR4_USE_THREAD_LOCAL_CACHE
@@ -689,7 +688,7 @@ void langlexerLexerInitialize() {
   for (size_t i = 0; i < count; i++) {
     staticData->decisionToDFA.emplace_back(staticData->atn->getDecisionState(i), i);
   }
-  langlexerLexerStaticData = std::move(staticData);
+  langlexerLexerStaticData = staticData.release();
 }
 
 } // namespace
