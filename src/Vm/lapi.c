@@ -616,7 +616,7 @@ LUA_API int lua_pushthread(lua_State *L) {
 static int auxgetstr(lua_State *L, const TValue *t, const char *k) {
   lu_byte tag;
   TString *str = luaS_new(L, k);
-  luaV_fastget(t, str, s2v(L->top.p), luaH_getstr, tag);
+  luaV_fastget(L, t, str, s2v(L->top.p), luaH_getstr, tag);
   if (!tagisempty(tag))
     api_incr_top(L);
   else {
@@ -635,7 +635,7 @@ static int auxgetstr(lua_State *L, const TValue *t, const char *k) {
 */
 static void getGlobalTable(lua_State *L, TValue *gt) {
   Table *registry = hvalue(&G(L)->l_registry);
-  lu_byte tag = luaH_getint(registry, LUA_RIDX_GLOBALS, gt);
+  lu_byte tag = luaH_getint(L, registry, LUA_RIDX_GLOBALS, gt);
   (void)tag; /* avoid not-used warnings when checks are off */
   api_check(L, novariant(tag) == LUA_TTABLE, "global table must exist");
 }
@@ -653,7 +653,7 @@ LUA_API int lua_gettable(lua_State *L, int idx) {
   lua_lock(L);
   api_checkpop(L, 1);
   t = index2value(L, idx);
-  luaV_fastget(t, s2v(L->top.p - 1), s2v(L->top.p - 1), luaH_get, tag);
+  luaV_fastget(L, t, s2v(L->top.p - 1), s2v(L->top.p - 1), luaH_get, tag);
   if (tagisempty(tag))
     tag = luaV_finishget(L, t, s2v(L->top.p - 1), L->top.p - 1, tag);
   lua_unlock(L);
@@ -670,7 +670,7 @@ LUA_API int lua_geti(lua_State *L, int idx, lua_Integer n) {
   lu_byte tag;
   lua_lock(L);
   t = index2value(L, idx);
-  luaV_fastgeti(t, n, s2v(L->top.p), tag);
+  luaV_fastgeti(L, t, n, s2v(L->top.p), tag);
   if (tagisempty(tag)) {
     TValue key;
     setivalue(&key, n);
@@ -701,7 +701,7 @@ LUA_API int lua_rawget(lua_State *L, int idx) {
   lua_lock(L);
   api_checkpop(L, 1);
   t = gettable(L, idx);
-  tag = luaH_get(t, s2v(L->top.p - 1), s2v(L->top.p - 1));
+  tag = luaH_get(L, t, s2v(L->top.p - 1), s2v(L->top.p - 1));
   L->top.p--; /* pop key */
   return finishrawget(L, tag);
 }
@@ -711,7 +711,7 @@ LUA_API int lua_rawgeti(lua_State *L, int idx, lua_Integer n) {
   lu_byte tag;
   lua_lock(L);
   t = gettable(L, idx);
-  luaH_fastgeti(t, n, s2v(L->top.p), tag);
+  luaH_fastgeti(L, t, n, s2v(L->top.p), tag);
   return finishrawget(L, tag);
 }
 
@@ -721,7 +721,7 @@ LUA_API int lua_rawgetp(lua_State *L, int idx, const void *p) {
   lua_lock(L);
   t = gettable(L, idx);
   setpvalue(&k, cast_voidp(p));
-  return finishrawget(L, luaH_get(t, &k, s2v(L->top.p)));
+  return finishrawget(L, luaH_get(L, t, &k, s2v(L->top.p)));
 }
 
 /*

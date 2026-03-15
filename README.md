@@ -14,12 +14,81 @@
 | Registry 引用 | `lua_rawgeti(L, REG, ref)` | **`lua_getref(L, ref)`**  |
 | `#` 对 Map   | 返回边界                       | **固定返回 0**                |
 | 数组越界        | 返回 nil                     | **抛出错误**                  |
+| 变量作用域       | 默认全局，`local` 声明局部          | **默认局部，`global` 声明全局**    |
 
 ---
 
-## 2. Slot 0 Receiver 调用约定（最重要）
+## 2. 变量作用域与 `global` 关键字
 
 ### 2.1 基本规则
+
+**SPT 默认变量为局部作用域，需使用 `global` 关键字显式声明全局变量。**
+
+```spt
+int x = 100;           // 局部变量（仅当前作用域可见）
+global int y = 200;    // 全局变量（跨 do_string 持久化）
+
+int add(int a, int b) { return a + b; }           // 局部函数
+global int mul(int a, int b) { return a * b; }     // 全局函数
+```
+
+### 2.2 与标准 Lua 对比
+
+| 声明方式                 | 标准 Lua | SPT Lua  |
+|----------------------|--------|----------|
+| `x = 100`            | 全局变量   | **语法错误** |
+| `local x = 100`      | 局部变量   | **语法错误** |
+| `int x = 100`        | 不支持    | 局部变量     |
+| `global int x = 100` | 不支持    | 全局变量     |
+
+### 2.3 全局变量持久化
+
+全局变量在同一个 `lua_State` 的多次 `do_string` 调用之间**持久化**：
+
+```cpp
+sptxx::state lua;
+lua.open_libraries();
+
+lua.do_string("global int counter = 0;");
+lua.do_string("counter = counter + 1;");
+lua.do_string("print(counter);");  // 输出: 1
+
+int val = lua.get_global<int>("counter");  // val = 1
+```
+
+### 2.4 ⚠️ 易错点
+
+```spt
+// ❌ 错误：忘记 global，变量无法跨作用域访问
+int x = 100;
+// 在另一个 do_string 中访问 x 会得到 nil
+
+// ✅ 正确：使用 global 声明全局变量
+global int x = 100;
+// 现在可以在其他 do_string 中访问 x
+
+// ❌ 错误：在同一个 do_string 中，全局函数声明后立即使用的代码块中找不到其他全局函数
+global int add(int a, int b) { return a + b; } print(add(1,2));
+// 错误: variable 'print' not declared
+
+// ✅ 正确：分开两个 do_string
+lua.do_string("global int add(int a, int b) { return a + b; }");
+lua.do_string("print(add(1, 2));");  // 输出: 3
+```
+
+### 2.5 设计理念
+
+SPT 采用显式 `global` 的设计，避免了标准 Lua 中常见的"忘记 `local` 导致全局污染"问题：
+
+- **默认安全**：变量默认局部，不会意外污染全局命名空间
+- **显式意图**：`global` 关键字明确表达变量的全局意图
+- **代码可读性**：一眼就能区分局部变量和全局变量
+
+---
+
+## 3. Slot 0 Receiver 调用约定（最重要）
+
+### 3.1 基本规则
 
 **所有函数调用，索引 1 永远是 Receiver，实际参数从索引 2 开始。**
 
@@ -30,7 +99,7 @@
   [3] arg2              - 第二个实际参数
 ```
 
-### 2.2 不同调用场景
+### 3.2 不同调用场景
 
 | 调用方式                   | 栈布局                  | 参数起始索引      |
 |------------------------|----------------------|-------------|
@@ -41,7 +110,7 @@
 | `Table(a, b)` (__call) | `[Table, nil, a, b]` | **索引 3** ⚠️ |
 | `new Class(a, b)`      | `[Class, nil, a, b]` | **索引 3** ⚠️ |
 
-### 2.3 C 函数模板
+### 3.3 C 函数模板
 
 ```c
 /* 普通函数 / 方法 */
@@ -61,7 +130,7 @@ static int constructor(lua_State *L) {
 }
 ```
 
-### 2.4 ⚠️ 易错点：__call 参数索引
+### 3.4 ⚠️ 易错点：__call 参数索引
 
 `__call` 元方法中，**参数从索引 3 开始**，不是索引 2！
 
@@ -73,16 +142,16 @@ static int constructor(lua_State *L) {
 
 ---
 
-## 3. List 与 Map 分离
+## 4. List 与 Map 分离
 
-### 3.1 类型判断
+### 4.1 类型判断
 
 ```c
 #define ttisarray(o)  // 判断是否为 List
 #define ttistable(o)  // 判断是否为 Map
 ```
 
-### 3.2 行为差异
+### 4.2 行为差异
 
 | 操作   | List (`LUA_VARRAY`)       | Map (`LUA_VTABLE`)         |
 |------|---------------------------|----------------------------|
@@ -92,7 +161,7 @@ static int constructor(lua_State *L) {
 | 越界访问 | **抛出错误**                  | 返回 nil                     |
 | 越界写入 | **抛出错误**                  | 正常插入                       |
 
-### 3.3 List 边界检查
+### 4.3 List 边界检查
 
 ```c
 /* 以下操作会抛出错误 */
@@ -101,7 +170,7 @@ arr[100]     // 越界（>= loglen）
 arr[1.5]     // 浮点索引
 ```
 
-### 3.4 List API
+### 4.4 List API
 
 #### 基础 API
 
@@ -154,9 +223,9 @@ void lua_arrayreserve(lua_State *L, int idx, lua_Integer cap);
 
 ---
 
-## 4. Registry 引用机制（破坏性变更）
+## 5. Registry 引用机制（破坏性变更）
 
-### 4.1 ⚠️ 禁止使用的 API
+### 5.1 ⚠️ 禁止使用的 API
 
 ```c
 // ❌ 禁止！会导致未定义行为
@@ -164,7 +233,7 @@ lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
 lua_rawseti(L, LUA_REGISTRYINDEX, ref);
 ```
 
-### 4.2 正确用法
+### 5.2 正确用法
 
 ```c
 int ref = luaL_ref(L, LUA_REGISTRYINDEX);  // 创建引用
@@ -177,7 +246,7 @@ luaL_unref(L, LUA_REGISTRYINDEX, ref);     // 释放引用
 
 ---
 
-## 5. Table 结构
+## 6. Table 结构
 
 ```c
 typedef struct Table {
@@ -194,7 +263,7 @@ typedef struct Table {
 } Table;
 ```
 
-### 5.1 List 内存布局
+### 6.1 List 内存布局
 
 ```
              Values                    Tags
@@ -209,7 +278,7 @@ typedef struct Table {
 
 ---
 
-## 6. 新增 VM 指令
+## 7. 新增 VM 指令
 
 | 指令           | 说明      |
 |--------------|---------|
@@ -217,9 +286,9 @@ typedef struct Table {
 
 ---
 
-## 7. 新增标准库函数
+## 8. 新增标准库函数
 
-### 7.1 table 库
+### 8.1 table 库
 
 ```c
 table.push(list, value)   // 追加元素到末尾（loglen 位置）
@@ -227,7 +296,7 @@ table.pop(list)           // 移除并返回最后一个元素
 table.create(n)           // 创建容量为 n 的 List
 ```
 
-### 7.2 math 库适配
+### 8.2 math 库适配
 
 所有 math 函数已适配 Slot 0 Receiver，参数从索引 2 开始：
 
@@ -238,7 +307,7 @@ math.floor(x)
 // ... 其他函数同理
 ```
 
-### 7.3 base 库适配
+### 8.3 base 库适配
 
 ```c
 pcall(func, ...)   // 内部自动插入 nil receiver
@@ -247,11 +316,11 @@ xpcall(func, err, ...)  // 同上
 
 ---
 
-## 8. 原生 class 机制
+## 9. 原生 class 机制
 
 SPT 提供原生类定义语法，通过 `__call` 元方法实现实例化。
 
-### 8.1 类定义语法
+### 9.1 类定义语法
 
 ```spt
 class Point {
@@ -270,14 +339,14 @@ class Point {
 }
 ```
 
-### 8.2 实例化
+### 9.2 实例化
 
 ```spt
 auto p = new Point(10, 20)  // 调用 __call 元方法
 p.move(5, 5)                // 方法调用
 ```
 
-### 8.3 编译器生成的结构
+### 9.3 编译器生成的结构
 
 ```
 class Point { ... } 编译后：
@@ -295,7 +364,7 @@ class Point { ... } 编译后：
    end })
 ```
 
-### 8.4 ⚠️ 构造函数参数索引
+### 9.4 ⚠️ 构造函数参数索引
 
 `__init` 方法是普通方法，参数从索引 2 开始：
 
@@ -318,11 +387,11 @@ class Point { ... } 编译后：
 
 ---
 
-## 9. sptxx C++ 绑定库
+## 10. sptxx C++ 绑定库
 
 sptxx 是类似 sol2 的 C++ 绑定库，已适配 SPT 的 Slot 0 Receiver 约定。
 
-### 9.1 头文件结构
+### 10.1 头文件结构
 
 ```
 sptxx/
@@ -337,7 +406,7 @@ sptxx/
     └── error.hpp    // 异常处理
 ```
 
-### 9.2 基本用法
+### 10.2 基本用法
 
 ```cpp
 #include "sptxx.hpp"
@@ -368,7 +437,7 @@ int main() {
 }
 ```
 
-### 9.3 ⚠️ 参数索引约定
+### 10.3 ⚠️ 参数索引约定
 
 sptxx 内部已正确处理参数索引：
 
@@ -378,7 +447,7 @@ sptxx 内部已正确处理参数索引：
 | 方法调用            | `extract_args_from_2` | 索引 2   |
 | 构造函数 (`__call`) | `extract_args_from_3` | 索引 3   |
 
-### 9.4 List/Map 模板
+### 10.4 List/Map 模板
 
 ```cpp
 // List 模板
@@ -391,7 +460,7 @@ sptxx::map<std::string, int> str_int_map;
 sptxx::map<void> void_map;      // 无类型 Map
 ```
 
-### 9.5 用户类型绑定
+### 10.5 用户类型绑定
 
 ```cpp
 struct Warrior {
@@ -413,9 +482,9 @@ ut.set("take_damage", &Warrior::take_damage);  // 成员方法
 
 ---
 
-## 10. 快速参考
+## 11. 快速参考
 
-### 10.1 参数索引速查表
+### 11.1 参数索引速查表
 
 ```
 普通函数:     luaL_check*(L, 2)   // 索引 2 开始
@@ -423,7 +492,7 @@ ut.set("take_damage", &Warrior::take_damage);  // 成员方法
 __call:      luaL_check*(L, 3)   // 索引 3 开始 ⚠️
 ```
 
-### 10.2 List API 速查表
+### 11.2 List API 速查表
 
 ```
 创建:     lua_createarray(L, cap)
@@ -438,7 +507,7 @@ __call:      luaL_check*(L, 3)   // 索引 3 开始 ⚠️
 其他:     lua_arrayisempty(), lua_arrayreserve()
 ```
 
-### 10.3 Registry 速查表
+### 11.3 Registry 速查表
 
 ```
 创建:  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -449,9 +518,9 @@ __call:      luaL_check*(L, 3)   // 索引 3 开始 ⚠️
 
 ---
 
-## 11. 常见错误
+## 12. 常见错误
 
-### 11.1 参数索引错误
+### 12.1 参数索引错误
 
 ```c
 // ❌ 错误：普通函数从索引 1 开始
@@ -461,7 +530,7 @@ int arg = luaL_checkinteger(L, 1);
 int arg = luaL_checkinteger(L, 2);
 ```
 
-### 11.2 __call 参数索引错误
+### 12.2 __call 参数索引错误
 
 ```c
 // ❌ 错误：__call 从索引 2 开始
@@ -471,7 +540,7 @@ int arg = luaL_checkinteger(L, 2);
 int arg = luaL_checkinteger(L, 3);
 ```
 
-### 11.3 Registry API 错误
+### 12.3 Registry API 错误
 
 ```c
 // ❌ 错误：使用旧 API
@@ -481,7 +550,7 @@ lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
 lua_getref(L, ref);
 ```
 
-### 11.4 List 索引错误
+### 12.4 List 索引错误
 
 ```c
 // ❌ 错误：1-based 索引
@@ -497,4 +566,4 @@ arr[0]  // 第一个元素
 
 - **Lua 版本**: 5.5 (2026 官方版本修改)
 - **SPT 版本**: 1.0
-- **更新日期**: 2026-03-15
+- **更新日期**: 2026-03-16

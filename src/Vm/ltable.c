@@ -947,11 +947,11 @@ static lu_byte finishnodeget(const TValue *val, TValue *res) {
   return ttypetag(val);
 }
 
-lu_byte luaH_getint(Table *t, lua_Integer key, TValue *res) {
+lu_byte luaH_getint(lua_State *L, Table *t, lua_Integer key, TValue *res) {
   if (t->mode == TABLE_ARRAY) {
-    /* bounds check against loglen (logical length), not asize (capacity) */
     if (key < 0 || key >= (lua_Integer)t->loglen)
-      return LUA_VEMPTY;
+      luaG_runerror(L, "list index out of range: index %I, length %d", (LUAI_UACINT)key,
+                    (int)t->loglen);
     lu_byte tag = *getArrTag(t, cast_uint(key));
     if (tag != LUA_VEMPTY)
       farr2val(t, cast_uint(key), tag, res);
@@ -985,7 +985,8 @@ const TValue *luaH_Hgetshortstr(Table *t, TString *key) {
   }
 }
 
-lu_byte luaH_getshortstr(Table *t, TString *key, TValue *res) {
+lu_byte luaH_getshortstr(lua_State *L, Table *t, TString *key, TValue *res) {
+  (void)L;
   return finishnodeget(luaH_Hgetshortstr(t, key), res);
 }
 
@@ -1003,21 +1004,22 @@ static const TValue *Hgetstr(Table *t, TString *key) {
     return Hgetlongstr(t, key);
 }
 
-lu_byte luaH_getstr(Table *t, TString *key, TValue *res) {
+lu_byte luaH_getstr(lua_State *L, Table *t, TString *key, TValue *res) {
+  (void)L;
   return finishnodeget(Hgetstr(t, key), res);
 }
 
 /*
 ** main search function
 */
-lu_byte luaH_get(Table *t, const TValue *key, TValue *res) {
+lu_byte luaH_get(lua_State *L, Table *t, const TValue *key, TValue *res) {
   if (t->mode == TABLE_ARRAY) {
     if (ttypetag(key) == LUA_VNUMINT)
-      return luaH_getint(t, ivalue(key), res);
+      return luaH_getint(L, t, ivalue(key), res);
     if (ttypetag(key) == LUA_VNUMFLT) {
       lua_Integer k;
       if (luaV_flttointeger(fltvalue(key), &k, F2Ieq))
-        return luaH_getint(t, k, res);
+        return luaH_getint(L, t, k, res);
     }
     return LUA_VEMPTY; /* non-integer key returns empty */
   }
@@ -1027,14 +1029,14 @@ lu_byte luaH_get(Table *t, const TValue *key, TValue *res) {
     slot = luaH_Hgetshortstr(t, tsvalue(key));
     break;
   case LUA_VNUMINT:
-    return luaH_getint(t, ivalue(key), res);
+    return luaH_getint(L, t, ivalue(key), res);
   case LUA_VNIL:
     slot = &absentkey;
     break;
   case LUA_VNUMFLT: {
     lua_Integer k;
     if (luaV_flttointeger(fltvalue(key), &k, F2Ieq)) /* integral index? */
-      return luaH_getint(t, k, res);                 /* use specialized version */
+      return luaH_getint(L, t, k, res);              /* use specialized version */
     /* else... */
   } /* FALLTHROUGH */
   default:

@@ -45,7 +45,7 @@
 */
 #define arraylimit(h) ((h)->mode == TABLE_ARRAY ? (h)->loglen : (h)->asize)
 
-#define luaH_fastgeti(t, k, res, tag)                                                              \
+#define luaH_fastgeti(L, t, k, res, tag)                                                           \
   {                                                                                                \
     Table *h = t;                                                                                  \
     lua_Unsigned u = l_castS2U(k);                                                                 \
@@ -55,7 +55,7 @@
         farr2val(h, u, tag, res);                                                                  \
       }                                                                                            \
     } else {                                                                                       \
-      tag = luaH_getint(h, (k), res);                                                              \
+      tag = luaH_getint(L, h, (k), res);                                                           \
     }                                                                                              \
   }
 
@@ -148,10 +148,10 @@
 
 #define fval2arr(h, k, tag, val) (*tag = (val)->tt_, *getArrVal(h, (k)) = (val)->value_)
 
-LUAI_FUNC lu_byte luaH_get(Table *t, const TValue *key, TValue *res);
-LUAI_FUNC lu_byte luaH_getshortstr(Table *t, TString *key, TValue *res);
-LUAI_FUNC lu_byte luaH_getstr(Table *t, TString *key, TValue *res);
-LUAI_FUNC lu_byte luaH_getint(Table *t, lua_Integer key, TValue *res);
+LUAI_FUNC lu_byte luaH_get(lua_State *L, Table *t, const TValue *key, TValue *res);
+LUAI_FUNC lu_byte luaH_getshortstr(lua_State *L, Table *t, TString *key, TValue *res);
+LUAI_FUNC lu_byte luaH_getstr(lua_State *L, Table *t, TString *key, TValue *res);
+LUAI_FUNC lu_byte luaH_getint(lua_State *L, Table *t, lua_Integer key, TValue *res);
 
 /* Special get for metamethods */
 LUAI_FUNC const TValue *luaH_Hgetshortstr(Table *t, TString *key);

@@ -303,7 +303,7 @@ static int getnumargs(lua_State *L, CallInfo *ci, Table *h) {
     return ci->u.l.nextraargs;
   else {
     TValue res;
-    if (luaH_getshortstr(h, luaS_new(L, "n"), &res) != LUA_VNUMINT ||
+    if (luaH_getshortstr(L, h, luaS_new(L, "n"), &res) != LUA_VNUMINT ||
         l_castS2U(ivalue(&res)) > cast_uint(INT_MAX / 2))
       luaG_runerror(L, "vararg table has no proper 'n'");
     return cast_int(ivalue(&res));
@@ -329,7 +329,7 @@ void luaT_getvarargs(lua_State *L, CallInfo *ci, StkId where, int wanted, int va
       setobjs2s(L, where + i, ci->func.p - nargs + i);
   } else { /* get vararg values from vararg table */
     for (i = 0; i < touse; i++) {
-      lu_byte tag = luaH_getint(h, i + 1, s2v(where + i));
+      lu_byte tag = luaH_getint(L, h, i + 1, s2v(where + i));
       if (tagisempty(tag))
         setnilvalue(s2v(where + i));
     }

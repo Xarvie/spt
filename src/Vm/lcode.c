@@ -526,8 +526,8 @@ static int addk(FuncState *fs, Proto *f, TValue *v) {
 static int k2proto(FuncState *fs, TValue *key, TValue *v) {
   TValue val;
   Proto *f = fs->f;
-  int tag = luaH_get(fs->kcache, key, &val); /* query scanner table */
-  if (!tagisempty(tag)) {                    /* is there an index there? */
+  int tag = luaH_get(fs->ls->L, fs->kcache, key, &val); /* query scanner table */
+  if (!tagisempty(tag)) {                               /* is there an index there? */
     int k = cast_int(ivalue(&val));
     /* collisions can happen only for float keys */
     lua_assert(ttisfloat(key) || luaV_rawequalobj(&f->k[k], v));

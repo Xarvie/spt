@@ -294,7 +294,7 @@ lu_byte luaV_finishget(lua_State *L, const TValue *t, TValue *key, StkId val, lu
       return tag;                               /* return tag of the result */
     }
     t = tm; /* else try to access 'tm[key]' */
-    luaV_fastget(t, key, s2v(val), luaH_get, tag);
+    luaV_fastget(L, t, key, s2v(val), luaH_get, tag);
     if (!tagisempty(tag))
       return tag; /* done */
     /* else repeat (tail call 'luaV_finishget') */
@@ -1320,7 +1320,7 @@ returning: /* trap already set */
         TValue *rc = KC(i);
         TString *key = tsvalue(rc); /* key must be a short string */
         lu_byte tag;
-        luaV_fastget(upval, key, s2v(ra), luaH_getshortstr, tag);
+        luaV_fastget(L, upval, key, s2v(ra), luaH_getshortstr, tag);
         if (tagisempty(tag))
           Protect(luaV_finishget(L, upval, rc, ra, tag));
         vmbreak;
@@ -1335,12 +1335,7 @@ returning: /* trap already set */
           Table *t = avalue(rb);
           if (l_likely(ttisinteger(rc))) {
             lua_Integer idx = ivalue(rc);
-            if (l_likely(idx >= 0 && idx < (lua_Integer)t->loglen)) {
-              tag = luaH_getint(t, idx, s2v(ra));
-            } else {
-              luaG_runerror(L, "list index out of range: index %I, length %d", (LUAI_UACINT)idx,
-                            (int)t->loglen);
-            }
+            tag = luaH_getint(L, t, idx, s2v(ra));
           } else if (l_unlikely(ttisnumber(rc))) {
             luaG_runerror(L, "list index must be integer, not float");
           } else {
@@ -1348,9 +1343,9 @@ returning: /* trap already set */
           }
         } else {
           if (ttisinteger(rc)) {
-            luaV_fastgeti(rb, ivalue(rc), s2v(ra), tag);
+            luaV_fastgeti(L, rb, ivalue(rc), s2v(ra), tag);
           } else {
-            luaV_fastget(rb, rc, s2v(ra), luaH_get, tag);
+            luaV_fastget(L, rb, rc, s2v(ra), luaH_get, tag);
           }
         }
 
@@ -1375,7 +1370,7 @@ returning: /* trap already set */
             luaG_runerror(L, "list index out of range: index %d, length %d", c, (int)t->loglen);
           }
         } else {
-          luaV_fastgeti(rb, c, s2v(ra), tag);
+          luaV_fastgeti(L, rb, c, s2v(ra), tag);
         }
 
         if (tagisempty(tag)) {
@@ -1391,7 +1386,7 @@ returning: /* trap already set */
         TValue *rc = KC(i);
         TString *key = tsvalue(rc); /* key must be a short string */
         lu_byte tag;
-        luaV_fastget(rb, key, s2v(ra), luaH_getshortstr, tag);
+        luaV_fastget(L, rb, key, s2v(ra), luaH_getshortstr, tag);
         if (tagisempty(tag))
           Protect(luaV_finishget(L, rb, rc, ra, tag));
         vmbreak;
@@ -1544,7 +1539,7 @@ returning: /* trap already set */
         TValue *rc = KC(i);
         TString *key = tsvalue(rc); /* key must be a short string */
         setobj2s(L, ra + 1, rb);
-        luaV_fastget(rb, key, s2v(ra), luaH_getshortstr, tag);
+        luaV_fastget(L, rb, key, s2v(ra), luaH_getshortstr, tag);
         if (tagisempty(tag))
           Protect(luaV_finishget(L, rb, rc, ra, tag));
         vmbreak;

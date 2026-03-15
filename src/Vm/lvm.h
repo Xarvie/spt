@@ -63,18 +63,18 @@ typedef enum {
 /*
 ** fast track for 'gettable'
 */
-#define luaV_fastget(t, k, res, f, tag)                                                            \
-  (tag = ((!ttistable(t) && !ttisarray(t)) ? LUA_VNOTABLE : f(gco2t(gcvalue(t)), k, res)))
+#define luaV_fastget(L, t, k, res, f, tag)                                                         \
+  (tag = ((!ttistable(t) && !ttisarray(t)) ? LUA_VNOTABLE : f(L, gco2t(gcvalue(t)), k, res)))
 
 /*
 ** Special case of 'luaV_fastget' for integers, inlining the fast case
 ** of 'luaH_getint'.
 */
-#define luaV_fastgeti(t, k, res, tag)                                                              \
+#define luaV_fastgeti(L, t, k, res, tag)                                                           \
   if (!ttistable(t) && !ttisarray(t))                                                              \
     tag = LUA_VNOTABLE;                                                                            \
   else {                                                                                           \
-    luaH_fastgeti(gco2t(gcvalue(t)), k, res, tag);                                                 \
+    luaH_fastgeti(L, gco2t(gcvalue(t)), k, res, tag);                                              \
   }
 
 #define luaV_fastset(t, k, val, hres, f)                                                           \

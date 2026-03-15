@@ -117,7 +117,7 @@ l_noret luaX_syntaxerror(LexState *ls, const char *msg) { lexerror(ls, msg, ls->
 static TString *anchorstr(LexState *ls, TString *ts) {
   lua_State *L = ls->L;
   TValue oldts;
-  int tag = luaH_getstr(ls->h, ts, &oldts);
+  int tag = luaH_getstr(L, ls->h, ts, &oldts);
   if (!tagisempty(tag))            /* string already present? */
     return tsvalue(&oldts);        /* use stored value */
   else {                           /* create a new entry */

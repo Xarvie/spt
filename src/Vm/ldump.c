@@ -128,7 +128,7 @@ static void dumpString(DumpState *D, TString *ts) {
     dumpVarint(D, 0); /* special index for NULL */
   } else {
     TValue idx;
-    int tag = luaH_getstr(D->h, ts, &idx);
+    int tag = luaH_getstr(D->L, D->h, ts, &idx);
     if (!tagisempty(tag)) {                   /* string already saved? */
       dumpVarint(D, 0);                       /* reuse a saved string */
       dumpVarint(D, l_castS2U(ivalue(&idx))); /* index of saved string */
