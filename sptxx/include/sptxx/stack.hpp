@@ -7,6 +7,7 @@ extern "C" {
 #include "../../src/Vm/lauxlib.h"
 }
 
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -190,6 +191,33 @@ struct pusher<std::string> {
     static void push(lua_State* L, std::string&& value) {
         lua_pushlstring(L, value.data(), value.size());
     }
+};
+
+template <typename T> struct getter<std::optional<T>> {
+  static std::optional<T> get(lua_State *L, int index) {
+    if (lua_isnil(L, index)) {
+      return std::nullopt;
+    }
+    return stack::get<T>(L, index);
+  }
+};
+
+template <typename T> struct pusher<std::optional<T>> {
+  static void push(lua_State *L, const std::optional<T> &value) {
+    if (value.has_value()) {
+      stack::push(L, value.value());
+    } else {
+      lua_pushnil(L);
+    }
+  }
+
+  static void push(lua_State *L, std::optional<T> &&value) {
+    if (value.has_value()) {
+      stack::push(L, std::move(value.value()));
+    } else {
+      lua_pushnil(L);
+    }
+  }
 };
 
 } // namespace sptxx

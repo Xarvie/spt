@@ -8,14 +8,15 @@ extern "C" {
 #include "../../src/Vm/lualib.h"
 }
 
-#include "stack.hpp"
 #include "error.hpp"
 #include "function.hpp"
 #include "list.hpp"
 #include "map.hpp"
+#include "stack.hpp"
 #include "usertype.hpp"
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -136,6 +137,70 @@ public:
     usertype<T> ut(L, name);
     ut.constructor();
     return ut;
+  }
+
+  template <typename R = void, typename... Args> R call(const char *name, Args &&...args) {
+    lua_getglobal(L, name);
+    if (!lua_isfunction(L, -1)) {
+      lua_pop(L, 1);
+      throw error(std::string("'") + name + "' is not a function");
+    }
+
+    lua_pushnil(L);
+
+    detail::push_args<Args...>(L, std::forward<Args>(args)...);
+
+    int nargs = sizeof...(Args) + 1;
+    int nresults = 1;
+    if constexpr (std::is_void_v<R>) {
+      nresults = 0;
+    } else if constexpr (detail::is_tuple_v<R>) {
+      nresults = static_cast<int>(std::tuple_size_v<R>);
+    }
+
+    int result = lua_pcall(L, nargs, nresults, 0);
+    if (result != LUA_OK) {
+      std::string err = lua_tostring(L, -1);
+      lua_pop(L, 1);
+      throw error("Lua error calling '" + std::string(name) + "': " + err);
+    }
+
+    if constexpr (std::is_void_v<R>) {
+      return;
+    } else if constexpr (detail::is_tuple_v<R>) {
+      auto ret = detail::extract_multi_return<R>(L, -nresults);
+      lua_pop(L, nresults);
+      return ret;
+    } else {
+      R ret = stack::get<R>(L, -1);
+      lua_pop(L, 1);
+      return ret;
+    }
+  }
+
+  template <typename Signature> function_ref<Signature> get_function(const char *name) {
+    lua_getglobal(L, name);
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 1);
+      throw error(std::string("Function '") + name + "' not found");
+    }
+    if (!lua_isfunction(L, -1)) {
+      lua_pop(L, 1);
+      throw error(std::string("'") + name + "' is not a function");
+    }
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    return function_ref<Signature>(L, ref);
+  }
+
+  template <typename T = void> std::optional<T> get_global_or(const char *name) {
+    lua_getglobal(L, name);
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 1);
+      return std::nullopt;
+    }
+    T result = stack::get<T>(L, -1);
+    lua_pop(L, 1);
+    return result;
   }
 };
 

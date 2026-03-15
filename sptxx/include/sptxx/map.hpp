@@ -7,9 +7,12 @@ extern "C" {
 #include "../../src/Vm/lauxlib.h"
 }
 
-#include "stack.hpp"
 #include "error.hpp"
+#include "stack.hpp"
 #include <cstddef>
+#include <iterator>
+#include <optional>
+#include <utility>
 
 namespace sptxx {
 
@@ -167,6 +170,196 @@ public:
     lua_pushnil(L);
     lua_settable(L, -3);
     lua_pop(L, 1);
+  }
+
+  void clear() {
+    if (!valid()) {
+      throw error("Invalid map");
+    }
+    lua_getref(L, ref);
+    lua_pushnil(L);
+    while (lua_next(L, -2) != 0) {
+      lua_pop(L, 1);
+      lua_pushvalue(L, -1);
+      lua_pushnil(L);
+      lua_settable(L, -4);
+      lua_pushnil(L);
+      lua_settable(L, -3);
+    }
+    lua_pop(L, 1);
+  }
+
+  template <typename Key> T get_or_default(const Key &key, const T &default_value) const {
+    if (!valid()) {
+      throw error("Invalid map");
+    }
+    lua_getref(L, ref);
+    stack::push(L, key);
+    lua_gettable(L, -2);
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 2);
+      return default_value;
+    }
+    T result = stack::get<T>(L, -1);
+    lua_pop(L, 2);
+    return result;
+  }
+
+  template <typename Key> std::optional<T> try_get(const Key &key) const {
+    if (!valid()) {
+      throw error("Invalid map");
+    }
+    lua_getref(L, ref);
+    stack::push(L, key);
+    lua_gettable(L, -2);
+    if (lua_isnil(L, -1)) {
+      lua_pop(L, 2);
+      return std::nullopt;
+    }
+    T result = stack::get<T>(L, -1);
+    lua_pop(L, 2);
+    return result;
+  }
+
+  template <typename Key, typename V = T> class iterator {
+  private:
+    map *m;
+    int iter_key_ref;
+    bool at_end;
+    std::pair<Key, V> current;
+
+    void advance() {
+      if (!m || !m->valid() || at_end) {
+        at_end = true;
+        return;
+      }
+
+      lua_getref(m->L, m->ref);
+      if (iter_key_ref == LUA_NOREF) {
+        lua_pushnil(m->L);
+      } else {
+        lua_getref(m->L, iter_key_ref);
+      }
+
+      if (lua_next(m->L, -2) == 0) {
+        at_end = true;
+        lua_pop(m->L, 1);
+        return;
+      }
+
+      current.second = stack::get<V>(m->L, -1);
+      current.first = stack::get<Key>(m->L, -2);
+
+      if (iter_key_ref != LUA_NOREF) {
+        luaL_unref(m->L, LUA_REGISTRYINDEX, iter_key_ref);
+      }
+      lua_pushvalue(m->L, -2);
+      iter_key_ref = luaL_ref(m->L, LUA_REGISTRYINDEX);
+
+      lua_pop(m->L, 3);
+    }
+
+  public:
+    using difference_type = std::ptrdiff_t;
+    using value_type = std::pair<Key, V>;
+    using pointer = value_type *;
+    using reference = value_type &;
+    using iterator_category = std::forward_iterator_tag;
+
+    iterator() : m(nullptr), iter_key_ref(LUA_NOREF), at_end(true) {}
+
+    iterator(map *map_ptr, bool end = false) : m(map_ptr), iter_key_ref(LUA_NOREF), at_end(end) {
+      if (!end && m && m->valid()) {
+        advance();
+      }
+    }
+
+    iterator(const iterator &other)
+        : m(other.m), iter_key_ref(LUA_NOREF), at_end(other.at_end), current(other.current) {
+      if (!at_end && other.iter_key_ref != LUA_NOREF) {
+        lua_getref(m->L, other.iter_key_ref);
+        iter_key_ref = luaL_ref(m->L, LUA_REGISTRYINDEX);
+      }
+    }
+
+    iterator(iterator &&other) noexcept
+        : m(other.m), iter_key_ref(other.iter_key_ref), at_end(other.at_end),
+          current(std::move(other.current)) {
+      other.m = nullptr;
+      other.iter_key_ref = LUA_NOREF;
+      other.at_end = true;
+    }
+
+    iterator &operator=(const iterator &other) {
+      if (this != &other) {
+        if (iter_key_ref != LUA_NOREF) {
+          luaL_unref(m->L, LUA_REGISTRYINDEX, iter_key_ref);
+        }
+        m = other.m;
+        at_end = other.at_end;
+        current = other.current;
+        if (!at_end && other.iter_key_ref != LUA_NOREF) {
+          lua_getref(m->L, other.iter_key_ref);
+          iter_key_ref = luaL_ref(m->L, LUA_REGISTRYINDEX);
+        } else {
+          iter_key_ref = LUA_NOREF;
+        }
+      }
+      return *this;
+    }
+
+    iterator &operator=(iterator &&other) noexcept {
+      if (this != &other) {
+        if (iter_key_ref != LUA_NOREF) {
+          luaL_unref(m->L, LUA_REGISTRYINDEX, iter_key_ref);
+        }
+        m = other.m;
+        iter_key_ref = other.iter_key_ref;
+        at_end = other.at_end;
+        current = std::move(other.current);
+        other.m = nullptr;
+        other.iter_key_ref = LUA_NOREF;
+        other.at_end = true;
+      }
+      return *this;
+    }
+
+    ~iterator() {
+      if (iter_key_ref != LUA_NOREF && m && m->valid()) {
+        luaL_unref(m->L, LUA_REGISTRYINDEX, iter_key_ref);
+      }
+    }
+
+    const value_type &operator*() const { return current; }
+
+    const value_type *operator->() const { return &current; }
+
+    iterator &operator++() {
+      advance();
+      return *this;
+    }
+
+    iterator operator++(int) {
+      iterator tmp = *this;
+      advance();
+      return tmp;
+    }
+
+    bool operator==(const iterator &other) const {
+      if (at_end && other.at_end)
+        return true;
+      return m == other.m && at_end == other.at_end;
+    }
+
+    bool operator!=(const iterator &other) const { return !(*this == other); }
+  };
+
+  template <typename Key = std::string> iterator<Key, T> begin() {
+    return iterator<Key, T>(this, false);
+  }
+
+  template <typename Key = std::string> iterator<Key, T> end() {
+    return iterator<Key, T>(this, true);
   }
 
   // Raw Lua state access

@@ -67,6 +67,36 @@ struct function_caller<R, Func, std::tuple<Args...>> {
   }
 };
 
+template <typename Func, typename... Args> struct function_caller<void, Func, std::tuple<Args...>> {
+  static int call(lua_State *L, Func &f) {
+    auto args = extract_args_from_2<Args...>(L);
+    std::apply(f, std::move(args));
+    return 0;
+  }
+};
+
+template <typename... Rs, typename Func, typename... Args>
+struct function_caller<std::tuple<Rs...>, Func, std::tuple<Args...>> {
+  static int call(lua_State *L, Func &f) {
+    auto args = extract_args_from_2<Args...>(L);
+    auto result = std::apply(f, std::move(args));
+    push_multi_return<Rs...>(L, std::move(result));
+    return sizeof...(Rs);
+  }
+
+private:
+  template <typename... Ts>
+  static void push_multi_return(lua_State *L, std::tuple<Ts...> &&values) {
+    push_multi_return_impl(L, std::move(values), std::index_sequence_for<Ts...>{});
+  }
+
+  template <typename... Ts, std::size_t... Is>
+  static void push_multi_return_impl(lua_State *L, std::tuple<Ts...> &&values,
+                                     std::index_sequence<Is...>) {
+    (stack::push(L, std::move(std::get<Is>(values))), ...);
+  }
+};
+
 template <typename Func> struct function_traits;
 
 template <typename R, typename... Args> struct function_traits<R(Args...)> {
@@ -128,6 +158,169 @@ template <typename R, typename... Args> lua_CFunction make_function_wrapper(R (*
   };
 }
 
+template <typename R, typename... Args>
+inline std::tuple<R, Args...> extract_args_for_call(lua_State *L, int start_idx) {
+  return extract_args_impl<std::tuple<R, Args...>>(L, start_idx,
+                                                   std::index_sequence_for<R, Args...>{});
+}
+
+template <typename... Args> inline void push_args(lua_State *L, Args &&...args) {
+  (stack::push(L, std::forward<Args>(args)), ...);
+}
+
+template <typename T> struct is_tuple : std::false_type {};
+
+template <typename... Ts> struct is_tuple<std::tuple<Ts...>> : std::true_type {};
+
+template <typename T> inline constexpr bool is_tuple_v = is_tuple<T>::value;
+
+template <typename Tuple, std::size_t... Is>
+inline Tuple extract_multi_return_impl(lua_State *L, int base_idx, std::index_sequence<Is...>) {
+  return Tuple{stack::get<std::tuple_element_t<Is, Tuple>>(L, base_idx + static_cast<int>(Is))...};
+}
+
+template <typename Tuple> inline Tuple extract_multi_return(lua_State *L, int base_idx) {
+  return extract_multi_return_impl<Tuple>(L, base_idx,
+                                          std::make_index_sequence<std::tuple_size_v<Tuple>>{});
+}
+
 } // namespace detail
+
+template <typename Signature> class function_ref;
+
+template <typename R, typename... Args> class function_ref<R(Args...)> {
+private:
+  lua_State *L;
+  int ref;
+
+public:
+  function_ref() : L(nullptr), ref(LUA_NOREF) {}
+
+  function_ref(lua_State *state, int reference) : L(state), ref(reference) {}
+
+  function_ref(const function_ref &other) : L(other.L), ref(LUA_NOREF) {
+    if (other.valid()) {
+      lua_getref(L, other.ref);
+      ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    }
+  }
+
+  function_ref(function_ref &&other) noexcept : L(other.L), ref(other.ref) {
+    other.L = nullptr;
+    other.ref = LUA_NOREF;
+  }
+
+  function_ref &operator=(const function_ref &other) {
+    if (this != &other) {
+      if (valid()) {
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+      }
+      L = other.L;
+      if (other.valid()) {
+        lua_getref(L, other.ref);
+        ref = luaL_ref(L, LUA_REGISTRYINDEX);
+      } else {
+        ref = LUA_NOREF;
+      }
+    }
+    return *this;
+  }
+
+  function_ref &operator=(function_ref &&other) noexcept {
+    if (this != &other) {
+      if (valid()) {
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+      }
+      L = other.L;
+      ref = other.ref;
+      other.L = nullptr;
+      other.ref = LUA_NOREF;
+    }
+    return *this;
+  }
+
+  ~function_ref() {
+    if (valid()) {
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    }
+  }
+
+  bool valid() const { return L != nullptr && ref != LUA_NOREF && ref != LUA_REFNIL; }
+
+  explicit operator bool() const { return valid(); }
+
+  R operator()(Args... args) const {
+    if (!valid()) {
+      throw error("Invalid function reference");
+    }
+
+    lua_getref(L, ref);
+
+    if (!lua_isfunction(L, -1)) {
+      lua_pop(L, 1);
+      throw error("Reference is not a function");
+    }
+
+    lua_pushnil(L);
+
+    detail::push_args<Args...>(L, std::forward<Args>(args)...);
+
+    int nargs = sizeof...(Args) + 1;
+    int nresults = 1;
+
+    if constexpr (std::is_void_v<R>) {
+      nresults = 0;
+    } else if constexpr (detail::is_tuple_v<R>) {
+      nresults = std::tuple_size_v<R>;
+    }
+
+    int result = lua_pcall(L, nargs, nresults, 0);
+    if (result != LUA_OK) {
+      std::string err = lua_tostring(L, -1);
+      lua_pop(L, 1);
+      throw error("Lua error: " + err);
+    }
+
+    if constexpr (std::is_void_v<R>) {
+      return;
+    } else if constexpr (detail::is_tuple_v<R>) {
+      auto ret = detail::extract_multi_return<R>(L, -static_cast<int>(nresults));
+      lua_pop(L, static_cast<int>(nresults));
+      return ret;
+    } else {
+      R ret = stack::get<R>(L, -1);
+      lua_pop(L, 1);
+      return ret;
+    }
+  }
+
+  lua_State *lua_state() const { return L; }
+
+  int registry_index() const { return ref; }
+};
+
+template <typename R, typename... Args> struct getter<function_ref<R(Args...)>> {
+  static function_ref<R(Args...)> get(lua_State *L, int index) {
+    if (lua_isnil(L, index)) {
+      return function_ref<R(Args...)>();
+    }
+    if (!lua_isfunction(L, index)) {
+      luaL_error(L, "Expected function at index %d", index);
+    }
+    lua_pushvalue(L, index);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    return function_ref<R(Args...)>(L, ref);
+  }
+};
+
+template <typename R, typename... Args> struct pusher<function_ref<R(Args...)>> {
+  static void push(lua_State *L, const function_ref<R(Args...)> &value) {
+    if (value.valid()) {
+      lua_getref(L, value.registry_index());
+    } else {
+      lua_pushnil(L);
+    }
+  }
+};
 
 } // namespace sptxx
