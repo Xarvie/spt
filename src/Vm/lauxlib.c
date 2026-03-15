@@ -970,8 +970,9 @@ LUALIB_API void luaL_requiref(lua_State *L, const char *modname, lua_CFunction o
   if (!lua_toboolean(L, -1)) {  /* package not already loaded? */
     lua_pop(L, 1);              /* remove field */
     lua_pushcfunction(L, openf);
-    lua_pushstring(L, modname);   /* argument to open function */
-    lua_call(L, 1, 1);            /* call 'openf' to open module */
+    lua_pushnil(L);                   /* receiver 垫片 (slot 0) */
+    lua_pushstring(L, modname);       /* argument to open function */
+    lua_call(L, 2, 1);               /* 2 args: receiver + modname */
     lua_pushvalue(L, -1);         /* make copy of module (call result) */
     lua_setfield(L, -3, modname); /* LOADED[modname] = module */
   }
