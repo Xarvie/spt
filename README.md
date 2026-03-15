@@ -67,13 +67,9 @@ int x = 100;
 global int x = 100;
 // 现在可以在其他 do_string 中访问 x
 
-// ❌ 错误：在同一个 do_string 中，全局函数声明后立即使用的代码块中找不到其他全局函数
-global int add(int a, int b) { return a + b; } print(add(1,2));
-// 错误: variable 'print' not declared
-
-// ✅ 正确：分开两个 do_string
-lua.do_string("global int add(int a, int b) { return a + b; }");
-lua.do_string("print(add(1, 2));");  // 输出: 3
+// ✅ 全局函数声明后可以立即在同一 do_string 中使用
+global int add(int a, int b) { return a + b; }
+print(add(1, 2));  // 输出: 3
 ```
 
 ### 2.5 设计理念

@@ -385,8 +385,6 @@ static void ast_buildvar(CompileCtx *C, TString *varname, expdesc *var) {
   ast_singlevaraux(C, fs, varname, var, 1);
   if (var->k == VGLOBAL) {
     int info = var->u.info;
-    if (info == -2)
-      compile_errorf(C, "variable '%s' not declared", getstr(varname));
     ast_buildglobal(C, varname, var);
     if (info != -1 && C->dyd->actvar.arr[info].vd.kind == GDKCONST)
       var->u.ind.ro = 1;
