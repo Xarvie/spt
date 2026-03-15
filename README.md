@@ -1,925 +1,500 @@
-# SPT Lua 5.5 修改指南
+# SPT Lua 5.5 技术规范
 
-> 本文档详细记录了 SPT 项目对 Lua 5.5 的所有修改，旨在为开发脚本绑定的 C API 和 CXX API（类似 sol2）提供参考。
-
----
-
-## 目录
-
-1. [概述](#1-概述)
-2. [核心设计原则](#2-核心设计原则)
-3. [类型系统修改](#3-类型系统修改)
-4. [Table 结构改造](#4-table-结构改造)
-5. [List 与 Map 拆分](#5-list-与-map-拆分)
-6. [Slot 0 Receiver 调用约定](#6-slot-0-receiver-调用约定)
-7. [新增 C API](#7-新增-c-api)
-8. [VM 指令修改](#8-vm-指令修改)
-9. [标准库适配](#9-标准库适配)
-10. [边界检查与错误处理](#10-边界检查与错误处理)
-11. [CXX API 开发指南](#11-cxx-api-开发指南)
-12. [附录：关键宏和函数](#12-附录关键宏和函数)
+> 本文档为SPT Lua 5.5 的关键技术规范，重点标注与标准 Lua 的差异和易错点。
 
 ---
 
-## 1. 概述
+## 1. 核心差异速查
 
-### 1.1 修改背景
-
-SPT 项目基于 2026 年发布的官方 Lua 5.5 进行深度定制，主要目标是：
-
-- **统一调用约定**：所有函数强制 Slot 0 为 Receiver，支持面向对象编程范式
-- **List/Map 语义分离**：彻底拆分数组和哈希表的语义，提供更直观的数据结构
-- **性能优化**：List 长度与容量分离，支持 O(1) 摊销追加操作
-- **类型安全**：严格的边界检查和类型验证
-
-### 1.2 文件清单
-
-| 文件           | 修改内容                |
-|--------------|---------------------|
-| `lobject.h`  | 新增类型标签、Table 结构改造   |
-| `ltable.h`   | 新增数组操作宏、模式枚举        |
-| `ltable.c`   | List/Map 核心实现       |
-| `lapi.c`     | 新增数组 C API          |
-| `lvm.c`      | VM 指令实现、边界检查        |
-| `lopcodes.h` | 新增 OP_NEWLIST 指令    |
-| `ltablib.c`  | table.push/pop 等库函数 |
-| `lmathlib.c` | Slot 0 Receiver 适配  |
-| `lbaselib.c` | Slot 0 Receiver 适配  |
-| `ldo.c`      | 调用栈帧处理              |
-| `ldblib.c`   | Hook 回调 Receiver 垫片 |
+| 特性          | 标准 Lua 5.5                 | SPT Lua 5.5               |
+|-------------|----------------------------|---------------------------|
+| 函数参数起始索引    | 索引 1                       | **索引 2**（索引 1 是 Receiver） |
+| 数组索引        | 1-based                    | **0-based**               |
+| 数组/表        | 统一 Table 类型                | **List / Map 分离**         |
+| Registry 引用 | `lua_rawgeti(L, REG, ref)` | **`lua_getref(L, ref)`**  |
+| `#` 对 Map   | 返回边界                       | **固定返回 0**                |
+| 数组越界        | 返回 nil                     | **抛出错误**                  |
 
 ---
 
-## 2. 核心设计原则
+## 2. Slot 0 Receiver 调用约定（最重要）
 
-### 2.1 统一 Receiver 调用约定
+### 2.1 基本规则
 
-**原则**：所有函数调用时，Slot 0（栈索引 1）强制预留为 Receiver。
+**所有函数调用，索引 1 永远是 Receiver，实际参数从索引 2 开始。**
 
 ```
 栈布局：
   [1] receiver (Slot 0) - 始终存在
-  [2] arg1    (Slot 1) - 第一个实际参数
-  [3] arg2    (Slot 2) - 第二个实际参数
-  ...
+  [2] arg1              - 第一个实际参数
+  [3] arg2              - 第二个实际参数
 ```
 
-**示例**：
+### 2.2 不同调用场景
+
+| 调用方式                   | 栈布局                  | 参数起始索引      |
+|------------------------|----------------------|-------------|
+| `func(a, b)`           | `[nil, a, b]`        | **索引 2**    |
+| `obj:method(a)`        | `[obj, a]`           | **索引 2**    |
+| `obj.method(a)`        | `[obj, a]`           | **索引 2**    |
+| `obj[key](a)`          | `[obj, a]`           | **索引 2**    |
+| `Table(a, b)` (__call) | `[Table, nil, a, b]` | **索引 3** ⚠️ |
+| `new Class(a, b)`      | `[Class, nil, a, b]` | **索引 3** ⚠️ |
+
+### 2.3 C 函数模板
 
 ```c
-/* C 函数签名约定 */
-static int my_function(lua_State *L) {
-  /* receiver 在索引 1，但通常被忽略（为 nil）*/
-  /* 实际参数从索引 2 开始 */
-  int arg1 = luaL_checkinteger(L, 2);
+/* 普通函数 / 方法 */
+static int my_func(lua_State *L) {
+  int arg1 = luaL_checkinteger(L, 2);  /* 从索引 2 开始 */
   int arg2 = luaL_checkinteger(L, 3);
+  lua_pushinteger(L, result);
+  return 1;
+}
+
+/* __call 元方法（构造函数） */
+static int constructor(lua_State *L) {
+  /* 索引 1: 表本身, 索引 2: nil */
+  const char *name = luaL_checkstring(L, 3);  /* 从索引 3 开始！ */
+  int val = luaL_checkinteger(L, 4);
   ...
 }
 ```
 
-### 2.2 List/Map 语义分离
+### 2.4 ⚠️ 易错点：__call 参数索引
 
-| 特性      | List (TABLE_ARRAY) | Map (TABLE_MAP) |
-|---------|--------------------|-----------------|
-| 类型标签    | `LUA_VARRAY`       | `LUA_VTABLE`    |
-| 键类型     | 仅整数 (0-based)      | 任意类型            |
-| `#` 运算符 | 返回 `loglen`        | 固定返回 0          |
-| 内存布局    | 倒置数组（值 + 标签分离）     | 标准哈希表           |
-| 边界检查    | 严格拦截越界             | 无限制             |
+`__call` 元方法中，**参数从索引 3 开始**，不是索引 2！
 
----
+原因：Lua VM 触发 `__call` 时，将被调用的表插入到 func 位置，导致：
 
-## 3. 类型系统修改
-
-### 3.1 新增类型标签
-
-```c
-/* lobject.h */
-
-/* 基础类型 */
-#define LUA_TARRAY (LUA_NUMTYPES)      /* 数组类型 */
-
-/* 变体类型 */
-#define LUA_VARRAY makevariant(LUA_TARRAY, 0)  /* 数组变体 */
-
-/* 类型判断宏 */
-#define ttisarray(o) checktag((o), ctb(LUA_VARRAY))
-#define ttistable(o) checktag((o), ctb(LUA_VTABLE))
-```
-
-### 3.2 类型转换宏
-
-```c
-/* lobject.h */
-
-/* 获取数组值 */
-#define avalue(o) check_exp(ttisarray(o), gco2t(val_(o).gc))
-
-/* 设置数组值到栈 */
-#define setavalue(L, obj, x) \
-  { TValue *io = (obj); \
-    Table *x_ = (x); \
-    val_(io).gc = obj2gco(x_); \
-    settt_(io, ctb(LUA_VARRAY)); \
-    checkliveness(L, io); }
-
-#define setavalue2s(L, o, a) setavalue(L, s2v(o), a)
-```
-
-### 3.3 类型名称
-
-```c
-/* lapi.c */
-LUA_API const char *lua_typename(lua_State *L, int t) {
-  ...
-  if (t == LUA_TARRAY)
-    return "array";
-  return ttypename(t);
-}
-```
+- 索引 1 = 表本身（作为 Receiver）
+- 索引 2 = 原本的 nil receiver
+- 索引 3+ = 实际参数
 
 ---
 
-## 4. Table 结构改造
+## 3. List 与 Map 分离
 
-### 4.1 Table 结构定义
+### 3.1 类型判断
 
 ```c
-/* lobject.h */
+#define ttisarray(o)  // 判断是否为 List
+#define ttistable(o)  // 判断是否为 Map
+```
+
+### 3.2 行为差异
+
+| 操作   | List (`LUA_VARRAY`)       | Map (`LUA_VTABLE`)         |
+|------|---------------------------|----------------------------|
+| 创建   | `lua_createarray(L, cap)` | `lua_createtable(L, 0, 0)` |
+| 索引   | 仅整数，**0-based**           | 任意类型                       |
+| `#t` | 返回 `loglen`               | **返回 0**                   |
+| 越界访问 | **抛出错误**                  | 返回 nil                     |
+| 越界写入 | **抛出错误**                  | 正常插入                       |
+
+### 3.3 List 边界检查
+
+```c
+/* 以下操作会抛出错误 */
+arr[-1]      // 负数索引
+arr[100]     // 越界（>= loglen）
+arr[1.5]     // 浮点索引
+```
+
+### 3.4 List API
+
+#### 基础 API
+
+```c
+void lua_createarray(lua_State *L, int narray);
+// 创建 List，初始容量为 narray，逻辑长度为 0
+
+lua_Integer lua_arraylen(lua_State *L, int idx);
+// 获取逻辑长度 (loglen)
+
+void lua_arraysetlen(lua_State *L, int idx, lua_Integer newlen);
+// 设置逻辑长度（缩容时清理截断槽位，保证 GC 安全）
+
+void lua_arrayresize(lua_State *L, int idx, lua_Integer newsize);
+// 调整物理容量（不能小于当前 loglen）
+```
+
+#### 扩展 API
+
+```c
+lua_Integer lua_arraycapacity(lua_State *L, int idx);
+// 获取物理容量 (asize)
+
+int lua_gettablemode(lua_State *L, int idx);
+// 返回 TABLE_ARRAY(1) 或 TABLE_MAP(2)，无效类型返回 0
+
+int lua_ismap(lua_State *L, int idx);
+// 是否为 Map（TABLE_MAP 模式）
+
+void lua_getarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer end);
+// 获取 [start, end) 范围的元素，压入栈顶
+
+void lua_setarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer count);
+// 从栈顶弹出 count 个值，设置到 start 开始的位置
+
+void lua_movearray(lua_State *L, int fromidx, int toidx, 
+                   lua_Integer from, lua_Integer to, lua_Integer count);
+// 在两个数组间移动元素
+
+int lua_nextarray(lua_State *L, int idx, lua_Integer *cursor);
+// 迭代数组，cursor 初始为 -1，返回 1 表示还有元素，0 表示结束
+// 每次调用将 (index, value) 压入栈顶
+
+int lua_arrayisempty(lua_State *L, int idx);
+// 是否为空 (loglen == 0)
+
+void lua_arrayreserve(lua_State *L, int idx, lua_Integer cap);
+// 预留容量（只增不减）
+```
+
+---
+
+## 4. Registry 引用机制（破坏性变更）
+
+### 4.1 ⚠️ 禁止使用的 API
+
+```c
+// ❌ 禁止！会导致未定义行为
+lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+lua_rawseti(L, LUA_REGISTRYINDEX, ref);
+```
+
+### 4.2 正确用法
+
+```c
+int ref = luaL_ref(L, LUA_REGISTRYINDEX);  // 创建引用
+
+lua_getref(L, ref);   // ✅ 获取引用值到栈顶
+lua_setref(L, ref);   // ✅ 设置栈顶值到引用位置
+
+luaL_unref(L, LUA_REGISTRYINDEX, ref);     // 释放引用
+```
+
+---
+
+## 5. Table 结构
+
+```c
 typedef struct Table {
   CommonHeader;
-  lu_byte flags;       /* 1<<p means tagmethod(p) is not present */
-  lu_byte lsizenode;   /* log2 of number of slots of 'node' array */
-  lu_byte mode;        /* TABLE_ARRAY (1) or TABLE_MAP (2) */
-  unsigned int asize;  /* number of slots in 'array' array (physical capacity) */
-  unsigned int loglen; /* logical length, only used by TABLE_ARRAY */
-  Value *array;        /* array part (inverted layout) */
-  Node *node;          /* hash part */
+  lu_byte flags;
+  lu_byte lsizenode;
+  lu_byte mode;        /* TABLE_ARRAY(1) 或 TABLE_MAP(2) */
+  unsigned int asize;  /* 物理容量 */
+  unsigned int loglen; /* 逻辑长度（仅 List 使用） */
+  Value *array;        /* 数组部分（倒置布局） */
+  Node *node;          /* 哈希部分 */
   struct Table *metatable;
   GCObject *gclist;
 } Table;
 ```
 
-### 4.2 模式枚举
-
-```c
-/* lobject.h */
-#define TABLE_ARRAY 1  /* 纯数组模式（List） */
-#define TABLE_MAP 2    /* 纯哈希模式（Map） */
-```
-
-### 4.3 数组内存布局
+### 5.1 List 内存布局
 
 ```
-             Values                              Tags
-  --------------------------------------------------------
-  ...  |   Value 1     |   Value 0     |unsigned|0|1|...
-  --------------------------------------------------------
-                                       ^ t->array
+             Values                    Tags
+  ----------------------------------------------
+  ...  |   Value 1   |   Value 0   |len|0|1|...
+  ----------------------------------------------
+                     ^ t->array 指向此处
 
-- `t->array` 指向两个数组之间
-- 值通过负索引访问：`t->array[-1]` = Value 0
-- 标签通过正索引访问：`getArrTag(t, 0)` = Tag 0
-- `unsigned` 用于存储长度提示（lenhint）
+- 值：t->array[-1] = Value 0, t->array[-2] = Value 1
+- 标签：getArrTag(t, 0), getArrTag(t, 1)
 ```
 
 ---
 
-## 5. List 与 Map 拆分
+## 6. 新增 VM 指令
 
-### 5.1 List 特性
+| 指令           | 说明      |
+|--------------|---------|
+| `OP_NEWLIST` | 创建 List |
 
-| 特性    | 描述                      |
-|-------|-------------------------|
-| 索引    | 0-based                 |
-| 容量    | `asize` 物理容量            |
-| 长度    | `loglen` 逻辑长度           |
-| 扩容    | 平摊扩容（1.5 倍增长）           |
-| 缩容    | 仅缩减 `loglen`，不清理物理内存    |
-| GC 安全 | 缩容时清理截断槽位为 `LUA_VEMPTY` |
+---
 
-### 5.2 Map 特性
+## 7. 新增标准库函数
 
-| 特性      | 描述                      |
-|---------|-------------------------|
-| 键类型     | 任意类型（整数、字符串、表等）         |
-| `#` 运算符 | 固定返回 0                  |
-| 遍历      | 使用 `next()` 或 `pairs()` |
-| 边界检查    | 无                       |
-
-### 5.3 长度运算符 (#) 实现
+### 7.1 table 库
 
 ```c
-/* ltable.c - luaH_getn */
-lua_Unsigned luaH_getn(lua_State *L, Table *t) {
-  /* LIST: return logical length */
-  if (t->mode == TABLE_ARRAY)
-    return t->loglen;
+table.push(list, value)   // 追加元素到末尾（loglen 位置）
+table.pop(list)           // 移除并返回最后一个元素
+table.create(n)           // 创建容量为 n 的 List
+```
+
+### 7.2 math 库适配
+
+所有 math 函数已适配 Slot 0 Receiver，参数从索引 2 开始：
+
+```c
+math.abs(x)     // receiver 在索引 1，x 在索引 2
+math.sin(x)
+math.floor(x)
+// ... 其他函数同理
+```
+
+### 7.3 base 库适配
+
+```c
+pcall(func, ...)   // 内部自动插入 nil receiver
+xpcall(func, err, ...)  // 同上
+```
+
+---
+
+## 8. 原生 class 机制
+
+SPT 提供原生类定义语法，通过 `__call` 元方法实现实例化。
+
+### 8.1 类定义语法
+
+```spt
+class Point {
+  var x = 0
+  var y = 0
   
-  /* MAP: always return 0 according to design document */
-  if (t->mode == TABLE_MAP)
-    return 0;
+  fn __init(self, x, y) {
+    self.x = x
+    self.y = y
+  }
   
-  /* regular table logic (not used in SPT) */
-  ...
+  fn move(self, dx, dy) {
+    self.x = self.x + dx
+    self.y = self.y + dy
+  }
 }
+```
 
-/* lvm.c - OP_LEN */
-void luaV_objlen(lua_State *L, StkId ra, const TValue *rb) {
-  ...
-  case LUA_VARRAY: {
-    Table *h = avalue(rb);
-    tm = fasttm(L, h->metatable, TM_LEN);
-    if (tm) break;
-    setivalue(s2v(ra), (lua_Integer)h->loglen);
-    return;
-  }
-  case LUA_VTABLE: {
-    Table *h = hvalue(rb);
-    tm = fasttm(L, h->metatable, TM_LEN);
-    if (tm) break;
-    setivalue(s2v(ra), l_castU2S(luaH_getn(L, h)));
-    return;
-  }
-  ...
-}
+### 8.2 实例化
+
+```spt
+auto p = new Point(10, 20)  // 调用 __call 元方法
+p.move(5, 5)                // 方法调用
+```
+
+### 8.3 编译器生成的结构
+
+```
+class Point { ... } 编译后：
+
+1. local Point = {}
+2. Point.__index = Point
+3. Point.__init = function(self, x, y) ... end
+4. Point.move = function(self, dx, dy) ... end
+5. setmetatable(Point, { __call = function(cls, nil, ...) 
+      local obj = setmetatable({}, cls)
+      -- 初始化实例字段 --
+      local init = obj.__init
+      if init then init(obj, ...) end
+      return obj
+   end })
+```
+
+### 8.4 ⚠️ 构造函数参数索引
+
+`__init` 方法是普通方法，参数从索引 2 开始：
+
+```c
+// __init(self, x, y) 的 C 层视角：
+// 索引 1: self (实例对象)
+// 索引 2: x
+// 索引 3: y
+```
+
+但 `new Point(x, y)` 触发的 `__call` 元方法，参数从索引 3 开始：
+
+```c
+// __call 闭包的 C 层视角：
+// 索引 1: Point 表 (Slot 0 Receiver)
+// 索引 2: nil (SPT 插入的 receiver)
+// 索引 3: x
+// 索引 4: y
 ```
 
 ---
 
-## 6. Slot 0 Receiver 调用约定
+## 9. sptxx C++ 绑定库
 
-### 6.1 调用栈布局
+sptxx 是类似 sol2 的 C++ 绑定库，已适配 SPT 的 Slot 0 Receiver 约定。
+
+### 9.1 头文件结构
 
 ```
-CallInfo 栈帧：
-  ci->func.p     -> [function]
-  ci->func.p + 1 -> [receiver] (Slot 0, 通常为 nil)
-  ci->func.p + 2 -> [arg1]     (Slot 1)
-  ci->func.p + 3 -> [arg2]     (Slot 2)
-  ...
+sptxx/
+├── sptxx.hpp        // 主入口
+└── sptxx/
+    ├── state.hpp    // Lua 状态管理
+    ├── list.hpp     // List 绑定
+    ├── map.hpp      // Map 绑定
+    ├── function.hpp // 函数绑定
+    ├── usertype.hpp // 用户类型绑定
+    ├── stack.hpp    // 栈操作
+    └── error.hpp    // 异常处理
 ```
 
-### 6.2 C 函数参数提取模式
+### 9.2 基本用法
 
-```c
-/* 标准模式 */
-static int my_func(lua_State *L) {
-  /* 索引 1: receiver (通常为 nil) */
-  /* 索引 2+: 实际参数 */
+```cpp
+#include "sptxx.hpp"
+
+int main() {
+  sptxx::state lua;
+  lua.open_libraries();
   
-  int arg1 = luaL_checkinteger(L, 2);
-  int arg2 = luaL_checkinteger(L, 3);
-  const char *str = luaL_checkstring(L, 4);
+  // 注册全局函数
+  lua.set_function("add", [](int a, int b) { return a + b; });
   
-  /* 返回值压入栈顶 */
-  lua_pushinteger(L, result);
-  return 1; /* 返回值数量 */
+  // 创建 List
+  auto list = lua.create_list<int>(10);
+  list.set(0, 100);
+  
+  // 创建 Map
+  auto map = lua.create_map<std::string, int>();
+  
+  // 注册用户类型
+  auto ut = lua.new_usertype<Point>("Point");
+  ut.constructor<int, int>();
+  ut.set("x", &Point::x);
+  ut.set("y", &Point::y);
+  ut.set("move", &Point::move);
+  
+  // 执行代码
+  lua.do_string("auto p = new Point(10, 20); p:move(5, 5);");
 }
 ```
 
-### 6.3 方法调用语义
+### 9.3 ⚠️ 参数索引约定
 
-```lua
--- 点调用：receiver 是对象本身
-obj:method(arg1, arg2)
--- 栈布局：[nil, obj, arg1, arg2]
+sptxx 内部已正确处理参数索引：
 
--- 索引调用：receiver 是容器
-arr[0] = value
--- 栈布局：[nil, arr, 0, value]
+| 场景              | 使用的函数                 | 参数起始索引 |
+|-----------------|-----------------------|--------|
+| 全局函数            | `extract_args_from_2` | 索引 2   |
+| 方法调用            | `extract_args_from_2` | 索引 2   |
+| 构造函数 (`__call`) | `extract_args_from_3` | 索引 3   |
 
--- 函数调用：receiver 为 nil
-func(arg1, arg2)
--- 栈布局：[nil, arg1, arg2]
+### 9.4 List/Map 模板
+
+```cpp
+// List 模板
+sptxx::list<int> int_list;      // 整数 List
+sptxx::list<std::string> str_list;  // 字符串 List
+sptxx::list<void> void_list;    // 无类型 List
+
+// Map 模板
+sptxx::map<std::string, int> str_int_map;
+sptxx::map<void> void_map;      // 无类型 Map
 ```
 
-### 6.4 闭包 this 穿透
+### 9.5 用户类型绑定
 
-| 函数类型    | Receiver 命名    | 说明     |
-|---------|----------------|--------|
-| 类方法     | `"self"`       | 面向对象方法 |
-| 普通函数/闭包 | `"(receiver)"` | 穿透调用   |
-
-### 6.5 C 层回调垫片
-
-```c
-/* ltablib.c - sort_comp */
-static int sort_comp(lua_State *L, int a, int b) {
-  if (lua_isnil(L, 3)) {
-    return lua_compare(L, a, b, LUA_OPLT);
-  } else {
-    lua_pushvalue(L, 3);    /* push function */
-    lua_pushnil(L);         /* push 隐式的 receiver */
-    lua_pushvalue(L, a - 2); /* 补偿 func 和 nil */
-    lua_pushvalue(L, b - 3); /* 补偿 func, nil 和 a */
-    lua_call(L, 3, 1);      /* 3 个参数：receiver, a, b */
-    ...
-  }
-}
-
-/* ldblib.c - hook 回调 */
-lua_pushnil(L);  /* 为 errhandler 垫入 nil receiver */
-lua_call(L, 3, 1); /* receiver + 2 个参数 */
-```
-
----
-
-## 7. 新增 C API
-
-### 7.1 基础数组 API
-
-#### lua_createarray
-
-```c
-/* lapi.c */
-LUA_API void lua_createarray(lua_State *L, int narray);
-/*
- * 创建一个新的数组（List）
- * @param L Lua 状态
- * @param narray 初始容量（逻辑长度初始为 0）
- * @return 新数组压入栈顶
- */
-```
-
-#### lua_arrayresize
-
-```c
-LUA_API void lua_arrayresize(lua_State *L, int idx, lua_Integer newsize);
-/*
- * 调整数组的物理容量
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @param newsize 新容量（不能小于当前逻辑长度）
- */
-```
-
-#### lua_arraylen
-
-```c
-LUA_API lua_Integer lua_arraylen(lua_State *L, int idx);
-/*
- * 获取数组的逻辑长度
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @return 逻辑长度
- */
-```
-
-#### lua_arraysetlen
-
-```c
-LUA_API void lua_arraysetlen(lua_State *L, int idx, lua_Integer newlen);
-/*
- * 设置数组的逻辑长度
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @param newlen 新长度（必须在 [0, asize] 范围内）
- * 
- * 注意：缩容时会清理截断的槽位为 LUA_VEMPTY，保证 GC 安全
- */
-```
-
-### 7.2 扩展数组 API
-
-#### lua_arraycapacity
-
-```c
-LUA_API lua_Integer lua_arraycapacity(lua_State *L, int idx);
-/*
- * 获取数组的物理容量（asize）
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @return 物理容量
- */
-```
-
-#### lua_gettablemode
-
-```c
-LUA_API int lua_gettablemode(lua_State *L, int idx);
-/*
- * 获取表的模式
- * @param L Lua 状态
- * @param idx 栈索引
- * @return TABLE_ARRAY(1) 为数组，TABLE_MAP(2) 为映射，0 为无效类型
- */
-```
-
-#### lua_ismap
-
-```c
-LUA_API int lua_ismap(lua_State *L, int idx);
-/*
- * 检查对象是否为 Map（TABLE_MAP 模式）
- * @param L Lua 状态
- * @param idx 栈索引
- * @return 1 如果是 Map，0 否则
- */
-```
-
-#### lua_getarrayrange
-
-```c
-LUA_API void lua_getarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer end);
-/*
- * 获取数组范围的元素
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @param start 起始索引（包含）
- * @param end 结束索引（不包含）
- * 
- * 将元素从索引 start 到 end-1 压入栈顶
- *
- */
-```
-
-#### lua_setarrayrange
-
-```c
-LUA_API void lua_setarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer count);
-/*
- * 从栈设置数组范围的元素
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @param start 起始索引
- * @param count 元素数量（从栈顶获取）
- * 
- * 从栈顶弹出 count 个值并设置到数组中
- *
- */
-```
-
-#### lua_movearray
-
-```c
-LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer from, lua_Integer to,
-                           lua_Integer count);
-/*
- * 移动数组元素
- * @param L Lua 状态
- * @param fromidx 源数组索引
- * @param toidx 目标数组索引
- * @param from 源起始位置
- * @param to 目标起始位置
- * @param count 元素数量
- *
- */
-```
-
-#### lua_nextarray
-
-```c
-LUA_API int lua_nextarray(lua_State *L, int idx, lua_Integer *cursor);
-/*
- * 迭代数组元素
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @param cursor 迭代器游标（初始为 -1）
- * @return 1 如果还有元素，0 如果迭代完成
- * 
- * 每次调用将 (index, value) 压入栈顶
- * 使用示例:
- *   lua_Integer cursor = -1;
- *   while (lua_nextarray(L, idx, &cursor)) {
- *     // 栈顶：value, 栈顶 -1: index
- *     lua_pop(L, 2);
- *   }
- *
- */
-```
-
-#### lua_arrayisempty
-
-```c
-LUA_API int lua_arrayisempty(lua_State *L, int idx);
-/*
- * 检查数组是否为空（loglen == 0）
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @return 1 如果为空，0 否则
- */
-```
-
-#### lua_arrayreserve
-
-```c
-LUA_API void lua_arrayreserve(lua_State *L, int idx, lua_Integer cap);
-/*
- * 预留数组容量（只增不减）
- * @param L Lua 状态
- * @param idx 数组的栈索引
- * @param cap 要预留的容量
- */
-```
-
-### 7.3 原始长度（通用）
-
-```c
-/* lapi.c */
-LUA_API lua_Unsigned lua_rawlen(lua_State *L, int idx);
-/*
- * 获取对象的原始长度
- * - 数组：返回 loglen
- * - 表：返回 luaH_getn 的结果
- * - 字符串：返回字符长度
- * - userdata：返回字节长度
- */
-```
-
----
-
-## 8. VM 指令修改
-
-### 8.1 OP_NEWLIST
-
-```c
-/* lopcodes.h */
-OP_NEWLIST, /* A vB vC k  R[A] := [] (array) */
-
-/* lvm.c */
-vmcase(OP_NEWLIST) {
-  StkId ra = RA(i);
-  unsigned c = cast_uint(GETARG_vC(i)); /* array size */
-  Table *t;
-  if (TESTARG_k(i)) { /* non-zero extra argument? */
-    lua_assert(GETARG_Ax(*pc) != 0);
-    c += cast_uint(GETARG_Ax(*pc)) * (MAXARG_vC + 1);
-  }
-  pc++;                 /* skip extra argument */
-  L->top.p = ra + 1;    /* correct top in case of emergency GC */
-  t = luaH_newarray(L); /* create array */
-  setavalue2s(L, ra, t);
-  if (c != 0)
-    luaH_resizearray(L, t, c); /* resize array part only */
-  checkGC(L, ra + 1);
-  vmbreak;
-}
-```
-
-### 8.2 OP_GETTABLE (数组边界检查)
-
-```c
-/* lvm.c */
-vmcase(OP_GETTABLE) {
-  StkId ra = RA(i);
-  TValue *rb = vRB(i);
-  TValue *rc = vRC(i);
-  lu_byte tag;
-
-  if (ttisarray(rb)) {
-    Table *t = avalue(rb);
-    if (ttisinteger(rc)) {
-      lua_Integer idx = ivalue(rc);
-      /* 负数索引检查 */
-      if (idx < 0)
-        luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
-      /* 越界检查 */
-      if (idx >= (lua_Integer)t->loglen)
-        luaG_runerror(L, "list index out of range: index %I >= length %u", 
-                      (LUAI_UACINT)idx, t->loglen);
-      tag = luaH_getint(t, idx, s2v(ra));
-    } else if (ttisnumber(rc)) {
-      luaG_runerror(L, "list index must be integer, not float");
-    } else {
-      /* 非数字 key，放行给 finishget 触发 __index */
-      tag = LUA_VEMPTY;
-    }
-  } else {
-    /* Map: 原有逻辑 */
-    ...
-  }
-  ...
-}
-```
-
-### 8.3 OP_SETTABLE (数组边界检查)
-
-```c
-/* lvm.c */
-vmcase(OP_SETTABLE) {
-  StkId ra = RA(i);
-  TValue *rb = vRB(i); /* key */
-  TValue *rc = RKC(i); /* value */
-  int hres;
-
-  if (ttisarray(s2v(ra))) {
-    Table *t = avalue(s2v(ra));
-    if (ttisinteger(rb)) {
-      lua_Integer idx = ivalue(rb);
-      /* 负数索引检查 */
-      if (idx < 0)
-        luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
-      /* 严格越界拦截 */
-      if (idx >= (lua_Integer)t->loglen)
-        luaG_runerror(L, "list index out of range: index %I >= length %u", 
-                      (LUAI_UACINT)idx, t->loglen);
-      /* 直接写入 */
-      lu_byte *tagp = getArrTag(t, cast_uint(idx));
-      if (checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp)) {
-        fval2arr(t, cast_uint(idx), tagp, rc);
-        hres = HOK;
-      } else {
-        hres = ~cast_int(idx);
-      }
-    } else if (ttisnumber(rb)) {
-      luaG_runerror(L, "list index must be integer, not float");
-    } else {
-      /* 非数字 key，放行给 __newindex */
-      hres = HNOTFOUND;
-    }
-  } else {
-    /* Map: 原有逻辑 */
-    ...
-  }
-  ...
-}
-```
-
-### 8.4 OP_TFORCALL
-
-```c
-/* lvm.c */
-vmcase(OP_TFORCALL) {
-  StkId ra = RA(i);
-  setobjs2s(L, ra + 6, ra + 3); /* control (3rd arg) */
-  setobjs2s(L, ra + 3, ra);     /* function */
-  setobjs2s(L, ra + 4, ra);     /* receiver (1st arg) */
-  setobjs2s(L, ra + 5, ra + 1); /* state (2nd arg) */
-  L->top.p = ra + 3 + 4;
-  ProtectNT(luaD_call(L, ra + 3, GETARG_C(i)));
-  updatestack(ci);
-  ...
-}
-```
-
----
-
-## 9. 标准库适配
-
-### 9.1 table 库
-
-```c
-/* ltablib.c */
-
-/* 导出函数列表 */
-static const luaL_Reg tab_funcs[] = {
-  {"concat", tconcat},
-  {"create", tcreate},
-  {"insert", tinsert},
-  {"pack", tpack},
-  {"unpack", tunpack},
-  {"remove", tremove},
-  {"move", tmove},
-  {"sort", sort},
-  {"push", lpush},    /* 新增 */
-  {"pop", lpop},      /* 新增 */
-  {NULL, NULL}
+```cpp
+struct Warrior {
+  std::string name;
+  int hp;
+  
+  Warrior(const std::string& n, int h) : name(n), hp(h) {}
+  
+  void take_damage(int amount) { hp -= amount; }
 };
-```
 
-#### table.push
-
-```c
-/* lpush - Append a value to the end of a list
- * Arguments: receiver (nil), list, value
- * Returns: nothing
- */
-static int lpush(lua_State *L) {
-  luaL_checktype(L, 2, LUA_TARRAY);
-  luaL_checkany(L, 3);
-  
-  lua_Integer size = luaL_len(L, 2);
-  if (l_unlikely(size >= LUA_MAXINTEGER))
-    return luaL_error(L, "list overflow");
-  
-  lua_pushvalue(L, 3);
-  lua_seti(L, 2, size); /* 触发 finishset 的 append 路径 */
-  return 0;
-}
-```
-
-#### table.pop
-
-```c
-/* lpop - Remove and return the last element from a list
- * Arguments: receiver (nil), list
- * Returns: the removed element, or nil if list is empty
- */
-static int lpop(lua_State *L) {
-  luaL_checktype(L, 2, LUA_TARRAY);
-  
-  lua_Integer size = luaL_len(L, 2);
-  if (size == 0) {
-    lua_pushnil(L);
-    return 1;
-  }
-  
-  lua_geti(L, 2, size - 1); /* 获取最后一个元素 */
-  lua_arraysetlen(L, 2, size - 1); /* 缩容并清理槽位 */
-  return 1;
-}
-```
-
-### 9.2 math 库
-
-所有 math 函数都适配了 Receiver 约定：
-
-```c
-/* lmathlib.c */
-/* math_abs - receiver is arg1, x is arg2 */
-static int math_abs(lua_State *L) {
-  if (lua_isinteger(L, 2)) {
-    lua_Integer n = lua_tointeger(L, 2);
-    if (n < 0) n = (lua_Integer)(0u - (lua_Unsigned)n);
-    lua_pushinteger(L, n);
-  } else {
-    lua_pushnumber(L, l_mathop(fabs)(luaL_checknumber(L, 2)));
-  }
-  return 1;
-}
-
-/* 其他函数同理：math_sin, math_cos, math_floor, math_ceil, ... */
-```
-
-### 9.3 base 库
-
-```c
-/* lbaselib.c */
-
-/* pcall - 强制压入 nil receiver */
-static int luaB_pcall(lua_State *L) {
-  luaL_checkany(L, 2);
-  lua_pushnil(L);  /* receiver 垫片 */
-  lua_insert(L, 2);
-  return lua_pcallk(L, lua_gettop(L) - 2, LUA_MULTRET, 0, 0, finishpcall);
-}
-
-/* xpcall - 强制压入 nil receiver */
-static int luaB_xpcall(lua_State *L) {
-  luaL_checkany(L, 2);
-  lua_pushnil(L);  /* receiver 垫片 */
-  lua_insert(L, 2);
-  status = lua_pcallk(L, n - 2, LUA_MULTRET, 3, 2, finishpcall);
-  ...
-}
+// 绑定
+auto ut = lua.new_usertype<Warrior>("Warrior");
+ut.constructor<std::string, int>();  // 构造函数
+ut.set("name", &Warrior::name);       // 成员变量
+ut.set("hp", &Warrior::hp);
+ut.set("take_damage", &Warrior::take_damage);  // 成员方法
 ```
 
 ---
 
-## 10. 边界检查与错误处理
+## 10. 快速参考
 
-### 10.1 List 边界检查规则
+### 10.1 参数索引速查表
 
-| 情况          | 错误信息                                               |
-|-------------|----------------------------------------------------|
-| 负数索引        | `"list index out of range: negative index %I"`     |
-| 浮点索引        | `"list index must be integer, not float"`          |
-| `>= loglen` | `"list index out of range: index %I >= length %u"` |
-| 非整数 key     | 放行给 `__index`/`__newindex` 元方法                     |
-
-### 10.2 错误处理中的 Receiver 垫片
-
-```c
-/* ldblib.c - 错误处理 */
-/* === SPT 专属修改：为 errhandler 垫入 nil receiver === */
-/* 栈结构从 [err_msg] 调整为 [errfunc, nil_receiver, err_msg] */
-
-setobjs2s(L, L->top.p - 1, errfunc);  /* 在 err_msg 原位置放入 errfunc */
-L->top.p += 2;                         /* 栈高度增加 2 (函数 + receiver) */
-
-/* 调用 errfunc，参数：receiver(nil) + err_msg */
-luaD_callnoyield(L, L->top.p - 3, 1);
+```
+普通函数:     luaL_check*(L, 2)   // 索引 2 开始
+方法调用:     luaL_check*(L, 2)   // 索引 2 开始
+__call:      luaL_check*(L, 3)   // 索引 3 开始 ⚠️
 ```
 
-### 10.3 GC 安全清理
+### 10.2 List API 速查表
 
-```c
-/* lapi.c - lua_arraysetlen */
-LUA_API void lua_arraysetlen(lua_State *L, int idx, lua_Integer newlen) {
-  ...
-  /* 缩容时清理截断槽位（GC 安全） */
-  {
-    unsigned i;
-    for (i = cast_uint(newlen); i < t->loglen; i++)
-      *getArrTag(t, i) = LUA_VEMPTY;
-  }
-  t->loglen = cast_uint(newlen);
-  ...
-}
+```
+创建:     lua_createarray(L, cap)
+长度:     lua_arraylen(L, idx)           // loglen
+容量:     lua_arraycapacity(L, idx)      // asize
+设置长度: lua_arraysetlen(L, idx, newlen)
+调整容量: lua_arrayresize(L, idx, newcap)
+判断类型: ttisarray(o), lua_ismap(L, idx), lua_gettablemode(L, idx)
+范围操作: lua_getarrayrange(), lua_setarrayrange()
+移动:     lua_movearray()
+迭代:     lua_nextarray(L, idx, &cursor)
+其他:     lua_arrayisempty(), lua_arrayreserve()
+```
+
+### 10.3 Registry 速查表
+
+```
+创建:  int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+获取:  lua_getref(L, ref);   // 值压入栈顶
+设置:  lua_setref(L, ref);   // 栈顶值存入引用
+释放:  luaL_unref(L, LUA_REGISTRYINDEX, ref);
 ```
 
 ---
 
-## 11. 附录：关键宏和函数
+## 11. 常见错误
 
-### 11.1 类型判断宏
-
-```c
-/* lobject.h */
-#define ttisarray(o) checktag((o), ctb(LUA_VARRAY))
-#define ttistable(o) checktag((o), ctb(LUA_VTABLE))
-#define ttisnumber(o) checktype((o), LUA_TNUMBER)
-#define ttisinteger(o) checktag((o), LUA_VNUMINT)
-#define ttisfloat(o) checktag((o), LUA_VNUMFLT)
-#define ttisstring(o) checktype((o), LUA_TSTRING)
-#define ttisfunction(o) checktype((o), LUA_TFUNCTION)
-```
-
-### 11.2 数组操作宏
+### 11.1 参数索引错误
 
 ```c
-/* ltable.h */
-#define getArrTag(t, k) (cast(lu_byte *, (t)->array) + sizeof(unsigned) + (k))
-#define getArrVal(t, k) ((t)->array - 1 - (k))
-#define lenhint(t) cast(unsigned *, (t)->array)
+// ❌ 错误：普通函数从索引 1 开始
+int arg = luaL_checkinteger(L, 1);
 
-#define arr2obj(h, k, val) ((val)->tt_ = *getArrTag(h, (k)), (val)->value_ = *getArrVal(h, (k)))
-#define obj2arr(h, k, val) (*getArrTag(h, (k)) = (val)->tt_, *getArrVal(h, (k)) = (val)->value_)
-#define farr2val(h, k, tag, res) ((res)->tt_ = tag, (res)->value_ = *getArrVal(h, (k)))
-#define fval2arr(h, k, tag, val) (*tag = (val)->tt_, *getArrVal(h, (k)) = (val)->value_)
-
-#define arraylimit(h) ((h)->mode == TABLE_ARRAY ? (h)->loglen : (h)->asize)
+// ✅ 正确：普通函数从索引 2 开始
+int arg = luaL_checkinteger(L, 2);
 ```
 
-### 11.3 栈操作宏
+### 11.2 __call 参数索引错误
 
 ```c
-/* lapi.h / lvm.h */
-#define RA(i) (base + GETARG_A(i))
-#define vRA(i) s2v(RA(i))
-#define RB(i) (base + GETARG_B(i))
-#define vRB(i) s2v(RB(i))
+// ❌ 错误：__call 从索引 2 开始
+int arg = luaL_checkinteger(L, 2);
 
-/* 栈索引 */
-#define lua_absindex(L, idx) ((idx > 0 || ispseudo(idx)) ? idx : cast_int(L->top.p - L->ci->func.p) + idx)
-#define lua_gettop(L) cast_int(L->top.p - (L->ci->func.p + 1))
+// ✅ 正确：__call 从索引 3 开始
+int arg = luaL_checkinteger(L, 3);
 ```
 
-### 11.4 核心函数
+### 11.3 Registry API 错误
 
 ```c
-/* ltable.c */
-Table *luaH_new(lua_State *L);
-Table *luaH_newarray(lua_State *L);
-void luaH_resize(lua_State *L, Table *t, unsigned nasize, unsigned nhsize);
-void luaH_resizearray(lua_State *L, Table *t, unsigned nasize);
-lu_byte luaH_get(Table *t, const TValue *key, TValue *res);
-lu_byte luaH_getint(Table *t, lua_Integer key, TValue *res);
-void luaH_set(lua_State *L, Table *t, const TValue *key, TValue *value);
-void luaH_setint(lua_State *L, Table *t, lua_Integer key, TValue *value);
-lua_Unsigned luaH_getn(lua_State *L, Table *t);
+// ❌ 错误：使用旧 API
+lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
 
-/* lvm.c */
-void luaV_execute(lua_State *L, CallInfo *ci);
-void luaV_objlen(lua_State *L, StkId ra, const TValue *rb);
-lu_byte luaV_finishget(lua_State *L, const TValue *t, TValue *key, StkId val, lu_byte tag);
-void luaV_finishset(lua_State *L, const TValue *t, TValue *key, TValue *val, int hres);
-
-/* ldo.c */
-CallInfo *luaD_precall(lua_State *L, StkId func, int nresults);
-void luaD_call(lua_State *L, StkId func, int nResults);
-void luaD_callnoyield(lua_State *L, StkId func, int nResults);
-void luaD_poscall(lua_State *L, CallInfo *ci, int nres);
+// ✅ 正确：使用新 API
+lua_getref(L, ref);
 ```
 
-### 11.5 Registry 引用机制变更
+### 11.4 List 索引错误
 
-由于拆分了map和list,Lua 原生的注册表引用机制发生了变更。
-原生的 `luaL_ref(L, LUA_REGISTRYINDEX)` 生成的整数句柄，在底层依然依赖于 Lua 的原生 Table 操作。
-
-目前修改了 `lstate.c` 和 `lapi.c`，使得 `luaL_ref` 分配的整数句柄直接映射到 `global_State` 内部维护的一个自定义连续 C 数组 (`g->registry_array`) 中。这绕过了所有的 Table 查找开销，实现了真正的 O(1) 物理内存寻址。
-
-**3. 对 C++ 侧代码的破坏性变更（Breaking Change）：**
-因为数据不再存在普通的 Lua Table 中，**不能**再用传统的表操作接口去读取它。
-- ❌ **禁止使用**：`lua_rawgeti(L, LUA_REGISTRYINDEX, ref)`
-- ❌ **禁止使用**：`lua_rawseti(L, LUA_REGISTRYINDEX, ref)`
-
-**4. 替代方案（新 API）：**
-在 `lua.h` 中暴露了专属的极速访问接口，请在所有交互代码中使用它们：
 ```c
-// 获取 registry 引用
-LUA_API int lua_getref(lua_State *L, int ref);
+// ❌ 错误：1-based 索引
+arr[1]  // 这访问的是第二个元素，不是第一个！
 
-// 更新 registry 引用
-LUA_API void lua_setref(lua_State *L, int ref);
+// ✅ 正确：0-based 索引
+arr[0]  // 第一个元素
 ```
-
-### 11.6 原生 class 机制
-SPT 原生类的实例化： 靠的是类表上的 __call 元方法拦截，然后去调用内部隐式的 __init。
 
 ---
 
 ## 版本信息
 
 - **Lua 版本**: 5.5 (2026 官方版本修改)
-- **SPT 修改版本**: 1.0
-- **文档最后更新**: 2026-03-12
-
----
-
-## 参考资源
-
-- [Lua 5.5 官方文档](https://www.lua.org/manual/5.5/)
-- [SPT 项目仓库](https://github.com/Xarvie/spt)
-- [sol2 文档](https://sol2.readthedocs.io/)
+- **SPT 版本**: 1.0
+- **更新日期**: 2026-03-15
