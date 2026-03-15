@@ -192,4 +192,24 @@ public:
 
 using object_map = map<void>;
 
+// 允许从 Lua 栈中提取 Map
+template <typename T> struct getter<map<T>> {
+  static map<T> get(lua_State *L, int index) {
+    lua_pushvalue(L, index);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    return map<T>(L, ref);
+  }
+};
+
+// 允许将 Map 推送到 Lua 栈
+template <typename T> struct pusher<map<T>> {
+  static void push(lua_State *L, const map<T> &value) {
+    if (value.valid()) {
+      lua_getref(L, value.registry_index());
+    } else {
+      lua_pushnil(L);
+    }
+  }
+};
+
 } // namespace sptxx

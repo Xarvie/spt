@@ -1,20 +1,34 @@
-// test_usertype.cpp - Test usertype registration issue - Final Corrected Version
+// test_usertype_expanded.cpp - Test expanded usertype features
 
 #include "sptxx.hpp"
 #include <iostream>
 #include <string>
 
-struct Person {
+// 扩展的测试类
+struct Warrior {
   std::string name;
-  int age;
+  int hp;
+  int attack;
 
-  Person() : name("Unknown"), age(0) {}
+  // 默认构造
+  Warrior() : name("Unknown"), hp(100), attack(10) {}
 
-  Person(const std::string &n, int a) : name(n), age(a) {}
+  // 带参数的构造
+  Warrior(const std::string &n, int h, int a) : name(n), hp(h), attack(a) {}
 
   void introduce() const {
-    std::cout << "[C++ Call] Hi, I'm " << name << " and I'm " << age << " years old." << std::endl;
+    std::cout << "[Warrior] I am " << name << ", HP: " << hp << ", ATK: " << attack << std::endl;
   }
+
+  // 多参数方法测试
+  void take_damage(int amount, const std::string &source) {
+    hp -= amount;
+    std::cout << "[Warrior] " << name << " took " << amount << " damage from " << source
+              << "! HP left: " << hp << std::endl;
+  }
+
+  // 带返回值的方法测试
+  bool is_alive() const { return hp > 0; }
 };
 
 void safe_do_string(sptxx::state &lua, const char *code) {
@@ -30,31 +44,51 @@ int main() {
     sptxx::state lua;
     lua.open_libraries();
 
-    std::cout << "=== Testing Usertype Registration Issue ===" << std::endl;
+    std::cout << "=== Testing Expanded Usertype Features ===" << std::endl;
 
-    std::cout << "\n1. Testing basic usertype creation & binding..." << std::endl;
-    auto person_type = lua.new_usertype<Person>("Person");
+    std::cout << "\n1. Binding Warrior class..." << std::endl;
+    // 显式指定构造参数的类型
+    auto warrior_type = lua.new_usertype<Warrior>("Warrior");
 
-    // 绑定机制
-    person_type.constructor(); // 底层已经将构造绑定到了 __call
-    person_type.set("name", &Person::name);
-    person_type.set("age", &Person::age);
-    person_type.set("introduce", &Person::introduce);
+    // 绑定有参构造 (注册对应类型的参数以便 C++ 解析)
+    warrior_type.constructor<std::string, int, int>();
 
-    std::cout << "Usertype created and bound successfully!" << std::endl;
+    // 绑定属性
+    warrior_type.set("name", &Warrior::name);
+    warrior_type.set("hp", &Warrior::hp);
 
-    std::cout << "\n2. Testing Lua instance creation..." << std::endl;
-    // 使用真正的原生语法 Person()，去触发 __call！
-    safe_do_string(lua, "p = Person();");
-    std::cout << "Lua instance creation succeeded!" << std::endl;
+    // 绑定多参数及返回值方法
+    warrior_type.set("introduce", &Warrior::introduce);
+    warrior_type.set("take_damage", &Warrior::take_damage);
+    warrior_type.set("is_alive", &Warrior::is_alive);
 
-    std::cout << "\n3. Testing property assignment and method calls..." << std::endl;
-    safe_do_string(lua, "p.name = 'Alice';\n"
-                        "p.age = 25;\n"
-                        "p.introduce();\n");
-    std::cout << "Method call worked!" << std::endl;
+    std::cout << "Class bound successfully!" << std::endl;
 
-    std::cout << "\n=== Usertype Test Complete ===" << std::endl;
+    std::cout << "\n2. Testing Custom Grammar Scripts..." << std::endl;
+
+    // 严格按照 LangParser.g4 和 LangLexer.g4 编写的测试脚本
+    safe_do_string(lua, R"(
+        auto w = new Warrior("Arthur", 500, 50);
+
+        w.introduce();
+        print("Initial HP from script: " .. w.hp);
+
+        w.take_damage(150, "Dragon Fire");
+
+        auto alive = w.is_alive();
+        if (alive) {
+            print("Arthur is still standing!");
+        } else {
+            error("Arthur shouldn't be dead yet!");
+        }
+
+        w.take_damage(400, "Dark Magic");
+        if (!w.is_alive()) {
+            print("Arthur has fallen...");
+        }
+    )");
+
+    std::cout << "\n=== All Expanded Usertype Tests Passed! ===" << std::endl;
     return 0;
 
   } catch (const std::exception &e) {

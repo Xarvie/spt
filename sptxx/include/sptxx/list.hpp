@@ -18,10 +18,9 @@ template<typename T = void>
 class list {
 private:
   lua_State *L;
-  int ref; // 修复：使用 O(1) 的 registry 句柄替代 void* key
+  int ref; // 统一使用极速 O(1) 句柄
 
 public:
-  // Constructors
   list() : L(nullptr), ref(LUA_NOREF) {}
 
   list(lua_State *state, int reference) : L(state), ref(reference) {
@@ -30,22 +29,18 @@ public:
     }
   }
 
-  // Copy constructor
   list(const list &other) : L(other.L), ref(LUA_NOREF) {
     if (other.valid()) {
-      // 修复：使用高速 lua_getref API
       lua_getref(L, other.ref);
       ref = luaL_ref(L, LUA_REGISTRYINDEX);
     }
   }
 
-  // Move constructor
   list(list &&other) noexcept : L(other.L), ref(other.ref) {
     other.L = nullptr;
     other.ref = LUA_NOREF;
   }
 
-  // Assignment operators
   list &operator=(const list &other) {
     if (this != &other) {
       if (valid()) {
@@ -81,12 +76,9 @@ public:
     }
   }
 
-  // Validity check
   bool valid() const { return L != nullptr && ref != LUA_NOREF && ref != LUA_REFNIL; }
-
   explicit operator bool() const { return valid(); }
 
-  // Size and capacity
   std::size_t size() const {
     if (!valid())
       throw error("Invalid list");
@@ -114,7 +106,6 @@ public:
     return is_empty != 0;
   }
 
-  // Resize operations
   void resize(std::size_t new_size) {
     if (!valid())
       throw error("Invalid list");
@@ -131,7 +122,6 @@ public:
     lua_pop(L, 1);
   }
 
-  // Element access
   template <typename U = T>
   auto get(std::size_t index) const -> typename std::enable_if<!std::is_void_v<U>, U>::type {
     if (!valid())
@@ -170,7 +160,6 @@ public:
     lua_pop(L, 1);
   }
 
-  // Push/pop operations
   void push_back(const T &value) {
     if (!valid())
       throw error("Invalid list");
@@ -194,7 +183,6 @@ public:
     return result;
   }
 
-  // Iterator support (basic) - 保持不变
   class iterator {
   private:
     list *lst;
@@ -228,16 +216,13 @@ public:
   };
 
   iterator begin() { return iterator(this, 0); }
-
   iterator end() { return iterator(this, size()); }
 
-  // Raw Lua state access
   lua_State *lua_state() const { return L; }
 
   int registry_index() const { return ref; }
 };
 
-// Specialization for void (generic object list)
 template<>
 class list<void> {
 private:
@@ -251,5 +236,27 @@ public:
 };
 
 using object_list = list<void>;
+
+// 允许从 Lua 栈中提取 List
+template <typename T> struct getter<list<T>> {
+  static list<T> get(lua_State *L, int index) {
+    // 将指定索引的 table 拷贝到栈顶
+    lua_pushvalue(L, index);
+    // 生成 Registry 句柄 (List 析构时会自动 unref)
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    return list<T>(L, ref);
+  }
+};
+
+// 允许将 List 推送到 Lua 栈
+template <typename T> struct pusher<list<T>> {
+  static void push(lua_State *L, const list<T> &value) {
+    if (value.valid()) {
+      lua_getref(L, value.registry_index());
+    } else {
+      lua_pushnil(L);
+    }
+  }
+};
 
 } // namespace sptxx

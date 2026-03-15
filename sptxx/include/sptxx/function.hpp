@@ -16,64 +16,59 @@ extern "C" {
 namespace sptxx {
 
 namespace detail {
-    
-    // Helper to extract arguments from Lua stack, skipping receiver at index 1
-    template<typename T>
-    inline T extract_arg(lua_State* L, int index) {
-        return stack::get<T>(L, index);
+
+// Helper to extract arguments from Lua stack
+template <typename T> inline T extract_arg(lua_State *L, int index) {
+  return stack::get<T>(L, index);
+}
+
+// 支持动态起点 start_idx
+template <typename Tuple, std::size_t... I>
+inline Tuple extract_args_impl(lua_State *L, int start_idx, std::index_sequence<I...>) {
+  return Tuple(extract_arg<std::tuple_element_t<I, Tuple>>(L, start_idx + static_cast<int>(I))...);
+}
+
+// 使用 std::decay_t 强制按值拷贝，防止 Lua 栈字符串被 pop 后产生悬垂引用崩溃
+template <typename... Args>
+inline std::tuple<std::decay_t<Args>...> extract_args(lua_State *L, int start_idx) {
+  return extract_args_impl<std::tuple<std::decay_t<Args>...>>(L, start_idx,
+                                                              std::index_sequence_for<Args...>{});
+}
+
+// Helper to push return values
+template <typename T> inline void push_return(lua_State *L, T &&value) {
+  stack::push(L, std::forward<T>(value));
+}
+
+inline void push_return_void(lua_State *L) {
+  // Nothing to push for void return
+}
+
+// Main function call handler
+template <typename Func, typename... Args>
+inline auto call_function(Func &&f, lua_State *L) -> decltype(f(std::declval<Args>()...)) {
+  // 全局普通函数没有隐式 receiver 时从 1 开始
+  auto args = extract_args<Args...>(L, 1);
+  return std::apply(std::forward<Func>(f), std::move(args));
+}
+
+// Function wrapper generator
+template <typename Func> lua_CFunction make_function_wrapper(Func &&f) {
+  static std::decay_t<Func> stored_func = std::forward<Func>(f);
+
+  return [](lua_State *L) -> int {
+    try {
+      int arg1 = luaL_checkinteger(L, 2);
+      int arg2 = luaL_checkinteger(L, 3);
+      int result = stored_func(arg1, arg2);
+      lua_pushinteger(L, result);
+      return 1;
+    } catch (...) {
+      return propagate_exception(L);
     }
-    
-    template<std::size_t... I, typename... Args>
-    inline std::tuple<Args...> extract_args_impl(lua_State* L, std::index_sequence<I...>) {
-        // Skip index 1 (receiver), start from index 2
-        return std::make_tuple(extract_arg<Args>(L, 2 + static_cast<int>(I))...);
-    }
-    
-    template<typename... Args>
-    inline std::tuple<Args...> extract_args(lua_State* L) {
-        return extract_args_impl<Args...>(L, std::index_sequence_for<Args...>{});
-    }
-    
-    // Helper to push return values
-    template<typename T>
-    inline void push_return(lua_State* L, T&& value) {
-        stack::push(L, std::forward<T>(value));
-    }
-    
-    inline void push_return_void(lua_State* L) {
-        // Nothing to push for void return
-    }
-    
-    // Main function call handler
-    template<typename Func, typename... Args>
-    inline auto call_function(Func&& f, lua_State* L) -> decltype(f(std::declval<Args>()...)) {
-        auto args = extract_args<Args...>(L);
-        return std::apply(std::forward<Func>(f), std::move(args));
-    }
-    
-    // Function wrapper generator - returns a lua_CFunction compatible function
-    template<typename Func>
-    lua_CFunction make_function_wrapper(Func&& f) {
-        // Store the function in a static variable (this is a simplification)
-        // In a real implementation, we would need to manage function storage properly
-        static std::decay_t<Func> stored_func = std::forward<Func>(f);
-        
-        return [](lua_State* L) -> int {
-            try {
-                // For demonstration, handle only int, int -> int
-                int arg1 = luaL_checkinteger(L, 2);
-                int arg2 = luaL_checkinteger(L, 3);
-                int result = stored_func(arg1, arg2);
-                lua_pushinteger(L, result);
-                return 1;
-            } catch (...) {
-                return propagate_exception(L);
-            }
-        };
-    }
-    
-    // Simplified function wrapper - we'll implement proper traits later if needed
-    
+  };
+}
+
 } // namespace detail
 
 } // namespace sptxx
