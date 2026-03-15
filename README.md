@@ -418,18 +418,7 @@ LUA_API int lua_ismap(lua_State *L, int idx);
  */
 ```
 
-### 7.2 安全修复记录
-
-以下安全问题已在 2026-03-12 修复：
-
-| API                 | 问题         | 修复内容                               |
-|---------------------|------------|------------------------------------|
-| `lua_getarrayrange` | 边界检查不完整    | 添加 `end >= 0` 检查                   |
-| `lua_setarrayrange` | 缺少 GC 屏障   | 使用 `obj2arr` 宏和 `luaC_barrierback` |
-| `lua_movearray`     | 重叠区域问题     | 添加重叠检测，使用反向复制                      |
-| `lua_nextarray`     | 缺少 NULL 检查 | 添加 `cursor != NULL` 检查             |
-
-#### lua_getarrayrange (已修复)
+#### lua_getarrayrange
 
 ```c
 LUA_API void lua_getarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer end);
@@ -441,13 +430,11 @@ LUA_API void lua_getarrayrange(lua_State *L, int idx, lua_Integer start, lua_Int
  * @param end 结束索引（不包含）
  * 
  * 将元素从索引 start 到 end-1 压入栈顶
- * 
- * 安全修复：边界检查从 (start >= 0 && start <= end) 改为
- * (start >= 0 && end >= start && end >= 0)
+ *
  */
 ```
 
-#### lua_setarrayrange (已修复)
+#### lua_setarrayrange
 
 ```c
 LUA_API void lua_setarrayrange(lua_State *L, int idx, lua_Integer start, lua_Integer count);
@@ -459,13 +446,11 @@ LUA_API void lua_setarrayrange(lua_State *L, int idx, lua_Integer start, lua_Int
  * @param count 元素数量（从栈顶获取）
  * 
  * 从栈顶弹出 count 个值并设置到数组中
- * 
- * 安全修复：使用 obj2arr 宏和 luaC_barrierback 确保 GC 安全
- * 修复前直接复制 tt_ 和 value_ 字段，缺少 GC 写屏障
+ *
  */
 ```
 
-#### lua_movearray (已修复)
+#### lua_movearray
 
 ```c
 LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer from, lua_Integer to,
@@ -478,13 +463,11 @@ LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer fro
  * @param from 源起始位置
  * @param to 目标起始位置
  * @param count 元素数量
- * 
- * 安全修复：添加重叠区域检测 (memmove 语义)
- * 当 ft == tt && from < to && from + count > to 时，使用反向复制
+ *
  */
 ```
 
-#### lua_nextarray (已修复)
+#### lua_nextarray
 
 ```c
 LUA_API int lua_nextarray(lua_State *L, int idx, lua_Integer *cursor);
@@ -502,8 +485,7 @@ LUA_API int lua_nextarray(lua_State *L, int idx, lua_Integer *cursor);
  *     // 栈顶：value, 栈顶 -1: index
  *     lua_pop(L, 2);
  *   }
- * 
- * 安全修复：添加 cursor != NULL 参数验证
+ *
  */
 ```
 
@@ -654,7 +636,7 @@ vmcase(OP_SETTABLE) {
 }
 ```
 
-### 8.4 OP_TFORCALL (通用 for 循环修复)
+### 8.4 OP_TFORCALL
 
 ```c
 /* lvm.c */
