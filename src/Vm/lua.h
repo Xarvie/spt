@@ -238,6 +238,8 @@ LUA_API int(lua_geti)(lua_State *L, int idx, lua_Integer n);
 LUA_API int(lua_rawget)(lua_State *L, int idx);
 LUA_API int(lua_rawgeti)(lua_State *L, int idx, lua_Integer n);
 LUA_API int(lua_rawgetp)(lua_State *L, int idx, const void *p);
+LUA_API int (lua_getref)(lua_State *L, int ref);
+LUA_API void (lua_setref)(lua_State *L, int ref);
 
 LUA_API void(lua_createtable)(lua_State *L, int narr, int nrec);
 LUA_API void(lua_createarray)(lua_State *L, int narray);

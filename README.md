@@ -1006,6 +1006,26 @@ void luaD_callnoyield(lua_State *L, StkId func, int nResults);
 void luaD_poscall(lua_State *L, CallInfo *ci, int nres);
 ```
 
+### 12.5 Registry 引用机制变更
+
+由于拆分了map和list,Lua 原生的注册表引用机制发生了变更。
+原生的 `luaL_ref(L, LUA_REGISTRYINDEX)` 生成的整数句柄，在底层依然依赖于 Lua 的原生 Table 操作。
+
+目前修改了 `lstate.c` 和 `lapi.c`，使得 `luaL_ref` 分配的整数句柄直接映射到 `global_State` 内部维护的一个自定义连续 C 数组 (`g->registry_array`) 中。这绕过了所有的 Table 查找开销，实现了真正的 O(1) 物理内存寻址。
+
+**3. 对 C++ 侧代码的破坏性变更（Breaking Change）：**
+因为数据不再存在普通的 Lua Table 中，**不能**再用传统的表操作接口去读取它。
+- ❌ **禁止使用**：`lua_rawgeti(L, LUA_REGISTRYINDEX, ref)`
+- ❌ **禁止使用**：`lua_rawseti(L, LUA_REGISTRYINDEX, ref)`
+
+**4. 替代方案（新 API）：**
+在 `lua.h` 中暴露了专属的极速访问接口，请在所有交互代码中使用它们：
+```c
+// 获取 registry 引用
+LUA_API int lua_getref(lua_State *L, int ref);
+
+// 更新 registry 引用
+LUA_API void lua_setref(lua_State *L, int ref);
 ---
 
 ## 版本信息

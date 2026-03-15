@@ -724,6 +724,41 @@ LUA_API int lua_rawgetp(lua_State *L, int idx, const void *p) {
   return finishrawget(L, luaH_get(t, &k, s2v(L->top.p)));
 }
 
+/*
+** === 新增：专属的 Registry Array 获取接口 ===
+*/
+LUA_API int lua_getref(lua_State *L, int ref) {
+  global_State *g = G(L);
+  lu_byte tag;
+  lua_lock(L);
+  /* 只有合法的引用 ID 才去数组取值，否则压入 nil */
+  if (ref > LUA_RIDX_LAST && ref < g->registry_array.size) {
+    setobj2s(L, L->top.p, &g->registry_array.arr[ref]);
+  } else {
+    setnilvalue(s2v(L->top.p));
+  }
+  tag = ttype(s2v(L->top.p));
+  api_incr_top(L);
+  lua_unlock(L);
+  return novariant(tag);
+}
+
+/*
+** === 新增：专属的 Registry Array 设置接口 ===
+*/
+LUA_API void lua_setref(lua_State *L, int ref) {
+  global_State *g = G(L);
+  lua_lock(L);
+  api_checkpop(L, 1); /* 确保栈顶有值要设置 */
+  if (ref > LUA_RIDX_LAST && ref < g->registry_array.size) {
+    setobj(L, &g->registry_array.arr[ref], s2v(L->top.p - 1));
+    /* GC 屏障：确保写入的值能被垃圾回收器正确追踪 */
+    luaC_barrierref(L, &g->registry_array.arr[ref]);
+  }
+  L->top.p--; /* 弹出栈顶的值 */
+  lua_unlock(L);
+}
+
 LUA_API void lua_createtable(lua_State *L, int narray, int nrec) {
   Table *t;
   lua_lock(L);

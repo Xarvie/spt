@@ -35,7 +35,7 @@ int main() {
             std::cout << "ERROR: Reference is invalid (LUA_NOREF or LUA_REFNIL)!" << std::endl;
         } else {
             // Retrieve from registry
-            lua_rawgeti(lua.lua_state(), LUA_REGISTRYINDEX, ref);
+            lua_getref(lua.lua_state(), ref);
             std::cout << "Retrieved from registry" << std::endl;
             
             // Check type again
@@ -68,7 +68,7 @@ int main() {
         if (table_ref == LUA_NOREF || table_ref == LUA_REFNIL) {
             std::cout << "ERROR: Table reference is invalid!" << std::endl;
         } else {
-            lua_rawgeti(lua.lua_state(), LUA_REGISTRYINDEX, table_ref);
+            lua_getref(lua.lua_state(), table_ref);
             std::cout << "Table retrieved from registry" << std::endl;
             
             type = lua_type(lua.lua_state(), -1);
