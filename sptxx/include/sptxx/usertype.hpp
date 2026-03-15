@@ -166,16 +166,9 @@ public:
         lua_setmetatable(L, -2);
         T **ptr = static_cast<T **>(obj);
 
-        // 防御性初始化，防止异常抛出时 GC 回收野指针崩溃
         *ptr = nullptr;
 
-        // 动态适配 SPT Lua 的隐式 Receiver
-        int start_idx = 2; // 默认标准 Lua
-        if (lua_gettop(L) >= 2 && lua_isnil(L, 2)) {
-          start_idx = 3; // 跳过 VM 自动塞入的 nil receiver
-        }
-
-        auto args = detail::extract_args<Args...>(L, start_idx);
+        auto args = detail::extract_args_from_3<Args...>(L);
         *ptr = std::apply(
             [](auto &&...unpacked) { return new T(std::forward<decltype(unpacked)>(unpacked)...); },
             std::move(args));
@@ -254,7 +247,7 @@ private:
       std::memcpy(&f, lua_touserdata(L, lua_upvalueindex(1)), sizeof(f));
 
       try {
-        auto args = detail::extract_args<Args...>(L, 2);
+        auto args = detail::extract_args_from_2<Args...>(L);
 
         if constexpr (std::is_void_v<R>) {
           std::apply(

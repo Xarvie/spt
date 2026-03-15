@@ -21,15 +21,6 @@ extern "C" {
 
 namespace sptxx {
 
-namespace detail {
-inline void ensure_receiver_slot(lua_State *L) {
-  lua_pushnil(L);
-  lua_insert(L, 1);
-}
-
-inline void remove_receiver_slot(lua_State *L) { lua_remove(L, 1); }
-}
-
 template<typename Allocator = std::allocator<void>>
 class basic_state {
 private:
@@ -126,7 +117,6 @@ public:
     if (capacity > 0) {
       lua_arraysetlen(L, -1, static_cast<lua_Integer>(capacity));
     }
-    // 彻底修复：使用最新的 O(1) Registry Array 机制获取句柄
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     return list<T>(L, ref);
   }
@@ -144,7 +134,6 @@ public:
 
   template <typename T> usertype<T> new_usertype(const char *name) {
     usertype<T> ut(L, name);
-    // 直接使用底层完美的 __call 注册即可，删除掉毒瘤闭包
     ut.constructor();
     return ut;
   }
