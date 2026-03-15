@@ -731,9 +731,13 @@ LUA_API int lua_getref(lua_State *L, int ref) {
   global_State *g = G(L);
   lu_byte tag;
   lua_lock(L);
-  /* 只有合法的引用 ID 才去数组取值，否则压入 nil */
-  if (ref > LUA_RIDX_LAST && ref < g->registry_array.size) {
-    setobj2s(L, L->top.p, &g->registry_array.arr[ref]);
+  if (ref > LUA_RIDX_LAST && ref < g->registry_array.size && ref >= 0) {
+    TValue *slot = &g->registry_array.arr[ref];
+    if (tagisempty(ttype(slot))) {
+      setnilvalue(s2v(L->top.p));
+    } else {
+      setobj2s(L, L->top.p, slot);
+    }
   } else {
     setnilvalue(s2v(L->top.p));
   }
@@ -749,13 +753,13 @@ LUA_API int lua_getref(lua_State *L, int ref) {
 LUA_API void lua_setref(lua_State *L, int ref) {
   global_State *g = G(L);
   lua_lock(L);
-  api_checkpop(L, 1); /* 确保栈顶有值要设置 */
-  if (ref > LUA_RIDX_LAST && ref < g->registry_array.size) {
-    setobj(L, &g->registry_array.arr[ref], s2v(L->top.p - 1));
-    /* GC 屏障：确保写入的值能被垃圾回收器正确追踪 */
-    luaC_barrierref(L, &g->registry_array.arr[ref]);
+  api_checkpop(L, 1);
+  if (ref > LUA_RIDX_LAST && ref < g->registry_array.size && ref >= 0) {
+    TValue *slot = &g->registry_array.arr[ref];
+    setobj(L, slot, s2v(L->top.p - 1));
+    luaC_barrierref(L, slot);
   }
-  L->top.p--; /* 弹出栈顶的值 */
+  L->top.p--;
   lua_unlock(L);
 }
 
@@ -837,8 +841,9 @@ LUA_API void lua_arraysetlen(lua_State *L, int idx, lua_Integer newlen) {
   /* If shrinking, clear truncated slots (GC safety invariant) */
   {
     unsigned i;
-    for (i = cast_uint(newlen); i < t->loglen; i++)
+    for (i = cast_uint(newlen); i < t->loglen; i++) {
       *getArrTag(t, i) = LUA_VEMPTY;
+    }
   }
   t->loglen = cast_uint(newlen);
   lua_unlock(L);

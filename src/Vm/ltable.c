@@ -1159,20 +1159,21 @@ int luaH_pset(Table *t, const TValue *key, TValue *val) {
 void luaH_finishset(lua_State *L, Table *t, const TValue *key, TValue *value, int hres) {
   lua_assert(hres != HOK);
   if (hres == HNOTFOUND) {
-    /* LIST: append / grow support */
     if (t->mode == TABLE_ARRAY) {
       if (ttisinteger(key)) {
         lua_Integer k = ivalue(key);
-        /* only allow appending at loglen (i.e. one past the end) */
         if (k == (lua_Integer)t->loglen) {
-          /* need to grow capacity? */
           if (t->loglen >= t->asize) {
-            unsigned newcap = t->asize + (t->asize >> 1);
-            if (newcap < t->asize + 8)
-              newcap = t->asize + 8;
+            unsigned newcap;
+            if (t->asize == 0) {
+              newcap = 8;
+            } else if (t->asize < 1024) {
+              newcap = t->asize * 2;
+            } else {
+              newcap = t->asize + (t->asize >> 2);
+            }
             luaH_resizearray(L, t, newcap);
           }
-          /* write value and bump logical length */
           obj2arr(t, cast_uint(t->loglen), value);
           t->loglen++;
           return;
@@ -1183,7 +1184,6 @@ void luaH_finishset(lua_State *L, Table *t, const TValue *key, TValue *value, in
         luaG_runerror(L, "list indices must be integers");
       }
     }
-    /* regular table path */
     TValue aux;
     if (l_unlikely(ttisnil(key)))
       luaG_runerror(L, "table index is nil");

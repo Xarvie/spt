@@ -1333,22 +1333,20 @@ returning: /* trap already set */
 
         if (ttisarray(rb)) {
           Table *t = avalue(rb);
-          if (ttisinteger(rc)) {
+          if (l_likely(ttisinteger(rc))) {
             lua_Integer idx = ivalue(rc);
-            if (idx < 0)
-              luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
-            if (idx >= (lua_Integer)t->loglen)
-              luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx,
-                            t->loglen);
-            tag = luaH_getint(t, idx, s2v(ra));
-          } else if (ttisnumber(rc)) {
+            if (l_likely(idx >= 0 && idx < (lua_Integer)t->loglen)) {
+              tag = luaH_getint(t, idx, s2v(ra));
+            } else {
+              luaG_runerror(L, "list index out of range: index %I, length %d", (LUAI_UACINT)idx,
+                            (int)t->loglen);
+            }
+          } else if (l_unlikely(ttisnumber(rc))) {
             luaG_runerror(L, "list index must be integer, not float");
           } else {
-            /* 非数字 key（如方法名），主动返回空，放行给 finishget 触发 __index */
             tag = LUA_VEMPTY;
           }
         } else {
-          /* Map: 原有逻辑 */
           if (ttisinteger(rc)) {
             luaV_fastgeti(rb, ivalue(rc), s2v(ra), tag);
           } else {
@@ -1368,18 +1366,15 @@ returning: /* trap already set */
 
         if (ttisarray(rb)) {
           Table *t = avalue(rb);
-          /*边界检查*/
-          if (c < 0)
-            luaG_runerror(L, "list index out of range: negative index %d", c);
           lua_Unsigned ukey = l_castS2U(c);
-          if (ukey >= t->loglen)
-            luaG_runerror(L, "list index out of range: index %d >= length %u", c, t->loglen);
-
-          tag = *getArrTag(t, ukey);
-          if (tag != LUA_VEMPTY)
-            farr2val(t, ukey, tag, s2v(ra));
+          if (l_likely(c >= 0 && ukey < t->loglen)) {
+            tag = *getArrTag(t, ukey);
+            if (tag != LUA_VEMPTY)
+              farr2val(t, ukey, tag, s2v(ra));
+          } else {
+            luaG_runerror(L, "list index out of range: index %d, length %d", c, (int)t->loglen);
+          }
         } else {
-          /* Map: 原有逻辑 */
           luaV_fastgeti(rb, c, s2v(ra), tag);
         }
 
@@ -1416,37 +1411,32 @@ returning: /* trap already set */
       }
       vmcase(OP_SETTABLE) {
         StkId ra = RA(i);
-        TValue *rb = vRB(i); /* key */
-        TValue *rc = RKC(i); /* value */
+        TValue *rb = vRB(i);
+        TValue *rc = RKC(i);
         int hres;
 
         if (ttisarray(s2v(ra))) {
           Table *t = avalue(s2v(ra));
-          if (ttisinteger(rb)) {
+          if (l_likely(ttisinteger(rb))) {
             lua_Integer idx = ivalue(rb);
-            if (idx < 0)
-              luaG_runerror(L, "list index out of range: negative index %I", (LUAI_UACINT)idx);
-
-            /* 严格越界拦截：>= loglen 直接报错 */
-            if (idx >= (lua_Integer)t->loglen)
-              luaG_runerror(L, "list index out of range: index %I >= length %u", (LUAI_UACINT)idx,
-                            t->loglen);
-
-            lu_byte *tagp = getArrTag(t, cast_uint(idx));
-            if (checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp)) {
-              fval2arr(t, cast_uint(idx), tagp, rc);
-              hres = HOK;
+            if (l_likely(idx >= 0 && idx < (lua_Integer)t->loglen)) {
+              lu_byte *tagp = getArrTag(t, cast_uint(idx));
+              if (l_likely(checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp))) {
+                fval2arr(t, cast_uint(idx), tagp, rc);
+                hres = HOK;
+              } else {
+                hres = ~cast_int(idx);
+              }
             } else {
-              hres = ~cast_int(idx);
+              luaG_runerror(L, "list index out of range: index %I, length %d", (LUAI_UACINT)idx,
+                            (int)t->loglen);
             }
-          } else if (ttisnumber(rb)) {
+          } else if (l_unlikely(ttisnumber(rb))) {
             luaG_runerror(L, "list index must be integer, not float");
           } else {
-            /* 仅对非数字 key（如设置方法/属性）放行，走 __newindex */
             hres = HNOTFOUND;
           }
         } else {
-          /* Map: 原有逻辑 */
           if (ttisinteger(rb)) {
             luaV_fastseti(s2v(ra), ivalue(rb), rc, hres);
           } else {
@@ -1468,24 +1458,20 @@ returning: /* trap already set */
 
         if (ttisarray(s2v(ra))) {
           Table *t = avalue(s2v(ra));
-          if (b < 0)
-            luaG_runerror(L, "list index out of range: negative index %d", b);
-
           lua_Unsigned ukey = l_castS2U(b);
 
-          /* 严格越界拦截：>= loglen 直接报错 */
-          if (ukey >= t->loglen)
-            luaG_runerror(L, "list index out of range: index %d >= length %u", b, t->loglen);
-
-          lu_byte *tagp = getArrTag(t, ukey);
-          if (checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp)) {
-            fval2arr(t, ukey, tagp, rc);
-            hres = HOK;
+          if (l_likely(b >= 0 && ukey < t->loglen)) {
+            lu_byte *tagp = getArrTag(t, ukey);
+            if (l_likely(checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp))) {
+              fval2arr(t, ukey, tagp, rc);
+              hres = HOK;
+            } else {
+              hres = ~cast_int(ukey);
+            }
           } else {
-            hres = ~cast_int(ukey);
+            luaG_runerror(L, "list index out of range: index %d, length %d", b, (int)t->loglen);
           }
         } else {
-          /* Map: 原有逻辑 */
           luaV_fastseti(s2v(ra), b, rc, hres);
         }
 
