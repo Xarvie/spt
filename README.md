@@ -829,114 +829,9 @@ LUA_API void lua_arraysetlen(lua_State *L, int idx, lua_Integer newlen) {
 
 ---
 
-## 11. CXX API 开发指南
+## 11. 附录：关键宏和函数
 
-### 11.1 设计目标
-
-开发类似 sol2 的 C++ API，需要遵循以下原则：
-
-1. **Receiver 透明化**：自动处理 Slot 0 的 nil 垫片
-2. **类型安全映射**：C++ 类型到 Lua 类型的自动转换
-3. **异常安全**：C++ 异常到 Lua 错误的转换
-4. **RAII 管理**：自动管理 Lua 栈和引用
-
-### 11.2 推荐 API 设计
-
-```cpp
-namespace spt {
-
-class state {
-  lua_State* L;
-public:
-  // 基本操作
-  void open_libraries();
-  void do_string(const char* code);
-  void do_file(const char* filename);
-  
-  // 栈管理（自动处理 receiver）
-  template<typename... Args>
-  void push(Args&&... args);
-  
-  template<typename T>
-  T pop(int index = -1);
-  
-  // 注册函数（自动包装 receiver 垫片）
-  template<typename Func>
-  void set_function(const char* name, Func&& func);
-  
-  // 注册类
-  template<typename T>
-  usertype<T> new_usertype(const char* name);
-};
-
-// 自动包装 C++ 函数
-template<typename Func>
-auto make_function(Func&& f) {
-  return [f = std::forward<Func>(f)](lua_State* L) -> int {
-    // 1. 跳过 receiver (索引 1)
-    // 2. 从索引 2 开始提取参数
-    // 3. 调用 f
-    // 4. 将返回值压入栈
-    // 5. 返回返回值数量
-    ...
-  };
-}
-
-} // namespace spt
-```
-
-### 11.3 函数绑定示例
-
-```cpp
-// C++ 函数
-int add(int a, int b) { return a + b; }
-
-// 绑定到 Lua
-spt::state L;
-L.set_function("add", add);
-
-// Lua 调用
-// local result = add(1, 2)
-// 栈布局：[nil, 1, 2] -> [nil, 3]
-```
-
-### 11.4 类绑定示例
-
-```cpp
-// C++ 类
-class Vec2 {
-public:
-  float x, y;
-  Vec2(float x, float y) : x(x), y(y) {}
-  float length() const { return std::sqrt(x*x + y*y); }
-};
-
-// 绑定到 Lua
-spt::state L;
-auto vec2 = L.new_usertype<Vec2>("Vec2");
-vec2.set("x", &Vec2::x);
-vec2.set("y", &Vec2::y);
-vec2.set("length", &Vec2::length);
-
-// Lua 调用
-// local v = Vec2.new(3, 4)
-// print(v:length())  --> 5.0
-```
-
-### 11.5 注意事项
-
-1. **始终预留 Slot 0**：任何 C++ 函数绑定都要跳过索引 1
-2. **Receiver 命名**：
-   - 类方法：使用 `"self"` 作为 receiver 名称
-   - 普通函数：使用 `"(receiver)"` 作为 receiver 名称
-3. **错误处理**：使用 `lua_error` 或 `luaL_error` 抛出 Lua 错误
-4. **GC 安全**：长生命周期对象使用 `luaL_ref` 创建引用
-
----
-
-## 12. 附录：关键宏和函数
-
-### 12.1 类型判断宏
+### 11.1 类型判断宏
 
 ```c
 /* lobject.h */
@@ -949,7 +844,7 @@ vec2.set("length", &Vec2::length);
 #define ttisfunction(o) checktype((o), LUA_TFUNCTION)
 ```
 
-### 12.2 数组操作宏
+### 11.2 数组操作宏
 
 ```c
 /* ltable.h */
@@ -965,7 +860,7 @@ vec2.set("length", &Vec2::length);
 #define arraylimit(h) ((h)->mode == TABLE_ARRAY ? (h)->loglen : (h)->asize)
 ```
 
-### 12.3 栈操作宏
+### 11.3 栈操作宏
 
 ```c
 /* lapi.h / lvm.h */
@@ -979,7 +874,7 @@ vec2.set("length", &Vec2::length);
 #define lua_gettop(L) cast_int(L->top.p - (L->ci->func.p + 1))
 ```
 
-### 12.4 核心函数
+### 11.4 核心函数
 
 ```c
 /* ltable.c */
@@ -1006,7 +901,7 @@ void luaD_callnoyield(lua_State *L, StkId func, int nResults);
 void luaD_poscall(lua_State *L, CallInfo *ci, int nres);
 ```
 
-### 12.5 Registry 引用机制变更
+### 11.5 Registry 引用机制变更
 
 由于拆分了map和list,Lua 原生的注册表引用机制发生了变更。
 原生的 `luaL_ref(L, LUA_REGISTRYINDEX)` 生成的整数句柄，在底层依然依赖于 Lua 的原生 Table 操作。
@@ -1026,8 +921,9 @@ LUA_API int lua_getref(lua_State *L, int ref);
 
 // 更新 registry 引用
 LUA_API void lua_setref(lua_State *L, int ref);
+```
 
-### 12.6 原生 class 机制
+### 11.6 原生 class 机制
 SPT 原生类的实例化： 靠的是类表上的 __call 元方法拦截，然后去调用内部隐式的 __init。
 
 ---
