@@ -1026,6 +1026,10 @@ LUA_API int lua_getref(lua_State *L, int ref);
 
 // 更新 registry 引用
 LUA_API void lua_setref(lua_State *L, int ref);
+
+### 12.6 原生 class 机制
+SPT 原生类的实例化： 靠的是类表上的 __call 元方法拦截，然后去调用内部隐式的 __init。
+
 ---
 
 ## 版本信息

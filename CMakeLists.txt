@@ -3,7 +3,7 @@ set(CMAKE_MACOSX_RPATH OFF)
 project(spt LANGUAGES C CXX)
 include(cmake/PickSource.cmake)
 if(APPLE)
-  find_library(COREFOUNDATION_LIBRARY CoreFoundation)
+    find_library(COREFOUNDATION_LIBRARY CoreFoundation)
 endif()
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
 
@@ -32,7 +32,7 @@ endforeach()
 
 if(MSVC)
     add_compile_options(/utf-8)
-#    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    #    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else ()
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} -O3")
@@ -45,20 +45,20 @@ PickSourceFiles(
 )
 PickIncludeDirectories(${CMAKE_CURRENT_SOURCE_DIR}/src/
         includeDirs
-        )
+)
 add_subdirectory(runtime)
 
 add_library(sptscript_library_static STATIC ${sourceFiles})
 target_include_directories(sptscript_library_static PUBLIC ${includeDirs}
-                           ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
-                           ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
 )
 target_link_libraries(sptscript_library_static PUBLIC antlr4_static)
 add_library(sptscript_library_shared SHARED ${sourceFiles})
 
 target_include_directories(sptscript_library_shared PUBLIC ${includeDirs}
-                           ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
-                           ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src/
 )
 target_link_libraries(sptscript_library_shared PRIVATE antlr4_shared)
 target_compile_definitions(sptscript_library_shared PUBLIC SPT_BUILD_AS_DLL)
@@ -99,4 +99,37 @@ if (BUILD_TESTS)
 
     message(STATUS "Regression test enabled: regression_test")
     message(STATUS "C API test enabled: TestCApi")
+
+    # ====================================================================
+    # 新增：集成 sptxx 的 C++ 包装层测试
+    # ====================================================================
+    # 自动搜索 sptxx 目录下所有的 test_*.cpp 文件
+    file(GLOB SPTXX_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/sptxx/test_*.cpp")
+
+    foreach (TEST_SRC ${SPTXX_TEST_SOURCES})
+        # 提取文件名作为目标名称 (例如 test_registry_ref)
+        get_filename_component(TEST_NAME ${TEST_SRC} NAME_WE)
+
+        # 加上 sptxx_ 前缀以避免与主项目重名冲突
+        set(TARGET_NAME "sptxx_${TEST_NAME}")
+
+        add_executable(${TARGET_NAME} ${TEST_SRC})
+
+        # 包含 sptxx 自己的头文件，以及它依赖的 runtime 核心头文件
+        target_include_directories(${TARGET_NAME} PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/sptxx/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/Vm
+                ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src
+        )
+
+        # 强制链接刚刚编译出来的静态核心库！这样就能找到你新增的 lua_getref 了
+        target_link_libraries(${TARGET_NAME} PRIVATE sptscript_library_static)
+
+        # 注册到 CTest，可以通过 ctest 命令批量跑
+        add_test(NAME ${TARGET_NAME}
+                COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${TARGET_NAME}
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    endforeach ()
+
+    message(STATUS "sptxx tests integration enabled.")
 endif ()

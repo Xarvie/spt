@@ -146,17 +146,14 @@ public:
     // Create list and map
     template<typename T = void>
     auto create_list(size_t capacity = 0) {
-        lua_createarray(L, static_cast<int>(capacity));
-        if (capacity > 0) {
-            // Set logical length to capacity so we can write to indices [0, capacity-1]
-            lua_arraysetlen(L, -1, static_cast<lua_Integer>(capacity));
-        }
-        // Store in registry using a unique light userdata key
-        void* key = lua_newuserdatauv(L, 0, 0); // create a unique key
-        lua_pushvalue(L, -2); // push the array (now at -2 because of the new key)
-        lua_rawsetp(L, LUA_REGISTRYINDEX, key); // registry[key] = array
-        lua_pop(L, 1); // pop the array, leaving the key on stack
-        return list<T>(L, key);
+      lua_createarray(L, static_cast<int>(capacity));
+      if (capacity > 0) {
+        // Set logical length to capacity
+        lua_arraysetlen(L, -1, static_cast<lua_Integer>(capacity));
+      }
+      // 修复：废弃 lua_rawsetp 和 userdata key，改用标准的 ref 获取 O(1) 句柄
+      int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+      return list<T>(L, ref);
     }
     
     template<typename T = void>

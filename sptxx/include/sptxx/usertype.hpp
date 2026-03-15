@@ -218,25 +218,48 @@ public:
     
     template<typename... Args>
     void constructor() {
-        auto ctor_wrapper = [](lua_State* L) -> int {
-            const char* name = lua_tostring(L, lua_upvalueindex(1));
-            try {
-                void* obj = lua_newuserdatauv(L, sizeof(T*), 0);
-                luaL_getmetatable(L, name);
-                lua_setmetatable(L, -2);
-                T** ptr = static_cast<T**>(obj);
-                *ptr = new T();
-                return 1;
-            } catch (...) {
-                return detail::propagate_exception(L);
-            }
-        };
-        
-        luaL_getmetatable(L, type_name.c_str());
-        lua_pushstring(L, type_name.c_str());
-        lua_pushcclosure(L, ctor_wrapper, 1);
-        lua_setfield(L, -2, "new");
-        lua_pop(L, 1);
+      auto ctor_wrapper = [](lua_State *L) -> int {
+        // 注意：__call 触发时，传进来的第一个参数（索引1）是被调用的表本身（即 Person 类表）
+        // 如果你后续要解析真实参数，请记得从索引 2 开始取！
+
+        const char *name = lua_tostring(L, lua_upvalueindex(1));
+        try {
+          void *obj = lua_newuserdatauv(L, sizeof(T *), 0);
+          luaL_getmetatable(L, name);
+          lua_setmetatable(L, -2);
+          T **ptr = static_cast<T **>(obj);
+          *ptr = new T(); // TODO: 后续这里可以扩展解析 Args...
+          return 1;
+        } catch (...) {
+          return detail::propagate_exception(L);
+        }
+      };
+
+      // 1. 获取或创建全局的类表 (例如 _G["Person"])
+      if (lua_getglobal(L, type_name.c_str()) != LUA_TTABLE) {
+        lua_pop(L, 1);   // 如果不是 table，弹掉
+        lua_newtable(L); // 创建一个新的全局类表
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, type_name.c_str()); // 注册到全局环境
+      }
+      // 当前栈顶: [ClassTable]
+
+      // 2. 获取或创建这个全局类表的 Metatable
+      if (!lua_getmetatable(L, -1)) {
+        lua_newtable(L); // 如果没有元表，建一个
+      }
+      // 当前栈顶: [ClassTable, ClassMetaTable]
+
+      // 3. 将 C++ 构造函数包装器绑定到 __call 元方法上
+      lua_pushstring(L, type_name.c_str()); // upvalue 1: 类名
+      lua_pushcclosure(L, ctor_wrapper, 1);
+      lua_setfield(L, -2, "__call");
+
+      // 4. 将元表设置给类表
+      lua_setmetatable(L, -2);
+
+      // 清理栈，弹出 ClassTable
+      lua_pop(L, 1);
     }
     
 private:
