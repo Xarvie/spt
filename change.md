@@ -1,5 +1,5 @@
 vm修改自2026年发布的官方的lua5.5
-
+spt语言本质是lua，对lua做出了一些改动：
 统一调用约定：所有函数 Slot 0 强制预留为 Receiver。
 
 闭包 this 穿透 & 库适配：类方法 Slot 0 命名 "self"，普通函数/闭包命名为 "(receiver)"，实现了闭包 this 穿透。修改了 C 库（如
