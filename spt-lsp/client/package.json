@@ -1,0 +1,89 @@
+{
+  "name": "sptscript-lsp-client",
+  "description": "VS Code client for the sptScript Language Server",
+  "version": "0.0.1",
+  "publisher": "yourPublisherName",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/sptscript-lsp.git"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "activationEvents": [
+    "onLanguage:sptscript"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "sptscript",
+        "aliases": [
+          "sptScript",
+          "sptscript"
+        ],
+        "extensions": [
+          ".spt"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "sptScript LSP",
+      "properties": {
+        "sptscript.lsp.serverPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "指定 sptScript LSP 服务器可执行文件的绝对路径。如果留空，插件将尝试在默认位置查找。",
+          "scope": "resource"
+        },
+        "sptscript.lsp.enableLog": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用LSP通信日志记录，用于调试。日志将记录所有JSON-RPC消息。",
+          "scope": "resource"
+        },
+        "sptscript.lsp.logPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "日志文件路径。如果启用日志但未指定路径，默认使用 lsp_trace.log。",
+          "scope": "resource"
+        }
+      }
+    },
+    "snippets": [
+      {
+        "language": "sptscript",
+        "path": "./snippets/sptscript.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sptscript",
+        "scopeName": "source.sptscript",
+        "path": "./syntaxes/sptscript.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "@types/vscode": "^1.107.0",
+    "typescript": "^5.x.x",
+    "vscode": "^1.1.37"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

@@ -1,0 +1,35 @@
+{
+    "compilerOptions": {
+      // --- 输出选项 ---
+      "module": "commonjs", // VS Code 扩展需要使用 CommonJS 模块系统
+      "target": "es2020",   // 编译目标 ECMAScript 版本 (ES2020 是比较现代且兼容的选择)
+      "outDir": "out",      // 指定编译后 JS 文件的输出目录 (与 package.json 中的 "main" 对应)
+      "lib": [              // 包含的库定义 (根据 target 通常会自动包含)
+        "es2020"
+      ],
+      "sourceMap": true,    // 生成 .js.map 文件，方便调试 TypeScript 源码
+  
+      // --- 编译选项 ---
+      "rootDir": "src",     // 指定包含 TypeScript 源文件的根目录
+      "strict": true,       // 启用所有严格类型检查选项 (强烈推荐)
+      // "noImplicitAny": true,        // (包含在 strict 中) 不允许隐式的 any 类型
+      // "noImplicitThis": true,       // (包含在 strict 中) 不允许不明确的 this
+      // "strictNullChecks": true,     // (包含在 strict 中) 严格空检查
+  
+      // --- 模块解析 ---
+      "moduleResolution": "node", // 使用 Node.js 风格的模块解析
+      "esModuleInterop": true,    // 允许 import default * as ... 语法，提高兼容性
+      "resolveJsonModule": true, // 允许导入 .json 文件
+  
+      // --- 其他 ---
+      "skipLibCheck": true,     // 跳过对所有声明文件 (.d.ts) 的类型检查 (可以加快编译速度)
+      "forceConsistentCasingInFileNames": true // 强制文件名大小写一致
+    },
+    "include": [ // 指定需要编译的文件/目录
+      "src/**/*" // 编译 src 目录下的所有 TypeScript 文件
+    ],
+    "exclude": [ // 指定不需要编译的目录
+      "node_modules",
+      ".vscode-test" // VS Code 测试运行器使用的目录
+    ]
+  }

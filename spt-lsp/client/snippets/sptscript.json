@@ -1,0 +1,65 @@
+{
+    "If Statement": {
+      "prefix": "if",
+      "body": [
+        "if ($1) {",
+        "\t$0",
+        "}"
+      ],
+      "description": "插入一个 if 语句块"
+    },
+    "Else If Statement": {
+      "prefix": "elseif",
+      "body": [
+        "else if ($1) {",
+        "\t$0",
+        "}"
+      ],
+      "description": "插入一个 else if 语句块"
+     },
+     "Else Statement": {
+       "prefix": "else",
+       "body": [
+         "else {",
+         "\t$0",
+         "}"
+       ],
+       "description": "插入一个 else 语句块"
+     },
+    "For Each Loop": {
+      "prefix": "for",
+      "body": [
+        "for (auto $1 : $2) {",
+        "\t$0",
+        "}"
+      ],
+      "description": "插入一个 for-each 循环块"
+    },
+    "While Loop": {
+       "prefix": "while",
+       "body": [
+         "while ($1) {",
+         "\t$0",
+         "}"
+       ],
+       "description": "插入一个 while 循环块"
+     },
+     "Function Definition": {
+       "prefix": "func",
+       "body": [
+         "void $1($2) {",
+         "\t$0",
+         "}"
+       ],
+       "description": "插入一个函数定义块"
+     },
+     "Class Definition": {
+       "prefix": "class",
+       "body": [
+         "class $1 {",
+         "\t$0",
+         "}"
+       ],
+       "description": "插入一个类定义块"
+     }
+  }

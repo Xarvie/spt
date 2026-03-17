@@ -1,0 +1,21 @@
+//a.spt
+int add(int a, int b){
+    return a + b;
+}
+
+class A{
+    string abc;
+
+    void __init(string a){
+        this.abc = a;
+    }
+
+}
+int main(){
+    int a = 12;
+    sting ab = "abc";
+    auto cc = "abcd";
+    auto a  = new A("a");
+
+    return 0;
+}
