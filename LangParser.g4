@@ -286,9 +286,9 @@ mapEntry
     | FLOAT_LITERAL COL expression   #mapEntryFloatKey     // 1.5: value
     ;
 
-/** 'new' 表达式: new ClassName(args?) - 强制带括号 */
+/** 'new' 表达式: 支持 new ClassName(), new Module.ClassName(), new Module.ClassName */
 newExp
-    : NEW qualifiedIdentifier (OP arguments? CP) #newExpressionDef
+    : NEW qualifiedIdentifier (OP arguments? CP)? #newExpressionDef
     ;
 
 // --- 控制流语句 ---
