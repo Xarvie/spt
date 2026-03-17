@@ -1,7 +1,0 @@
-// test_import_debug.spt - 测试模块导入
-
-print("Testing require...");
-
-auto m = require("math_utils");
-print("require returned something");
-print(type(m));

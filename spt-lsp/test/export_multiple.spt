@@ -1,0 +1,11 @@
+// 导出多个变量和函数
+export number PI = 3.14159;
+export number E = 2.71828;
+
+export number add(number a, number b) {
+    return a + b;
+}
+
+export number multiply(number a, number b) {
+    return a * b;
+}

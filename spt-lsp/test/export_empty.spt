@@ -1,0 +1,6 @@
+// 测试空导出模块
+auto internalValue = 42;
+
+string internalFunction() {
+    return "internal";
+}

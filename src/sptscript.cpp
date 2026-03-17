@@ -29,9 +29,12 @@ int runScript(const char *path) {
     return -1;
   }
 
-  std::filesystem::path scriptPath(path);
+  std::filesystem::path scriptPath = std::filesystem::absolute(path);
   std::string filename = scriptPath.filename().string();
   std::string scriptDir = scriptPath.parent_path().string();
+
+  fprintf(stderr, "DEBUG runScript: absolute path='%s', scriptDir='%s'\n",
+          scriptPath.string().c_str(), scriptDir.c_str());
 
   AstNode *ast = loadAst(source.c_str(), filename.c_str());
   if (!ast) {

@@ -567,19 +567,23 @@ static int searcher_preload(lua_State *L) {
 static void findloader(lua_State *L, const char *name) {
   int i;
   luaL_Buffer msg; /* to build error message */
-  /* push 'package.searchers' to index 3 in the stack */
-  if (l_unlikely(lua_getfield(L, lua_upvalueindex(1), "searchers") != LUA_TTABLE))
+
+  /* 将 'package.searchers' 压栈 (SPT Lua: could be TABLE or ARRAY) */
+  int searchers_type = lua_getfield(L, lua_upvalueindex(1), "searchers");
+  if (l_unlikely(searchers_type != LUA_TTABLE && searchers_type != LUA_TARRAY))
     luaL_error(L, "'package.searchers' must be a table");
+
+  /* 【修复点 1】: 动态保存 searchers 表的绝对栈索引，而不是硬编码 3 */
+  int searchers_idx = lua_gettop(L);
+
   luaL_buffinit(L, &msg);
   luaL_addstring(&msg, "\n\t"); /* error-message prefix for first message */
-  /*  iterate over available searchers to find a loader */
-  for (i = 1;; i++) {
-    if (l_unlikely(lua_rawgeti(L, 3, i) == LUA_TNIL)) { /* no more searchers? */
-      lua_pop(L, 1);                                    /* remove nil */
-      luaL_buffsub(&msg, 2);                            /* remove last prefix */
-      luaL_pushresult(&msg);                            /* create error message */
-      luaL_error(L, "module '%s' not found:%s", name, lua_tostring(L, -1));
-    }
+
+  /* iterate over available searchers to find a loader (SPT Lua uses 0-based indexing) */
+  lua_Integer searchers_count = lua_arraylen(L, searchers_idx);
+  for (i = 0; i < (int)searchers_count; i++) {
+    /* 使用动态获取的 searchers_idx */
+    lua_rawgeti(L, searchers_idx, i);
     lua_pushnil(L); /* receiver for searcher */
     lua_pushstring(L, name);
     lua_call(L, 2, 2);              /* call it with receiver + name */
@@ -592,6 +596,10 @@ static void findloader(lua_State *L, const char *name) {
     } else                          /* no error message */
       lua_pop(L, 2);                /* remove both returns */
   }
+  /* No searcher found a loader */
+  luaL_buffsub(&msg, 2); /* remove last prefix */
+  luaL_pushresult(&msg); /* create error message */
+  luaL_error(L, "module '%s' not found:%s", name, lua_tostring(L, -1));
 }
 
 /* ll_require - receiver is arg1, name is arg2 */
@@ -602,14 +610,20 @@ static int ll_require(lua_State *L) {
   lua_getfield(L, 3, name); /* LOADED[name] */
   if (lua_toboolean(L, -1)) /* is it there? */
     return 1;               /* package is already loaded */
+
   /* else must load package */
   lua_pop(L, 1); /* remove 'getfield' result */
   findloader(L, name);
   lua_rotate(L, -2, 1); /* function <-> loader data */
-  lua_pushvalue(L, 2);  /* name is 1st argument to module loader */
-  lua_pushvalue(L, -3); /* loader data is 2nd argument */
-  /* stack: ...; loader data; loader function; mod. name; loader data */
-  lua_call(L, 2, 1); /* run loader to load module */
+
+  /* 【修复点 2】: 补齐加载模块时的 Receiver 参数 */
+  lua_pushnil(L);       /* 压入 nil 作为 receiver (Slot 0) */
+  lua_pushvalue(L, 2);  /* 压入模块名作为第 1 个业务参数 */
+  lua_pushvalue(L, -4); /* 压入 loader data 作为第 2 个业务参数 (原位置被垫高了) */
+  /* 当前栈: ...; loader data; loader function; nil; mod. name; loader data */
+
+  lua_call(L, 3, 1); /* 运行加载器，消耗 3 个参数 */
+
   /* stack: ...; loader data; result from loader */
   if (!lua_isnil(L, -1))      /* non-nil return? */
     lua_setfield(L, 3, name); /* LOADED[name] = returned value */
@@ -642,13 +656,17 @@ static void createsearcherstable(lua_State *L) {
   static const lua_CFunction searchers[] = {searcher_preload, searcher_Lua, searcher_C,
                                             searcher_Croot, NULL};
   int i;
-  /* create 'searchers' table */
-  lua_createtable(L, sizeof(searchers) / sizeof(searchers[0]) - 1, 0);
+  int n = sizeof(searchers) / sizeof(searchers[0]) - 1;
+  /* create 'searchers' table as array (list) */
+  lua_createarray(L, n);
+  /* Set loglen so that seti can write into [0, n-1] (SPT Lua array is 0-based) */
+  if (n > 0)
+    lua_arraysetlen(L, -1, n);
   /* fill it with predefined searchers */
   for (i = 0; searchers[i] != NULL; i++) {
     lua_pushvalue(L, -2); /* set 'package' as upvalue for all searchers */
     lua_pushcclosure(L, searchers[i], 1);
-    lua_rawseti(L, -2, i + 1);
+    lua_rawseti(L, -2, i); /* 0-based index for SPT Lua */
   }
   lua_setfield(L, -2, "searchers"); /* put it in field 'searchers' */
 }

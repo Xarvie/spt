@@ -1,0 +1,7 @@
+// 测试仅导入函数
+import * as m from "export_only_functions";
+
+print("funcA = " .. m.funcA());
+print("funcB = " .. m.funcB());
+print("funcC = " .. m.funcC());
+print("Only functions import test passed!");

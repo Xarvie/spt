@@ -1,0 +1,5 @@
+// 测试导入空模块
+import * as m from "export_empty";
+
+print("Empty module imported, type = " .. typeof(m));
+print("Empty import test passed!");

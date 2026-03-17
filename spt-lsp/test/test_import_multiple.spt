@@ -1,0 +1,8 @@
+// 测试导入多个导出项
+import * as m from "export_multiple";
+
+print("PI = " .. tostring(m.PI));
+print("E = " .. tostring(m.E));
+print("add(10, 20) = " .. tostring(m.add(10, 20)));
+print("multiply(5, 6) = " .. tostring(m.multiply(5, 6)));
+print("Multiple import test passed!");

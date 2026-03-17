@@ -1,1 +1,6 @@
-import * as math from "math_utils";
+// 测试命名导入
+import { PI, add } from "export_multiple";
+
+print("PI = " .. tostring(PI));
+print("add(1, 2) = " .. tostring(add(1, 2)));
+print("Named import test passed!");
