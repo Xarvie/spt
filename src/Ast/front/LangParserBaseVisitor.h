@@ -3,15 +3,18 @@
 
 #pragma once
 
-#include "LangParserVisitor.h"
+
 #include "antlr4-runtime.h"
+#include "LangParserVisitor.h"
+
 
 /**
  * This class provides an empty implementation of LangParserVisitor, which can be
  * extended to create a visitor which only needs to handle a subset of the available methods.
  */
-class LangParserBaseVisitor : public LangParserVisitor {
+class  LangParserBaseVisitor : public LangParserVisitor {
 public:
+
   virtual std::any visitCompilationUnit(LangParser::CompilationUnitContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -116,13 +119,11 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitVariableDeclarationDef(LangParser::VariableDeclarationDefContext *ctx) override {
+  virtual std::any visitVariableDeclarationDef(LangParser::VariableDeclarationDefContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitMutiVariableDeclarationDef(LangParser::MutiVariableDeclarationDefContext *ctx) override {
+  virtual std::any visitMutiVariableDeclarationDef(LangParser::MutiVariableDeclarationDefContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -130,13 +131,11 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitFunctionDeclarationDef(LangParser::FunctionDeclarationDefContext *ctx) override {
+  virtual std::any visitFunctionDeclarationDef(LangParser::FunctionDeclarationDefContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any visitMultiReturnFunctionDeclarationDef(
-      LangParser::MultiReturnFunctionDeclarationDefContext *ctx) override {
+  virtual std::any visitMultiReturnFunctionDeclarationDef(LangParser::MultiReturnFunctionDeclarationDefContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -152,8 +151,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitMultiReturnClassMethodMember(LangParser::MultiReturnClassMethodMemberContext *ctx) override {
+  virtual std::any visitMultiReturnClassMethodMember(LangParser::MultiReturnClassMethodMemberContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -177,8 +175,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitTypeQualifiedIdentifier(LangParser::TypeQualifiedIdentifierContext *ctx) override {
+  virtual std::any visitTypeQualifiedIdentifier(LangParser::TypeQualifiedIdentifierContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -210,8 +207,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitLogicalAndExpression(LangParser::LogicalAndExpressionContext *ctx) override {
+  virtual std::any visitLogicalAndExpression(LangParser::LogicalAndExpressionContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -219,13 +215,11 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitBitwiseXorExpression(LangParser::BitwiseXorExpressionContext *ctx) override {
+  virtual std::any visitBitwiseXorExpression(LangParser::BitwiseXorExpressionContext *ctx) override {
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitBitwiseAndExpression(LangParser::BitwiseAndExpressionContext *ctx) override {
+  virtual std::any visitBitwiseAndExpression(LangParser::BitwiseAndExpressionContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -237,8 +231,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitComparisonExpression(LangParser::ComparisonExpressionContext *ctx) override {
+  virtual std::any visitComparisonExpression(LangParser::ComparisonExpressionContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -398,8 +391,7 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any
-  visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) override {
+  virtual std::any visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -422,4 +414,7 @@ public:
   virtual std::any visitArguments(LangParser::ArgumentsContext *ctx) override {
     return visitChildren(ctx);
   }
+
+
 };
+
