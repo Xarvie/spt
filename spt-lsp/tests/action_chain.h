@@ -144,7 +144,7 @@ public:
     ActionChain& testCompletion(uint32_t line, uint32_t column, 
                                  std::function<void(TestContext&, const lang::lsp::CompletionResult&)> validator) {
         actions_.push_back([line, column, validator](TestContext& ctx) {
-            lang::lsp::Position pos{line, column};
+            lang::lsp::Position pos{line + 1, column + 1};
             auto result = ctx.service.completion(ctx.currentFile, pos);
             ctx.logMessage("COMPLETION: line " + std::to_string(line) + ", col " + std::to_string(column) + 
                           " -> " + std::to_string(result.items.size()) + " items");
@@ -158,8 +158,8 @@ public:
     ActionChain& testHover(uint32_t line, uint32_t column,
                           std::function<void(TestContext&, const lang::lsp::HoverResult&)> validator) {
         actions_.push_back([line, column, validator](TestContext& ctx) {
-            lang::lsp::Position pos{line, column};
-            auto result = ctx.service.hover(ctx.currentFile, pos);
+        lang::lsp::Position pos{line + 1, column + 1};
+        auto result = ctx.service.hover(ctx.currentFile, pos);
             ctx.logMessage("HOVER: line " + std::to_string(line) + ", col " + std::to_string(column));
             if (validator) {
                 validator(ctx, result);
@@ -171,7 +171,7 @@ public:
     ActionChain& testDefinition(uint32_t line, uint32_t column,
                                std::function<void(TestContext&, const std::vector<lang::lsp::LocationLink>&)> validator) {
         actions_.push_back([line, column, validator](TestContext& ctx) {
-            lang::lsp::Position pos{line, column};
+            lang::lsp::Position pos{line + 1, column + 1};
             auto result = ctx.service.definition(ctx.currentFile, pos);
             ctx.logMessage("DEFINITION: line " + std::to_string(line) + ", col " + std::to_string(column) +
                           " -> " + std::to_string(result.size()) + " locations");

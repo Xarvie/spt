@@ -2605,6 +2605,15 @@ extern "C" LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, con
   lua_assert(!funcstate.prev && funcstate.nups == 1 && !ctx.fs);
   lua_assert(dyd->actvar.n == 0 && dyd->gt.n == 0 && dyd->label.n == 0);
 
+  luaF_initupvals(L, cl);
+  if (cl->nupvalues >= 1) {
+    TValue gt;
+    Table *registry = hvalue(&G(L)->l_registry);
+    luaH_getint(L, registry, LUA_RIDX_GLOBALS, &gt);
+    setobj(L, cl->upvals[0]->v.p, &gt);
+    luaC_barrier(L, cl->upvals[0], &gt);
+  }
+
   return cl;
 }
 

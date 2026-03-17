@@ -80,8 +80,7 @@
   "devDependencies": {
     "@types/node": "^18.19.130",
     "@types/vscode": "^1.107.0",
-    "typescript": "^5.x.x",
-    "vscode": "^1.1.37"
+    "typescript": "^5.x.x"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
