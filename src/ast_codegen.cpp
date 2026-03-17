@@ -2284,62 +2284,87 @@ static void compile_import_namespace(CompileCtx *C, ImportNamespaceNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
-  /* local alias = require("modulePath") */
-  TString *alias = mkstr(C, n->alias);
-  ast_new_localvar(C, alias);
+  fprintf(stderr, "DEBUG compile_import_namespace: START, freereg=%d, nactvar=%d\n", fs->freereg,
+          fs->nactvar);
 
+  /* Compile require("modulePath") first, then store result to local variable */
+
+  /* 1. Get require function */
   expdesc req;
   ast_singlevar(C, "require", &req);
+  fprintf(stderr, "DEBUG: require expdesc k=%d\n", req.k);
   luaK_exp2nextreg(fs, &req);
+  fprintf(stderr, "DEBUG: after exp2nextreg, req.u.info=%d, freereg=%d\n", req.u.info, fs->freereg);
 
-  /* Push _ENV as Receiver (Scenario A: global function call) */
-  expdesc env;
-  ast_buildvar(C, C->envn, &env);
-  luaK_exp2nextreg(fs, &env);
+  /* 2. Push nil as Receiver (global function call pattern) */
+  expdesc recv;
+  init_exp(&recv, VNIL, 0);
+  luaK_exp2nextreg(fs, &recv);
+  fprintf(stderr, "DEBUG: after recv, freereg=%d\n", fs->freereg);
 
+  /* 3. Push module path argument */
   expdesc arg;
   arg.f = arg.t = NO_JUMP;
   arg.k = VKSTR;
   arg.u.strval = mkstr(C, n->modulePath);
   luaK_exp2nextreg(fs, &arg);
+  fprintf(stderr, "DEBUG: after arg, freereg=%d\n", fs->freereg);
 
-  /* nparams = 2 (Receiver + modulePath), B = 3 */
+  /* 4. Emit OP_CALL: require(nil, "modulePath")
+     B = 3 (function + receiver + arg = 3 items)
+     C = 2 (want 1 result) */
   int base = req.u.info;
+  fprintf(stderr, "DEBUG: base=%d\n", base);
   init_exp(&req, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
   luaK_fixline(fs, C->linenumber);
-  fs->freereg = cast_byte(base + 1);
+  fs->freereg = cast_byte(base + 1); /* call returns result at base */
+  fprintf(stderr, "DEBUG: after CALL, freereg=%d\n", fs->freereg);
 
+  /* 5. Now create local variable and store result */
+  TString *alias = mkstr(C, n->alias);
+  ast_new_localvar(C, alias);
+  fprintf(stderr, "DEBUG: after new_localvar, nactvar=%d\n", fs->nactvar);
+
+  /* The VCALL result is already at 'base', which becomes the local variable */
   ast_adjustlocalvars(C, 1);
+  fprintf(stderr, "DEBUG: after adjustlocalvars, nactvar=%d, freereg=%d\n", fs->nactvar,
+          fs->freereg);
 }
 
 static void compile_import_named(CompileCtx *C, ImportNamedNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
-  /* local __tmp = require("modulePath") */
-  TString *tmpname = mkstr(C, "(import tmp)");
-  ast_new_localvar(C, tmpname);
+  /* Compile require("modulePath") first, then store result to temp variable */
 
+  /* 1. Get require function */
   expdesc req;
   ast_singlevar(C, "require", &req);
   luaK_exp2nextreg(fs, &req);
 
-  /* Push _ENV as Receiver (Scenario A: global function call) */
-  expdesc env;
-  ast_buildvar(C, C->envn, &env);
-  luaK_exp2nextreg(fs, &env);
+  /* 2. Push nil as Receiver (global function call pattern) */
+  expdesc recv;
+  init_exp(&recv, VNIL, 0);
+  luaK_exp2nextreg(fs, &recv);
 
+  /* 3. Push module path argument */
   expdesc arg;
   arg.f = arg.t = NO_JUMP;
   arg.k = VKSTR;
   arg.u.strval = mkstr(C, n->modulePath);
   luaK_exp2nextreg(fs, &arg);
 
-  /* nparams = 2 (Receiver + modulePath), B = 3 */
+  /* 4. Emit OP_CALL: require(nil, "modulePath")
+     B = 3 (function + receiver + arg = 3 items)
+     C = 2 (want 1 result) */
   int base = req.u.info;
   init_exp(&req, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
   luaK_fixline(fs, C->linenumber);
   fs->freereg = cast_byte(base + 1);
+
+  /* 5. Create temp variable for module result */
+  TString *tmpname = mkstr(C, "(import tmp)");
+  ast_new_localvar(C, tmpname);
   ast_adjustlocalvars(C, 1);
 
   /* For each specifier: local name = __tmp.originalName */
@@ -2564,9 +2589,61 @@ static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
     compile_error(C, "root AST node must be a BlockNode");
   }
 
+  /* Collect exported declarations */
+  std::vector<std::string> exported_names;
+  for (auto *stmt : block->statements) {
+    if (auto *decl = dynamic_cast<Declaration *>(stmt)) {
+      if (decl->isModuleRoot) {
+        if (auto *varDecl = dynamic_cast<VariableDeclNode *>(stmt)) {
+          if (varDecl->isExported) {
+            exported_names.push_back(varDecl->name);
+          }
+        } else if (auto *funcDecl = dynamic_cast<FunctionDeclNode *>(stmt)) {
+          if (funcDecl->isExported) {
+            exported_names.push_back(funcDecl->name);
+          }
+        } else if (auto *classDecl = dynamic_cast<ClassDeclNode *>(stmt)) {
+          if (classDecl->isExported) {
+            exported_names.push_back(classDecl->name);
+          }
+        }
+      }
+    }
+  }
+
   for (auto *stmt : block->statements) {
     compile_statement(C, stmt);
     C->fs->freereg = luaY_nvarstack(C->fs);
+  }
+
+  /* If there are exported names, return an exports table */
+  if (!exported_names.empty()) {
+    int exports_reg = fs->freereg;
+    luaK_codeABC(fs, OP_NEWTABLE, exports_reg, 0, 0);
+    fs->freereg++;
+
+    for (const auto &name : exported_names) {
+      expdesc key, val;
+      key.f = key.t = NO_JUMP;
+      key.k = VKSTR;
+      key.u.strval = mkstr(C, name.c_str());
+
+      ast_singlevar(C, name.c_str(), &val);
+
+      /* Use luaK_indexed to set up the table indexing, then store the value */
+      expdesc table_exp;
+      table_exp.k = VNONRELOC;
+      table_exp.u.info = exports_reg;
+      table_exp.f = table_exp.t = NO_JUMP;
+
+      /* Index the table with the key */
+      luaK_indexed(fs, &table_exp, &key);
+
+      /* Store the value into the indexed position */
+      luaK_storevar(fs, &table_exp, &val);
+    }
+
+    luaK_codeABC(fs, OP_RETURN, exports_reg, 2, 0);
   }
 
   ast_close_func(C);

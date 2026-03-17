@@ -1,0 +1,7 @@
+// test_import.spt - 测试模块导入
+
+import * as math from "math_utils";
+
+print(math.add(10, 20));
+print(math.mul(5, 6));
+print(math.PI);

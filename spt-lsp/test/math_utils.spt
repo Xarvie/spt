@@ -1,0 +1,11 @@
+// math_utils.spt - 测试模块导出
+
+export int add(int a, int b) {
+    return a + b;
+}
+
+export int mul(int a, int b) {
+    return a * b;
+}
+
+export int PI = 314;

@@ -10,6 +10,7 @@ extern "C" {
 #include "Vm/lauxlib.h"
 #include "Vm/lua.h"
 #include "Vm/lualib.h"
+#include "Vm/spt_module.h"
 }
 
 int runScript(const char *path) {
@@ -28,7 +29,9 @@ int runScript(const char *path) {
     return -1;
   }
 
-  std::string filename = std::filesystem::path(path).filename().string();
+  std::filesystem::path scriptPath(path);
+  std::string filename = scriptPath.filename().string();
+  std::string scriptDir = scriptPath.parent_path().string();
 
   AstNode *ast = loadAst(source.c_str(), filename.c_str());
   if (!ast) {
@@ -44,6 +47,7 @@ int runScript(const char *path) {
   }
 
   luaL_openlibs(L);
+  spt_register_module_loader(L, scriptDir.c_str());
 
   Dyndata dyd = {0};
 
