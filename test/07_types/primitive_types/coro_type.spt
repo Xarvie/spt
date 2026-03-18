@@ -3,9 +3,9 @@
 // 描述: 测试coro类型声明
 
 coro c = null;
-assert(typeof(c) == "nil", "typeof(null) should be 'nil'");
+assert(typeof(c) == "null", "typeof(null) should be 'null'");
 
 coro co;
-assert(typeof(co) == "nil", "typeof(uninitialized coro) should be 'nil'");
+assert(typeof(co) == "null", "typeof(uninitialized coro) should be 'null'");
 
 print("coro_type tests passed!");

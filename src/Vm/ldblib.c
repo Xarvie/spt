@@ -53,7 +53,7 @@ static int db_getmetatable(lua_State *L) {
 /* db_setmetatable - receiver is arg1, object is arg2, mt is arg3 */
 static int db_setmetatable(lua_State *L) {
   int t = lua_type(L, 3);
-  luaL_argexpected(L, t == LUA_TNIL || t == LUA_TTABLE, 3, "nil or table");
+  luaL_argexpected(L, t == LUA_TNIL || t == LUA_TTABLE, 3, "null or table");
   lua_settop(L, 3);
   lua_setmetatable(L, 2);
   return 1; /* return 1st argument */

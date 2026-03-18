@@ -328,7 +328,7 @@ void lua_printvalue(TValue *v) {
     printf("full udata: %p", uvalue(v));
     break;
   case LUA_VNIL:
-    printf("nil");
+    printf("null");
     break;
   case LUA_VLCF:
     printf("light C function: %p", fvalue(v));

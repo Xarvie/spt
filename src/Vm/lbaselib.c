@@ -143,7 +143,7 @@ static int luaB_setmetatable(lua_State *L) {
   int t2 = lua_type(L, 2);
 
   luaL_argexpected(L, t2 == LUA_TTABLE || t2 == LUA_TARRAY, 2, "table or list");
-  luaL_argexpected(L, t == LUA_TNIL || t == LUA_TTABLE, 3, "nil or table");
+  luaL_argexpected(L, t == LUA_TNIL || t == LUA_TTABLE, 3, "null or table");
 
   if (l_unlikely(luaL_getmetafield(L, 2, "__metatable") != LUA_TNIL))
     return luaL_error(L, "cannot change a protected metatable");
