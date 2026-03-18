@@ -1,0 +1,6 @@
+import * as geom from "export_class";
+
+auto p1 = new geom.Point(3, 4);
+p1.print("p1 xy:");
+
+print("Class export/import test passed!");
