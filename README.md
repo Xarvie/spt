@@ -1,6 +1,11 @@
 # SPT Lua 5.5 技术规范
 
 > 本文档为SPT Lua 5.5 的关键技术规范，重点标注与标准 Lua 的差异和易错点。
+> 本机编译测试
+
+```
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -noe -c "&{Import-Module 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Microsoft.VisualStudio.DevShell.dll'; Enter-VsDevShell bc8a024f; cd C:\Users\ftp\Desktop\spt\build; cmake --build . -j 16}"
+```
 
 ---
 

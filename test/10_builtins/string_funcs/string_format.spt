@@ -1,0 +1,8 @@
+// 测试: 内置函数 - string.format
+// 语法: string.format(format, ...)
+// 描述: 测试string.format格式化字符串
+
+print(string.format("Hello %s", "World"));
+print(string.format("Number: %d", 42));
+print(string.format("Float: %f", 3.14));
+print(string.format("Mix: %s = %d", "answer", 42));

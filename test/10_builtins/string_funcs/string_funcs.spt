@@ -1,0 +1,11 @@
+// 测试: 内置函数 - string模块函数
+// 语法: string模块函数
+// 描述: 测试string模块的各种函数
+
+str s = "Hello World";
+print(string.len(s));
+print(string.sub(s, 1, 5));
+print(string.upper(s));
+print(string.lower(s));
+print(string.rep("ab", 3));
+print(string.reverse("abc"));

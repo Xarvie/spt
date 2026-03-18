@@ -1,0 +1,10 @@
+// 测试: 内置函数 - string.find
+// 语法: string.find(s, pattern)
+// 描述: 测试string.find查找子串
+
+str s = "Hello World";
+vars pos, end = string.find(s, "World");
+print(pos, end);
+
+vars pos2, end2 = string.find(s, "xyz");
+print(pos2, end2);

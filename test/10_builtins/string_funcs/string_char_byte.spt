@@ -1,0 +1,8 @@
+// 测试: 内置函数 - string.char和string.byte
+// 语法: string.char(...), string.byte(s, i)
+// 描述: 测试字符和ASCII码转换
+
+print(string.char(65, 66, 67));
+print(string.byte("ABC", 1));
+print(string.byte("ABC", 2));
+print(string.byte("ABC", 3));

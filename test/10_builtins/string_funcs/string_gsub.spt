@@ -1,0 +1,11 @@
+// 测试: 内置函数 - string.gsub
+// 语法: string.gsub(s, pattern, repl)
+// 描述: 测试字符串替换
+
+str s = "Hello World";
+vars result, count = string.gsub(s, "o", "0");
+print(result);
+print(count);
+
+vars result2, count2 = string.gsub("aaa", "a", "b");
+print(result2, count2);
