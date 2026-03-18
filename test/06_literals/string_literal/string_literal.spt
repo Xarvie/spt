@@ -1,0 +1,9 @@
+// 测试: 字面量 - 字符串字面量
+// 语法: STRING_LITERAL
+// 描述: 测试字符串字面量和转义序列
+
+str a = "double";
+str b = 'single';
+str c = "tab\there";
+str d = "line\nbreak";
+print(a, b);

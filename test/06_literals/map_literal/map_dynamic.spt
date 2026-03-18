@@ -1,0 +1,12 @@
+// 测试: Map - 动态行为
+// 语法: mapExpression, postfixIndexSuffix
+// 描述: 测试Map的动态扩容和任意键
+
+map<any, any> m = {};
+m[100] = 1;
+m["k"] = "v";
+print(m[100]);
+print(m["k"]);
+
+m[1000] = 2;
+print(m[1000]);

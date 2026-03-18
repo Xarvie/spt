@@ -1,0 +1,14 @@
+// 测试: 声明 - 函数声明
+// 语法: functionDeclaration -> GLOBAL? CONST? type qualifiedIdentifier OP parameterList? CP blockStatement
+// 描述: 测试函数声明
+
+int add(int a, int b) {
+    return a + b;
+}
+
+void greet(str name) {
+    print("Hello, " .. name);
+}
+
+print(add(3, 4));
+greet("World");

@@ -1,0 +1,8 @@
+// 测试: 字面量 - 整数字面量
+// 语法: INTEGER -> DIGIT+ | '0' [xX] HEX_DIGIT+
+// 描述: 测试十进制和十六进制整数字面量
+
+int a = 42;
+int b = 0xFF;
+int c = 0x10;
+print(a, b, c);

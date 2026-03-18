@@ -1,0 +1,8 @@
+// 测试: 边界情况 - 长字符串
+// 语法: STRING_LITERAL
+// 描述: 测试长字符串处理
+
+str s = "This is a very long str that contains many characters and is used to test the handling of long strings in the SPT language runtime. It should be processed correctly without any issues or truncation.";
+
+print(#s);
+print(s);

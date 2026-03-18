@@ -1,0 +1,9 @@
+// 测试: 内置函数 - assert函数
+// 语法: assert() 内置函数
+// 描述: 测试assert断言函数
+
+assert(1 == 1, "should be true");
+print("assertion 1 passed");
+
+assert(2 > 1);
+print("assertion 2 passed");

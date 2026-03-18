@@ -30,7 +30,7 @@ static int luaB_print(lua_State *L) {
     size_t l;
     const char *s = luaL_tolstring(L, i, &l); /* convert it to string */
     if (i > 2)                                /* not the first element? */
-      lua_writestring("\t", 1);               /* add a tab before it */
+      lua_writestring(" ", 1);                /* add a space before it */
     lua_writestring(s, l);                    /* print it */
     lua_pop(L, 1);                            /* pop result */
   }

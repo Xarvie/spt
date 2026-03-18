@@ -1,0 +1,17 @@
+// 测试: Lambda - 嵌套闭包
+// 语法: lambdaExpression
+// 描述: 测试多层嵌套的闭包
+
+auto outer = function() -> function {
+    int a = 1;
+    return function() -> function {
+        int b = 2;
+        return function() -> int {
+            return a + b;
+        };
+    };
+};
+
+auto f1 = outer();
+auto f2 = f1();
+print(f2());

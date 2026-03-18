@@ -1,0 +1,13 @@
+// 测试: List和Map混合 - List包含Map
+// 语法: listExpression, mapExpression
+// 描述: 测试List中包含Map元素
+
+list<any> users = [
+    {"name": "Alice", "age": "25"},
+    {"name": "Bob", "age": "30"},
+    {"name": "Charlie", "age": "35"}
+];
+
+print(users[0]["name"]);
+print(users[1]["age"]);
+print(users[2]["name"]);

@@ -1,0 +1,11 @@
+// 测试: 控制流 - 简单if-else
+// 语法: ifStatement -> IF OP expression CP blockStatement ELSE blockStatement
+// 描述: 测试简单的if-else语句
+
+int x = 5;
+if (x > 10) {
+    print("big");
+} else {
+    print("small");
+}
+print("done");

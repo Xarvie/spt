@@ -1,0 +1,13 @@
+// 测试: 字面量 - Map浮点键
+// 语法: mapEntry -> FLOAT_LITERAL COL expression #mapEntryFloatKey
+// 描述: 测试Map使用浮点数作为键
+
+map<float, str> m = {
+    1.5: "one point five",
+    2.5: "two point five",
+    3.14: "pi approx"
+};
+
+print(m[1.5]);
+print(m[2.5]);
+print(m[3.14]);

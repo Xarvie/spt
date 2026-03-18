@@ -1,0 +1,12 @@
+// 测试: 函数 - 递归函数
+// 语法: functionDeclaration
+// 描述: 测试递归函数调用
+
+int fact(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+
+print(fact(5));

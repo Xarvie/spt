@@ -1,0 +1,19 @@
+// 测试: 类 - 多返回值方法
+// 语法: multiReturnClassMethodMember
+// 描述: 测试类方法返回多个值
+
+class Pair {
+    int a;
+    int b;
+    void __init(int a, int b) {
+        this.a = a;
+        this.b = b;
+    }
+    vars get() {
+        return this.a, this.b;
+    }
+}
+
+Pair p = new Pair(3, 4);
+vars x, y = p.get();
+print(x, y);

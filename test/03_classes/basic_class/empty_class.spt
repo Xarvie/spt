@@ -1,0 +1,8 @@
+// 测试: 类 - 空类定义
+// 语法: classDeclaration -> CLASS IDENTIFIER OCB classMember* CCB
+// 描述: 测试空类定义
+
+class Empty {}
+
+auto e = new Empty();
+print(typeof(e));

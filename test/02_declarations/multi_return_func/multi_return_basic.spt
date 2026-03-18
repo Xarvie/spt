@@ -1,0 +1,10 @@
+// 测试: 声明 - 多返回值函数
+// 语法: GLOBAL? CONST? VARS qualifiedIdentifier OP parameterList? CP blockStatement #multiReturnFunctionDeclarationDef
+// 描述: 测试多返回值函数声明
+
+vars returnAB(int a, int b) {
+    return a, b;
+}
+
+vars x, y = returnAB(1, 2);
+print(x, y);

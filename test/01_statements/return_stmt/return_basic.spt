@@ -1,0 +1,15 @@
+// 测试: 语句 - return语句
+// 语法: RETURN expressionList? SEMICOLON #returnStmt
+// 描述: 测试return语句的各种形式
+
+int add(int a, int b) {
+    return a + b;
+}
+
+void greet(str name) {
+    print("Hello, " .. name);
+    return;
+}
+
+print(add(3, 4));
+greet("World");

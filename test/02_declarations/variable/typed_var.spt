@@ -1,0 +1,9 @@
+// 测试: 声明 - 带类型变量声明
+// 语法: variableDeclaration -> declaration_item (ASSIGN expression)? #variableDeclarationDef
+// 描述: 测试带类型的变量声明
+
+int a = 1;
+float b = 2.5;
+str c = "hello";
+bool d = true;
+print(a, b, c, d);

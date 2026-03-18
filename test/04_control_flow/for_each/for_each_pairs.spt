@@ -1,0 +1,8 @@
+// 测试: 控制流 - 泛型for-each循环
+// 语法: forEachControl -> forEachVar (COMMA forEachVar)* COL expressionList #forEachControl
+// 描述: 测试泛型for-each循环
+
+list<int> l = [10, 20, 30];
+for (k, v : pairs(l)) {
+    print(k .. ":" .. v);
+}

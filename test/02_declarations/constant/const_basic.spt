@@ -1,0 +1,7 @@
+// 测试: 声明 - const常量声明
+// 语法: CONST? declaration_item (ASSIGN expression)?
+// 描述: 测试const常量声明
+
+const int x = 10;
+const auto y = 20;
+print(x + y);

@@ -136,7 +136,7 @@ qualifiedIdentifier
 
 /** 基本类型 */
 primitiveType
-    : INT | FLOAT | NUMBER | STRING | BOOL | VOID | NULL_ | COROUTINE | FUNCTION
+    : INT | FLOAT | NUMBER | STR | BOOL | VOID | NULL_ | COROUTINE | FUNCTION
     ;
 
 /** List 类型注解: list 或 list<Type> */

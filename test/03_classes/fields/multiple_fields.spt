@@ -1,0 +1,17 @@
+// 测试: 类 - 多个字段
+// 语法: classFieldMember
+// 描述: 测试类中定义多个字段
+
+class Person {
+    str name;
+    int age;
+    str city;
+    void __init(str n, int a, str c) {
+        this.name = n;
+        this.age = a;
+        this.city = c;
+    }
+}
+
+Person p = new Person("Alice", 25, "Beijing");
+print(p.name, p.age, p.city);

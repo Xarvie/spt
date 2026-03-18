@@ -1,0 +1,11 @@
+// 测试: 字面量 - 十六进制浮点数
+// 语法: FLOAT_LITERAL -> '0' [xX] HEX_DIGIT+ '.' HEX_DIGIT* HEX_EXPONENT?
+// 描述: 测试十六进制浮点数字面量
+
+float a = 0x1.5p2;
+float b = 0x1.fp3;
+float c = 0x0.1p4;
+
+print(a);
+print(b);
+print(c);

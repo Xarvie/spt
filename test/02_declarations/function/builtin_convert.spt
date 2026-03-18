@@ -1,0 +1,8 @@
+// 测试: 内置函数 - tonumber/tostring
+// 语法: tonumber(), tostring() 内置函数
+// 描述: 测试类型转换内置函数
+
+print(tonumber("123"));
+print(tostring(456));
+print(tostring(true));
+print(tostring(null));

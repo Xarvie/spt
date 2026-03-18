@@ -1,0 +1,12 @@
+// 测试仅导出函数
+export str funcA() {
+    return "A";
+}
+
+export str funcB() {
+    return "B";
+}
+
+export str funcC() {
+    return "C";
+}

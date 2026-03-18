@@ -1,0 +1,10 @@
+// 测试: 函数 - 返回函数
+// 语法: functionDeclaration, lambdaExpression
+// 描述: 测试函数返回另一个函数
+
+function makeAdder(int n) {
+    return function(int x) -> int { return n + x; };
+}
+
+auto add5 = makeAdder(5);
+print(add5(10));

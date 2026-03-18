@@ -1,0 +1,15 @@
+// 测试: Lambda - 可变参数
+// 语法: parameterList -> parameter (COMMA parameter)* (COMMA DDD)? | DDD
+// 描述: 测试lambda中的可变参数
+
+auto sum = function(...) -> int {
+    auto args = table.pack(...);
+    int total = 0;
+    for (i = 0, #args - 1) {
+        total += args[i];
+    }
+    return total;
+};
+
+print(sum(1, 2, 3));
+print(sum(10, 20, 30, 40));

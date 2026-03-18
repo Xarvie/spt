@@ -1,0 +1,16 @@
+// 测试: Map - 混合键类型
+// 语法: mapExpression, mapEntry
+// 描述: 测试Map中使用不同类型的键
+
+map<any, any> m = {};
+m[1] = "int key";
+m["str"] = "str key";
+m[true] = "bool key";
+m[3.14] = "float key";
+m[-1] = "negative key";
+
+print(m[1]);
+print(m["str"]);
+print(m[true]);
+print(m[3.14]);
+print(m[-1]);

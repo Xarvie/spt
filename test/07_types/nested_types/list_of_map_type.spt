@@ -1,0 +1,11 @@
+// 测试: 类型系统 - 嵌套list类型
+// 语法: listType -> LIST (LT type GT)?
+// 描述: 测试list<map<str, int>>嵌套类型
+
+list<map<str, int>> data = [
+    {"x": 1, "y": 2},
+    {"x": 3, "y": 4}
+];
+
+print(data[0]["x"]);
+print(data[1]["y"]);

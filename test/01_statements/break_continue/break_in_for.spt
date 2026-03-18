@@ -1,0 +1,10 @@
+// 测试: 控制流 - break语句
+// 语法: BREAK SEMICOLON #breakStmt
+// 描述: 测试for循环中的break
+
+for (int i = 0, 9) {
+    if (i == 5) {
+        break;
+    }
+    print(i);
+}

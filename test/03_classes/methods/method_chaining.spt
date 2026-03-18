@@ -1,0 +1,20 @@
+// 测试: 类 - 方法链式调用
+// 语法: postfixCallSuffix
+// 描述: 测试方法链式调用模式
+
+class Builder {
+    int v;
+    void __init() {
+        this.v = 0;
+    }
+    Builder add(int n) {
+        this.v += n;
+        return this;
+    }
+    int get() {
+        return this.v;
+    }
+}
+
+Builder b = new Builder();
+print(b.add(1).add(2).add(3).get());

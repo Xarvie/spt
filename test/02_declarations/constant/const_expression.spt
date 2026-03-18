@@ -1,0 +1,10 @@
+// 测试: 声明 - const初始化表达式
+// 语法: CONST? declaration_item (ASSIGN expression)?
+// 描述: 测试const使用表达式初始化
+
+const int a = 1 + 2;
+const int b = 3 * 4;
+const str c = "hello" .. " world";
+const int d = a + b;
+
+print(a, b, c, d);

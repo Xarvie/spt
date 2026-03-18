@@ -1,0 +1,8 @@
+// 测试: 字面量 - Map字面量
+// 语法: mapExpression -> OCB mapEntryList? CCB
+// 描述: 测试Map字面量的各种键类型
+
+map<str, int> a = {"x": 1, "y": 2};
+map<any, any> b = {[1]: "one", [2]: "two"};
+map<any, any> c = {[3.14]: "pi"};
+print(a["x"], b[1], c[3.14]);

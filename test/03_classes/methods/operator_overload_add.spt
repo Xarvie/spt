@@ -1,0 +1,23 @@
+// 测试: 运算符重载 - 加法运算符
+// 语法: class方法定义 __add
+// 描述: 测试类运算符重载__add
+
+class Vec2 {
+    int x;
+    int y;
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+    Vec2 __add(Vec2 other) {
+        Vec2 result = new Vec2(0, 0);
+        result.x = this.x + other.x;
+        result.y = this.y + other.y;
+        return result;
+    }
+}
+
+Vec2 v1 = new Vec2(3, 4);
+Vec2 v2 = new Vec2(1, 2);
+Vec2 v3 = v1 + v2;
+print(v3.x, v3.y);

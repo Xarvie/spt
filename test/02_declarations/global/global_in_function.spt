@@ -1,0 +1,11 @@
+// 测试: 声明 - 函数内声明global
+// 语法: GLOBAL? declaration_item
+// 描述: 测试在函数内部声明global变量
+
+void test() {
+    global int g_inner = 42;
+    print(g_inner);
+}
+
+test();
+print(g_inner);

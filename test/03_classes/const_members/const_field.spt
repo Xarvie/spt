@@ -1,0 +1,12 @@
+// 测试: 类 - const字段
+// 语法: classFieldMember -> CONST? declaration_item
+// 描述: 测试类中的const字段
+
+class Constants {
+    const int MAX = 100;
+    const str NAME = "test";
+}
+
+Constants c = new Constants();
+print(c.MAX);
+print(c.NAME);

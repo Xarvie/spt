@@ -1,0 +1,22 @@
+// 测试: 运算符重载 - 一元负号
+// 语法: class方法定义 __unm
+// 描述: 测试类运算符重载__unm
+
+class Vec2 {
+    int x;
+    int y;
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+    Vec2 __unm() {
+        Vec2 result = new Vec2(0, 0);
+        result.x = -this.x;
+        result.y = -this.y;
+        return result;
+    }
+}
+
+Vec2 v = new Vec2(3, -4);
+Vec2 neg = -v;
+print(neg.x, neg.y);

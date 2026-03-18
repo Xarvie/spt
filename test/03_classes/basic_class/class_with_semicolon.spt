@@ -1,0 +1,11 @@
+// 测试: 类 - 只有分号成员
+// 语法: classMember -> SEMICOLON #classEmptyMember
+// 描述: 测试类中只有空成员（分号）
+
+class Empty2 {
+    ;
+    ;
+}
+
+auto e = new Empty2();
+print(typeof(e));

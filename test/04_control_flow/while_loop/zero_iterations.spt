@@ -1,0 +1,15 @@
+// 测试: 控制流 - 空循环
+// 语法: whileStatement, forStatement
+// 描述: 测试零次迭代的循环
+
+int i = 10;
+while (i < 5) {
+    print("never");
+    i = i + 1;
+}
+print("done");
+
+for (int j = 10, 4) {
+    print("never");
+}
+print("done2");

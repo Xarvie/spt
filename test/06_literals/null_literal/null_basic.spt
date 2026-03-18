@@ -1,0 +1,9 @@
+// 测试: 字面量 - null字面量
+// 语法: atomexp -> NULL_
+// 描述: 测试null字面量
+
+any x = null;
+print(x);
+if (x == null) {
+    print("is null");
+}

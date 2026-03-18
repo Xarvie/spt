@@ -1,0 +1,14 @@
+// 测试: 基础语法 - 逻辑短路
+// 语法: logicalOrExp, logicalAndExp
+// 描述: 测试逻辑运算的短路求值
+
+bool t = true;
+bool f = false;
+if (t || (1/0 == 0)) {
+    print("OR OK");
+}
+if (f && (1/0 == 0)) {
+    print("Fail");
+} else {
+    print("AND OK");
+}

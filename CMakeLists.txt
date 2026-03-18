@@ -70,21 +70,7 @@ target_link_libraries(sptscript PRIVATE sptscript_library_static)
 if (BUILD_TESTS)
     enable_testing()
 
-    # 回归测试可执行文件
-    add_executable(regression_test tests/testRun.cpp)
-    target_include_directories(regression_test PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/runtime/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/Ast/front
-    )
-    target_link_libraries(regression_test PRIVATE sptscript_library_static)
-
-    # 添加测试目标
-    add_test(NAME regression_test
-            COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/regression_test
-            WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
-
-    # 新增 C API 测试
+    # C API 测试
     add_executable(TestCApi tests/TestCApi.c)
     target_include_directories(TestCApi PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src/Vm
@@ -92,12 +78,10 @@ if (BUILD_TESTS)
     )
     target_link_libraries(TestCApi PRIVATE sptscript_library_static)
 
-    # 添加测试目标
     add_test(NAME TestCApi
             COMMAND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/TestCApi
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-    message(STATUS "Regression test enabled: regression_test")
     message(STATUS "C API test enabled: TestCApi")
 
     # ====================================================================

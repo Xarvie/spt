@@ -1,0 +1,16 @@
+// 测试: Lambda - 闭包
+// 语法: lambdaExpression
+// 描述: 测试lambda闭包捕获外部变量
+
+auto makeCounter = function() -> function {
+    int count = 0;
+    return function() -> int {
+        count = count + 1;
+        return count;
+    };
+};
+
+auto c1 = makeCounter();
+print(c1());
+print(c1());
+print(c1());

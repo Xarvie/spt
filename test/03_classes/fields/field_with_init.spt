@@ -1,0 +1,14 @@
+// 测试: 类 - 带初始化的字段
+// 语法: classFieldMember -> declaration_item (ASSIGN expression)?
+// 描述: 测试类字段带初始化表达式
+
+class Config {
+    int timeout = 30;
+    str host = "localhost";
+    bool debug = true;
+}
+
+Config c = new Config();
+print(c.timeout);
+print(c.host);
+print(c.debug);

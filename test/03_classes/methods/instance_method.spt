@@ -1,0 +1,20 @@
+// 测试: 类 - 方法成员
+// 语法: classMethodMember -> STATIC? CONST? type IDENTIFIER OP parameterList? CP blockStatement
+// 描述: 测试类的方法成员
+
+class Counter {
+    int value;
+    void __init(int start) {
+        this.value = start;
+    }
+    void increment() {
+        this.value = this.value + 1;
+    }
+    int get() {
+        return this.value;
+    }
+}
+
+Counter c = new Counter(0);
+c.increment();
+print(c.get());

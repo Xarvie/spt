@@ -1,0 +1,16 @@
+// 测试: 类 - const方法
+// 语法: classMethodMember -> CONST? type IDENTIFIER
+// 描述: 测试类中的const方法
+
+class Counter {
+    int value;
+    void __init(int v) {
+        this.value = v;
+    }
+    const int get() {
+        return this.value;
+    }
+}
+
+Counter c = new Counter(42);
+print(c.get());

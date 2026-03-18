@@ -1,0 +1,12 @@
+// 测试: 表达式 - Map长度
+// 语法: unaryExp -> LEN unaryExp
+// 描述: 测试#运算符获取Map长度
+
+map<str, int> m = {"a": 1, "b": 2, "c": 3};
+print(#m);
+
+map<any, any> empty = {};
+print(#empty);
+
+m["d"] = 4;
+print(#m);

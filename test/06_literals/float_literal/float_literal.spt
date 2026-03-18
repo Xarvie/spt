@@ -1,0 +1,9 @@
+// 测试: 字面量 - 浮点字面量
+// 语法: FLOAT_LITERAL
+// 描述: 测试浮点字面量的各种格式
+
+float a = 1.5;
+float b = .5;
+float c = 1e2;
+float d = 1.5e2;
+print(a, b, c, d);

@@ -1,0 +1,15 @@
+// 测试: 类型系统 - 类名作为类型
+// 语法: type -> qualifiedIdentifier
+// 描述: 测试使用类名作为类型注解
+
+class Point {
+    int x;
+    int y;
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+Point p = new Point(10, 20);
+print(p.x, p.y);

@@ -1,0 +1,16 @@
+// 测试: 内置函数 - table模块
+// 语法: table.push, table.pop, table.insert, table.remove, table.concat, table.sort
+// 描述: 测试table模块函数
+
+list<int> l = [1, 2, 3];
+table.push(l, 4);
+print(#l, l[3]);
+
+table.insert(l, 1, 99);
+print(l[1]);
+
+any val = table.remove(l, 0);
+print(val, #l);
+
+table.sort(l);
+print(table.concat(l, ","));

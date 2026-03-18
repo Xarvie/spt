@@ -1,0 +1,12 @@
+// 测试: Unicode标识符
+// 语法: IDENTIFIER
+// 描述: 测试Unicode标识符（中文、希腊字母等）
+
+int 变量 = 42;
+print(变量);
+
+float π = 3.14;
+print(π);
+
+str 你好 = "Hello";
+print(你好);

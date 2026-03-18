@@ -1,0 +1,13 @@
+// 测试: 控制流 - while true break模式
+// 语法: whileStatement, BREAK
+// 描述: 测试while(true)配合break的模式
+
+int count = 0;
+while (true) {
+    print(count);
+    count = count + 1;
+    if (count >= 3) {
+        break;
+    }
+}
+print("exit");

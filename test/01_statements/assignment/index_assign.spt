@@ -1,0 +1,7 @@
+// 测试: 语句 - 索引赋值
+// 语法: lvalue -> (IDENTIFIER) ( lvalueSuffix )* #lvalueBase
+// 描述: 测试数组索引作为左值的赋值
+
+list<int> arr = [1, 2, 3];
+arr[0] = 100;
+print(arr[0]);

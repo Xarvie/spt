@@ -1,0 +1,18 @@
+// 测试: 类 - 复杂字段
+// 语法: classFieldMember
+// 描述: 测试类中包含复杂类型的字段
+
+class Container {
+    any data;
+    void __init(any d) {
+        this.data = d;
+    }
+}
+
+Container c1 = new Container(42);
+Container c2 = new Container("hello");
+Container c3 = new Container([1, 2, 3]);
+
+print(c1.data);
+print(c2.data);
+print(c3.data[1]);

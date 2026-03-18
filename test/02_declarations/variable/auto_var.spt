@@ -1,0 +1,11 @@
+// 测试: 声明 - auto类型推断
+// 语法: declaration_item -> AUTO IDENTIFIER
+// 描述: 测试auto类型的变量声明
+
+auto a = 42;
+auto b = "hello";
+auto c = true;
+auto d = 3.14;
+auto e = [1, 2];
+auto f = {"k": "v"};
+print(a, b, c, d);

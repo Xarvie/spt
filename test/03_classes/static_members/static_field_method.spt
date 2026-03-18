@@ -1,0 +1,14 @@
+// 测试: 类 - 静态成员
+// 语法: classFieldMember -> STATIC? CONST? declaration_item, classMethodMember -> STATIC? CONST? type IDENTIFIER...
+// 描述: 测试类的静态字段和方法
+
+class Counter {
+    static int count = 0;
+    static int getCount() {
+        return Counter.count;
+    }
+}
+
+Counter.count = 5;
+print(Counter.count);
+print(Counter.getCount());

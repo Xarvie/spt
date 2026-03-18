@@ -1,0 +1,11 @@
+// 测试: 类型系统 - 嵌套map类型
+// 语法: mapType -> MAP (LT type COMMA type GT)?
+// 描述: 测试map<str, list<int>>嵌套类型
+
+map<str, list<int>> data = {
+    "a": [1, 2, 3],
+    "b": [4, 5, 6]
+};
+
+print(data["a"][0]);
+print(data["b"][2]);

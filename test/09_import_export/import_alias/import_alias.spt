@@ -1,0 +1,6 @@
+// 测试: 导入 - 带别名导入
+// 语法: importSpecifier -> IDENTIFIER (AS IDENTIFIER)?
+// 描述: 测试import { a as b }语法
+
+import { abs as myAbs } from "math";
+print(myAbs(-99));

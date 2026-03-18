@@ -1,0 +1,10 @@
+// 测试: 语句 - 多返回值return
+// 语法: RETURN expressionList? SEMICOLON #returnStmt
+// 描述: 测试多返回值的return语句
+
+vars returnTwo() {
+    return 10, 20;
+}
+
+vars a, b = returnTwo();
+print(a, b);

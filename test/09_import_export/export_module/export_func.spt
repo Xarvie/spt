@@ -1,0 +1,6 @@
+// 测试: 导出 - 函数导出
+// 语法: declaration -> EXPORT? functionDeclaration
+// 描述: 测试export函数声明
+
+export int square(int x) { return x * x; }
+print(square(5));

@@ -1,0 +1,15 @@
+// 测试: 类 - 基本类定义
+// 语法: classDeclaration -> CLASS IDENTIFIER OCB classMember* CCB #classDeclarationDef
+// 描述: 测试基本类定义
+
+class Point {
+    int x;
+    int y;
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+Point p = new Point(10, 20);
+print(p.x, p.y);

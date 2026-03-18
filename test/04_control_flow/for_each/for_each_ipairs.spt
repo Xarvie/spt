@@ -1,0 +1,8 @@
+// 测试: 控制流 - ipairs迭代
+// 语法: forEachControl -> forEachVar (COMMA forEachVar)* COL expressionList
+// 描述: 测试ipairs迭代器（使用pairs代替）
+
+list<int> l = [10, 20, 30];
+for (i, v : pairs(l)) {
+    print(i .. ":" .. v);
+}

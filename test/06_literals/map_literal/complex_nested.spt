@@ -1,0 +1,14 @@
+// 测试: List和Map混合 - 复杂嵌套结构
+// 语法: listExpression, mapExpression
+// 描述: 测试复杂的嵌套数据结构
+
+map<str, any> complex = {
+    "users": [
+        {"name": "Alice", "scores": [85, 90, 95]},
+        {"name": "Bob", "scores": [75, 80, 85]}
+    ]
+};
+
+print(complex["users"][0]["name"]);
+print(complex["users"][0]["scores"][0]);
+print(complex["users"][1]["scores"][2]);

@@ -1,0 +1,12 @@
+export class Point {
+    int x = 0;
+    int y = 0;
+
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+    void print(str a) {
+        print(a .. this.x .. this.y);
+    }
+}

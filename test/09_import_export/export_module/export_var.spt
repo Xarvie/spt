@@ -1,0 +1,6 @@
+// 测试: 导出 - 变量导出
+// 语法: declaration -> EXPORT? (variableDeclaration SEMICOLON | functionDeclaration | classDeclaration)
+// 描述: 测试export变量声明
+
+export int val = 42;
+print(val);

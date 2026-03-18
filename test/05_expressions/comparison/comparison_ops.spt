@@ -1,0 +1,10 @@
+// 测试: 表达式 - 比较运算
+// 语法: comparisonExp, equalityExp
+// 描述: 测试比较运算符
+
+print(1 < 2);
+print(2 > 1);
+print(1 <= 1);
+print(1 >= 1);
+print(1 == 1);
+print(1 != 2);

@@ -1,0 +1,12 @@
+// 测试: 表达式 - 字符串长度
+// 语法: unaryExp -> LEN unaryExp
+// 描述: 测试#运算符获取字符串长度
+
+str s = "hello world";
+print(#s);
+
+str empty = "";
+print(#empty);
+
+str chinese = "中文测试";
+print(#chinese);

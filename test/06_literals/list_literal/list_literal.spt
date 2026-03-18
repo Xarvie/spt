@@ -1,0 +1,8 @@
+// 测试: 字面量 - List字面量
+// 语法: listExpression -> OSB expressionList? CSB
+// 描述: 测试List字面量
+
+list<int> a = [1, 2, 3];
+list<any> b = [1, "hello", true, null];
+list<list<int>> c = [[1, 2], [3, 4]];
+print(#a, a[0], b[1], c[0][0]);

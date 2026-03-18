@@ -1,0 +1,22 @@
+// 测试: 类 - 多实例
+// 语法: classDeclaration, newExp
+// 描述: 测试创建多个类实例
+
+class Box {
+    int value;
+    void __init(int v) {
+        this.value = v;
+    }
+}
+
+Box a = new Box(10);
+Box b = new Box(20);
+Box c = new Box(30);
+
+print(a.value);
+print(b.value);
+print(c.value);
+
+a.value = 100;
+print(a.value);
+print(b.value);

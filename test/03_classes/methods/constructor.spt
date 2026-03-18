@@ -1,0 +1,18 @@
+// 测试: 类 - 构造函数__init
+// 语法: classMethodMember
+// 描述: 测试类构造函数__init
+
+class Point {
+    int x;
+    int y;
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+    void show() {
+        print(this.x, this.y);
+    }
+}
+
+Point p = new Point(10, 20);
+p.show();

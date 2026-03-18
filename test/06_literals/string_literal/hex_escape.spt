@@ -1,0 +1,11 @@
+// 测试: 字面量 - 十六进制转义
+// 语法: HexEscape -> '\\x' HEX_DIGIT HEX_DIGIT
+// 描述: 测试字符串中的十六进制字节转义
+
+str a = "hex: \x41\x42\x43";
+str b = "newline: \x0A";
+str c = "tab: \x09";
+
+print(a);
+print(b);
+print(c);

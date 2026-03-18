@@ -1,0 +1,16 @@
+// 测试: List - 引用行为
+// 语法: listExpression
+// 描述: 测试List的引用语义
+
+list<int> a = [1, 2, 3];
+list<int> b = a;
+b[0] = 99;
+print(a[0]);
+print(b[0]);
+
+list<int> c = [1, 2, 3];
+list<int> d = c;
+table.push(d, 4);
+print(#a);
+print(#c);
+print(#d);

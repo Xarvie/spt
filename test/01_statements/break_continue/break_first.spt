@@ -1,0 +1,9 @@
+// 测试: 控制流 - break在第一次迭代
+// 语法: BREAK SEMICOLON
+// 描述: 测试在第一次迭代就break
+
+for (int i = 0, 99) {
+    break;
+    print("never");
+}
+print("done");

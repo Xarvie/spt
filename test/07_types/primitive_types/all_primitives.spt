@@ -1,0 +1,11 @@
+// 测试: 类型系统 - 基本类型
+// 语法: primitiveType -> INT | FLOAT | NUMBER | str | BOOL | VOID | NULL_ | COROUTINE | FUNCTION
+// 描述: 测试所有基本类型
+
+int a = 1;
+float b = 2.5;
+number c = 3;
+str d = "s";
+bool e = true;
+any f = null;
+print(a, b, c, d, e, f);

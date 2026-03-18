@@ -1,0 +1,10 @@
+// 测试: 表达式 - 位运算
+// 语法: bitwiseOrExp, bitwiseXorExp, bitwiseAndExp, shiftExp
+// 描述: 测试位运算符
+
+print(0xFF & 0x0F);
+print(0xF0 | 0x0F);
+print(0xFF ^ 0x0F);
+print(~0);
+print(1 << 8);
+print(256 >> 4);

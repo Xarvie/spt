@@ -1,0 +1,9 @@
+// 测试: 控制流 - continue所有迭代
+// 语法: CONTINUE SEMICOLON
+// 描述: 测试每次迭代都continue
+
+for (int i = 0, 2) {
+    continue;
+    print("never");
+}
+print("done");

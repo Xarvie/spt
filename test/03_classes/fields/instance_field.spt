@@ -1,0 +1,13 @@
+// 测试: 类 - 字段成员
+// 语法: classFieldMember -> STATIC? CONST? declaration_item (ASSIGN expression)?
+// 描述: 测试类的字段成员
+
+class Box {
+    int value;
+    void __init(int v) {
+        this.value = v;
+    }
+}
+
+Box b = new Box(42);
+print(b.value);

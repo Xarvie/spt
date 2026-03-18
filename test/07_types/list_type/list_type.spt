@@ -1,0 +1,8 @@
+// 测试: 类型系统 - List类型
+// 语法: listType -> LIST (LT type GT)?
+// 描述: 测试List类型注解
+
+list a = [1, 2];
+list<int> b = [3, 4];
+list<list<int>> c = [[5]];
+print(a[0], b[1], c[0][0]);

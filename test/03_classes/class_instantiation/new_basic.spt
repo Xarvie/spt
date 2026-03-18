@@ -1,0 +1,15 @@
+// 测试: 类 - 实例化
+// 语法: newExp -> NEW qualifiedIdentifier (OP arguments? CP)? #newExpressionDef
+// 描述: 测试new表达式实例化类
+
+class Point {
+    int x;
+    int y;
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+Point p1 = new Point(3, 4);
+print(p1.x, p1.y);

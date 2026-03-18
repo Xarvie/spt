@@ -1,0 +1,7 @@
+// 测试: 表达式 - 右移运算符
+// 语法: shiftExp -> concatExp (GT GT concatExp)*
+// 描述: 测试右移运算符>>
+
+print(16 >> 2);
+print(32 >> 3);
+print(100 >> 1);

@@ -5,7 +5,7 @@ lexer grammar LangLexer; // 定义词法分析器 LangLexer
 INT: 'int';             // 整数类型
 FLOAT: 'float';         // 浮点数类型
 NUMBER: 'number';       // 通用数字类型提示
-STRING: 'string';       // 字符串类型
+STR: 'str';             // 字符串类型
 BOOL: 'bool';           // 布尔类型
 ANY: 'any';             // 任意类型
 VOID: 'void';           // void 类型 (用于函数返回值)

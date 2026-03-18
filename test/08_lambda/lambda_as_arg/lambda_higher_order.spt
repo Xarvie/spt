@@ -1,0 +1,13 @@
+// 测试: Lambda - lambda作为参数
+// 语法: lambdaExpression
+// 描述: 测试lambda作为函数参数（高阶函数）
+
+int apply(function f, int x) {
+    return f(x);
+}
+
+auto double = function(int n) -> int { return n * 2; };
+auto square = function(int n) -> int { return n * n; };
+
+print(apply(double, 5));
+print(apply(square, 5));

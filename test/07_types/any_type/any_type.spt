@@ -1,0 +1,8 @@
+// 测试: 类型系统 - any类型
+// 语法: type -> ANY #typeAny
+// 描述: 测试any类型
+
+any x = 42;
+any y = "hello";
+any z = [1, 2, 3];
+print(x, y, z[0]);

@@ -1,0 +1,8 @@
+// 测试: List - 带nil元素
+// 语法: listExpression
+// 描述: 测试List中包含nil元素
+
+list<any> l = [100, null];
+print(l[0]);
+print(l[1]);
+print(#l);

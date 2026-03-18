@@ -1,0 +1,11 @@
+// 测试: 语句 - 显式代码块
+// 语法: statement -> blockStatement #blockStmt, blockStatement -> '{' statement* '}'
+// 描述: 测试显式代码块语句和嵌套代码块
+
+{
+    int x = 1;
+    {
+        int y = 2;
+        print(x + y);
+    }
+}

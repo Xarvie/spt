@@ -1,0 +1,7 @@
+// 测试: 语句 - 简单赋值
+// 语法: assignStatement -> lvalue (COMMA lvalue)* ASSIGN expression (COMMA expression)* #normalAssignStmt
+// 描述: 测试简单赋值语句
+
+int a = 1;
+a = 10;
+print(a);

@@ -1,0 +1,14 @@
+// 测试: 控制流 - 多变量for-each
+// 语法: forEachControl
+// 描述: 测试多返回值的for-each
+
+vars iter(any s, int c) {
+    if (c < 3) {
+        return c + 1, c * 10;
+    }
+    return null;
+}
+
+for (auto i, auto v : iter, null, 0) {
+    print(i .. ":" .. v);
+}

@@ -1,0 +1,8 @@
+// 测试: Lambda - 基本lambda
+// 语法: lambdaExpression -> FUNCTION OP parameterList? CP ARROW (type | VARS) blockStatement
+// 描述: 测试基本lambda表达式
+
+auto f1 = function() -> int { return 1; };
+auto f2 = function() -> str { return "hi"; };
+auto f3 = function() -> void { };
+print(f1(), f2());

@@ -1,0 +1,8 @@
+// 测试: 表达式 - 逻辑运算
+// 语法: logicalOrExp, logicalAndExp
+// 描述: 测试逻辑运算符
+
+bool a = true && false;
+bool b = true || false;
+bool c = !false;
+print(a, b, c);

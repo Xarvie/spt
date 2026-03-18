@@ -1,0 +1,9 @@
+// 测试: 边界情况 - 大量参数
+// 语法: arguments -> expressionList?
+// 描述: 测试函数调用时传递大量参数
+
+void many(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j) {
+    print(a + b + c + d + e + f + g + h + i + j);
+}
+
+many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);

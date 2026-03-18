@@ -32,14 +32,25 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      - name: Run tests
+      - name: Run C API tests
         run: |
           cd build
-          ctest -C Release --output-on-failure -j4
+          ctest -C Release --output-on-failure -j4 -R TestCApi
+
+      - name: Run SPT tests (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x scripts/run_spt_tests.sh
+          ./scripts/run_spt_tests.sh
+
+      - name: Run SPT tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python scripts/run_spt_tests.py
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
+          name: test-results-${{ matrix.os }}
           path: build/Testing/**/*.xml

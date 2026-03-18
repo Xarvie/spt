@@ -1,0 +1,7 @@
+// 测试: 声明 - global全局变量声明
+// 语法: GLOBAL? CONST? declaration_item
+// 描述: 测试global全局变量声明
+
+global int g = 100;
+global const int GC = 55;
+print(g, GC);

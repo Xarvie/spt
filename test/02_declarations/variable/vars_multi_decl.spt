@@ -1,0 +1,14 @@
+// 测试: 声明 - vars多变量声明
+// 语法: VARS IDENTIFIER (COMMA IDENTIFIER)* (ASSIGN expression)?
+// 描述: 测试vars关键字声明多个变量
+
+vars a, b;
+a = 1;
+b = 2;
+print(a, b);
+
+vars x, y, z;
+x = 10;
+y = 20;
+z = 30;
+print(x, y, z);

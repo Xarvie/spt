@@ -1,0 +1,15 @@
+// 测试: 基础语法 - 变量遮蔽
+// 语法: blockStatement, variableDeclaration
+// 描述: 测试嵌套作用域中的变量遮蔽
+
+int a = 100;
+{
+    int a = 200;
+    print(a);
+    {
+        int a = 300;
+        print(a);
+    }
+    print(a);
+}
+print(a);

@@ -1,0 +1,7 @@
+// 测试: 语句 - 空语句
+// 语法: statement -> SEMICOLON #semicolonStmt
+// 描述: 测试单独的分号作为空语句
+
+;
+;;
+print("ok");

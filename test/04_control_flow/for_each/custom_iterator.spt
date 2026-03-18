@@ -1,0 +1,14 @@
+// 测试: 控制流 - 泛型for迭代器
+// 语法: forEachControl
+// 描述: 测试自定义迭代器函数
+
+int iter(any s, int c) {
+    if (c < 3) {
+        return c + 1;
+    }
+    return null;
+}
+
+for (auto i : iter, null, 0) {
+    print(i);
+}

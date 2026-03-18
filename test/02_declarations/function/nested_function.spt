@@ -1,0 +1,13 @@
+// 测试: 函数 - 嵌套函数
+// 语法: functionDeclaration
+// 描述: 测试函数内部声明函数
+
+int outer(int x) {
+    int inner(int y) {
+        return y * 2;
+    }
+    return inner(x) + 1;
+}
+
+print(outer(5));
+print(outer(10));

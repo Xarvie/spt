@@ -1,0 +1,21 @@
+// 测试: 字面量 - 转义序列
+// 语法: EscapeSequence
+// 描述: 测试字符串中的所有转义序列
+
+str a = "tab\there";
+str b = "line\nbreak";
+str c = "carriage\rreturn";
+str d = "back\tspace";
+str e = "form\ffeed";
+str f = "quote\"here";
+str g = "apostrophe'here";
+str h = "backslash\\here";
+
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+print(h);

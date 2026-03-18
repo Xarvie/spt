@@ -1,0 +1,12 @@
+// 测试: Map - 嵌套Map
+// 语法: mapExpression
+// 描述: 测试嵌套的Map结构
+
+map<str, any> m = {
+    "user1": {"name": "Alice", "age": "25"},
+    "user2": {"name": "Bob", "age": "30"}
+};
+
+print(m["user1"]["name"]);
+print(m["user1"]["age"]);
+print(m["user2"]["name"]);

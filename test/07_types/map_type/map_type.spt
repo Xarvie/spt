@@ -1,0 +1,8 @@
+// 测试: 类型系统 - Map类型
+// 语法: mapType -> MAP (LT type COMMA type GT)?
+// 描述: 测试Map类型注解
+
+map a = {"x": 1};
+map<str, int> b = {"y": 2};
+map<str, map<str, int>> c = {"z": {"w": 3}};
+print(a["x"], b["y"], c["z"]["w"]);

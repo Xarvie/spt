@@ -1,0 +1,11 @@
+// 测试: Lambda - 带参数lambda
+// 语法: lambdaExpression -> FUNCTION OP parameterList? CP ARROW type blockStatement
+// 描述: 测试带参数的lambda表达式
+
+auto add = function(int a, int b) -> int {
+    return a + b;
+};
+print(add(3, 4));
+
+auto mul = function(int x, int y) -> int { return x * y; };
+print(mul(5, 6));

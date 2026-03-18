@@ -1,0 +1,8 @@
+// 测试: 语句 - 多目标赋值
+// 语法: assignStatement -> lvalue (COMMA lvalue)* ASSIGN expression (COMMA expression)* #normalAssignStmt
+// 描述: 测试多个左值的赋值语句
+
+int a = 0;
+int b = 0;
+a, b = 5, 6;
+print(a, b);

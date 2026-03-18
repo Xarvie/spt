@@ -1,0 +1,23 @@
+// 测试: List - 作为函数参数和返回值
+// 语法: listExpression, functionDeclaration
+// 描述: 测试List作为函数参数和返回值
+
+int sum(list arr) {
+    int total = 0;
+    for (i = 0, #arr - 1) {
+        total += arr[i];
+    }
+    return total;
+}
+
+list<int> nums = [1, 2, 3, 4, 5];
+print(sum(nums));
+
+list makeList() {
+    return [100, 200, 300];
+}
+
+any result = makeList();
+print(result[0]);
+print(result[2]);
+print(#result);

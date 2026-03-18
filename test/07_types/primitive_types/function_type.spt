@@ -1,0 +1,9 @@
+// 测试: 类型系统 - function类型
+// 语法: primitiveType -> FUNCTION
+// 描述: 测试function类型作为变量类型
+
+function add = function(int a, int b) -> int { return a + b; };
+print(add(3, 4));
+
+function greet = function(str name) -> void { print("Hello, " .. name); };
+greet("World");

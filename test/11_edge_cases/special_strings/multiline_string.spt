@@ -1,0 +1,10 @@
+// 测试: 边界情况 - 多行字符串
+// 语法: STRING_LITERAL
+// 描述: 测试包含换行符的多行字符串
+
+str s = "line1
+line2
+line3";
+
+print(s);
+print(#s);

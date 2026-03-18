@@ -1,0 +1,21 @@
+// 测试: 表达式 - 后缀表达式
+// 语法: postfixSuffix -> OSB expression CSB | DOT IDENTIFIER | OP arguments? CP
+// 描述: 测试后缀表达式（索引、成员访问、函数调用）
+
+list<int> arr = [10, 20, 30];
+print(arr[0]);
+
+map<str, int> m = {"x": 1, "y": 2};
+print(m["x"]);
+
+class Point {
+    int x;
+    int y;
+    void __init(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+Point p = new Point(3, 4);
+print(p.x, p.y);

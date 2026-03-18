@@ -1,0 +1,7 @@
+// 测试: 字面量 - 布尔字面量
+// 语法: atomexp -> TRUE | FALSE
+// 描述: 测试布尔字面量
+
+bool t = true;
+bool f = false;
+print(t, f);

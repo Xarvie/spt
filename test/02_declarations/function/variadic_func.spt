@@ -1,0 +1,16 @@
+// 测试: 函数 - 可变参数
+// 语法: parameterList -> parameter (COMMA parameter)* (COMMA DDD)? | DDD
+// 描述: 测试可变参数函数
+
+void f(int a, ...) {
+    print(a);
+}
+
+f(42);
+
+void g(...) {
+    auto args = table.pack(...);
+    print(#args);
+}
+
+g(1, 2, 3);

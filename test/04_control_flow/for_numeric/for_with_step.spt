@@ -1,0 +1,7 @@
+// 测试: 控制流 - 数值for循环带步长
+// 语法: forNumericControl -> forNumericVar ASSIGN expression COMMA expression (COMMA expression)?
+// 描述: 测试带步长的数值for循环
+
+for (int i = 0, 10, 2) {
+    print(i);
+}

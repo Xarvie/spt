@@ -1,0 +1,8 @@
+// 测试: 声明 - global const
+// 语法: GLOBAL? CONST? declaration_item
+// 描述: 测试global const声明
+
+global const int GC = 100;
+global const str GS = "global str";
+
+print(GC, GS);

@@ -1498,7 +1498,7 @@ std::any AstBuilderVisitor::visitPrimitiveType(LangParser::PrimitiveTypeContext 
     node = new PrimitiveType(PrimitiveTypeKind::FLOAT, loc);
   else if (ctx->NUMBER())
     node = new PrimitiveType(PrimitiveTypeKind::NUMBER, loc);
-  else if (ctx->STRING())
+  else if (ctx->STR())
     node = new PrimitiveType(PrimitiveTypeKind::STRING, loc);
   else if (ctx->BOOL())
     node = new PrimitiveType(PrimitiveTypeKind::BOOL, loc);

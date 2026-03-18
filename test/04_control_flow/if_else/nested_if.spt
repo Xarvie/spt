@@ -1,0 +1,20 @@
+// 测试: 控制流 - 深层嵌套if
+// 语法: ifStatement
+// 描述: 测试深层嵌套的if-else结构
+
+int a = 1;
+int b = 2;
+int c = 3;
+if (a == 1) {
+    if (b == 2) {
+        if (c == 3) {
+            print("deep");
+        } else {
+            print("c wrong");
+        }
+    } else {
+        print("b wrong");
+    }
+} else {
+    print("a wrong");
+}

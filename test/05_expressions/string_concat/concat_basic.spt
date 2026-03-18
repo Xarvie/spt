@@ -1,0 +1,7 @@
+// 测试: 表达式 - 字符串连接
+// 语法: concatExp -> addSubExp (CONCAT addSubExp)*
+// 描述: 测试字符串连接运算符
+
+print("a" .. "b" .. "c");
+print(1 .. 2 .. 3);
+print("result: " .. (1 + 2) .. " done");

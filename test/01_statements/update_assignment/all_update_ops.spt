@@ -1,0 +1,23 @@
+// 测试: 语句 - 更新赋值运算符
+// 语法: updateStatement -> lvalue op=(ADD_ASSIGN | SUB_ASSIGN | MUL_ASSIGN | DIV_ASSIGN | IDIV_ASSIGN | MOD_ASSIGN | CONCAT_ASSIGN) expression
+// 描述: 测试所有更新赋值运算符
+
+int a = 100;
+a += 10;
+print(a);
+a -= 5;
+print(a);
+a *= 2;
+print(a);
+a /= 7;
+print(a);
+a ~/= 3;
+print(a);
+
+int b = 17;
+b %= 5;
+print(b);
+
+str s = "hello";
+s ..= " world";
+print(s);

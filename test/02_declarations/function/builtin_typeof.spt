@@ -1,0 +1,11 @@
+// 测试: 内置函数 - typeof
+// 语法: typeof() 内置函数
+// 描述: 测试typeof内置函数
+
+print(typeof(42));
+print(typeof(3.14));
+print(typeof("hello"));
+print(typeof(true));
+print(typeof(null));
+print(typeof([1, 2, 3]));
+print(typeof({}));

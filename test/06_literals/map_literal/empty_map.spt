@@ -1,0 +1,12 @@
+// 测试: 字面量 - 空Map
+// 语法: mapExpression -> OCB mapEntryList? CCB
+// 描述: 测试空Map字面量
+
+map<str, int> empty = {};
+print(#empty);
+print(typeof(empty));
+
+map<any, any> e2 = {};
+e2["key"] = 1;
+print(#e2);
+print(e2["key"]);

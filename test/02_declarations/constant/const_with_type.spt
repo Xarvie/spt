@@ -1,0 +1,10 @@
+// 测试: 声明 - 带类型的const
+// 语法: CONST? declaration_item (ASSIGN expression)?
+// 描述: 测试带类型注解的const声明
+
+const int x = 10;
+const str s = "hello";
+const bool b = true;
+const float f = 3.14;
+
+print(x, s, b, f);

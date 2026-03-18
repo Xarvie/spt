@@ -1,0 +1,12 @@
+// 测试: List和Map混合 - Map包含List
+// 语法: mapExpression, listExpression
+// 描述: 测试Map中包含List值
+
+map<str, any> data = {
+    "numbers": [1, 2, 3],
+    "strings": ["a", "b", "c"]
+};
+
+print(data["numbers"][0]);
+print(data["numbers"][2]);
+print(data["strings"][1]);

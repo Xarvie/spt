@@ -1,0 +1,9 @@
+// 测试: 类型系统 - auto类型推断
+// 语法: declaration_item -> AUTO IDENTIFIER
+// 描述: 测试auto类型推断
+
+auto a = 42;
+auto b = "hello";
+auto c = [1, 2];
+auto d = {"k": "v"};
+print(a, b, c[0], d["k"]);

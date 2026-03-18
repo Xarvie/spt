@@ -1,0 +1,6 @@
+// 测试: 导入 - 命名空间导入
+// 语法: importStatement -> IMPORT MUL AS IDENTIFIER FROM STRING_LITERAL #importNamespaceStmt
+// 描述: 测试import * as语法
+
+import * as m from "math";
+print(m.abs(-42));

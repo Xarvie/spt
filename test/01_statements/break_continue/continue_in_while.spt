@@ -1,0 +1,13 @@
+// 测试: 控制流 - while中的continue
+// 语法: whileStatement, CONTINUE
+// 描述: 测试while循环中的continue语句
+
+int i = 0;
+while (i < 5) {
+    i += 1;
+    if (i == 3) {
+        continue;
+    }
+    print(i);
+}
+print("done");

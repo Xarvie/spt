@@ -1,0 +1,11 @@
+// 测试: 基础语法 - NaN比较
+// 语法: comparisonExp
+// 描述: 测试NaN的各种比较操作
+
+float nanX = math.sqrt(-1);
+print(nanX == nanX);
+print(nanX != nanX);
+print(nanX < nanX);
+print(nanX > nanX);
+print(nanX <= nanX);
+print(nanX >= nanX);

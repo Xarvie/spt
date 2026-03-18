@@ -1,0 +1,13 @@
+// 测试: 语句 - 成员赋值
+// 语法: lvalueSuffix -> DOT IDENTIFIER #lvalueMember
+// 描述: 测试对象成员作为左值的赋值
+
+class Point {
+    int x;
+    int y;
+}
+
+Point p = new Point();
+p.x = 10;
+p.y = 20;
+print(p.x, p.y);

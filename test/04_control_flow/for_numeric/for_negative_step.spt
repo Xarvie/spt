@@ -1,0 +1,7 @@
+// 测试: 控制流 - 负步长for循环
+// 语法: forNumericControl
+// 描述: 测试负步长的数值for循环
+
+for (int i = 5, 0, -1) {
+    print(i);
+}

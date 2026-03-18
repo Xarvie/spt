@@ -1,0 +1,9 @@
+// 测试: 控制流 - while循环
+// 语法: whileStatement -> WHILE OP expression CP blockStatement
+// 描述: 测试while循环
+
+int i = 0;
+while (i < 3) {
+    print(i);
+    i += 1;
+}

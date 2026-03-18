@@ -1,0 +1,9 @@
+// 测试: 表达式 - 链式后缀
+// 语法: postfixSuffix*
+// 描述: 测试链式后缀表达式
+
+map<str, any> m = {"data": [10, 20, 30]};
+print(m["data"][1]);
+
+list<map<str, int>> arr = [{"x": 1}, {"x": 2}];
+print(arr[1]["x"]);

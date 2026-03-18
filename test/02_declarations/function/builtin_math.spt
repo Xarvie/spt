@@ -1,0 +1,9 @@
+// 测试: 内置函数 - math模块
+// 语法: math.abs, math.floor, math.ceil, math.min, math.max
+// 描述: 测试math模块函数
+
+print(math.abs(-5));
+print(math.floor(3.9));
+print(math.ceil(3.1));
+print(math.min(1, 2));
+print(math.max(1, 2));

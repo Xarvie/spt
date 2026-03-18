@@ -1,0 +1,17 @@
+// 测试: 控制流 - for-each变量类型
+// 语法: forEachVar
+// 描述: 测试for-each循环变量的不同类型声明方式
+
+list<int> l = [10, 20];
+
+for (int k, int v : pairs(l)) {
+    print("typed: " .. k .. ":" .. v);
+}
+
+for (auto k, auto v : pairs(l)) {
+    print("auto: " .. k .. ":" .. v);
+}
+
+for (k, v : pairs(l)) {
+    print("untyped: " .. k .. ":" .. v);
+}

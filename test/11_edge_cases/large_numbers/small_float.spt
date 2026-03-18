@@ -1,0 +1,13 @@
+// 测试: 边界情况 - 极小浮点数
+// 语法: FLOAT_LITERAL
+// 描述: 测试极小浮点数和科学计数法
+
+float a = 1e-10;
+float b = 1.5e-20;
+float c = 0.000000001;
+float d = 1e100;
+
+print(a);
+print(b);
+print(c);
+print(d);

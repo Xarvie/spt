@@ -1,0 +1,17 @@
+// 测试: 控制流 - 多路径return
+// 语法: RETURN expression? SEMICOLON
+// 描述: 测试函数中多个return路径
+
+int test(int x) {
+    if (x < 0) {
+        return -1;
+    }
+    if (x == 0) {
+        return 0;
+    }
+    return 1;
+}
+
+print(test(-5));
+print(test(0));
+print(test(10));

@@ -1,0 +1,13 @@
+// 测试: 控制流 - while中的break
+// 语法: whileStatement, BREAK
+// 描述: 测试while循环中的break语句
+
+int i = 0;
+while (i < 10) {
+    if (i == 3) {
+        break;
+    }
+    print(i);
+    i += 1;
+}
+print("done");
