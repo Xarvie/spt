@@ -5,4 +5,7 @@
 auto f1 = function() -> int { return 1; };
 auto f2 = function() -> str { return "hi"; };
 auto f3 = function() -> void { };
-print(f1(), f2());
+assert(f1() == 1, "f1() should be 1");
+assert(f2() == "hi", "f2() should be 'hi'");
+
+print("lambda_basic tests passed!");

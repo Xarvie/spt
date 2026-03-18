@@ -5,4 +5,7 @@
 int a = 0;
 int b = 0;
 a, b = 5, 6;
-print(a, b);
+assert(a == 5, "a should be 5");
+assert(b == 6, "b should be 6");
+
+print("multi_target_assign tests passed!");

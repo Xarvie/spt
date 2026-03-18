@@ -13,10 +13,12 @@ Box a = new Box(10);
 Box b = new Box(20);
 Box c = new Box(30);
 
-print(a.value);
-print(b.value);
-print(c.value);
+assert(a.value == 10, "a.value should be 10");
+assert(b.value == 20, "b.value should be 20");
+assert(c.value == 30, "c.value should be 30");
 
 a.value = 100;
-print(a.value);
-print(b.value);
+assert(a.value == 100, "a.value should be 100 after update");
+assert(b.value == 20, "b.value should still be 20");
+
+print("multiple_instances tests passed!");

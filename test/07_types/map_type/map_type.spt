@@ -5,4 +5,8 @@
 map a = {"x": 1};
 map<str, int> b = {"y": 2};
 map<str, map<str, int>> c = {"z": {"w": 3}};
-print(a["x"], b["y"], c["z"]["w"]);
+assert(a["x"] == 1, "a['x'] should be 1");
+assert(b["y"] == 2, "b['y'] should be 2");
+assert(c["z"]["w"] == 3, "c['z']['w'] should be 3");
+
+print("map_type tests passed!");

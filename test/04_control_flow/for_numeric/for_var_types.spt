@@ -2,14 +2,24 @@
 // 语法: forNumericVar
 // 描述: 测试for循环变量的不同类型声明方式
 
+int typedSum = 0;
+int autoSum = 0;
+int untypedSum = 0;
+
 for (int i = 0, 2) {
-    print("typed: " .. i);
+    typedSum += i;
 }
 
 for (auto j = 0, 2) {
-    print("auto: " .. j);
+    autoSum += j;
 }
 
 for (k = 0, 2) {
-    print("untyped: " .. k);
+    untypedSum += k;
 }
+
+assert(typedSum == 3, "typedSum should be 3");
+assert(autoSum == 3, "autoSum should be 3");
+assert(untypedSum == 3, "untypedSum should be 3");
+
+print("for_var_types tests passed!");

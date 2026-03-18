@@ -1,0 +1,13 @@
+// 测试: List - 0-based索引
+// 语法: list索引访问
+// 描述: 测试SPT的List使用0-based索引（与Lua 1-based不同）
+
+list<int> arr = [10, 20, 30, 40, 5];
+assert(arr[0] == 10, "arr[0] should be 10");
+assert(arr[1] == 20, "arr[1] should be 20");
+assert(arr[2] == 30, "arr[2] should be 30");
+assert(arr[3] == 40, "arr[3] should be 40");
+assert(arr[4] == 5, "arr[4] should be 5");
+assert(#arr == 5, "#arr should be 5");
+
+print("zero_based_index tests passed!");

@@ -3,10 +3,10 @@
 // 描述: 测试后缀表达式（索引、成员访问、函数调用）
 
 list<int> arr = [10, 20, 30];
-print(arr[0]);
+assert(arr[0] == 10, "arr[0] should be 10");
 
 map<str, int> m = {"x": 1, "y": 2};
-print(m["x"]);
+assert(m["x"] == 1, "m['x'] should be 1");
 
 class Point {
     int x;
@@ -18,4 +18,7 @@ class Point {
 }
 
 Point p = new Point(3, 4);
-print(p.x, p.y);
+assert(p.x == 3, "p.x should be 3");
+assert(p.y == 4, "p.y should be 4");
+
+print("postfix_ops tests passed!");

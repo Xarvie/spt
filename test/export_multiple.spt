@@ -9,3 +9,10 @@ export number add(number a, number b) {
 export number multiply(number a, number b) {
     return a * b;
 }
+
+assert(PI > 3.14, "PI should be > 3.14");
+assert(E > 2.71, "E should be > 2.71");
+assert(add(1, 2) == 3, "add(1, 2) should be 3");
+assert(multiply(3, 4) == 12, "multiply(3, 4) should be 12");
+
+print("export_multiple tests passed!");

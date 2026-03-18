@@ -1,7 +1,8 @@
 // 测试仅导入函数
 import * as m from "export_only_functions";
 
-print("funcA = " .. m.funcA());
-print("funcB = " .. m.funcB());
-print("funcC = " .. m.funcC());
-print("Only functions import test passed!");
+assert(m.funcA() == "A", "m.funcA should return 'A'");
+assert(m.funcB() == "B", "m.funcB should return 'B'");
+assert(m.funcC() == "C", "m.funcC should return 'C'");
+
+print("test_import_only_functions tests passed!");

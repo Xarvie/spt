@@ -3,7 +3,11 @@
 // 描述: 测试while循环
 
 int i = 0;
+int sum = 0;
 while (i < 3) {
-    print(i);
+    sum += i;
     i += 1;
 }
+assert(sum == 3, "sum should be 3 (0+1+2)");
+
+print("while_basic tests passed!");

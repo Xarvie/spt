@@ -3,7 +3,6 @@
 // 描述: 测试null字面量
 
 any x = null;
-print(x);
-if (x == null) {
-    print("is null");
-}
+assert(x == null, "x should be null");
+
+print("null_basic tests passed!");

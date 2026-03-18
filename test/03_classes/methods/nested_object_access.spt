@@ -1,5 +1,5 @@
 // 测试: 类 - 嵌套对象访问
-// 语法: postfixMemberSuffix
+// 语法: postfixExpression
 // 描述: 测试嵌套对象的成员访问
 
 class Inner {
@@ -10,11 +10,13 @@ class Inner {
 }
 
 class Outer {
-    any inner;
+    Inner inner;
     void __init(int v) {
         this.inner = new Inner(v);
     }
 }
 
 Outer o = new Outer(42);
-print(o.inner.value);
+assert(o.inner.value == 42, "o.inner.value should be 42");
+
+print("nested_object_access tests passed!");

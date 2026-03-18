@@ -1,0 +1,18 @@
+// 测试: 协程 - 协程作为参数传递
+// 语法: coro类型参数
+// 描述: 测试协程作为函数参数
+
+int runCo(coro c) {
+    vars ok, val = coroutine.resume(c);
+    return val;
+}
+
+coro myCo = coroutine.create(function() -> int {
+    coroutine.yield(42);
+    return -1;
+});
+
+assert(runCo(myCo) == 42, "first run should return 42");
+assert(runCo(myCo) == -1, "second run should return -1");
+
+print("coroutine_param tests passed!");

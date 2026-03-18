@@ -3,10 +3,13 @@
 // 描述: 测试Unicode标识符（中文、希腊字母等）
 
 int 变量 = 42;
-print(变量);
+assert(变量 == 42, "变量 should be 42");
 
 float π = 3.14;
-print(π);
+assert(π > 3.13, "π should be > 3.13");
+assert(π < 3.15, "π should be < 3.15");
 
 str 你好 = "Hello";
-print(你好);
+assert(你好 == "Hello", "你好 should be 'Hello'");
+
+print("unicode_identifier tests passed!");

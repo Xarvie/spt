@@ -13,6 +13,8 @@ Container c1 = new Container(42);
 Container c2 = new Container("hello");
 Container c3 = new Container([1, 2, 3]);
 
-print(c1.data);
-print(c2.data);
-print(c3.data[1]);
+assert(c1.data == 42, "c1.data should be 42");
+assert(c2.data == "hello", "c2.data should be 'hello'");
+assert(c3.data[1] == 2, "c3.data[1] should be 2");
+
+print("complex_fields tests passed!");

@@ -2,6 +2,10 @@
 // 语法: forNumericControl -> forNumericVar ASSIGN expression COMMA expression (COMMA expression)?
 // 描述: 测试带步长的数值for循环
 
+int sum = 0;
 for (int i = 0, 10, 2) {
-    print(i);
+    sum += i;
 }
+assert(sum == 30, "sum should be 30 (0+2+4+6+8+10)");
+
+print("for_with_step tests passed!");

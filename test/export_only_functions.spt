@@ -10,3 +10,9 @@ export str funcB() {
 export str funcC() {
     return "C";
 }
+
+assert(funcA() == "A", "funcA should return 'A'");
+assert(funcB() == "B", "funcB should return 'B'");
+assert(funcC() == "C", "funcC should return 'C'");
+
+print("export_only_functions tests passed!");

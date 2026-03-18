@@ -2,6 +2,8 @@
 // 语法: concatExp -> addSubExp (CONCAT addSubExp)*
 // 描述: 测试字符串连接运算符
 
-print("a" .. "b" .. "c");
-print(1 .. 2 .. 3);
-print("result: " .. (1 + 2) .. " done");
+assert("a" .. "b" .. "c" == "abc", "'a' .. 'b' .. 'c' should be 'abc'");
+assert(1 .. 2 .. 3 == "123", "1 .. 2 .. 3 should be '123'");
+assert("result: " .. (1 + 2) .. " done" == "result: 3 done", "concat with expr should work");
+
+print("concat_basic tests passed!");

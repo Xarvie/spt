@@ -3,11 +3,15 @@
 // 描述: 测试while循环中的break语句
 
 int i = 0;
+int sum = 0;
 while (i < 10) {
     if (i == 3) {
         break;
     }
-    print(i);
+    sum += i;
     i += 1;
 }
-print("done");
+// sum = 0 + 1 + 2 = 3
+assert(sum == 3, "sum should be 3 (0+1+2)");
+
+print("break_in_while tests passed!");

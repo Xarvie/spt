@@ -2,6 +2,8 @@
 // 语法: shiftExp -> concatExp (GT GT concatExp)*
 // 描述: 测试右移运算符>>
 
-print(16 >> 2);
-print(32 >> 3);
-print(100 >> 1);
+assert((16 >> 2) == 4, "16 >> 2 should be 4");
+assert((32 >> 3) == 4, "32 >> 3 should be 4");
+assert((100 >> 1) == 50, "100 >> 1 should be 50");
+
+print("right_shift tests passed!");

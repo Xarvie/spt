@@ -6,8 +6,9 @@ float a = 1e-10;
 float b = 1.5e-20;
 float c = 0.000000001;
 float d = 1e100;
+assert(a > 0, "a should be positive");
+assert(b > 0, "b should be positive");
+assert(c > 0, "c should be positive");
+assert(d > 0, "d should be positive");
 
-print(a);
-print(b);
-print(c);
-print(d);
+print("small_float tests passed!");

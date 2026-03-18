@@ -2,6 +2,8 @@
 // 语法: primaryParenExp -> OP expression CP
 // 描述: 测试括号改变运算优先级
 
-print((1 + 2) * 3);
-print(1 + 2 * 3);
-print(((10)));
+assert((1 + 2) * 3 == 9, "(1 + 2) * 3 should be 9");
+assert(1 + 2 * 3 == 7, "1 + 2 * 3 should be 7");
+assert(((10)) == 10, "(((10))) should be 10");
+
+print("paren_exp tests passed!");

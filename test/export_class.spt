@@ -10,3 +10,5 @@ export class Point {
         print(a .. this.x .. this.y);
     }
 }
+
+print("export_class tests passed!");

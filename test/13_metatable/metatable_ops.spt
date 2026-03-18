@@ -1,0 +1,13 @@
+// 测试: 元表 - getmetatable/setmetatable
+// 语法: getmetatable, setmetatable
+// 描述: 测试元表操作函数
+
+map<any, any> t = {"x": 1};
+map<any, any> mt = {"__metatable": "protected"};
+
+setmetatable(t, mt);
+
+str meta = getmetatable(t);
+assert(meta == "protected", "getmetatable should return 'protected'");
+
+print("metatable_ops tests passed!");

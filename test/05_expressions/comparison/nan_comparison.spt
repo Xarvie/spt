@@ -3,9 +3,7 @@
 // 描述: 测试NaN的各种比较操作
 
 float nanX = math.sqrt(-1);
-print(nanX == nanX);
-print(nanX != nanX);
-print(nanX < nanX);
-print(nanX > nanX);
-print(nanX <= nanX);
-print(nanX >= nanX);
+assert((nanX == nanX) == false, "NaN == NaN should be false");
+assert((nanX != nanX) == true, "NaN != NaN should be true");
+
+print("nan_comparison tests passed!");

@@ -8,5 +8,7 @@ class Constants {
 }
 
 Constants c = new Constants();
-print(c.MAX);
-print(c.NAME);
+assert(c.MAX == 100, "c.MAX should be 100");
+assert(c.NAME == "test", "c.NAME should be 'test'");
+
+print("const_field tests passed!");

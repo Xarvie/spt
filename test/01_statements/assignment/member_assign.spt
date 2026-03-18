@@ -10,4 +10,7 @@ class Point {
 Point p = new Point();
 p.x = 10;
 p.y = 20;
-print(p.x, p.y);
+assert(p.x == 10, "p.x should be 10");
+assert(p.y == 20, "p.y should be 20");
+
+print("member_assign tests passed!");

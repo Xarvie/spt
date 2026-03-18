@@ -1,0 +1,14 @@
+// 测试: io库函数
+// 语法: io模块函数
+// 描述: 测试io模块的常用函数
+
+// 测试 io.type
+assert(io.type(io.stdin) == "file", "io.type(io.stdin) should be 'file'");
+assert(io.type(io.stdout) == "file", "io.type(io.stdout) should be 'file'");
+assert(io.type(io.stderr) == "file", "io.type(io.stderr) should be 'file'");
+
+// 测试 io.write 和 io.flush (只验证不报错)
+io.write("test output\n");
+io.flush();
+
+print("io library tests passed!");

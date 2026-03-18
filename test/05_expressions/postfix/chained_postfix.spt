@@ -3,7 +3,9 @@
 // 描述: 测试链式后缀表达式
 
 map<str, any> m = {"data": [10, 20, 30]};
-print(m["data"][1]);
+assert(m["data"][1] == 20, "m['data'][1] should be 20");
 
 list<map<str, int>> arr = [{"x": 1}, {"x": 2}];
-print(arr[1]["x"]);
+assert(arr[1]["x"] == 2, "arr[1]['x'] should be 2");
+
+print("chained_postfix tests passed!");

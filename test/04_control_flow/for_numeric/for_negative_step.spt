@@ -2,6 +2,10 @@
 // 语法: forNumericControl
 // 描述: 测试负步长的数值for循环
 
+int sum = 0;
 for (int i = 5, 0, -1) {
-    print(i);
+    sum += i;
 }
+assert(sum == 15, "sum should be 15 (5+4+3+2+1+0)");
+
+print("for_negative_step tests passed!");

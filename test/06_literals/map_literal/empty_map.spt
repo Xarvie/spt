@@ -3,10 +3,11 @@
 // 描述: 测试空Map字面量
 
 map<str, int> empty = {};
-print(#empty);
-print(typeof(empty));
+assert(#empty == 0, "#empty should be 0");
+assert(typeof(empty) == "table", "empty map should be 'table'");
 
 map<any, any> e2 = {};
 e2["key"] = 1;
-print(#e2);
-print(e2["key"]);
+assert(e2["key"] == 1, "e2['key'] should be 1");
+
+print("empty_map tests passed!");

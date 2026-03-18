@@ -2,13 +2,22 @@
 // 语法: forStatement, BREAK
 // 描述: 测试嵌套循环中break只跳出内层循环
 
+int breakCount = 0;
+int outerCount = 0;
 for (int i = 0, 2) {
+    outerCount += 1;
     for (int j = 0, 2) {
         for (int k = 0, 2) {
             if (k == 1) {
+                breakCount += 1;
                 break;
             }
-            print(i .. "-" .. j .. "-" .. k);
         }
     }
 }
+// outerCount = 3 (i=0,1,2)
+// breakCount = 9 (3 * 3, each inner loop breaks once)
+assert(outerCount == 3, "outer loop should run 3 times");
+assert(breakCount == 9, "break should happen 9 times (3*3)");
+
+print("break_nested tests passed!");

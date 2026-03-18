@@ -3,4 +3,6 @@
 // 描述: 测试export函数声明
 
 export int square(int x) { return x * x; }
-print(square(5));
+assert(square(5) == 25, "square(5) should be 25");
+
+print("export_func tests passed!");

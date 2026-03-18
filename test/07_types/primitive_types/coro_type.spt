@@ -1,0 +1,11 @@
+// 测试: 类型系统 - coro协程类型
+// 语法: primitiveType -> COROUTINE
+// 描述: 测试coro类型声明
+
+coro c = null;
+assert(typeof(c) == "nil", "typeof(null) should be 'nil'");
+
+coro co;
+assert(typeof(co) == "nil", "typeof(uninitialized coro) should be 'nil'");
+
+print("coro_type tests passed!");

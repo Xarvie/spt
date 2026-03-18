@@ -3,4 +3,6 @@
 // 描述: 测试export变量声明
 
 export int val = 42;
-print(val);
+assert(val == 42, "val should be 42");
+
+print("export_var tests passed!");

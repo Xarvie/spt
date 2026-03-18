@@ -8,4 +8,6 @@ class Empty2 {
 }
 
 auto e = new Empty2();
-print(typeof(e));
+assert(typeof(e) == "table", "typeof(class instance) should be 'table'");
+
+print("class_with_semicolon tests passed!");

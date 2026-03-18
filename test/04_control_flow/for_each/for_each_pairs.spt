@@ -3,6 +3,10 @@
 // 描述: 测试泛型for-each循环
 
 list<int> l = [10, 20, 30];
+int sum = 0;
 for (k, v : pairs(l)) {
-    print(k .. ":" .. v);
+    sum += v;
 }
+assert(sum == 60, "sum should be 60 (10+20+30)");
+
+print("for_each_pairs tests passed!");

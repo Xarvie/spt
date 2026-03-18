@@ -9,5 +9,7 @@ int outer(int x) {
     return inner(x) + 1;
 }
 
-print(outer(5));
-print(outer(10));
+assert(outer(5) == 11, "outer(5) should be 11");
+assert(outer(10) == 21, "outer(10) should be 21");
+
+print("nested_function tests passed!");

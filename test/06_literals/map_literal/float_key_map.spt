@@ -1,13 +1,15 @@
 // 测试: 字面量 - Map浮点键
-// 语法: mapEntry -> FLOAT_LITERAL COL expression #mapEntryFloatKey
-// 描述: 测试Map使用浮点数作为键
+// 语法: mapEntry -> OSB expression CSB COL expression
+// 描述: 测试Map使用浮点数作为键（需要方括号）
 
-map<float, str> m = {
-    1.5: "one point five",
-    2.5: "two point five",
-    3.14: "pi approx"
+map<any, str> m = {
+    [1.5]: "one point five",
+    [2.5]: "two point five",
+    [3.14]: "pi approx"
 };
 
-print(m[1.5]);
-print(m[2.5]);
-print(m[3.14]);
+assert(m[1.5] == "one point five", "m[1.5] should be 'one point five'");
+assert(m[2.5] == "two point five", "m[2.5] should be 'two point five'");
+assert(m[3.14] == "pi approx", "m[3.14] should be 'pi approx'");
+
+print("float_key_map tests passed!");

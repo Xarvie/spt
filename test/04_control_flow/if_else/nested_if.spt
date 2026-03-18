@@ -5,16 +5,20 @@
 int a = 1;
 int b = 2;
 int c = 3;
+str result = "";
 if (a == 1) {
     if (b == 2) {
         if (c == 3) {
-            print("deep");
+            result = "deep";
         } else {
-            print("c wrong");
+            result = "c wrong";
         }
     } else {
-        print("b wrong");
+        result = "b wrong";
     }
 } else {
-    print("a wrong");
+    result = "a wrong";
 }
+assert(result == "deep", "result should be 'deep'");
+
+print("nested_if tests passed!");

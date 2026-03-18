@@ -1,10 +1,13 @@
 // 测试: 内置函数 - string.find
 // 语法: string.find(s, pattern)
-// 描述: 测试string.find查找子串
+// 描述: 测试string.find查找子串（SPT使用0-based索引）
 
 str s = "Hello World";
 vars pos, end = string.find(s, "World");
-print(pos, end);
+assert(pos == 6, "pos should be 6 (0-based)");
+assert(end == 11, "end should be 11");
 
 vars pos2, end2 = string.find(s, "xyz");
-print(pos2, end2);
+assert(pos2 == null, "pos2 should be null for not found");
+
+print("string_find tests passed!");

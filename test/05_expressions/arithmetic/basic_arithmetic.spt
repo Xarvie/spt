@@ -2,9 +2,11 @@
 // 语法: addSubExp, mulDivModExp
 // 描述: 测试加减乘除取模运算
 
-print(2 + 3);
-print(10 - 4);
-print(3 * 4);
-print(15 / 3);
-print(17 % 5);
-print(7 ~/ 2);
+assert(2 + 3 == 5, "2 + 3 should be 5");
+assert(10 - 4 == 6, "10 - 4 should be 6");
+assert(3 * 4 == 12, "3 * 4 should be 12");
+assert(15 / 3 == 5, "15 / 3 should be 5");
+assert(17 % 5 == 2, "17 % 5 should be 2");
+assert(7 ~/ 2 == 3, "7 ~/ 2 should be 3");
+
+print("basic_arithmetic tests passed!");

@@ -4,11 +4,17 @@
 
 bool t = true;
 bool f = false;
+str result = "";
 if (t || (1/0 == 0)) {
-    print("OR OK");
+    result = "OR OK";
 }
+assert(result == "OR OK", "OR short-circuit should work");
+
 if (f && (1/0 == 0)) {
-    print("Fail");
+    result = "Fail";
 } else {
-    print("AND OK");
+    result = "AND OK";
 }
+assert(result == "AND OK", "AND short-circuit should work");
+
+print("short_circuit tests passed!");

@@ -5,10 +5,15 @@
 vars a, b;
 a = 1;
 b = 2;
-print(a, b);
+assert(a == 1, "a should be 1");
+assert(b == 2, "b should be 2");
 
 vars x, y, z;
 x = 10;
 y = 20;
 z = 30;
-print(x, y, z);
+assert(x == 10, "x should be 10");
+assert(y == 20, "y should be 20");
+assert(z == 30, "z should be 30");
+
+print("vars_multi_decl tests passed!");

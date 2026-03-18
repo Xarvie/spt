@@ -3,4 +3,6 @@
 // 描述: 测试import { a as b }语法
 
 import { abs as myAbs } from "math";
-print(myAbs(-99));
+assert(myAbs(-99) == 99, "myAbs(-99) should be 99");
+
+print("import_alias tests passed!");

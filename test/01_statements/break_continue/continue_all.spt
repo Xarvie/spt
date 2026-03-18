@@ -2,8 +2,11 @@
 // 语法: CONTINUE SEMICOLON
 // 描述: 测试每次迭代都continue
 
+int count = 0;
 for (int i = 0, 2) {
     continue;
-    print("never");
+    count += 100; // should never execute
 }
-print("done");
+assert(count == 0, "count should be 0 since all iterations continue");
+
+print("continue_all tests passed!");

@@ -1,0 +1,15 @@
+// 测试: List - 越界访问错误
+// 语法: list越界访问
+// 描述: 测试List越界访问会抛出错误（与Lua返回nil不同）
+
+list<int> arr = [1, 2, 3];
+assert(arr[0] == 1, "arr[0] should be 1");
+assert(arr[1] == 2, "arr[1] should be 2");
+assert(arr[2] == 3, "arr[2] should be 3");
+
+vars ok, err = pcall(function() -> void {
+    auto x = arr[10];
+});
+assert(ok == false, "out of bounds should fail");
+
+print("out_of_bounds tests passed!");

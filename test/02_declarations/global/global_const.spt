@@ -5,4 +5,7 @@
 global const int GC = 100;
 global const str GS = "global str";
 
-print(GC, GS);
+assert(GC == 100, "GC should be 100");
+assert(GS == "global str", "GS should be 'global str'");
+
+print("global_const tests passed!");

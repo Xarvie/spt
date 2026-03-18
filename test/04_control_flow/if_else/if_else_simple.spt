@@ -3,9 +3,12 @@
 // 描述: 测试简单的if-else语句
 
 int x = 5;
+str result = "";
 if (x > 10) {
-    print("big");
+    result = "big";
 } else {
-    print("small");
+    result = "small";
 }
-print("done");
+assert(result == "small", "result should be 'small'");
+
+print("if_else_simple tests passed!");

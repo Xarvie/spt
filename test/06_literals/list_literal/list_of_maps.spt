@@ -8,6 +8,8 @@ list<any> users = [
     {"name": "Charlie", "age": "35"}
 ];
 
-print(users[0]["name"]);
-print(users[1]["age"]);
-print(users[2]["name"]);
+assert(users[0]["name"] == "Alice", "first user name should be Alice");
+assert(users[1]["age"] == "30", "second user age should be 30");
+assert(users[2]["name"] == "Charlie", "third user name should be Charlie");
+
+print("list_of_maps tests passed!");

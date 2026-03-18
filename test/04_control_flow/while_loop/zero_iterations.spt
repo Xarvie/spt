@@ -3,13 +3,17 @@
 // 描述: 测试零次迭代的循环
 
 int i = 10;
+int whileCount = 0;
 while (i < 5) {
-    print("never");
+    whileCount += 1;
     i = i + 1;
 }
-print("done");
+assert(whileCount == 0, "while should not execute");
 
+int forCount = 0;
 for (int j = 10, 4) {
-    print("never");
+    forCount += 1;
 }
-print("done2");
+assert(forCount == 0, "for should not execute");
+
+print("zero_iterations tests passed!");

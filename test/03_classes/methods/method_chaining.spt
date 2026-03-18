@@ -17,4 +17,6 @@ class Builder {
 }
 
 Builder b = new Builder();
-print(b.add(1).add(2).add(3).get());
+assert(b.add(1).add(2).add(3).get() == 6, "chained add should result in 6");
+
+print("method_chaining tests passed!");

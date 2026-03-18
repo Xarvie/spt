@@ -1,0 +1,45 @@
+// 测试: 内置函数 - math模块
+// 语法: math模块函数
+// 描述: 测试math模块的常用函数
+
+// 测试 math.abs
+assert(math.abs(-42) == 42, "math.abs(-42) should be 42");
+assert(math.abs(42) == 42, "math.abs(42) should be 42");
+assert(math.abs(0) == 0, "math.abs(0) should be 0");
+
+// 测试 math.ceil
+assert(math.ceil(3.2) == 4, "math.ceil(3.2) should be 4");
+assert(math.ceil(3.8) == 4, "math.ceil(3.8) should be 4");
+assert(math.ceil(-3.2) == -3, "math.ceil(-3.2) should be -3");
+
+// 测试 math.floor
+assert(math.floor(3.8) == 3, "math.floor(3.8) should be 3");
+assert(math.floor(3.2) == 3, "math.floor(3.2) should be 3");
+assert(math.floor(-3.8) == -4, "math.floor(-3.8) should be -4");
+
+// 测试 math.sqrt
+assert(math.sqrt(16) == 4.0, "math.sqrt(16) should be 4.0");
+assert(math.sqrt(0) == 0.0, "math.sqrt(0) should be 0.0");
+
+// 测试 math.sin/cos/tan
+assert(math.sin(0) == 0.0, "math.sin(0) should be 0.0");
+assert(math.cos(0) == 1.0, "math.cos(0) should be 1.0");
+assert(math.tan(0) == 0.0, "math.tan(0) should be 0.0");
+
+// 测试 math.log
+assert(math.log(2.718281828) > 0.99, "math.log(e) should be ~1.0");
+assert(math.log(2.718281828) < 1.01, "math.log(e) should be ~1.0");
+
+// 测试 math.min/max
+assert(math.min(1, 2, 3) == 1, "math.min(1, 2, 3) should be 1");
+assert(math.max(1, 2, 3) == 3, "math.max(1, 2, 3) should be 3");
+
+// 测试 math.pi
+assert(math.pi > 3.14, "math.pi should be > 3.14");
+assert(math.pi < 3.15, "math.pi should be < 3.15");
+
+// 测试 math.huge
+assert(math.huge > 0, "math.huge should be positive");
+assert(math.huge == math.huge, "math.huge == math.huge");
+
+print("math library tests passed!");

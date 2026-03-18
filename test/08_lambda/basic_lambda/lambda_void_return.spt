@@ -2,9 +2,14 @@
 // 语法: lambdaExpression -> FUNCTION OP parameterList? CP ARROW (type | VARS) blockStatement
 // 描述: 测试void返回类型的lambda
 
+int called = 0;
 auto f = function() -> void {
-    print("side effect");
+    called = called + 1;
 };
 
 f();
-print("after call");
+f();
+f();
+assert(called == 3, "f should be called 3 times");
+
+print("lambda_void_return tests passed!");

@@ -3,5 +3,7 @@
 // 描述: 测试import { a, b }语法
 
 import { abs, max } from "math";
-print(abs(-10));
-print(max(15, 25));
+assert(abs(-10) == 10, "abs(-10) should be 10");
+assert(max(15, 25) == 25, "max(15, 25) should be 25");
+
+print("import_named tests passed!");

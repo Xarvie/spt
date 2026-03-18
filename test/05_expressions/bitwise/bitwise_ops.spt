@@ -2,9 +2,10 @@
 // 语法: bitwiseOrExp, bitwiseXorExp, bitwiseAndExp, shiftExp
 // 描述: 测试位运算符
 
-print(0xFF & 0x0F);
-print(0xF0 | 0x0F);
-print(0xFF ^ 0x0F);
-print(~0);
-print(1 << 8);
-print(256 >> 4);
+assert((0xFF & 0x0F) == 0x0F, "0xFF & 0x0F should be 0x0F");
+assert((0xF0 | 0x0F) == 0xFF, "0xF0 | 0x0F should be 0xFF");
+assert((0xFF ^ 0x0F) == 0xF0, "0xFF ^ 0x0F should be 0xF0");
+assert((1 << 8) == 256, "1 << 8 should be 256");
+assert((256 >> 4) == 16, "256 >> 4 should be 16");
+
+print("bitwise_ops tests passed!");

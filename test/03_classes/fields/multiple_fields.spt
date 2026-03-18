@@ -14,4 +14,8 @@ class Person {
 }
 
 Person p = new Person("Alice", 25, "Beijing");
-print(p.name, p.age, p.city);
+assert(p.name == "Alice", "p.name should be 'Alice'");
+assert(p.age == 25, "p.age should be 25");
+assert(p.city == "Beijing", "p.city should be 'Beijing'");
+
+print("multiple_fields tests passed!");

@@ -1,8 +1,10 @@
 // 测试: 内置函数 - string.char和string.byte
 // 语法: string.char(...), string.byte(s, i)
-// 描述: 测试字符和ASCII码转换
+// 描述: 测试字符和ASCII码转换（SPT使用0-based索引）
 
-print(string.char(65, 66, 67));
-print(string.byte("ABC", 1));
-print(string.byte("ABC", 2));
-print(string.byte("ABC", 3));
+assert(string.char(65, 66, 67) == "ABC", "char(65,66,67) should be 'ABC'");
+assert(string.byte("ABC", 0) == 65, "byte('ABC', 0) should be 65");
+assert(string.byte("ABC", 1) == 66, "byte('ABC', 1) should be 66");
+assert(string.byte("ABC", 2) == 67, "byte('ABC', 2) should be 67");
+
+print("string_char_byte tests passed!");

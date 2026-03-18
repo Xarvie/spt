@@ -9,6 +9,8 @@ class Config {
 }
 
 Config c = new Config();
-print(c.timeout);
-print(c.host);
-print(c.debug);
+assert(c.timeout == 30, "c.timeout should be 30");
+assert(c.host == "localhost", "c.host should be 'localhost'");
+assert(c.debug == true, "c.debug should be true");
+
+print("field_with_init tests passed!");

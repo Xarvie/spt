@@ -5,7 +5,8 @@
 float a = 0x1.5p2;
 float b = 0x1.fp3;
 float c = 0x0.1p4;
+assert(a == 5.25, "0x1.5p2 should be 5.25");
+assert(b == 15.5, "0x1.fp3 should be 15.5");
+assert(c == 1.0, "0x0.1p4 should be 1.0");
 
-print(a);
-print(b);
-print(c);
+print("hex_float tests passed!");

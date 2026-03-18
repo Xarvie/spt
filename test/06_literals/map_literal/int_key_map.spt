@@ -1,13 +1,15 @@
 // 测试: 字面量 - Map整数键
-// 语法: mapEntry -> INTEGER COL expression #mapEntryIntKey
-// 描述: 测试Map使用整数作为键
+// 语法: mapEntry -> OSB expression CSB COL expression
+// 描述: 测试Map使用整数作为键（需要方括号）
 
-map<int, str> m = {
-    1: "one",
-    2: "two",
-    3: "three"
+map<any, str> m = {
+    [1]: "one",
+    [2]: "two",
+    [3]: "three"
 };
 
-print(m[1]);
-print(m[2]);
-print(m[3]);
+assert(m[1] == "one", "m[1] should be 'one'");
+assert(m[2] == "two", "m[2] should be 'two'");
+assert(m[3] == "three", "m[3] should be 'three'");
+
+print("int_key_map tests passed!");

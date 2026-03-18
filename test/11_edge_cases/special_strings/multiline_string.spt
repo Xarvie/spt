@@ -6,5 +6,6 @@ str s = "line1
 line2
 line3";
 
-print(s);
-print(#s);
+assert(#s == 17, "multiline string length should be 17");
+
+print("multiline_string tests passed!");

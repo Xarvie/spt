@@ -2,7 +2,9 @@
 // 语法: expression规则链
 // 描述: 测试运算符优先级
 
-print(2 + 3 * 4);
-print((2 + 3) * 4);
-print(10 - 2 * 3 + 1);
-print(10 % 3 + 1);
+assert(2 + 3 * 4 == 14, "2 + 3 * 4 should be 14");
+assert((2 + 3) * 4 == 20, "(2 + 3) * 4 should be 20");
+assert(10 - 2 * 3 + 1 == 5, "10 - 2 * 3 + 1 should be 5");
+assert(10 % 3 + 1 == 2, "10 % 3 + 1 should be 2");
+
+print("operator_precedence tests passed!");

@@ -7,4 +7,7 @@ vars returnTwo() {
 }
 
 vars a, b = returnTwo();
-print(a, b);
+assert(a == 10, "a should be 10");
+assert(b == 20, "b should be 20");
+
+print("return_multi tests passed!");

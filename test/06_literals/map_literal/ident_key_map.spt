@@ -8,6 +8,8 @@ map<str, int> m = {
     z: 3
 };
 
-print(m["x"]);
-print(m["y"]);
-print(m["z"]);
+assert(m["x"] == 1, "m['x'] should be 1");
+assert(m["y"] == 2, "m['y'] should be 2");
+assert(m["z"] == 3, "m['z'] should be 3");
+
+print("ident_key_map tests passed!");

@@ -3,7 +3,10 @@
 // 描述: 测试pcall保护调用
 
 vars ok, result = pcall(function() -> int { return 42; });
-print(ok, result);
+assert(ok == true, "ok should be true for success");
+assert(result == 42, "result should be 42");
 
 vars ok2, result2 = pcall(function() -> int { error("test error"); return 1; });
-print(ok2);
+assert(ok2 == false, "ok2 should be false for error");
+
+print("pcall_basic tests passed!");

@@ -3,7 +3,9 @@
 // 描述: 测试function类型作为变量类型
 
 function add = function(int a, int b) -> int { return a + b; };
-print(add(3, 4));
+assert(add(3, 4) == 7, "add(3, 4) should be 7");
 
 function greet = function(str name) -> void { print("Hello, " .. name); };
 greet("World");
+
+print("function_type tests passed!");

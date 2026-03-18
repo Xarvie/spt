@@ -5,4 +5,8 @@
 bool a = true && false;
 bool b = true || false;
 bool c = !false;
-print(a, b, c);
+assert(a == false, "true && false should be false");
+assert(b == true, "true || false should be true");
+assert(c == true, "!false should be true");
+
+print("logical_ops tests passed!");

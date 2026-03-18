@@ -3,4 +3,6 @@
 // 描述: 测试import * as语法
 
 import * as m from "math";
-print(m.abs(-42));
+assert(m.abs(-42) == 42, "m.abs(-42) should be 42");
+
+print("import_namespace tests passed!");

@@ -5,4 +5,8 @@
 list a = [1, 2];
 list<int> b = [3, 4];
 list<list<int>> c = [[5]];
-print(a[0], b[1], c[0][0]);
+assert(a[0] == 1, "a[0] should be 1");
+assert(b[1] == 4, "b[1] should be 4");
+assert(c[0][0] == 5, "c[0][0] should be 5");
+
+print("list_type tests passed!");

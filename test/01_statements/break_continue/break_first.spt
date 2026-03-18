@@ -2,8 +2,12 @@
 // 语法: BREAK SEMICOLON
 // 描述: 测试在第一次迭代就break
 
+int count = 0;
 for (int i = 0, 99) {
+    count += 1;
     break;
-    print("never");
+    count += 100; // should never execute
 }
-print("done");
+assert(count == 1, "count should be 1 after first iteration break");
+
+print("break_first tests passed!");

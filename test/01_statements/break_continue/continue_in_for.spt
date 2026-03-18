@@ -2,9 +2,14 @@
 // 语法: CONTINUE SEMICOLON #continueStmt
 // 描述: 测试for循环中的continue
 
+int sum = 0;
 for (int i = 0, 5) {
     if (i == 2) {
         continue;
     }
-    print(i);
+    sum += i;
 }
+// sum = 0 + 1 + 3 + 4 + 5 = 13 (skips 2)
+assert(sum == 13, "sum should be 13 (0+1+3+4+5, skipping 2)");
+
+print("continue_in_for tests passed!");

@@ -1,0 +1,20 @@
+// 测试: 协程 - 基本协程
+// 语法: Lua风格协程API
+// 描述: 测试基本协程创建和使用
+
+coro myCo = coroutine.create(function() -> int {
+    for (int i = 1, 3) {
+        coroutine.yield(i * 10);
+    }
+    return 99;
+});
+
+assert(coroutine.status(myCo) == "suspended", "status should be suspended");
+vars ok1, v1 = coroutine.resume(myCo);
+assert(v1 == 10, "first yield should be 10");
+vars ok2, v2 = coroutine.resume(myCo);
+assert(v2 == 20, "second yield should be 20");
+vars ok3, v3 = coroutine.resume(myCo);
+assert(v3 == 30, "third yield should be 30");
+
+print("basic_coroutine tests passed!");

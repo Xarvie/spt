@@ -2,5 +2,7 @@
 // 语法: primaryParenExp
 // 描述: 测试深度嵌套的表达式
 
-print(((1 + 2) * (3 - 1)) / ((4 + 2) / 3));
-print((((10))));
+assert(((1 + 2) * (3 - 1)) / ((4 + 2) / 3) == 3, "nested expression should equal 3");
+assert((((10))) == 10, "((((10)))) should be 10");
+
+print("deeply_nested tests passed!");

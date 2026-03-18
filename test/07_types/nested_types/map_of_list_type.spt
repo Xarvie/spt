@@ -7,5 +7,7 @@ map<str, list<int>> data = {
     "b": [4, 5, 6]
 };
 
-print(data["a"][0]);
-print(data["b"][2]);
+assert(data["a"][0] == 1, "data['a'][0] should be 1");
+assert(data["b"][2] == 6, "data['b'][2] should be 6");
+
+print("map_of_list_type tests passed!");

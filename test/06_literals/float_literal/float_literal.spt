@@ -6,4 +6,9 @@ float a = 1.5;
 float b = .5;
 float c = 1e2;
 float d = 1.5e2;
-print(a, b, c, d);
+assert(a == 1.5, "a should be 1.5");
+assert(b == 0.5, "b should be 0.5");
+assert(c == 100.0, "c should be 100.0");
+assert(d == 150.0, "d should be 150.0");
+
+print("float_literal tests passed!");

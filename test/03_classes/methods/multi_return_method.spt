@@ -16,4 +16,7 @@ class Pair {
 
 Pair p = new Pair(3, 4);
 vars x, y = p.get();
-print(x, y);
+assert(x == 3, "x should be 3");
+assert(y == 4, "y should be 4");
+
+print("multi_return_method tests passed!");

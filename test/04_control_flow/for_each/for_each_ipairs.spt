@@ -3,6 +3,10 @@
 // 描述: 测试ipairs迭代器（使用pairs代替）
 
 list<int> l = [10, 20, 30];
+int sum = 0;
 for (i, v : pairs(l)) {
-    print(i .. ":" .. v);
+    sum += v;
 }
+assert(sum == 60, "sum should be 60");
+
+print("for_each_ipairs tests passed!");

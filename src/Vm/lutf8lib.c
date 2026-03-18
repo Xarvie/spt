@@ -75,18 +75,14 @@ static const char *utf8_decode(const char *s, l_uint32 *val, int strict) {
   return s + 1; /* +1 to include first byte */
 }
 
-/*
-** utf8len(s [, i [, j [, lax]]]) --> number of characters that
-** start in the range [i,j], or nil + current position if 's' is not
-** well formed in that interval
-*/
+/* utflen - receiver is arg1, s is arg2, len is arg3 (optional), */
 static int utflen(lua_State *L) {
   lua_Integer n = 0; /* counter for the number of characters */
   size_t len;        /* string length in bytes */
-  const char *s = luaL_checklstring(L, 1, &len);
-  lua_Integer posi = u_posrelat(luaL_optinteger(L, 2, 0), len);
-  lua_Integer posj = u_posrelat(luaL_optinteger(L, 3, (lua_Integer)len), len);
-  int lax = lua_toboolean(L, 4);
+  const char *s = luaL_checklstring(L, 2, &len);
+  lua_Integer posi = u_posrelat(luaL_optinteger(L, 3, 0), len);
+  lua_Integer posj = u_posrelat(luaL_optinteger(L, 4, (lua_Integer)len), len);
+  int lax = lua_toboolean(L, 5);
   luaL_argcheck(L, 0 <= posi && posi <= (lua_Integer)len, 2, "initial position out of bounds");
   luaL_argcheck(L, posj <= (lua_Integer)len, 3, "final position out of bounds");
   while (posi < posj) {
@@ -107,16 +103,17 @@ static int utflen(lua_State *L) {
 ** codepoint(s, [i, [j [, lax]]]) -> returns codepoints for all
 ** characters that start in the range [i,j]
 */
+/* codepoint - receiver is arg1, s is arg2, i is arg3, j is arg4, lax is arg5 */
 static int codepoint(lua_State *L) {
   size_t len;
-  const char *s = luaL_checklstring(L, 1, &len);
-  lua_Integer posi = u_posrelat(luaL_optinteger(L, 2, 0), len);
-  lua_Integer pose = u_posrelat(luaL_optinteger(L, 3, posi + 1), len);
-  int lax = lua_toboolean(L, 4);
+  const char *s = luaL_checklstring(L, 2, &len);
+  lua_Integer posi = u_posrelat(luaL_optinteger(L, 3, 0), len);
+  lua_Integer pose = u_posrelat(luaL_optinteger(L, 4, posi + 1), len);
+  int lax = lua_toboolean(L, 5);
   int n;
   const char *se;
-  luaL_argcheck(L, posi >= 0, 2, "out of bounds");
-  luaL_argcheck(L, pose <= (lua_Integer)len, 3, "out of bounds");
+  luaL_argcheck(L, posi >= 0, 3, "out of bounds");
+  luaL_argcheck(L, pose <= (lua_Integer)len, 4, "out of bounds");
   if (posi > pose)
     return 0;                 /* empty interval; return no values */
   if (pose - posi >= INT_MAX) /* (lua_Integer -> int) overflow? */
@@ -145,15 +142,16 @@ static void pushutfchar(lua_State *L, int arg) {
 /*
 ** utfchar(n1, n2, ...)  -> char(n1)..char(n2)...
 */
+/* utfchar - receiver is arg1, values start from arg2 */
 static int utfchar(lua_State *L) {
-  int n = lua_gettop(L); /* number of arguments */
-  if (n == 1)            /* optimize common case of single char */
-    pushutfchar(L, 1);
+  int n = lua_gettop(L) - 1; /* number of arguments (excluding receiver) */
+  if (n == 1)                /* optimize common case of single char */
+    pushutfchar(L, 2);
   else {
     int i;
     luaL_Buffer b;
     luaL_buffinit(L, &b);
-    for (i = 1; i <= n; i++) {
+    for (i = 2; i <= n + 1; i++) {
       pushutfchar(L, i);
       luaL_addvalue(&b);
     }
@@ -166,13 +164,14 @@ static int utfchar(lua_State *L) {
 ** offset(s, n, [i])  -> indices where n-th character counting from
 **   position 'i' starts and ends; 0 means character at 'i'.
 */
+/* byteoffset - receiver is arg1, s is arg2, n is arg3, i is arg4 */
 static int byteoffset(lua_State *L) {
   size_t len;
-  const char *s = luaL_checklstring(L, 1, &len);
-  lua_Integer n = luaL_checkinteger(L, 2);
+  const char *s = luaL_checklstring(L, 2, &len);
+  lua_Integer n = luaL_checkinteger(L, 3);
   lua_Integer posi = (n >= 0) ? 0 : cast_st2S(len);
-  posi = u_posrelat(luaL_optinteger(L, 3, posi), len);
-  luaL_argcheck(L, 0 <= posi && posi <= (lua_Integer)len, 3, "position out of bounds");
+  posi = u_posrelat(luaL_optinteger(L, 4, posi), len);
+  luaL_argcheck(L, 0 <= posi && posi <= (lua_Integer)len, 4, "position out of bounds");
   if (n == 0) {
     /* find beginning of current byte sequence */
     while (posi > 0 && iscontp(s + posi))
@@ -214,8 +213,8 @@ static int byteoffset(lua_State *L) {
 
 static int iter_aux(lua_State *L, int strict) {
   size_t len;
-  const char *s = luaL_checklstring(L, 1, &len);
-  lua_Integer sn = lua_tointeger(L, 2);
+  const char *s = luaL_checklstring(L, 2, &len);
+  lua_Integer sn = lua_tointeger(L, 3);
   lua_Unsigned n;
   if (sn < 0) {
     n = 0; /* first iteration: start from byte 0 */
@@ -243,12 +242,13 @@ static int iter_auxstrict(lua_State *L) { return iter_aux(L, 1); }
 
 static int iter_auxlax(lua_State *L) { return iter_aux(L, 0); }
 
+/* iter_codes - receiver is arg1, s is arg2, lax is arg3 */
 static int iter_codes(lua_State *L) {
-  int lax = lua_toboolean(L, 2);
-  const char *s = luaL_checkstring(L, 1);
-  luaL_argcheck(L, !iscontp(s), 1, MSGInvalid);
+  int lax = lua_toboolean(L, 3);
+  const char *s = luaL_checkstring(L, 2);
+  luaL_argcheck(L, !iscontp(s), 2, MSGInvalid);
   lua_pushcfunction(L, lax ? iter_auxlax : iter_auxstrict);
-  lua_pushvalue(L, 1);
+  lua_pushvalue(L, 2);
   lua_pushinteger(L, -1); /* initial control: before first byte */
   return 3;
 }

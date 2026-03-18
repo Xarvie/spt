@@ -10,5 +10,7 @@ class Counter {
 }
 
 Counter.count = 5;
-print(Counter.count);
-print(Counter.getCount());
+assert(Counter.count == 5, "Counter.count should be 5");
+assert(Counter.getCount() == 5, "Counter.getCount() should be 5");
+
+print("static_field_method tests passed!");

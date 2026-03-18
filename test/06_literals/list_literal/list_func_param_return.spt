@@ -11,13 +11,15 @@ int sum(list arr) {
 }
 
 list<int> nums = [1, 2, 3, 4, 5];
-print(sum(nums));
+assert(sum(nums) == 15, "sum should be 15");
 
 list makeList() {
     return [100, 200, 300];
 }
 
 any result = makeList();
-print(result[0]);
-print(result[2]);
-print(#result);
+assert(result[0] == 100, "result[0] should be 100");
+assert(result[2] == 300, "result[2] should be 300");
+assert(#result == 3, "#result should be 3");
+
+print("list_func_param_return tests passed!");

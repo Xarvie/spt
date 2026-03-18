@@ -1,0 +1,19 @@
+// 测试: 协程 - yield多值
+// 语法: coroutine.yield多返回值
+// 描述: 测试协程yield多个值
+
+coro co = coroutine.create(function() -> vars {
+    coroutine.yield(1, "a");
+    coroutine.yield(2, "b");
+    return 3, "c";
+});
+
+vars a, b = coroutine.resume(co);
+assert(a == true, "first resume ok should be true");
+assert(b == 1, "first resume value should be 1");
+
+vars c, d = coroutine.resume(co);
+assert(c == true, "second resume ok should be true");
+assert(d == 2, "second resume value should be 2");
+
+print("yield_multi tests passed!");

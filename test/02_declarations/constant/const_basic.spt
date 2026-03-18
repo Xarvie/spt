@@ -4,4 +4,8 @@
 
 const int x = 10;
 const auto y = 20;
-print(x + y);
+assert(x == 10, "x should be 10");
+assert(y == 20, "y should be 20");
+assert(x + y == 30, "x + y should be 30");
+
+print("const_basic tests passed!");

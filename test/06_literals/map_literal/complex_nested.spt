@@ -9,6 +9,8 @@ map<str, any> complex = {
     ]
 };
 
-print(complex["users"][0]["name"]);
-print(complex["users"][0]["scores"][0]);
-print(complex["users"][1]["scores"][2]);
+assert(complex["users"][0]["name"] == "Alice", "first user should be Alice");
+assert(complex["users"][0]["scores"][0] == 85, "Alice's first score should be 85");
+assert(complex["users"][1]["scores"][2] == 85, "Bob's third score should be 85");
+
+print("complex_nested tests passed!");

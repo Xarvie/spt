@@ -1,0 +1,14 @@
+// 测试: 元表 - __index
+// 语法: metatable __index
+// 描述: 测试元表__index元方法
+
+map<any, any> base = {"x": 1, "y": 2};
+map<any, any> child = {"z": 3};
+
+setmetatable(child, {__index: base});
+
+assert(child["z"] == 3, "child['z'] should be 3");
+assert(child["x"] == 1, "child['x'] should be 1 from base");
+assert(child["y"] == 2, "child['y'] should be 2 from base");
+
+print("metatable_index tests passed!");

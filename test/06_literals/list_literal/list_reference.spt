@@ -5,12 +5,13 @@
 list<int> a = [1, 2, 3];
 list<int> b = a;
 b[0] = 99;
-print(a[0]);
-print(b[0]);
+assert(a[0] == 99, "a[0] should be 99 (reference)");
+assert(b[0] == 99, "b[0] should be 99");
 
 list<int> c = [1, 2, 3];
 list<int> d = c;
 table.push(d, 4);
-print(#a);
-print(#c);
-print(#d);
+assert(#c == 4, "#c should be 4 (shared reference)");
+assert(#d == 4, "#d should be 4");
+
+print("list_reference tests passed!");

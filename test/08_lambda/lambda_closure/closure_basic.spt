@@ -11,6 +11,8 @@ auto makeCounter = function() -> function {
 };
 
 auto c1 = makeCounter();
-print(c1());
-print(c1());
-print(c1());
+assert(c1() == 1, "first call should return 1");
+assert(c1() == 2, "second call should return 2");
+assert(c1() == 3, "third call should return 3");
+
+print("closure_basic tests passed!");

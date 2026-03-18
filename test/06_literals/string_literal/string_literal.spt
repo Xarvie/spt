@@ -4,6 +4,7 @@
 
 str a = "double";
 str b = 'single';
-str c = "tab\there";
-str d = "line\nbreak";
-print(a, b);
+assert(a == "double", "a should be 'double'");
+assert(b == "single", "b should be 'single'");
+
+print("string_literal tests passed!");

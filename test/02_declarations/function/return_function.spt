@@ -7,4 +7,6 @@ function makeAdder(int n) {
 }
 
 auto add5 = makeAdder(5);
-print(add5(10));
+assert(add5(10) == 15, "add5(10) should be 15");
+
+print("return_function tests passed!");

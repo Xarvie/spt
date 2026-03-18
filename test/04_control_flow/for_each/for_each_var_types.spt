@@ -3,15 +3,24 @@
 // 描述: 测试for-each循环变量的不同类型声明方式
 
 list<int> l = [10, 20];
+int typedCount = 0;
+int autoCount = 0;
+int untypedCount = 0;
 
 for (int k, int v : pairs(l)) {
-    print("typed: " .. k .. ":" .. v);
+    typedCount += 1;
 }
 
 for (auto k, auto v : pairs(l)) {
-    print("auto: " .. k .. ":" .. v);
+    autoCount += 1;
 }
 
 for (k, v : pairs(l)) {
-    print("untyped: " .. k .. ":" .. v);
+    untypedCount += 1;
 }
+
+assert(typedCount == 2, "typed iteration should run 2 times");
+assert(autoCount == 2, "auto iteration should run 2 times");
+assert(untypedCount == 2, "untyped iteration should run 2 times");
+
+print("for_each_var_types tests passed!");

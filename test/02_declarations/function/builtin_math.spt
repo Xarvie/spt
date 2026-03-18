@@ -2,8 +2,10 @@
 // 语法: math.abs, math.floor, math.ceil, math.min, math.max
 // 描述: 测试math模块函数
 
-print(math.abs(-5));
-print(math.floor(3.9));
-print(math.ceil(3.1));
-print(math.min(1, 2));
-print(math.max(1, 2));
+assert(math.abs(-5) == 5, "math.abs(-5) should be 5");
+assert(math.floor(3.9) == 3, "math.floor(3.9) should be 3");
+assert(math.ceil(3.1) == 4, "math.ceil(3.1) should be 4");
+assert(math.min(1, 2) == 1, "math.min(1, 2) should be 1");
+assert(math.max(1, 2) == 2, "math.max(1, 2) should be 2");
+
+print("builtin_math tests passed!");

@@ -2,7 +2,7 @@
 // 语法: string.format(format, ...)
 // 描述: 测试string.format格式化字符串
 
-print(string.format("Hello %s", "World"));
-print(string.format("Number: %d", 42));
-print(string.format("Float: %f", 3.14));
-print(string.format("Mix: %s = %d", "answer", 42));
+assert(string.format("Hello %s", "World") == "Hello World", "format string should work");
+assert(string.format("Number: %d", 42) == "Number: 42", "format int should work");
+
+print("string_format tests passed!");

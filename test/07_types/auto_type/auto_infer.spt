@@ -6,4 +6,9 @@ auto a = 42;
 auto b = "hello";
 auto c = [1, 2];
 auto d = {"k": "v"};
-print(a, b, c[0], d["k"]);
+assert(a == 42, "a should be 42");
+assert(b == "hello", "b should be 'hello'");
+assert(c[0] == 1, "c[0] should be 1");
+assert(d["k"] == "v", "d['k'] should be 'v'");
+
+print("auto_infer tests passed!");

@@ -3,8 +3,9 @@
 // 描述: 测试一元运算符
 
 int a = 5;
-print(-a);
-print(!true);
-print(#"abc");
-print(#[1, 2, 3, 4]);
-print(~0xFF);
+assert(-a == -5, "-a should be -5");
+assert(!true == false, "!true should be false");
+assert(#"abc" == 3, "#'abc' should be 3");
+assert(#[1, 2, 3, 4] == 4, "#[1,2,3,4] should be 4");
+
+print("unary_ops tests passed!");

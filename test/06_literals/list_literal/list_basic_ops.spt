@@ -3,9 +3,11 @@
 // 描述: 测试List的创建、访问和修改
 
 list<int> a = [10, 20, 30];
-print(a[0]);
-print(a[2]);
-print(#a);
+assert(a[0] == 10, "a[0] should be 10");
+assert(a[2] == 30, "a[2] should be 30");
+assert(#a == 3, "#a should be 3");
 
 a[0] = 99;
-print(a[0]);
+assert(a[0] == 99, "a[0] should be 99 after update");
+
+print("list_basic_ops tests passed!");

@@ -2,18 +2,18 @@
 // 语法: forEachControl -> forEachVar (COMMA forEachVar)* COL expressionList
 // 描述: 测试pairs迭代器遍历List和Map
 
+int listCount = 0;
 list<any> l = [10, null, 30];
-print("--- List ---");
 for (k, v : pairs(l)) {
-    if (v == null) {
-        print(k .. ":nil");
-    } else {
-        print(k .. ":" .. v);
-    }
+    listCount += 1;
 }
+assert(listCount == 3, "should iterate 3 items in list");
 
+int mapCount = 0;
 map<int, int> m = {1:30, 3:30};
-print("--- Map ---");
 for (k, v : pairs(m)) {
-    print(v);
+    mapCount += 1;
 }
+assert(mapCount == 2, "should iterate 2 items in map");
+
+print("pairs_iteration tests passed!");

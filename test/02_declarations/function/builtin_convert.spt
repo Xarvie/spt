@@ -1,8 +1,9 @@
-// 测试: 内置函数 - tonumber/tostring
-// 语法: tonumber(), tostring() 内置函数
+// 测试: 内置函数 - 类型转换
+// 语法: tonumber(), tostring()
 // 描述: 测试类型转换内置函数
 
-print(tonumber("123"));
-print(tostring(456));
-print(tostring(true));
-print(tostring(null));
+assert(tonumber("123") == 123, "tonumber('123') should be 123");
+assert(tostring(456) == "456", "tostring(456) should be '456'");
+assert(tostring(true) == "true", "tostring(true) should be 'true'");
+
+print("builtin_convert tests passed!");

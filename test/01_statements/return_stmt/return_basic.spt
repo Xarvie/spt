@@ -11,5 +11,6 @@ void greet(str name) {
     return;
 }
 
-print(add(3, 4));
-greet("World");
+assert(add(3, 4) == 7, "add(3, 4) should be 7");
+
+print("return_basic tests passed!");

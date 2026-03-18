@@ -4,10 +4,11 @@
 
 int count = 0;
 while (true) {
-    print(count);
     count = count + 1;
     if (count >= 3) {
         break;
     }
 }
-print("exit");
+assert(count == 3, "count should be 3");
+
+print("while_true_break tests passed!");

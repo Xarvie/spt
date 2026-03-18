@@ -3,9 +3,11 @@
 // 描述: 测试string模块的各种函数
 
 str s = "Hello World";
-print(string.len(s));
-print(string.sub(s, 1, 5));
-print(string.upper(s));
-print(string.lower(s));
-print(string.rep("ab", 3));
-print(string.reverse("abc"));
+assert(string.len(s) == 11, "len should be 11");
+assert(string.sub(s, 0, 5) == "Hello", "sub(0,5) should be 'Hello'");
+assert(string.upper(s) == "HELLO WORLD", "upper should work");
+assert(string.lower(s) == "hello world", "lower should work");
+assert(string.rep("ab", 3) == "ababab", "rep should work");
+assert(string.reverse("abc") == "cba", "reverse should work");
+
+print("string_funcs tests passed!");

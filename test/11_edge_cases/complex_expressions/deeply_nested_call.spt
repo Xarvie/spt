@@ -8,4 +8,6 @@ int f3(int x) { return f2(x) + 3; }
 int f4(int x) { return f3(x) * 4; }
 int f5(int x) { return f4(x) + 5; }
 
-print(f5(f5(f5(0))));
+assert(f5(0) == 25, "f5(0) should be 25");
+
+print("deeply_nested_call tests passed!");

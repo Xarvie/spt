@@ -1,5 +1,5 @@
-// 测试: 运算符重载 - 加法运算符
-// 语法: class方法定义 __add
+// 测试: 类 - 运算符重载__add
+// 语法: classMethodMember, operator overloading
 // 描述: 测试类运算符重载__add
 
 class Vec2 {
@@ -10,14 +10,14 @@ class Vec2 {
         this.y = y;
     }
     Vec2 __add(Vec2 other) {
-        Vec2 result = new Vec2(0, 0);
-        result.x = this.x + other.x;
-        result.y = this.y + other.y;
-        return result;
+        return new Vec2(this.x + other.x, this.y + other.y);
     }
 }
 
-Vec2 v1 = new Vec2(3, 4);
-Vec2 v2 = new Vec2(1, 2);
-Vec2 v3 = v1 + v2;
-print(v3.x, v3.y);
+Vec2 a = new Vec2(1, 2);
+Vec2 b = new Vec2(3, 4);
+Vec2 c = a + b;
+assert(c.x == 4, "c.x should be 4");
+assert(c.y == 6, "c.y should be 6");
+
+print("operator_overload_add tests passed!");

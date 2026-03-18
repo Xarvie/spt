@@ -2,8 +2,10 @@
 // 语法: arguments -> expressionList?
 // 描述: 测试函数调用时传递大量参数
 
-void many(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j) {
-    print(a + b + c + d + e + f + g + h + i + j);
+int many(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j) {
+    return a + b + c + d + e + f + g + h + i + j;
 }
 
-many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+assert(many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) == 55, "sum should be 55");
+
+print("many_arguments tests passed!");

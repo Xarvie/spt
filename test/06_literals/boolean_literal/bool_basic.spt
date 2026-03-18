@@ -4,4 +4,7 @@
 
 bool t = true;
 bool f = false;
-print(t, f);
+assert(t == true, "t should be true");
+assert(f == false, "f should be false");
+
+print("bool_basic tests passed!");

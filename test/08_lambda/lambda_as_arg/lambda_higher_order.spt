@@ -9,5 +9,7 @@ int apply(function f, int x) {
 auto double = function(int n) -> int { return n * 2; };
 auto square = function(int n) -> int { return n * n; };
 
-print(apply(double, 5));
-print(apply(square, 5));
+assert(apply(double, 5) == 10, "double(5) should be 10");
+assert(apply(square, 5) == 25, "square(5) should be 25");
+
+print("lambda_higher_order tests passed!");

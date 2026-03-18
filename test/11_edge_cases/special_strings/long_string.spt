@@ -4,5 +4,6 @@
 
 str s = "This is a very long str that contains many characters and is used to test the handling of long strings in the SPT language runtime. It should be processed correctly without any issues or truncation.";
 
-print(#s);
-print(s);
+assert(#s > 100, "long string length should be > 100");
+
+print("long_string tests passed!");

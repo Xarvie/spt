@@ -146,10 +146,11 @@ typedef luaL_Stream LStream;
 
 #define isclosed(p) ((p)->closef == NULL)
 
+/* io_type - receiver is arg1, file is arg2 */
 static int io_type(lua_State *L) {
   LStream *p;
-  luaL_checkany(L, 1);
-  p = (LStream *)luaL_testudata(L, 1, LUA_FILEHANDLE);
+  luaL_checkany(L, 2);
+  p = (LStream *)luaL_testudata(L, 2, LUA_FILEHANDLE);
   if (p == NULL)
     luaL_pushfail(L); /* not a file */
   else if (isclosed(p))
@@ -205,9 +206,14 @@ static int f_close(lua_State *L) {
   return aux_close(L);
 }
 
+/* io_close - receiver is arg1, file is arg2 (optional) */
 static int io_close(lua_State *L) {
-  if (lua_isnone(L, 1))                            /* no argument? */
+  if (lua_isnone(L, 2))                            /* no argument? */
     lua_getfield(L, LUA_REGISTRYINDEX, IO_OUTPUT); /* use default output */
+  else {
+    lua_pushvalue(L, 2); /* move file to index 1 for f_close */
+    lua_replace(L, 1);
+  }
   return f_close(L);
 }
 
@@ -241,12 +247,13 @@ static void opencheck(lua_State *L, const char *fname, const char *mode) {
     luaL_error(L, "cannot open file '%s' (%s)", fname, strerror(errno));
 }
 
+/* io_open - receiver is arg1, filename is arg2, mode is arg3 */
 static int io_open(lua_State *L) {
-  const char *filename = luaL_checkstring(L, 1);
-  const char *mode = luaL_optstring(L, 2, "r");
+  const char *filename = luaL_checkstring(L, 2);
+  const char *mode = luaL_optstring(L, 3, "r");
   LStream *p = newfile(L);
   const char *md = mode; /* to traverse/check mode */
-  luaL_argcheck(L, l_checkmode(md), 2, "invalid mode");
+  luaL_argcheck(L, l_checkmode(md), 3, "invalid mode");
   errno = 0;
   p->f = fopen(filename, mode);
   return (p->f == NULL) ? luaL_fileresult(L, 0, filename) : 1;
@@ -261,11 +268,12 @@ static int io_pclose(lua_State *L) {
   return luaL_execresult(L, l_pclose(L, p->f));
 }
 
+/* io_popen - receiver is arg1, command is arg2, mode is arg3 */
 static int io_popen(lua_State *L) {
-  const char *filename = luaL_checkstring(L, 1);
-  const char *mode = luaL_optstring(L, 2, "r");
+  const char *filename = luaL_checkstring(L, 2);
+  const char *mode = luaL_optstring(L, 3, "r");
   LStream *p = newprefile(L);
-  luaL_argcheck(L, l_checkmodep(mode), 2, "invalid mode");
+  luaL_argcheck(L, l_checkmodep(mode), 3, "invalid mode");
   errno = 0;
   p->f = l_popen(L, filename, mode);
   p->closef = &io_pclose;
@@ -288,12 +296,16 @@ static FILE *getiofile(lua_State *L, const char *findex) {
   return p->f;
 }
 
+/* g_iofile - helper for io_input/io_output, receiver is arg1, file is arg2 */
 static int g_iofile(lua_State *L, const char *f, const char *mode) {
-  if (!lua_isnoneornil(L, 1)) {
-    const char *filename = lua_tostring(L, 1);
+  if (!lua_isnoneornil(L, 2)) {
+    const char *filename = lua_tostring(L, 2);
     if (filename)
       opencheck(L, filename, mode);
     else {
+      /* check that it's a valid file handle - need to move to index 1 for tofile */
+      lua_pushvalue(L, 2);
+      lua_replace(L, 1);
       tofile(L); /* check that it's a valid file handle */
       lua_pushvalue(L, 1);
     }
@@ -304,8 +316,10 @@ static int g_iofile(lua_State *L, const char *f, const char *mode) {
   return 1;
 }
 
+/* io_input - receiver is arg1, file is arg2 */
 static int io_input(lua_State *L) { return g_iofile(L, IO_INPUT, "r"); }
 
+/* io_output - receiver is arg1, file is arg2 */
 static int io_output(lua_State *L) { return g_iofile(L, IO_OUTPUT, "w"); }
 
 static int io_readline(lua_State *L);
@@ -346,17 +360,18 @@ static int f_lines(lua_State *L) {
 ** closed, also returns the file itself as a second result (to be
 ** closed as the state at the exit of a generic for).
 */
+/* io_lines - receiver is arg1, filename is arg2 (optional) */
 static int io_lines(lua_State *L) {
   int toclose;
-  if (lua_isnone(L, 1))
+  if (lua_isnone(L, 2))
     lua_pushnil(L);                               /* at least one argument */
-  if (lua_isnil(L, 1)) {                          /* no file name? */
+  if (lua_isnil(L, 2)) {                          /* no file name? */
     lua_getfield(L, LUA_REGISTRYINDEX, IO_INPUT); /* get default input */
     lua_replace(L, 1);                            /* put it at index 1 */
     tofile(L);                                    /* check that it's a valid file handle */
     toclose = 0;                                  /* do not close it after iteration */
   } else {                                        /* open a new file */
-    const char *filename = luaL_checkstring(L, 1);
+    const char *filename = luaL_checkstring(L, 2);
     opencheck(L, filename, "r");
     lua_replace(L, 1); /* put file at index 1 */
     toclose = 1;       /* close it after iteration */
@@ -567,7 +582,18 @@ static int g_read(lua_State *L, FILE *f, int first) {
   return n - first;
 }
 
-static int io_read(lua_State *L) { return g_read(L, getiofile(L, IO_INPUT), 1); }
+/* io_read - receiver is arg1, format args start from arg2 */
+static int io_read(lua_State *L) {
+  /* Move all args down by 1 since receiver is at index 1 */
+  int i;
+  int nargs = lua_gettop(L) - 1;
+  for (i = 1; i <= nargs; i++) {
+    lua_pushvalue(L, i + 1);
+    lua_replace(L, i);
+  }
+  lua_settop(L, nargs);
+  return g_read(L, getiofile(L, IO_INPUT), 1);
+}
 
 static int f_read(lua_State *L) { return g_read(L, tofile(L), 2); }
 
@@ -629,7 +655,18 @@ static int g_write(lua_State *L, FILE *f, int arg) {
   return 1; /* no errors; file handle already on stack top */
 }
 
-static int io_write(lua_State *L) { return g_write(L, getiofile(L, IO_OUTPUT), 1); }
+/* io_write - receiver is arg1, values start from arg2 */
+static int io_write(lua_State *L) {
+  /* Move all args down by 1 since receiver is at index 1 */
+  int i;
+  int nargs = lua_gettop(L) - 1;
+  for (i = 1; i <= nargs; i++) {
+    lua_pushvalue(L, i + 1);
+    lua_replace(L, i);
+  }
+  lua_settop(L, nargs);
+  return g_write(L, getiofile(L, IO_OUTPUT), 1);
+}
 
 static int f_write(lua_State *L) {
   FILE *f = tofile(L);
@@ -674,6 +711,7 @@ static int aux_flush(lua_State *L, FILE *f) {
 
 static int f_flush(lua_State *L) { return aux_flush(L, tofile(L)); }
 
+/* io_flush - receiver is arg1 */
 static int io_flush(lua_State *L) { return aux_flush(L, getiofile(L, IO_OUTPUT)); }
 
 /*

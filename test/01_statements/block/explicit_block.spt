@@ -2,10 +2,14 @@
 // 语法: statement -> blockStatement #blockStmt, blockStatement -> '{' statement* '}'
 // 描述: 测试显式代码块语句和嵌套代码块
 
+int result = 0;
 {
     int x = 1;
     {
         int y = 2;
-        print(x + y);
+        result = x + y;
     }
 }
+assert(result == 3, "result should be 3");
+
+print("explicit_block tests passed!");

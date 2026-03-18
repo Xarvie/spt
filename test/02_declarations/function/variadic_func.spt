@@ -3,14 +3,16 @@
 // 描述: 测试可变参数函数
 
 void f(int a, ...) {
-    print(a);
+    assert(a == 42, "a should be 42");
 }
 
 f(42);
 
 void g(...) {
     auto args = table.pack(...);
-    print(#args);
+    assert(#args == 3, "args count should be 3");
 }
 
 g(1, 2, 3);
+
+print("variadic_func tests passed!");

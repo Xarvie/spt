@@ -4,8 +4,9 @@
 
 str s = "Hello World";
 vars result, count = string.gsub(s, "o", "0");
-print(result);
-print(count);
+assert(count == 2, "count should be 2");
 
 vars result2, count2 = string.gsub("aaa", "a", "b");
-print(result2, count2);
+assert(count2 == 3, "count2 should be 3");
+
+print("string_gsub tests passed!");

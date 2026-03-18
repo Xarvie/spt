@@ -35,44 +35,49 @@ static void checkstack(lua_State *L, lua_State *L1, int n) {
     luaL_error(L, "stack overflow");
 }
 
+/* db_getregistry - receiver is arg1 */
 static int db_getregistry(lua_State *L) {
   lua_pushvalue(L, LUA_REGISTRYINDEX);
   return 1;
 }
 
+/* db_getmetatable - receiver is arg1, object is arg2 */
 static int db_getmetatable(lua_State *L) {
-  luaL_checkany(L, 1);
-  if (!lua_getmetatable(L, 1)) {
+  luaL_checkany(L, 2);
+  if (!lua_getmetatable(L, 2)) {
     lua_pushnil(L); /* no metatable */
   }
   return 1;
 }
 
+/* db_setmetatable - receiver is arg1, object is arg2, mt is arg3 */
 static int db_setmetatable(lua_State *L) {
-  int t = lua_type(L, 2);
-  luaL_argexpected(L, t == LUA_TNIL || t == LUA_TTABLE, 2, "nil or table");
-  lua_settop(L, 2);
-  lua_setmetatable(L, 1);
+  int t = lua_type(L, 3);
+  luaL_argexpected(L, t == LUA_TNIL || t == LUA_TTABLE, 3, "nil or table");
+  lua_settop(L, 3);
+  lua_setmetatable(L, 2);
   return 1; /* return 1st argument */
 }
 
+/* db_getuservalue - receiver is arg1, userdata is arg2, n is arg3 */
 static int db_getuservalue(lua_State *L) {
-  int n = (int)luaL_optinteger(L, 2, 1);
-  if (lua_type(L, 1) != LUA_TUSERDATA)
+  int n = (int)luaL_optinteger(L, 3, 1);
+  if (lua_type(L, 2) != LUA_TUSERDATA)
     luaL_pushfail(L);
-  else if (lua_getiuservalue(L, 1, n) != LUA_TNONE) {
+  else if (lua_getiuservalue(L, 2, n) != LUA_TNONE) {
     lua_pushboolean(L, 1);
     return 2;
   }
   return 1;
 }
 
+/* db_setuservalue - receiver is arg1, userdata is arg2, value is arg3, n is arg4 */
 static int db_setuservalue(lua_State *L) {
-  int n = (int)luaL_optinteger(L, 3, 1);
-  luaL_checktype(L, 1, LUA_TUSERDATA);
-  luaL_checkany(L, 2);
-  lua_settop(L, 2);
-  if (!lua_setiuservalue(L, 1, n))
+  int n = (int)luaL_optinteger(L, 4, 1);
+  luaL_checktype(L, 2, LUA_TUSERDATA);
+  luaL_checkany(L, 3);
+  lua_settop(L, 3);
+  if (!lua_setiuservalue(L, 2, n))
     luaL_pushfail(L);
   return 1;
 }
@@ -80,15 +85,15 @@ static int db_setuservalue(lua_State *L) {
 /*
 ** Auxiliary function used by several library functions: check for
 ** an optional thread as function's first argument and set 'arg' with
-** 1 if this argument is present (so that functions can skip it to
+** 2 if this argument is present (so that functions can skip it to
 ** access their other arguments)
 */
 static lua_State *getthread(lua_State *L, int *arg) {
-  if (lua_isthread(L, 1)) {
-    *arg = 1;
-    return lua_tothread(L, 1);
+  if (lua_isthread(L, 2)) {
+    *arg = 2;
+    return lua_tothread(L, 2);
   } else {
-    *arg = 0;
+    *arg = 1;
     return L; /* function will operate over current thread */
   }
 }

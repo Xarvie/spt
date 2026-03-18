@@ -12,4 +12,7 @@ class Point {
 }
 
 Point p1 = new Point(3, 4);
-print(p1.x, p1.y);
+assert(p1.x == 3, "p1.x should be 3");
+assert(p1.y == 4, "p1.y should be 4");
+
+print("new_basic tests passed!");

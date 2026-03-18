@@ -1,12 +1,15 @@
 // 测试: 表达式 - 字符串长度
 // 语法: unaryExp -> LEN unaryExp
-// 描述: 测试#运算符获取字符串长度
+// 描述: 测试#运算符获取字符串长度（字节数）
 
 str s = "hello world";
-print(#s);
+assert(#s == 11, "#'hello world' should be 11");
 
 str empty = "";
-print(#empty);
+assert(#empty == 0, "#'' should be 0");
 
+// 中文字符串返回字节数，不是字符数
 str chinese = "中文测试";
-print(#chinese);
+assert(#chinese == 12, "#'中文测试' should be 12 (bytes)");
+
+print("length_string tests passed!");

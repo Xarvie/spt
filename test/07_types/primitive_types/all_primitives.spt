@@ -8,4 +8,11 @@ number c = 3;
 str d = "s";
 bool e = true;
 any f = null;
-print(a, b, c, d, e, f);
+assert(a == 1, "a should be 1");
+assert(b == 2.5, "b should be 2.5");
+assert(c == 3, "c should be 3");
+assert(d == "s", "d should be 's'");
+assert(e == true, "e should be true");
+assert(f == null, "f should be null");
+
+print("all_primitives tests passed!");

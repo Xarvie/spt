@@ -5,4 +5,8 @@
 int a = 42;
 int b = 0xFF;
 int c = 0x10;
-print(a, b, c);
+assert(a == 42, "a should be 42");
+assert(b == 255, "b should be 255");
+assert(c == 16, "c should be 16");
+
+print("int_literal tests passed!");

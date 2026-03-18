@@ -2,10 +2,11 @@
 // 语法: GLOBAL? declaration_item
 // 描述: 测试在函数内部声明global变量
 
-void test() {
+int getInner() {
     global int g_inner = 42;
-    print(g_inner);
+    return g_inner;
 }
 
-test();
-print(g_inner);
+assert(getInner() == 42, "getInner() should be 42");
+
+print("global_in_function tests passed!");

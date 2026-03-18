@@ -4,20 +4,22 @@
 
 int a = 100;
 a += 10;
-print(a);
+assert(a == 110, "a should be 110 after +=");
 a -= 5;
-print(a);
+assert(a == 105, "a should be 105 after -=");
 a *= 2;
-print(a);
+assert(a == 210, "a should be 210 after *=");
 a /= 7;
-print(a);
+assert(a == 30, "a should be 30 after /=");
 a ~/= 3;
-print(a);
+assert(a == 10, "a should be 10 after ~/=");
 
 int b = 17;
 b %= 5;
-print(b);
+assert(b == 2, "b should be 2 after %=");
 
 str s = "hello";
 s ..= " world";
-print(s);
+assert(s == "hello world", "s should be 'hello world' after ..=");
+
+print("all_update_ops tests passed!");

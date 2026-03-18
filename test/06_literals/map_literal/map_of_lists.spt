@@ -7,6 +7,8 @@ map<str, any> data = {
     "strings": ["a", "b", "c"]
 };
 
-print(data["numbers"][0]);
-print(data["numbers"][2]);
-print(data["strings"][1]);
+assert(data["numbers"][0] == 1, "data['numbers'][0] should be 1");
+assert(data["numbers"][2] == 3, "data['numbers'][2] should be 3");
+assert(data["strings"][1] == "b", "data['strings'][1] should be 'b'");
+
+print("map_of_lists tests passed!");

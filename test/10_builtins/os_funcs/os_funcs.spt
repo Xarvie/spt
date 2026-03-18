@@ -1,0 +1,24 @@
+// 测试: 内置函数 - os模块
+// 语法: os模块函数
+// 描述: 测试os模块的常用函数
+
+// 测试 os.time
+int t = os.time();
+assert(t > 0, "os.time() should return positive number");
+
+// 测试 os.date
+map<any, any> dateTable = os.date("*t");
+assert(dateTable["year"] >= 2024, "year should be >= 2024");
+assert(dateTable["month"] >= 1, "month should be >= 1");
+assert(dateTable["month"] <= 12, "month should be <= 12");
+assert(dateTable["day"] >= 1, "day should be >= 1");
+assert(dateTable["day"] <= 31, "day should be <= 31");
+
+str dateStr = os.date("%Y-%m-%d");
+assert(#dateStr == 10, "date string length should be 10");
+
+// 测试 os.clock
+float clockVal = os.clock();
+assert(clockVal >= 0, "os.clock() should return non-negative number");
+
+print("os library tests passed!");

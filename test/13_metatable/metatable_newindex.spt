@@ -1,0 +1,20 @@
+// 测试: 元表 - __newindex
+// 语法: metatable __newindex
+// 描述: 测试元表__newindex元方法
+
+map<any, any> watched = {};
+map<any, any> changes = {};
+
+setmetatable(watched, {
+    __newindex: function(str key, any val) -> void {
+        changes[key] = val;
+    }
+});
+
+watched["a"] = 1;
+watched["b"] = 2;
+
+assert(changes["a"] == 1, "changes['a'] should be 1");
+assert(changes["b"] == 2, "changes['b'] should be 2");
+
+print("metatable_newindex tests passed!");

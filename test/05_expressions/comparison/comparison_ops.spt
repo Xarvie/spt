@@ -2,9 +2,11 @@
 // 语法: comparisonExp, equalityExp
 // 描述: 测试比较运算符
 
-print(1 < 2);
-print(2 > 1);
-print(1 <= 1);
-print(1 >= 1);
-print(1 == 1);
-print(1 != 2);
+assert(1 < 2 == true, "1 < 2 should be true");
+assert(2 > 1 == true, "2 > 1 should be true");
+assert(1 <= 1 == true, "1 <= 1 should be true");
+assert(1 >= 1 == true, "1 >= 1 should be true");
+assert(1 == 1 == true, "1 == 1 should be true");
+assert(1 != 2 == true, "1 != 2 should be true");
+
+print("comparison_ops tests passed!");

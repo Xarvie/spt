@@ -4,3 +4,8 @@ auto internalValue = 42;
 str internalFunction() {
     return "internal";
 }
+
+assert(internalValue == 42, "internalValue should be 42");
+assert(internalFunction() == "internal", "internalFunction should return 'internal'");
+
+print("export_empty tests passed!");

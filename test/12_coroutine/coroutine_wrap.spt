@@ -1,0 +1,15 @@
+// 测试: 协程 - coroutine.wrap
+// 语法: coroutine.wrap()
+// 描述: 测试coroutine.wrap创建包装函数
+
+auto wrapped = coroutine.wrap(function() -> int {
+    coroutine.yield(10);
+    coroutine.yield(20);
+    return 30;
+});
+
+assert(wrapped() == 10, "first call should return 10");
+assert(wrapped() == 20, "second call should return 20");
+assert(wrapped() == 30, "third call should return 30");
+
+print("coroutine_wrap tests passed!");

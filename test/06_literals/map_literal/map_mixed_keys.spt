@@ -9,8 +9,10 @@ m[true] = "bool key";
 m[3.14] = "float key";
 m[-1] = "negative key";
 
-print(m[1]);
-print(m["str"]);
-print(m[true]);
-print(m[3.14]);
-print(m[-1]);
+assert(m[1] == "int key", "m[1] should be 'int key'");
+assert(m["str"] == "str key", "m['str'] should be 'str key'");
+assert(m[true] == "bool key", "m[true] should be 'bool key'");
+assert(m[3.14] == "float key", "m[3.14] should be 'float key'");
+assert(m[-1] == "negative key", "m[-1] should be 'negative key'");
+
+print("map_mixed_keys tests passed!");

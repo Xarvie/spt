@@ -4,4 +4,8 @@
 
 global int g = 100;
 global const int GC = 55;
-print(g, GC);
+
+assert(g == 100, "g should be 100");
+assert(GC == 55, "GC should be 55");
+
+print("global_var tests passed!");

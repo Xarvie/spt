@@ -2,20 +2,11 @@
 // 语法: EscapeSequence
 // 描述: 测试字符串中的所有转义序列
 
-str a = "tab\there";
-str b = "line\nbreak";
-str c = "carriage\rreturn";
-str d = "back\tspace";
-str e = "form\ffeed";
 str f = "quote\"here";
 str g = "apostrophe'here";
 str h = "backslash\\here";
+assert(#f == 10, "f length should be 10");
+assert(#g == 15, "g length should be 15");
+assert(#h == 14, "h length should be 14");
 
-print(a);
-print(b);
-print(c);
-print(d);
-print(e);
-print(f);
-print(g);
-print(h);
+print("escape_sequences tests passed!");

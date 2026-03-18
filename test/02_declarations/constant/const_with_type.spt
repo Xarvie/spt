@@ -7,4 +7,10 @@ const str s = "hello";
 const bool b = true;
 const float f = 3.14;
 
-print(x, s, b, f);
+assert(x == 10, "x should be 10");
+assert(s == "hello", "s should be 'hello'");
+assert(b == true, "b should be true");
+assert(f > 3.13, "f should be > 3.13");
+assert(f < 3.15, "f should be < 3.15");
+
+print("const_with_type tests passed!");

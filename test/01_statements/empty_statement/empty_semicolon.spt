@@ -2,6 +2,10 @@
 // 语法: statement -> SEMICOLON #semicolonStmt
 // 描述: 测试单独的分号作为空语句
 
+int x = 1;
 ;
 ;;
-print("ok");
+x = 2;
+assert(x == 2, "x should be 2 after empty statements");
+
+print("empty_semicolon tests passed!");

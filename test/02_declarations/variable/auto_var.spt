@@ -8,4 +8,11 @@ auto c = true;
 auto d = 3.14;
 auto e = [1, 2];
 auto f = {"k": "v"};
-print(a, b, c, d);
+
+assert(a == 42, "a should be 42");
+assert(b == "hello", "b should be 'hello'");
+assert(c == true, "c should be true");
+assert(d > 3.13, "d should be > 3.13");
+assert(d < 3.15, "d should be < 3.15");
+
+print("auto_var tests passed!");

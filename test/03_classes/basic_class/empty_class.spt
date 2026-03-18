@@ -5,4 +5,6 @@
 class Empty {}
 
 auto e = new Empty();
-print(typeof(e));
+assert(typeof(e) == "table", "typeof(class instance) should be 'table'");
+
+print("empty_class tests passed!");

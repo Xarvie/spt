@@ -3,6 +3,8 @@
 // 描述: 测试List中包含nil元素
 
 list<any> l = [100, null];
-print(l[0]);
-print(l[1]);
-print(#l);
+assert(l[0] == 100, "l[0] should be 100");
+assert(l[1] == null, "l[1] should be null");
+assert(#l == 2, "#l should be 2");
+
+print("list_with_nil tests passed!");

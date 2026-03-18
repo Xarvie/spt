@@ -3,12 +3,16 @@
 // 描述: 测试if-else if-else链
 
 int x = 2;
+str result = "";
 if (x == 1) {
-    print("one");
+    result = "one";
 } else if (x == 2) {
-    print("two");
+    result = "two";
 } else if (x == 3) {
-    print("three");
+    result = "three";
 } else {
-    print("other");
+    result = "other";
 }
+assert(result == "two", "result should be 'two'");
+
+print("if_elseif_else tests passed!");

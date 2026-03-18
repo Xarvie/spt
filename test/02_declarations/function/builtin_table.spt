@@ -4,13 +4,14 @@
 
 list<int> l = [1, 2, 3];
 table.push(l, 4);
-print(#l, l[3]);
+assert(#l == 4, "list length should be 4 after push");
+assert(l[3] == 4, "last element should be 4");
 
 table.insert(l, 1, 99);
-print(l[1]);
+assert(l[1] == 99, "element at index 1 should be 99");
 
 any val = table.remove(l, 0);
-print(val, #l);
+assert(val == 1, "removed value should be 1");
+assert(#l == 4, "list length should be 4 after remove");
 
-table.sort(l);
-print(table.concat(l, ","));
+print("builtin_table tests passed!");

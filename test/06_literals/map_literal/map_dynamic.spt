@@ -5,8 +5,10 @@
 map<any, any> m = {};
 m[100] = 1;
 m["k"] = "v";
-print(m[100]);
-print(m["k"]);
+assert(m[100] == 1, "m[100] should be 1");
+assert(m["k"] == "v", "m['k'] should be 'v'");
 
 m[1000] = 2;
-print(m[1000]);
+assert(m[1000] == 2, "m[1000] should be 2");
+
+print("map_dynamic tests passed!");

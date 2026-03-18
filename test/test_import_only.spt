@@ -1,6 +1,7 @@
 // 测试命名导入
 import { PI, add } from "export_multiple";
 
-print("PI = " .. tostring(PI));
-print("add(1, 2) = " .. tostring(add(1, 2)));
-print("Named import test passed!");
+assert(PI > 3.14, "PI should be > 3.14");
+assert(add(1, 2) == 3, "add(1, 2) should be 3");
+
+print("test_import_only tests passed!");

@@ -5,4 +5,8 @@
 any x = 42;
 any y = "hello";
 any z = [1, 2, 3];
-print(x, y, z[0]);
+assert(x == 42, "x should be 42");
+assert(y == "hello", "y should be 'hello'");
+assert(z[0] == 1, "z[0] should be 1");
+
+print("any_type tests passed!");

@@ -17,4 +17,6 @@ class Counter {
 
 Counter c = new Counter(0);
 c.increment();
-print(c.get());
+assert(c.get() == 1, "c.get() should be 1 after increment");
+
+print("instance_method tests passed!");

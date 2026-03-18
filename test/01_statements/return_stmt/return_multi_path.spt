@@ -12,6 +12,8 @@ int test(int x) {
     return 1;
 }
 
-print(test(-5));
-print(test(0));
-print(test(10));
+assert(test(-5) == -1, "test(-5) should be -1");
+assert(test(0) == 0, "test(0) should be 0");
+assert(test(10) == 1, "test(10) should be 1");
+
+print("return_multi_path tests passed!");

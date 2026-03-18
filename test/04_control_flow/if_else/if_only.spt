@@ -3,7 +3,10 @@
 // 描述: 测试只有if没有else的语句
 
 int x = 5;
+str result = "none";
 if (x > 0) {
-    print("positive");
+    result = "positive";
 }
-print("done");
+assert(result == "positive", "result should be 'positive'");
+
+print("if_only tests passed!");

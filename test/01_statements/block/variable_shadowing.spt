@@ -3,13 +3,16 @@
 // 描述: 测试嵌套作用域中的变量遮蔽
 
 int a = 100;
+int results = 0;
 {
     int a = 200;
-    print(a);
+    assert(a == 200, "inner a should be 200");
     {
         int a = 300;
-        print(a);
+        assert(a == 300, "innermost a should be 300");
     }
-    print(a);
+    assert(a == 200, "inner a should still be 200");
 }
-print(a);
+assert(a == 100, "outer a should be 100");
+
+print("variable_shadowing tests passed!");

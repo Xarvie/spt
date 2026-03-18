@@ -1,0 +1,31 @@
+// 测试: 内置函数 - table模块函数
+// 语法: table模块函数
+// 描述: 测试table模块的常用函数
+
+list<int> arr = [1, 2, 3];
+assert(#arr == 3, "initial length should be 3");
+
+table.push(arr, 4);
+assert(#arr == 4, "length should be 4 after push");
+assert(arr[3] == 4, "last element should be 4");
+
+int last = table.pop(arr);
+assert(last == 4, "popped value should be 4");
+assert(#arr == 3, "length should be 3 after pop");
+
+table.insert(arr, 0, 99);
+assert(arr[0] == 99, "arr[0] should be 99 after insert");
+
+table.remove(arr, 0);
+assert(arr[0] == 1, "arr[0] should be 1 after remove");
+
+list<int> sorted = [3, 1, 2];
+table.sort(sorted);
+assert(sorted[0] == 1, "sorted[0] should be 1");
+assert(sorted[1] == 2, "sorted[1] should be 2");
+assert(sorted[2] == 3, "sorted[2] should be 3");
+
+str concat = table.concat([1, 2, 3], ",");
+assert(concat == "1,2,3", "concat should be '1,2,3'");
+
+print("table_api tests passed!");

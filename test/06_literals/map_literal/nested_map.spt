@@ -7,6 +7,8 @@ map<str, any> m = {
     "user2": {"name": "Bob", "age": "30"}
 };
 
-print(m["user1"]["name"]);
-print(m["user1"]["age"]);
-print(m["user2"]["name"]);
+assert(m["user1"]["name"] == "Alice", "user1 name should be Alice");
+assert(m["user1"]["age"] == "25", "user1 age should be 25");
+assert(m["user2"]["name"] == "Bob", "user2 name should be Bob");
+
+print("nested_map tests passed!");

@@ -1,0 +1,15 @@
+// 测试: 协程 - 协程状态
+// 语法: coroutine.status()
+// 描述: 测试协程的不同状态
+
+coro co = coroutine.create(function() -> void {
+    coroutine.yield();
+});
+
+assert(coroutine.status(co) == "suspended", "before resume should be suspended");
+coroutine.resume(co);
+assert(coroutine.status(co) == "suspended", "after first resume should be suspended");
+coroutine.resume(co);
+assert(coroutine.status(co) == "dead", "after second resume should be dead");
+
+print("coroutine_status tests passed!");

@@ -4,4 +4,8 @@
 
 list<int> arr = [1, 2, 3];
 arr[0] = 100;
-print(arr[0]);
+assert(arr[0] == 100, "arr[0] should be 100");
+assert(arr[1] == 2, "arr[1] should be 2");
+assert(arr[2] == 3, "arr[2] should be 3");
+
+print("index_assign tests passed!");

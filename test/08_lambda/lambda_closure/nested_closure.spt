@@ -14,4 +14,6 @@ auto outer = function() -> function {
 
 auto f1 = outer();
 auto f2 = f1();
-print(f2());
+assert(f2() == 3, "nested closure should return 3 (1+2)");
+
+print("nested_closure tests passed!");

@@ -6,4 +6,11 @@ int a = 1;
 float b = 2.5;
 str c = "hello";
 bool d = true;
-print(a, b, c, d);
+
+assert(a == 1, "a should be 1");
+assert(b > 2.4, "b should be > 2.4");
+assert(b < 2.6, "b should be < 2.6");
+assert(c == "hello", "c should be 'hello'");
+assert(d == true, "d should be true");
+
+print("typed_var tests passed!");

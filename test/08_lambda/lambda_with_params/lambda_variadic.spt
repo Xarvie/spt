@@ -11,5 +11,7 @@ auto sum = function(...) -> int {
     return total;
 };
 
-print(sum(1, 2, 3));
-print(sum(10, 20, 30, 40));
+assert(sum(1, 2, 3) == 6, "sum(1,2,3) should be 6");
+assert(sum(10, 20, 30, 40) == 100, "sum(10,20,30,40) should be 100");
+
+print("lambda_variadic tests passed!");
