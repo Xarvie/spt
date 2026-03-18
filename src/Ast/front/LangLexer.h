@@ -12,7 +12,7 @@
 class  LangLexer : public antlr4::Lexer {
 public:
   enum {
-    INT = 1, FLOAT = 2, NUMBER = 3, STRING = 4, BOOL = 5, ANY = 6, VOID = 7, 
+    INT = 1, FLOAT = 2, NUMBER = 3, STR = 4, BOOL = 5, ANY = 6, VOID = 7, 
     NULL_ = 8, LIST = 9, MAP = 10, FUNCTION = 11, COROUTINE = 12, VARS = 13, 
     IF = 14, ELSE = 15, WHILE = 16, FOR = 17, BREAK = 18, CONTINUE = 19, 
     RETURN = 20, DEFER = 21, TRUE = 22, FALSE = 23, CONST = 24, AUTO = 25, 

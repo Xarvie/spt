@@ -67,9 +67,9 @@ void langparserParserInitialize() {
       "forEachVar", "parameterList", "parameter", "arguments"
     },
     std::vector<std::string>{
-      "", "'int'", "'float'", "'number'", "'string'", "'bool'", "'any'", 
-      "'void'", "'null'", "'list'", "'map'", "'function'", "'coro'", "'vars'", 
-      "'if'", "'else'", "'while'", "'for'", "'break'", "'continue'", "'return'", 
+      "", "'int'", "'float'", "'number'", "'str'", "'bool'", "'any'", "'void'", 
+      "'null'", "'list'", "'map'", "'function'", "'coro'", "'vars'", "'if'", 
+      "'else'", "'while'", "'for'", "'break'", "'continue'", "'return'", 
       "'defer'", "'true'", "'false'", "'const'", "'auto'", "'global'", "'static'", 
       "'import'", "'as'", "'from'", "'private'", "'export'", "'class'", 
       "'new'", "'+'", "'-'", "'*'", "'/'", "'~/'", "'%'", "'='", "'+='", 
@@ -79,7 +79,7 @@ void langparserParserInitialize() {
       "'{'", "'}'", "','", "'.'", "':'", "';'", "'...'"
     },
     std::vector<std::string>{
-      "", "INT", "FLOAT", "NUMBER", "STRING", "BOOL", "ANY", "VOID", "NULL_", 
+      "", "INT", "FLOAT", "NUMBER", "STR", "BOOL", "ANY", "VOID", "NULL_", 
       "LIST", "MAP", "FUNCTION", "COROUTINE", "VARS", "IF", "ELSE", "WHILE", 
       "FOR", "BREAK", "CONTINUE", "RETURN", "DEFER", "TRUE", "FALSE", "CONST", 
       "AUTO", "GLOBAL", "STATIC", "IMPORT", "AS", "FROM", "PRIVATE", "EXPORT", 
@@ -1879,7 +1879,7 @@ LangParser::VariableDeclarationContext* LangParser::variableDeclaration() {
       case LangParser::INT:
       case LangParser::FLOAT:
       case LangParser::NUMBER:
-      case LangParser::STRING:
+      case LangParser::STR:
       case LangParser::BOOL:
       case LangParser::ANY:
       case LangParser::VOID:
@@ -2053,7 +2053,7 @@ LangParser::Declaration_itemContext* LangParser::declaration_item() {
       case LangParser::INT:
       case LangParser::FLOAT:
       case LangParser::NUMBER:
-      case LangParser::STRING:
+      case LangParser::STR:
       case LangParser::BOOL:
       case LangParser::ANY:
       case LangParser::VOID:
@@ -2817,7 +2817,7 @@ LangParser::TypeContext* LangParser::type() {
       case LangParser::INT:
       case LangParser::FLOAT:
       case LangParser::NUMBER:
-      case LangParser::STRING:
+      case LangParser::STR:
       case LangParser::BOOL:
       case LangParser::VOID:
       case LangParser::NULL_:
@@ -2970,8 +2970,8 @@ tree::TerminalNode* LangParser::PrimitiveTypeContext::NUMBER() {
   return getToken(LangParser::NUMBER, 0);
 }
 
-tree::TerminalNode* LangParser::PrimitiveTypeContext::STRING() {
-  return getToken(LangParser::STRING, 0);
+tree::TerminalNode* LangParser::PrimitiveTypeContext::STR() {
+  return getToken(LangParser::STR, 0);
 }
 
 tree::TerminalNode* LangParser::PrimitiveTypeContext::BOOL() {
@@ -5361,7 +5361,7 @@ LangParser::LambdaExpressionContext* LangParser::lambdaExpression() {
       case LangParser::INT:
       case LangParser::FLOAT:
       case LangParser::NUMBER:
-      case LangParser::STRING:
+      case LangParser::STR:
       case LangParser::BOOL:
       case LangParser::ANY:
       case LangParser::VOID:
@@ -6484,7 +6484,7 @@ LangParser::ForNumericVarContext* LangParser::forNumericVar() {
         case LangParser::INT:
         case LangParser::FLOAT:
         case LangParser::NUMBER:
-        case LangParser::STRING:
+        case LangParser::STR:
         case LangParser::BOOL:
         case LangParser::ANY:
         case LangParser::VOID:
@@ -6612,7 +6612,7 @@ LangParser::ForEachVarContext* LangParser::forEachVar() {
         case LangParser::INT:
         case LangParser::FLOAT:
         case LangParser::NUMBER:
-        case LangParser::STRING:
+        case LangParser::STR:
         case LangParser::BOOL:
         case LangParser::ANY:
         case LangParser::VOID:
@@ -6722,7 +6722,7 @@ LangParser::ParameterListContext* LangParser::parameterList() {
       case LangParser::INT:
       case LangParser::FLOAT:
       case LangParser::NUMBER:
-      case LangParser::STRING:
+      case LangParser::STR:
       case LangParser::BOOL:
       case LangParser::ANY:
       case LangParser::VOID:

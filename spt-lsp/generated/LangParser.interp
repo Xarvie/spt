@@ -3,7 +3,7 @@ null
 'int'
 'float'
 'number'
-'string'
+'str'
 'bool'
 'any'
 'void'
@@ -89,7 +89,7 @@ null
 INT
 FLOAT
 NUMBER
-STRING
+STR
 BOOL
 ANY
 VOID

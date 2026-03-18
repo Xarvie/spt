@@ -1,7 +1,7 @@
 INT=1
 FLOAT=2
 NUMBER=3
-STRING=4
+STR=4
 BOOL=5
 ANY=6
 VOID=7
@@ -84,7 +84,7 @@ BLOCK_COMMENT=83
 'int'=1
 'float'=2
 'number'=3
-'string'=4
+'str'=4
 'bool'=5
 'any'=6
 'void'=7
