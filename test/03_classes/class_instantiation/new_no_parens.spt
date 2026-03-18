@@ -1,0 +1,14 @@
+// 测试: 类 - new 不带括号
+// 语法: newExp -> NEW qualifiedIdentifier (OP arguments? CP)?
+// 描述: 测试new表达式不带括号实例化类
+
+class Point {
+    int x = 0;
+    int y = 0;
+}
+
+auto p = new Point;
+assert(p.x == 0, "p.x should be 0");
+assert(p.y == 0, "p.y should be 0");
+
+print("new_no_parens tests passed!");
