@@ -1925,11 +1925,20 @@ static void compile_func_decl(CompileCtx *C, FunctionDeclNode *n) {
     }
     ast_codeclosure(C, &b);
 
+    /* Store the closure into the local variable */
     Vardesc *fvd = ast_getvar(C, fs, fvar);
     if (varinreg(fvd)) {
       int pidx = fvd->vd.pidx;
       if (pidx >= 0 && pidx < fs->ndebugvars)
         fs->f->locvars[pidx].startpc = fs->pc;
+
+      /* Store closure to the local variable's register */
+      expdesc var;
+      var.f = var.t = NO_JUMP;
+      var.k = VLOCAL;
+      var.u.var.vidx = cast_short(fvar);
+      var.u.var.ridx = fvd->vd.ridx;
+      luaK_storevar(fs, &var, &b);
     }
   }
 }
@@ -2284,23 +2293,17 @@ static void compile_import_namespace(CompileCtx *C, ImportNamespaceNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->location);
 
-  fprintf(stderr, "DEBUG compile_import_namespace: START, freereg=%d, nactvar=%d\n", fs->freereg,
-          fs->nactvar);
-
   /* Compile require("modulePath") first, then store result to local variable */
 
   /* 1. Get require function */
   expdesc req;
   ast_singlevar(C, "require", &req);
-  fprintf(stderr, "DEBUG: require expdesc k=%d\n", req.k);
   luaK_exp2nextreg(fs, &req);
-  fprintf(stderr, "DEBUG: after exp2nextreg, req.u.info=%d, freereg=%d\n", req.u.info, fs->freereg);
 
   /* 2. Push nil as Receiver (global function call pattern) */
   expdesc recv;
   init_exp(&recv, VNIL, 0);
   luaK_exp2nextreg(fs, &recv);
-  fprintf(stderr, "DEBUG: after recv, freereg=%d\n", fs->freereg);
 
   /* 3. Push module path argument */
   expdesc arg;
@@ -2308,27 +2311,21 @@ static void compile_import_namespace(CompileCtx *C, ImportNamespaceNode *n) {
   arg.k = VKSTR;
   arg.u.strval = mkstr(C, n->modulePath);
   luaK_exp2nextreg(fs, &arg);
-  fprintf(stderr, "DEBUG: after arg, freereg=%d\n", fs->freereg);
 
   /* 4. Emit OP_CALL: require(nil, "modulePath")
      B = 3 (function + receiver + arg = 3 items)
      C = 2 (want 1 result) */
   int base = req.u.info;
-  fprintf(stderr, "DEBUG: base=%d\n", base);
   init_exp(&req, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
   luaK_fixline(fs, C->linenumber);
   fs->freereg = cast_byte(base + 1); /* call returns result at base */
-  fprintf(stderr, "DEBUG: after CALL, freereg=%d\n", fs->freereg);
 
   /* 5. Now create local variable and store result */
   TString *alias = mkstr(C, n->alias);
   ast_new_localvar(C, alias);
-  fprintf(stderr, "DEBUG: after new_localvar, nactvar=%d\n", fs->nactvar);
 
   /* The VCALL result is already at 'base', which becomes the local variable */
   ast_adjustlocalvars(C, 1);
-  fprintf(stderr, "DEBUG: after adjustlocalvars, nactvar=%d, freereg=%d\n", fs->nactvar,
-          fs->freereg);
 }
 
 static void compile_import_named(CompileCtx *C, ImportNamedNode *n) {
@@ -2619,7 +2616,8 @@ static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
   /* If there are exported names, return an exports table */
   if (!exported_names.empty()) {
     int exports_reg = fs->freereg;
-    luaK_codeABC(fs, OP_NEWTABLE, exports_reg, 0, 0);
+    int pc = luaK_codeABC(fs, OP_NEWTABLE, exports_reg, 0, 0);
+    luaK_code(fs, CREATE_Ax(OP_EXTRAARG, 0));
     fs->freereg++;
 
     for (const auto &name : exported_names) {
