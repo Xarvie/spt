@@ -864,26 +864,10 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
           LSP_LOG("Hover: offset in partsRange[" << i << "]");
           // Get the type of this qualified identifier
           types::TypeRef type = model->getNodeType(qualifiedId);
-          LSP_LOG("Hover: getNodeType returned, type=" << (void *)type.get());
-
-          // If type is unknown, check if parent is QualifiedTypeNode
-          // (SemanticAnalyzer sets type on QualifiedTypeNode, not QualifiedIdentifierNode)
-          if ((!type || type->isUnknown()) && !findResult.context.ancestors.empty()) {
-            auto *parent = findResult.context.ancestors.back();
-            LSP_LOG("Hover: checking parent node kind=" << ast::astKindToString(parent->kind));
-            if (auto *qualType = ast::ast_cast<ast::QualifiedTypeNode>(parent)) {
-              type = model->getNodeType(qualType);
-              LSP_LOG("Hover: got type from parent QualifiedTypeNode");
-            }
-          }
-
-          if (type) {
-            LSP_LOG("Hover: type->isUnknown()=" << type->isUnknown()
-                                                << ", type->toString()=" << type->toString());
-            if (!type->isUnknown()) {
-              result.contents = "```lang\n" + type->toString() + "\n```";
-              result.range = file->toRange(partRange);
-            }
+          if (type && !type->isUnknown()) {
+            LSP_LOG("Hover: type=" << type->toString());
+            result.contents = "```lang\n" + type->toString() + "\n```";
+            result.range = file->toRange(partRange);
           }
           break;
         }
@@ -1380,18 +1364,6 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
           LSP_LOG("Definition: offset in partsRange[" << i << "]");
           // Get the type of this qualified identifier
           types::TypeRef type = model->getNodeType(qualifiedId);
-
-          // If type is unknown, check if parent is QualifiedTypeNode
-          // (SemanticAnalyzer sets type on QualifiedTypeNode, not QualifiedIdentifierNode)
-          if ((!type || type->isUnknown()) && !findResult.context.ancestors.empty()) {
-            auto *parent = findResult.context.ancestors.back();
-            LSP_LOG("Definition: checking parent node kind=" << ast::astKindToString(parent->kind));
-            if (auto *qualType = ast::ast_cast<ast::QualifiedTypeNode>(parent)) {
-              type = model->getNodeType(qualType);
-              LSP_LOG("Definition: got type from parent QualifiedTypeNode");
-            }
-          }
-
           if (type && !type->isUnknown()) {
             LSP_LOG("Definition: type=" << type->toString());
             // If it's a class type, find its declaration

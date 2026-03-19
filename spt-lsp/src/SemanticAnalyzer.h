@@ -878,10 +878,19 @@ public:
     if (node->name && !node->name->parts.empty()) {
       auto typeName = getString(node->name->parts[0]);
       if (auto ct = model_.typeContext().findClassType(typeName)) {
-        return setType(node, ct);
+        setType(node, ct);
+        // Also set type on child QualifiedIdentifierNode for hover/definition
+        // This allows direct type lookup without checking parent nodes
+        setType(node->name, ct);
+        return ct;
       }
     }
-    return setType(node, model_.typeContext().unknownType());
+    auto unknown = model_.typeContext().unknownType();
+    setType(node, unknown);
+    if (node->name) {
+      setType(node->name, unknown);
+    }
+    return unknown;
   }
 
   types::TypeRef visitMultiReturnType(ast::MultiReturnTypeNode *node) {
