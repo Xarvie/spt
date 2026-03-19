@@ -17,15 +17,15 @@ public:
     IF = 14, ELSE = 15, WHILE = 16, FOR = 17, BREAK = 18, CONTINUE = 19, 
     RETURN = 20, DEFER = 21, TRUE = 22, FALSE = 23, CONST = 24, AUTO = 25, 
     GLOBAL = 26, STATIC = 27, IMPORT = 28, AS = 29, FROM = 30, PRIVATE = 31, 
-    EXPORT = 32, CLASS = 33, NEW = 34, ADD = 35, SUB = 36, MUL = 37, DIV = 38, 
-    IDIV = 39, MOD = 40, ASSIGN = 41, ADD_ASSIGN = 42, SUB_ASSIGN = 43, 
-    MUL_ASSIGN = 44, DIV_ASSIGN = 45, IDIV_ASSIGN = 46, MOD_ASSIGN = 47, 
-    CONCAT_ASSIGN = 48, EQ = 49, NEQ = 50, LT = 51, GT = 52, LTE = 53, GTE = 54, 
-    AND = 55, OR = 56, NOT = 57, CONCAT = 58, LEN = 59, BIT_AND = 60, BIT_OR = 61, 
-    BIT_XOR = 62, BIT_NOT = 63, LSHIFT = 64, ARROW = 65, OP = 66, CP = 67, 
-    OSB = 68, CSB = 69, OCB = 70, CCB = 71, COMMA = 72, DOT = 73, COL = 74, 
-    SEMICOLON = 75, DDD = 76, INTEGER = 77, FLOAT_LITERAL = 78, STRING_LITERAL = 79, 
-    IDENTIFIER = 80, WS = 81, LINE_COMMENT = 82, BLOCK_COMMENT = 83
+    EXPORT = 32, CLASS = 33, ADD = 34, SUB = 35, MUL = 36, DIV = 37, IDIV = 38, 
+    MOD = 39, ASSIGN = 40, ADD_ASSIGN = 41, SUB_ASSIGN = 42, MUL_ASSIGN = 43, 
+    DIV_ASSIGN = 44, IDIV_ASSIGN = 45, MOD_ASSIGN = 46, CONCAT_ASSIGN = 47, 
+    EQ = 48, NEQ = 49, LT = 50, GT = 51, LTE = 52, GTE = 53, AND = 54, OR = 55, 
+    NOT = 56, CONCAT = 57, LEN = 58, BIT_AND = 59, BIT_OR = 60, BIT_XOR = 61, 
+    BIT_NOT = 62, LSHIFT = 63, ARROW = 64, OP = 65, CP = 66, OSB = 67, CSB = 68, 
+    OCB = 69, CCB = 70, COMMA = 71, DOT = 72, COL = 73, SEMICOLON = 74, 
+    DDD = 75, INTEGER = 76, FLOAT_LITERAL = 77, STRING_LITERAL = 78, IDENTIFIER = 79, 
+    WS = 80, LINE_COMMENT = 81, BLOCK_COMMENT = 82
   };
 
   enum {
@@ -43,10 +43,10 @@ public:
     RuleAddSubExpOp = 36, RuleMulDivModExp = 37, RuleMulDivModExpOp = 38, 
     RuleUnaryExp = 39, RulePostfixExp = 40, RulePostfixSuffix = 41, RulePrimaryExp = 42, 
     RuleAtomexp = 43, RuleLambdaExpression = 44, RuleListExpression = 45, 
-    RuleMapExpression = 46, RuleMapEntryList = 47, RuleMapEntry = 48, RuleNewExp = 49, 
-    RuleIfStatement = 50, RuleWhileStatement = 51, RuleForStatement = 52, 
-    RuleForControl = 53, RuleForNumericVar = 54, RuleForEachVar = 55, RuleParameterList = 56, 
-    RuleParameter = 57, RuleArguments = 58
+    RuleMapExpression = 46, RuleMapEntryList = 47, RuleMapEntry = 48, RuleIfStatement = 49, 
+    RuleWhileStatement = 50, RuleForStatement = 51, RuleForControl = 52, 
+    RuleForNumericVar = 53, RuleForEachVar = 54, RuleParameterList = 55, 
+    RuleParameter = 56, RuleArguments = 57
   };
 
   explicit LangParser(antlr4::TokenStream *input);
@@ -115,7 +115,6 @@ public:
   class MapExpressionContext;
   class MapEntryListContext;
   class MapEntryContext;
-  class NewExpContext;
   class IfStatementContext;
   class WhileStatementContext;
   class ForStatementContext;
@@ -1452,15 +1451,6 @@ public:
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
   };
 
-  class  PrimaryNewContext : public PrimaryExpContext {
-  public:
-    PrimaryNewContext(PrimaryExpContext *ctx);
-
-    NewExpContext *newExp();
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-  };
-
   class  PrimaryVarArgsContext : public PrimaryExpContext {
   public:
     PrimaryVarArgsContext(PrimaryExpContext *ctx);
@@ -1660,34 +1650,6 @@ public:
   };
 
   MapEntryContext* mapEntry();
-
-  class  NewExpContext : public antlr4::ParserRuleContext {
-  public:
-    NewExpContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-   
-    NewExpContext() = default;
-    void copyFrom(NewExpContext *context);
-    using antlr4::ParserRuleContext::copyFrom;
-
-    virtual size_t getRuleIndex() const override;
-
-   
-  };
-
-  class  NewExpressionDefContext : public NewExpContext {
-  public:
-    NewExpressionDefContext(NewExpContext *ctx);
-
-    antlr4::tree::TerminalNode *NEW();
-    QualifiedIdentifierContext *qualifiedIdentifier();
-    antlr4::tree::TerminalNode *OP();
-    antlr4::tree::TerminalNode *CP();
-    ArgumentsContext *arguments();
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-  };
-
-  NewExpContext* newExp();
 
   class  IfStatementContext : public antlr4::ParserRuleContext {
   public:

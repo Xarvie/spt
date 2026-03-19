@@ -169,8 +169,6 @@ public:
 
     virtual std::any visitPrimaryParenExp(LangParser::PrimaryParenExpContext *context) = 0;
 
-    virtual std::any visitPrimaryNew(LangParser::PrimaryNewContext *context) = 0;
-
     virtual std::any visitPrimaryLambda(LangParser::PrimaryLambdaContext *context) = 0;
 
     virtual std::any visitAtomexp(LangParser::AtomexpContext *context) = 0;
@@ -192,8 +190,6 @@ public:
     virtual std::any visitMapEntryIntKey(LangParser::MapEntryIntKeyContext *context) = 0;
 
     virtual std::any visitMapEntryFloatKey(LangParser::MapEntryFloatKeyContext *context) = 0;
-
-    virtual std::any visitNewExpressionDef(LangParser::NewExpressionDefContext *context) = 0;
 
     virtual std::any visitIfStatement(LangParser::IfStatementContext *context) = 0;
 

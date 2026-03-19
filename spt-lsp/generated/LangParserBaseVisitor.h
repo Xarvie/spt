@@ -315,10 +315,6 @@ public:
     return visitChildren(ctx);
   }
 
-  virtual std::any visitPrimaryNew(LangParser::PrimaryNewContext *ctx) override {
-    return visitChildren(ctx);
-  }
-
   virtual std::any visitPrimaryLambda(LangParser::PrimaryLambdaContext *ctx) override {
     return visitChildren(ctx);
   }
@@ -360,10 +356,6 @@ public:
   }
 
   virtual std::any visitMapEntryFloatKey(LangParser::MapEntryFloatKeyContext *ctx) override {
-    return visitChildren(ctx);
-  }
-
-  virtual std::any visitNewExpressionDef(LangParser::NewExpressionDefContext *ctx) override {
     return visitChildren(ctx);
   }
 
