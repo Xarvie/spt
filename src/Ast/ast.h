@@ -49,7 +49,6 @@ enum class NodeType {
   MEMBER_LOOKUP,
   INDEX_ACCESS,
   LAMBDA,
-  NEW_EXPRESSION,
   THIS_EXPRESSION,
   VAR_ARGS,
 
@@ -544,18 +543,6 @@ public:
         body(b), isVariadic(isVar) {}
 
   virtual ~LambdaNode() override;
-};
-
-class NewExpressionNode : public Expression {
-public:
-  UserType *classType = nullptr;
-  std::vector<Expression *> arguments;
-
-  NewExpressionNode(UserType *cType, std::vector<Expression *> args, SourceLocation loc)
-      : Expression(std::move(loc), NodeType::NEW_EXPRESSION), classType(cType),
-        arguments(std::move(args)) {} // 传递类型
-
-  virtual ~NewExpressionNode() override;
 };
 
 class ThisExpressionNode : public Expression {

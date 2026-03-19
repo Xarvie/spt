@@ -12,11 +12,11 @@ class Inner {
 class Outer {
     Inner inner;
     void __init(int v) {
-        this.inner = new Inner(v);
+        this.inner = Inner(v);
     }
 }
 
-Outer o = new Outer(42);
+Outer o = Outer(42);
 assert(o.inner.value == 42, "o.inner.value should be 42");
 
 print("nested_object_access tests passed!");

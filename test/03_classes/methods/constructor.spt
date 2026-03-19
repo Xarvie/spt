@@ -11,7 +11,7 @@ class Point {
     }
 }
 
-Point p = new Point(10, 20);
+Point p = Point(10, 20);
 assert(p.x == 10, "p.x should be 10");
 assert(p.y == 20, "p.y should be 20");
 

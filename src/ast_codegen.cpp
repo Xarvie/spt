@@ -1004,72 +1004,6 @@ static void compile_map_literal(CompileCtx *C, LiteralMapNode *n, expdesc *e) {
 }
 
 /*-----------------------------------------------------------------------
- * New expression:  new ClassName(args)
- *
- * The class table itself acts as the constructor (via __call or
- * direct protocol).
- *
- * Stack layout:
- *   R(base)   = ClassName (function / callable)
- *   R(base+1) = nil (Receiver — consistent with non-method calls)
- *   R(base+2) = arg1 ...
- *---------------------------------------------------------------------*/
-static void compile_new_expr(CompileCtx *C, NewExpressionNode *n, expdesc *e) {
-  FuncState *fs = C->fs;
-  setline(C, n->location);
-
-  if (n->classType) {
-    UserType *ut = dynamic_cast<UserType *>(n->classType);
-    if (ut && !ut->qualifiedNameParts.empty()) {
-      ast_singlevar(C, ut->qualifiedNameParts[0], e);
-      luaK_exp2nextreg(fs, e);
-      for (size_t i = 1; i < ut->qualifiedNameParts.size(); i++) {
-        luaK_exp2anyregup(fs, e);
-        expdesc key;
-        key.f = key.t = NO_JUMP;
-        key.k = VKSTR;
-        key.u.strval = mkstr(C, ut->qualifiedNameParts[i]);
-        luaK_indexed(fs, e, &key);
-        luaK_exp2nextreg(fs, e);
-      }
-    } else {
-      compile_error(C, "invalid type in new expression");
-    }
-  }
-
-  /* Push nil as Receiver */
-  {
-    expdesc nil_exp;
-    init_exp(&nil_exp, VNIL, 0);
-    luaK_exp2nextreg(fs, &nil_exp);
-  }
-
-  /* Compile arguments */
-  expdesc args;
-  int nparams;
-  if (n->arguments.empty()) {
-    /* No user args, but nil Receiver at R(base+1). */
-    nparams = fs->freereg - (e->u.info + 1);
-  } else {
-    nparams = compile_exprlist_n(C, n->arguments, &args);
-    if (hasmultret(args.k)) {
-      luaK_setmultret(fs, &args);
-      nparams = LUA_MULTRET;
-    } else {
-      if (args.k != VVOID)
-        luaK_exp2nextreg(fs, &args);
-      nparams = fs->freereg - (e->u.info + 1);
-    }
-  }
-
-  /* nparams includes the nil Receiver */
-  int base = e->u.info;
-  init_exp(e, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2));
-  luaK_fixline(fs, C->linenumber);
-  fs->freereg = cast_byte(base + 1);
-}
-
-/*-----------------------------------------------------------------------
  * This expression  → identifier "self"
  *---------------------------------------------------------------------*/
 static void compile_this(CompileCtx *C, ThisExpressionNode *n, expdesc *e) {
@@ -1143,9 +1077,6 @@ static void compile_expression(CompileCtx *C, Expression *expr, expdesc *e) {
     break;
   case NodeType::LITERAL_MAP:
     compile_map_literal(C, static_cast<LiteralMapNode *>(expr), e);
-    break;
-  case NodeType::NEW_EXPRESSION:
-    compile_new_expr(C, static_cast<NewExpressionNode *>(expr), e);
     break;
   case NodeType::THIS_EXPRESSION:
     compile_this(C, static_cast<ThisExpressionNode *>(expr), e);

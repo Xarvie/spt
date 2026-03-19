@@ -8,7 +8,7 @@ class Config {
     bool debug = true;
 }
 
-Config c = new Config();
+Config c = Config();
 assert(c.timeout == 30, "c.timeout should be 30");
 assert(c.host == "localhost", "c.host should be 'localhost'");
 assert(c.debug == true, "c.debug should be true");

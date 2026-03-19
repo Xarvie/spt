@@ -1,6 +1,6 @@
 // 测试: 类 - 实例化
-// 语法: newExp -> NEW qualifiedIdentifier (OP arguments? CP)? #newExpressionDef
-// 描述: 测试new表达式实例化类
+// 语法: postfixCallSuffix -> OP arguments? CP
+// 描述: 测试类实例化（直接调用类名）
 
 class Point {
     int x;
@@ -11,7 +11,7 @@ class Point {
     }
 }
 
-Point p1 = new Point(3, 4);
+Point p1 = Point(3, 4);
 assert(p1.x == 3, "p1.x should be 3");
 assert(p1.y == 4, "p1.y should be 4");
 

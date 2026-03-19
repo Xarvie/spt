@@ -1,6 +1,6 @@
 import * as geom from "export_class";
 
-auto p1 = new geom.Point(3, 4);
+auto p1 = geom.Point(3, 4);
 assert(p1.x == 3, "p1.x should be 3");
 assert(p1.y == 4, "p1.y should be 4");
 

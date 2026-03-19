@@ -9,7 +9,7 @@ class Box {
     }
 }
 
-Box b = new Box(42);
+Box b = Box(42);
 assert(b.value == 42, "b.value should be 42");
 
 print("instance_field tests passed!");

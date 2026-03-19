@@ -13,7 +13,7 @@ class Person {
     }
 }
 
-Person p = new Person("Alice", 25, "Beijing");
+Person p = Person("Alice", 25, "Beijing");
 assert(p.name == "Alice", "p.name should be 'Alice'");
 assert(p.age == 25, "p.age should be 25");
 assert(p.city == "Beijing", "p.city should be 'Beijing'");

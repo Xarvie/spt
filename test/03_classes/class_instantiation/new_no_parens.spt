@@ -1,14 +1,14 @@
-// 测试: 类 - new 不带括号
-// 语法: newExp -> NEW qualifiedIdentifier (OP arguments? CP)?
-// 描述: 测试new表达式不带括号实例化类
+// 测试: 类 - 直接调用不带括号
+// 语法: postfixCallSuffix
+// 描述: 测试直接调用类名不带括号实例化类
 
 class Point {
     int x = 0;
     int y = 0;
 }
 
-auto p = new Point;
+auto p = Point;
 assert(p.x == 0, "p.x should be 0");
 assert(p.y == 0, "p.y should be 0");
 
-print("new_no_parens tests passed!");
+print("no_parens tests passed!");

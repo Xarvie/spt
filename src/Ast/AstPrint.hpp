@@ -281,20 +281,6 @@ inline void printAst(std::ostream &out, const AstNode *node, int indentLevel) {
     printIndent(out, indentLevel + 1);
     out << "函数体:\n";
     printAst(out, n->body, indentLevel + 2);
-  } else if (const auto *n = dynamic_cast<const NewExpressionNode *>(node)) {
-    out << "New 表达式: ";
-    printAstType(out, n->classType);
-    out << "\n";
-    printIndent(out, indentLevel + 1);
-    out << "参数:\n";
-    if (n->arguments.empty()) {
-      printIndent(out, indentLevel + 2);
-      out << "(无)\n";
-    } else {
-      for (const auto *arg : n->arguments) {
-        printAst(out, arg, indentLevel + 2);
-      }
-    }
   } else if (dynamic_cast<const ThisExpressionNode *>(node)) {
     out << "This 表达式\n";
   } else if (dynamic_cast<const VarArgsNode *>(node)) {

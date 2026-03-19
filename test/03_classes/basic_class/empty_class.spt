@@ -4,7 +4,7 @@
 
 class Empty {}
 
-auto e = new Empty();
+auto e = Empty();
 assert(typeof(e) == "table", "typeof(class instance) should be 'table'");
 
 print("empty_class tests passed!");

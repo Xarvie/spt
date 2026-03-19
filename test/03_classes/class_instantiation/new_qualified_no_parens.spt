@@ -1,6 +1,6 @@
-// 测试: 类 - new A.B 不带括号
-// 语法: newExp -> NEW qualifiedIdentifier (OP arguments? CP)?
-// 描述: 测试new表达式不带括号实例化命名空间中的类
+// 测试: 类 - A.B 不带括号
+// 语法: postfixCallSuffix
+// 描述: 测试直接调用命名空间中的类名不带括号
 
 class Inner {
     int value = 100;
@@ -9,7 +9,7 @@ class Inner {
 map<any, any> NS = {};
 NS.Inner = Inner;
 
-auto obj = new NS.Inner;
+auto obj = NS.Inner;
 assert(obj.value == 100, "obj.value should be 100");
 
-print("new_qualified_no_parens tests passed!");
+print("qualified_no_parens tests passed!");

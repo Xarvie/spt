@@ -8,11 +8,11 @@ class Number {
         this.value = v;
     }
     Number __unm() {
-        return new Number(-this.value);
+        return Number(-this.value);
     }
 }
 
-Number a = new Number(5);
+Number a = Number(5);
 Number b = -a;
 assert(b.value == -5, "b.value should be -5");
 

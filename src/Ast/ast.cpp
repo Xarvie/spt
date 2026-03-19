@@ -151,11 +151,6 @@ LambdaNode::~LambdaNode() {
   delete body;
 }
 
-NewExpressionNode::~NewExpressionNode() {
-  delete classType;
-  deleteVectorItems(arguments);
-}
-
 ThisExpressionNode::~ThisExpressionNode() = default;
 VarArgsNode::~VarArgsNode() = default;
 

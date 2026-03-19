@@ -7,7 +7,7 @@ class Point {
     int y;
 }
 
-Point p = new Point();
+Point p = Point();
 p.x = 10;
 p.y = 20;
 assert(p.x == 10, "p.x should be 10");

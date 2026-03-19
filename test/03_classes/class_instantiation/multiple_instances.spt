@@ -9,9 +9,9 @@ class Box {
     }
 }
 
-Box a = new Box(10);
-Box b = new Box(20);
-Box c = new Box(30);
+Box a = Box(10);
+Box b = Box(20);
+Box c = Box(30);
 
 assert(a.value == 10, "a.value should be 10");
 assert(b.value == 20, "b.value should be 20");

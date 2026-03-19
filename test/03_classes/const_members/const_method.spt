@@ -12,7 +12,7 @@ class Counter {
     }
 }
 
-Counter c = new Counter(42);
+Counter c = Counter(42);
 assert(c.get() == 42, "c.get() should be 42");
 
 print("const_method tests passed!");

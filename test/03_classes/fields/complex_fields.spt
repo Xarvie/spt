@@ -9,9 +9,9 @@ class Container {
     }
 }
 
-Container c1 = new Container(42);
-Container c2 = new Container("hello");
-Container c3 = new Container([1, 2, 3]);
+Container c1 = Container(42);
+Container c2 = Container("hello");
+Container c3 = Container([1, 2, 3]);
 
 assert(c1.data == 42, "c1.data should be 42");
 assert(c2.data == "hello", "c2.data should be 'hello'");

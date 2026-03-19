@@ -15,7 +15,7 @@ class Counter {
     }
 }
 
-Counter c = new Counter(0);
+Counter c = Counter(0);
 c.increment();
 assert(c.get() == 1, "c.get() should be 1 after increment");
 

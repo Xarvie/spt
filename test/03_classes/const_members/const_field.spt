@@ -7,7 +7,7 @@ class Constants {
     const str NAME = "test";
 }
 
-Constants c = new Constants();
+Constants c = Constants();
 assert(c.MAX == 100, "c.MAX should be 100");
 assert(c.NAME == "test", "c.NAME should be 'test'");
 
