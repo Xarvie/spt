@@ -411,8 +411,9 @@ public:
     for (auto *param : node->params) {
       types::TypeRef pt = resolveTypeNode(param->type);
       paramTypes.push_back(pt);
-      auto *ps = model_.symbolTable().createParameter(getString(param->name), pt,
-                                                      param->range.begin, idx++);
+      ast::SourceLoc defLoc =
+          param->nameRange.isValid() ? param->nameRange.begin : param->range.begin;
+      auto *ps = model_.symbolTable().createParameter(getString(param->name), pt, defLoc, idx++);
       currentScope_->define(ps);
       model_.setDefiningSymbol(param, ps);
     }
@@ -502,7 +503,11 @@ public:
         types::TypeRef vt = resolveTypeNode(node->numericVar->type);
         if (vt->isUnknown())
           vt = model_.typeContext().numberType();
-        auto *vs = model_.symbolTable().createVariable(getString(node->numericVar->name), vt, node->numericVar->range.begin);
+        ast::SourceLoc defLoc = node->numericVar->nameRange.isValid()
+                                    ? node->numericVar->nameRange.begin
+                                    : node->numericVar->range.begin;
+        auto *vs =
+            model_.symbolTable().createVariable(getString(node->numericVar->name), vt, defLoc);
         currentScope_->define(vs);
         model_.setDefiningSymbol(node->numericVar, vs);
         setType(node->numericVar, vt);
@@ -534,7 +539,8 @@ public:
           types::TypeRef vt = resolveTypeNode(iv->type);
           if (vt->isUnknown())
             vt = elemType;
-          auto *vs = model_.symbolTable().createVariable(getString(iv->name), vt, iv->range.begin);
+          ast::SourceLoc defLoc = iv->nameRange.isValid() ? iv->nameRange.begin : iv->range.begin;
+          auto *vs = model_.symbolTable().createVariable(getString(iv->name), vt, defLoc);
           currentScope_->define(vs);
           model_.setDefiningSymbol(iv, vs);
           setType(iv, vt);
@@ -715,7 +721,8 @@ public:
     for (auto *p : node->parameters) {
       auto pn = getString(p->name);
       types::TypeRef pt = resolveTypeNode(p->type);
-      auto *ps = model_.symbolTable().createParameter(pn, pt, p->range.begin, idx++);
+      ast::SourceLoc defLoc = p->nameRange.isValid() ? p->nameRange.begin : p->range.begin;
+      auto *ps = model_.symbolTable().createParameter(pn, pt, defLoc, idx++);
       if (p->isVariadic)
         ps->addFlag(SymbolFlags::Variadic);
       currentScope_->define(ps);

@@ -1799,8 +1799,11 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
 
   // Convert definition location
   ast::SourceLoc defLoc = sym->definitionLoc();
+  LSP_LOG("Definition: sym->name()=" << sym->name() << ", defLoc.offset=" << defLoc.offset
+                                     << ", valid=" << defLoc.isValid());
   if (defLoc.isValid()) {
     Position defPos = file->getPosition(defLoc.offset);
+    LSP_LOG("Definition: defPos line=" << defPos.line << ", column=" << defPos.column);
     link.targetRange = Range{defPos, defPos};
     link.targetSelectionRange = link.targetRange;
     link.originSelectionRange = file->toRange(findResult.node()->range);

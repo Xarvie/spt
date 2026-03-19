@@ -1017,6 +1017,7 @@ struct MultiVarDeclNode : Decl {
 struct ParameterDeclNode : Decl {
   struct TypeNode *type = nullptr; ///< Parameter type (NEVER null)
   bool isVariadic = false;         ///< Is this the ... parameter
+  SourceRange nameRange;           ///< Position of the parameter name
 
   static constexpr AstKind Kind = AstKind::ParameterDecl;
 };

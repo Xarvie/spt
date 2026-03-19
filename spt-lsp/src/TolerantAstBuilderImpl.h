@@ -292,7 +292,8 @@ std::any visitForNumericVarTyped(LangParser::ForNumericVarTypedContext *ctx) ove
   }
 
   std::string name = ctx->IDENTIFIER() ? ctx->IDENTIFIER()->getText() : "";
-  return factory_.makeVarDecl(getRange(ctx), name, type, nullptr);
+  SourceRange nameRange = ctx->IDENTIFIER() ? getRange(ctx->IDENTIFIER()) : SourceRange::invalid();
+  return factory_.makeVarDecl(getRange(ctx), name, type, nullptr, NodeFlags::None, nameRange);
 }
 
 // For numeric variable (untyped)
@@ -302,8 +303,10 @@ std::any visitForNumericVarUntyped(LangParser::ForNumericVarUntypedContext *ctx)
         factory_.makeVarDecl(SourceRange::invalid(), "", factory_.makeErrorType(SourceRange::invalid(), "invalid type"), nullptr));
 
   std::string name = ctx->IDENTIFIER() ? ctx->IDENTIFIER()->getText() : "";
+  SourceRange nameRange = ctx->IDENTIFIER() ? getRange(ctx->IDENTIFIER()) : SourceRange::invalid();
   // Untyped variable uses auto type
-  return factory_.makeVarDecl(getRange(ctx), name, factory_.makeInferredType(getRange(ctx)), nullptr);
+  return factory_.makeVarDecl(getRange(ctx), name, factory_.makeInferredType(getRange(ctx)),
+                              nullptr, NodeFlags::None, nameRange);
 }
 
 // For each variable (typed)
@@ -320,7 +323,8 @@ std::any visitForEachVarTyped(LangParser::ForEachVarTypedContext *ctx) override 
   }
 
   std::string name = ctx->IDENTIFIER() ? ctx->IDENTIFIER()->getText() : "";
-  return factory_.makeVarDecl(getRange(ctx), name, type, nullptr);
+  SourceRange nameRange = ctx->IDENTIFIER() ? getRange(ctx->IDENTIFIER()) : SourceRange::invalid();
+  return factory_.makeVarDecl(getRange(ctx), name, type, nullptr, NodeFlags::None, nameRange);
 }
 
 // For each variable (untyped)
@@ -330,7 +334,9 @@ std::any visitForEachVarUntyped(LangParser::ForEachVarUntypedContext *ctx) overr
         factory_.makeVarDecl(SourceRange::invalid(), "", factory_.makeErrorType(SourceRange::invalid(), "invalid type"), nullptr));
 
   std::string name = ctx->IDENTIFIER() ? ctx->IDENTIFIER()->getText() : "";
-  return factory_.makeVarDecl(getRange(ctx), name, factory_.makeInferredType(getRange(ctx)), nullptr);
+  SourceRange nameRange = ctx->IDENTIFIER() ? getRange(ctx->IDENTIFIER()) : SourceRange::invalid();
+  return factory_.makeVarDecl(getRange(ctx), name, factory_.makeInferredType(getRange(ctx)),
+                              nullptr, NodeFlags::None, nameRange);
 }
 
 std::any visitBreakStmt(LangParser::BreakStmtContext *ctx) override {
@@ -608,8 +614,10 @@ std::any visitParameter(LangParser::ParameterContext *ctx) override {
   TypeNode *type = expectType(ctx->type());
   // 使用 std::string 避免悬空引用
   std::string name = ctx->IDENTIFIER() ? ctx->IDENTIFIER()->getText() : "";
+  SourceRange nameRange = ctx->IDENTIFIER() ? getRange(ctx->IDENTIFIER()) : SourceRange::invalid();
 
-  return static_cast<ParameterDeclNode *>(factory_.makeParameterDecl(getRange(ctx), name, type));
+  return static_cast<ParameterDeclNode *>(
+      factory_.makeParameterDecl(getRange(ctx), name, type, false, nameRange));
 }
 
 std::any visitFunctionDeclarationDef(LangParser::FunctionDeclarationDefContext *ctx) override {

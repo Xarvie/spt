@@ -1,0 +1,95 @@
+// Phase 2 函数功能测试
+
+// 测试1: 无参函数
+// 预期: hover显示签名 void foo()
+void foo() {
+    int x = 1;
+}
+
+// 测试2: 有参函数
+// 预期: hover显示签名 int add(int a, int b)
+int add(int a, int b) {
+    return a + b;
+}
+
+// 测试3: 函数参数跳转
+// 预期: 点击return中的a可跳转到参数定义
+int testParamJump(int p1, int p2) {
+    return p1 + p2;
+}
+
+// 测试4: 可变参数函数
+// 预期: 正确解析
+void print(str fmt, ...) {
+}
+
+// 测试5: 多返回值函数
+// 预期: hover显示签名 vars divmod(int a, int b)
+vars divmod(int a, int b) {
+    return a / b, a % b;
+}
+
+// 测试6: 函数调用跳转
+// 预期: 点击foo可跳转到函数定义
+void testCall() {
+    foo();
+}
+
+// 测试7: 带参数函数调用跳转
+// 预期: 点击add可跳转到函数定义
+int testCallWithArgs() {
+    return add(1, 2);
+}
+
+// 测试8: 链式调用
+// 预期: 每步类型推断正确
+str chainTest() {
+    str s = "hello";
+    return s;
+}
+
+// 测试9: 嵌套调用
+// 预期: 签名帮助正确
+int nestedCall() {
+    return add(add(1, 2), add(3, 4));
+}
+
+// 测试10: Lambda表达式
+// 预期: 正确解析
+auto lambda1 = function(int x) -> int {
+    return x * 2;
+};
+
+// 测试11: 无返回值Lambda
+// 预期: 正确解析
+auto lambda2 = function() -> void {
+};
+
+// 测试12: 多返回值Lambda
+// 预期: 正确解析
+auto lambda3 = function(int a, int b) -> vars {
+    return a, b;
+};
+
+// 测试13: 函数内局部变量
+// 预期: 局部变量正确识别和跳转
+void testLocalVar() {
+    int local1 = 1;
+    str local2 = "test";
+    local1 = 2;
+    local2 = "changed";
+}
+
+// 测试14: 函数参数类型推断
+// 预期: 参数类型正确显示
+void testParamTypes(int a, str b, bool c, float d) {
+}
+
+// 测试15: 递归函数
+// 预期: 正确解析
+int factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}

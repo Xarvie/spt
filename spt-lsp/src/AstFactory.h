@@ -877,7 +877,8 @@ public:
   }
 
   [[nodiscard]] ParameterDeclNode *makeParameterDecl(SourceRange range, std::string_view name,
-                                                     TypeNode *type, bool isVariadic = false) {
+                                                     TypeNode *type, bool isVariadic = false,
+                                                     SourceRange nameRange = SourceRange{}) {
     assert(type && "type must not be null");
 
     auto *node = arena_.make<ParameterDeclNode>();
@@ -886,6 +887,7 @@ public:
     node->name = strings_.intern(name);
     node->type = type;
     node->isVariadic = isVariadic;
+    node->nameRange = nameRange;
     return node;
   }
 

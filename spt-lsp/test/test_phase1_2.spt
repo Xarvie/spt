@@ -1,0 +1,96 @@
+// Phase 1.2 表达式类型测试
+
+// 测试1: 算术表达式
+// 预期: hover显示int
+int x = 1 + 2 * 3;
+
+// 测试2: 字符串连接
+// 预期: hover显示str
+str s = "a" .. "b";
+
+// 测试3: 比较表达式
+// 预期: hover显示bool
+bool b1 = 1 < 2;
+
+// 测试4: 逻辑表达式
+// 预期: hover显示bool
+bool b2 = true && false;
+
+// 测试5: 位运算
+// 预期: hover显示int
+int bits = 1 & 2;
+
+// 测试6: 复合表达式
+// 预期: hover显示int
+int complex = (1 + 2) * 3 - 4 / 2;
+
+// 测试7: 取模运算
+// 预期: hover显示int
+int mod = 10 % 3;
+
+// 测试8: 整数除法
+// 预期: hover显示int
+int div = 10 ~/ 3;
+
+// 测试9: 负数
+// 预期: hover显示int
+int neg = -5;
+
+// 测试10: 逻辑非
+// 预期: hover显示bool
+bool notVal = !true;
+
+// 测试11: 按位或
+// 预期: hover显示int
+int bor = 1 | 2;
+
+// 测试12: 按位异或
+// 预期: hover显示int
+int bxor = 1 ^ 2;
+
+// 测试13: 按位取反
+// 预期: hover显示int
+int bnot = ~1;
+
+// 测试14: 左移
+// 预期: hover显示int
+int lshift = 1 << 2;
+
+// 测试15: 右移 (注意: 语法可能是 >> 但需要处理泛型冲突)
+// 预期: hover显示int
+int rshift = 8;
+// int rshift = 8 >> 2;  // 可能需要特殊处理
+
+// 测试16: 相等比较
+// 预期: hover显示bool
+bool eq = 1 == 1;
+
+// 测试17: 不等比较
+// 预期: hover显示bool
+bool neq = 1 != 2;
+
+// 测试18: 小于等于
+// 预期: hover显示bool
+bool lte = 1 <= 2;
+
+// 测试19: 大于等于
+// 预期: hover显示bool
+bool gte = 2 >= 1;
+
+// 测试20: 逻辑或
+// 预期: hover显示bool
+bool orVal = true || false;
+
+// 测试21: 长度运算符
+// 预期: hover显示int
+int len = #"hello";
+
+// 测试22: 浮点运算
+// 预期: hover显示float
+float f = 1.5 + 2.5;
+
+// 测试23: 混合表达式
+// 预期: hover显示正确类型
+int mixed = 1 + 2;
+str smixed = "a" .. "b";
+bool bmixed = true && false;
