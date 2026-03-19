@@ -849,6 +849,27 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
         }
       }
     }
+  } else if (auto *qualifiedId = ast::ast_cast<ast::QualifiedIdentifierNode>(node)) {
+    // Handle hover on qualified identifier (e.g., Inner in "var abc: Inner")
+    LSP_LOG("Hover: QualifiedIdentifier, parts=" << qualifiedId->parts.size());
+    if (model) {
+      // Find which part the offset is in
+      for (size_t i = 0; i < qualifiedId->partsRange.size(); ++i) {
+        const auto &partRange = qualifiedId->partsRange[i];
+        if (partRange.isValid() && offset >= partRange.begin.offset &&
+            offset < partRange.end.offset) {
+          LSP_LOG("Hover: offset in partsRange[" << i << "]");
+          // Get the type of this qualified identifier
+          types::TypeRef type = model->getNodeType(qualifiedId);
+          if (type && !type->isUnknown()) {
+            LSP_LOG("Hover: type=" << type->toString());
+            result.contents = "```lang\n" + type->toString() + "\n```";
+            result.range = file->toRange(partRange);
+          }
+          break;
+        }
+      }
+    }
   }
 
   return result;
@@ -1325,6 +1346,49 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
               }
             }
           }
+        }
+      }
+    }
+  } else if (auto *qualifiedId = ast::ast_cast<ast::QualifiedIdentifierNode>(findResult.node())) {
+    // Handle definition on qualified identifier (e.g., Inner in "var abc: Inner")
+    LSP_LOG("Definition: QualifiedIdentifier, parts=" << qualifiedId->parts.size());
+    if (model) {
+      // Find which part the offset is in
+      for (size_t i = 0; i < qualifiedId->partsRange.size(); ++i) {
+        const auto &partRange = qualifiedId->partsRange[i];
+        if (partRange.isValid() && offset >= partRange.begin.offset &&
+            offset < partRange.end.offset) {
+          LSP_LOG("Definition: offset in partsRange[" << i << "]");
+          // Get the type of this qualified identifier
+          types::TypeRef type = model->getNodeType(qualifiedId);
+          if (type && !type->isUnknown()) {
+            LSP_LOG("Definition: type=" << type->toString());
+            // If it's a class type, find its declaration
+            if (auto *classType = dynamic_cast<const types::ClassType *>(type.get())) {
+              // Find the class declaration in AST
+              for (size_t j = 0; j < ast->statements.size(); ++j) {
+                if (auto *declStmt = ast::ast_cast<ast::DeclStmtNode>(ast->statements[j])) {
+                  if (auto *classDecl = ast::ast_cast<ast::ClassDeclNode>(declStmt->decl)) {
+                    if (classDecl->name.isValid()) {
+                      auto className = file->factory().strings().get(classDecl->name);
+                      if (className == classType->name()) {
+                        LSP_LOG("Definition: found class declaration at line "
+                                << classDecl->range.begin.line);
+                        LocationLink link;
+                        link.targetUri = std::string(uri);
+                        link.targetRange = file->toRange(classDecl->range);
+                        link.targetSelectionRange = link.targetRange;
+                        link.originSelectionRange = file->toRange(partRange);
+                        result.push_back(std::move(link));
+                        return result;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          break;
         }
       }
     }

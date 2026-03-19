@@ -684,6 +684,22 @@ private:
       }
     }
 
+    // 特殊处理: QualifiedIdentifierNode 的每个部分没有单独节点
+    // 如果 offset 在某个 part 的 partsRange 内，返回 QualifiedIdentifierNode 本身
+    if (!deeperResult && node->kind == ast::AstKind::QualifiedIdentifier) {
+      auto *qualifiedId = static_cast<ast::QualifiedIdentifierNode *>(node);
+      for (size_t i = 0; i < qualifiedId->partsRange.size(); ++i) {
+        const auto &partRange = qualifiedId->partsRange[i];
+        if (partRange.isValid() && offset >= partRange.begin.offset &&
+            offset < partRange.end.offset) {
+          LSP_LOG("  -> offset in partsRange[" << i << "] [" << partRange.begin.offset << ", "
+                                               << partRange.end.offset
+                                               << "), returning QualifiedIdentifier");
+          return node;
+        }
+      }
+    }
+
     // 如果在子节点中找到了，返回那个结果
     // 否则返回当前节点
     if (deeperResult) {

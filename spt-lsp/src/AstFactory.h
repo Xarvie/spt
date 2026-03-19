@@ -395,7 +395,8 @@ public:
   }
 
   [[nodiscard]] QualifiedIdentifierNode *
-  makeQualifiedIdentifier(SourceRange range, const std::vector<std::string_view> &parts) {
+  makeQualifiedIdentifier(SourceRange range, const std::vector<std::string_view> &parts,
+                          const std::vector<SourceRange> &partsRange = {}) {
     auto *node = arena_.make<QualifiedIdentifierNode>();
     node->kind = AstKind::QualifiedIdentifier;
     node->range = range;
@@ -406,6 +407,18 @@ public:
       internedParts.push_back(strings_.intern(part));
     }
     node->parts = arena_.makeArrayView(internedParts);
+
+    // 存储每个部分的位置范围
+    LSP_LOG("makeQualifiedIdentifier: partsRange.size()=" << partsRange.size());
+    if (!partsRange.empty()) {
+      node->partsRange = arena_.makeArrayView(partsRange);
+      LSP_LOG("makeQualifiedIdentifier: node->partsRange.size()=" << node->partsRange.size());
+      for (size_t i = 0; i < node->partsRange.size(); ++i) {
+        LSP_LOG("  partsRange[" << i << "]=[" << node->partsRange[i].begin.offset << "-"
+                                << node->partsRange[i].end.offset << "]");
+      }
+    }
+
     return node;
   }
 

@@ -545,6 +545,7 @@ struct IdentifierNode : Expr {
  */
 struct QualifiedIdentifierNode : Expr {
   ArrayView<InternedString> parts; ///< ["a", "b", "c"] for a.b.c
+  ArrayView<SourceRange> partsRange; ///< Location of each part (for hover/definition)
 
   static constexpr AstKind Kind = AstKind::QualifiedIdentifier;
 };

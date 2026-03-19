@@ -795,10 +795,12 @@ protected:
 
     // 使用 std::string 避免悬空引用（getText() 返回临时 string）
     std::vector<std::string> partsStorage;
+    std::vector<SourceRange> partsRange;
     for (auto *id : ctx->IDENTIFIER()) {
       std::string text = id->getText();
       LSP_LOG("visitQualifiedIdentifier: adding part '" << text << "'");
       partsStorage.push_back(text);
+      partsRange.push_back(getRange(id));
     }
 
     // 转换为 string_view（现在安全了，因为 partsStorage 在作用域内）
@@ -816,14 +818,16 @@ protected:
       isIncomplete = true;
       // Add empty placeholder for completion context
       parts.push_back("");
+      partsRange.push_back(SourceRange::invalid());
     }
 
     if (parts.empty()) {
       parts.push_back("");
+      partsRange.push_back(SourceRange::invalid());
       isIncomplete = true;
     }
 
-    auto *node = factory_.makeQualifiedIdentifier(getRange(ctx), parts);
+    auto *node = factory_.makeQualifiedIdentifier(getRange(ctx), parts, partsRange);
     LSP_LOG("visitQualifiedIdentifier: created node with " << node->parts.size() << " parts");
     for (size_t i = 0; i < node->parts.size(); ++i) {
       LSP_LOG("  part[" << i << "].id=" << node->parts[i].id << ", value='"
