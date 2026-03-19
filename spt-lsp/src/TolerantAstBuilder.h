@@ -8,6 +8,38 @@
  * 3. Propagates error flags through the tree
  * 4. Supports incomplete states for code completion
  *
+ * ============================================================================
+ * CRITICAL: UTF-8 Character Index vs Byte Offset Issue
+ * ============================================================================
+ *
+ * PROBLEM:
+ * ANTLR's token->getStartIndex() and token->getStopIndex() return CHARACTER
+ * INDEX (UTF-32 code points), NOT byte offsets. This causes a mismatch with
+ * LineOffsetTable which uses UTF-8 byte offsets.
+ *
+ * Example:
+ *   Source: "// 测试: 类" (Chinese characters)
+ *   - Byte offset of '测': 3 (after "// ")
+ *   - ANTLR char index of '测': 2 (counts "// " as 3 chars, but '测' as 1)
+ *
+ * When source contains non-ASCII characters (like Chinese), the offset
+ * difference grows with each multi-byte character:
+ *   - Each Chinese char: 3 bytes in UTF-8, but 1 in ANTLR's char index
+ *   - After 20 Chinese chars: 60 bytes difference!
+ *
+ * SYMPTOMS:
+ * - Hover shows wrong node (e.g., shows "int value 100" instead of "class Inner")
+ * - Go-to-definition jumps to wrong location
+ * - Completion triggers at wrong positions
+ *
+ * SOLUTION:
+ * Use charIndexToByteOffset() to convert ANTLR's character index to UTF-8
+ * byte offset before storing in SourceLoc/SourceRange.
+ *
+ * This conversion walks through the source string, counting UTF-8 character
+ * boundaries until we reach the target character index, then returns the
+ * corresponding byte offset.
+ *
  * @copyright Copyright (c) 2024-2025
  */
 
@@ -35,8 +67,9 @@ namespace ast {
  */
 class TolerantAstBuilder : public LangParserBaseVisitor {
 public:
-  explicit TolerantAstBuilder(AstFactory &factory, std::string_view filename = "<unknown>")
-      : factory_(factory), filename_(filename) {}
+  explicit TolerantAstBuilder(AstFactory &factory, std::string_view source,
+                              std::string_view filename = "<unknown>")
+      : factory_(factory), source_(source), filename_(filename) {}
 
   /**
    * @brief Build AST from compilation unit
@@ -68,18 +101,64 @@ public:
 
 protected:
   AstFactory &factory_;
+  std::string_view source_;
   std::string_view filename_;
 
   // ========================================================================
   // LAYER 1: INFRASTRUCTURE - Source Location Helpers
   // ========================================================================
 
+  /**
+   * @brief Convert ANTLR character index to UTF-8 byte offset
+   *
+   * WHY THIS IS NEEDED:
+   * ANTLR's token->getStartIndex() returns character index (UTF-32 code points),
+   * where each Unicode code point counts as 1. But LSP and LineOffsetTable use
+   * UTF-8 byte offsets, where non-ASCII characters can take multiple bytes.
+   *
+   * UTF-8 encoding:
+   * - 0xxxxxxx: 1 byte (ASCII, 0x00-0x7F)
+   * - 110xxxxx: 2 bytes (0xC0-0xDF)
+   * - 1110xxxx: 3 bytes (0xE0-0xEF) - Chinese characters fall here
+   * - 11110xxx: 4 bytes (0xF0-0xF7)
+   *
+   * @param charIndex ANTLR's character index (0-based)
+   * @return UTF-8 byte offset (0-based)
+   */
+  [[nodiscard]] uint32_t charIndexToByteOffset(size_t charIndex) const {
+    if (charIndex == 0 || source_.empty()) {
+      return 0;
+    }
+
+    size_t byteOffset = 0;
+    size_t charCount = 0;
+
+    while (byteOffset < source_.size() && charCount < charIndex) {
+      unsigned char c = static_cast<unsigned char>(source_[byteOffset]);
+      if ((c & 0x80) == 0) {
+        byteOffset += 1;
+      } else if ((c & 0xE0) == 0xC0) {
+        byteOffset += 2;
+      } else if ((c & 0xF0) == 0xE0) {
+        byteOffset += 3;
+      } else if ((c & 0xF8) == 0xF0) {
+        byteOffset += 4;
+      } else {
+        byteOffset += 1;
+      }
+      charCount++;
+    }
+
+    return static_cast<uint32_t>(byteOffset);
+  }
+
   [[nodiscard]] SourceLoc getLoc(antlr4::Token *token) const {
     if (!token)
       return SourceLoc::invalid();
+    // ⚠️ ANTLR API: getStartIndex() 返回字符索引，需转换为字节偏移
+    uint32_t byteOffset = charIndexToByteOffset(token->getStartIndex());
     return SourceLoc{static_cast<uint32_t>(token->getLine()),
-                     static_cast<uint32_t>(token->getCharPositionInLine() + 1),
-                     static_cast<uint32_t>(token->getStartIndex())};
+                     static_cast<uint32_t>(token->getCharPositionInLine() + 1), byteOffset};
   }
 
   [[nodiscard]] SourceRange getRange(antlr4::tree::TerminalNode *node) const {
@@ -89,13 +168,16 @@ protected:
     if (!token)
       return SourceRange::invalid();
 
+    // ⚠️ ANTLR API: getStartIndex()/getStopIndex() 返回字符索引，需转换为字节偏移
+    uint32_t beginOffset = charIndexToByteOffset(token->getStartIndex());
+    uint32_t endOffset = charIndexToByteOffset(token->getStopIndex() + 1);
+
     SourceLoc begin{static_cast<uint32_t>(token->getLine()),
-                    static_cast<uint32_t>(token->getCharPositionInLine() + 1),
-                    static_cast<uint32_t>(token->getStartIndex())};
+                    static_cast<uint32_t>(token->getCharPositionInLine() + 1), beginOffset};
     SourceLoc end{
         static_cast<uint32_t>(token->getLine()),
         static_cast<uint32_t>(token->getCharPositionInLine() + 1 + token->getText().length()),
-        static_cast<uint32_t>(token->getStopIndex() + 1)};
+        endOffset};
     return SourceRange{begin, end};
   }
 
@@ -108,21 +190,25 @@ protected:
     if (!start)
       return SourceRange::invalid();
 
+    // ⚠️ ANTLR API: getStartIndex()/getStopIndex() 返回字符索引，需转换为字节偏移
+    uint32_t beginOffset = charIndexToByteOffset(start->getStartIndex());
     SourceLoc begin{static_cast<uint32_t>(start->getLine()),
-                    static_cast<uint32_t>(start->getCharPositionInLine() + 1),
-                    static_cast<uint32_t>(start->getStartIndex())};
+                    static_cast<uint32_t>(start->getCharPositionInLine() + 1), beginOffset};
 
     SourceLoc end;
     if (stop) {
+      // ⚠️ ANTLR API: getStopIndex() 返回字符索引，需转换为字节偏移
+      uint32_t endOffset = charIndexToByteOffset(stop->getStopIndex() + 1);
       end = SourceLoc{
           static_cast<uint32_t>(stop->getLine()),
           static_cast<uint32_t>(stop->getCharPositionInLine() + 1 + stop->getText().length()),
-          static_cast<uint32_t>(stop->getStopIndex() + 1)};
+          endOffset};
     } else {
+      uint32_t endOffset = charIndexToByteOffset(start->getStopIndex() + 1);
       end = SourceLoc{
           static_cast<uint32_t>(start->getLine()),
           static_cast<uint32_t>(start->getCharPositionInLine() + 1 + start->getText().length()),
-          static_cast<uint32_t>(start->getStopIndex() + 1)};
+          endOffset};
     }
 
     return SourceRange{begin, end};
@@ -153,11 +239,9 @@ protected:
     TRY_EXPR(ErrorExprNode)
     TRY_EXPR(MissingExprNode) TRY_EXPR(NullLiteralNode) TRY_EXPR(BoolLiteralNode)
         TRY_EXPR(IntLiteralNode) TRY_EXPR(FloatLiteralNode) TRY_EXPR(StringLiteralNode)
-            TRY_EXPR(IdentifierNode) TRY_EXPR(QualifiedIdentifierNode)
-                TRY_EXPR(MemberAccessExprNode) TRY_EXPR(IndexExprNode) TRY_EXPR(ColonLookupExprNode)
-                    TRY_EXPR(BinaryExprNode) TRY_EXPR(UnaryExprNode) TRY_EXPR(CallExprNode)
-                        TRY_EXPR(NewExprNode) TRY_EXPR(ListExprNode) TRY_EXPR(MapExprNode)
-                            TRY_EXPR(MapEntryNode) TRY_EXPR(LambdaExprNode) TRY_EXPR(ParenExprNode)
+            TRY_EXPR(IdentifierNode) TRY_EXPR(QualifiedIdentifierNode) TRY_EXPR(MemberAccessExprNode) TRY_EXPR(IndexExprNode)
+                TRY_EXPR(BinaryExprNode) TRY_EXPR(UnaryExprNode) TRY_EXPR(CallExprNode)
+                    TRY_EXPR(ListExprNode) TRY_EXPR(MapExprNode) TRY_EXPR(MapEntryNode) TRY_EXPR(LambdaExprNode) TRY_EXPR(ParenExprNode)
                                 TRY_EXPR(VarArgsExprNode)
 #undef TRY_EXPR
                                     return nullptr;
@@ -424,7 +508,7 @@ protected:
       return PrimitiveKind::Float;
     case LangLexer::NUMBER:
       return PrimitiveKind::Number;
-    case LangLexer::STRING:
+    case LangLexer::STR:
       return PrimitiveKind::String;
     case LangLexer::BOOL:
       return PrimitiveKind::Bool;
@@ -965,14 +1049,21 @@ protected:
       // 使用 std::string 避免悬空引用
       std::string member = "";
       bool incomplete = false;
+      SourceRange memberRange = SourceRange::invalid();
 
       if (m->IDENTIFIER()) {
         member = m->IDENTIFIER()->getText();
+        // 计算 member 的位置范围
+        memberRange = getRange(m->IDENTIFIER());
+        LSP_LOG("applyPostfixSuffix: IDENTIFIER='" << member << "', memberRange=["
+                                                   << memberRange.begin.offset << "-"
+                                                   << memberRange.end.offset << "]"
+                                                   << ", line=" << memberRange.begin.line);
       } else {
         // No identifier after dot -> incomplete for completion!
         incomplete = true;
       }
-      return factory_.makeMemberAccessExpr(range, base, member, incomplete);
+      return factory_.makeMemberAccessExpr(range, base, member, memberRange, incomplete);
     }
 
     // Index: expr[index]
@@ -994,34 +1085,6 @@ protected:
     }
 
     return base;
-  }
-
-  // New expression
-  std::any visitNewExpressionDef(LangParser::NewExpressionDefContext *ctx) override {
-    if (!ctx)
-      return static_cast<Expr *>(factory_.makeErrorExpr(SourceRange::invalid(), "invalid new"));
-
-    auto range = getRange(ctx);
-    QualifiedIdentifierNode *typeName = nullptr;
-    if (ctx->qualifiedIdentifier()) {
-      auto v = visit(ctx->qualifiedIdentifier());
-      typeName = tryCast<QualifiedIdentifierNode>(v);
-    }
-    if (!typeName)
-      typeName = factory_.makeQualifiedIdentifier(range, {""});
-
-    std::vector<Expr *> args;
-    if (ctx->arguments() && ctx->arguments()->expressionList()) {
-      for (auto *a : ctx->arguments()->expressionList()->expression())
-        args.push_back(expectExpr(a));
-    }
-    return static_cast<Expr *>(factory_.makeNewExpr(range, typeName, args));
-  }
-
-  std::any visitPrimaryNew(LangParser::PrimaryNewContext *ctx) override {
-    if (!ctx || !ctx->newExp())
-      return static_cast<Expr *>(factory_.makeErrorExpr(getRange(ctx), "invalid new"));
-    return visit(ctx->newExp());
   }
 
   // Lambda expression

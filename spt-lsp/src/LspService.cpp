@@ -721,33 +721,86 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
 
   // position is already 1-based (converted in from_json)
   uint32_t offset = file->getOffset(position);
+  LSP_LOG("Hover requested at pos(" << position.line << ", " << position.column
+                                    << "), offset=" << offset);
 
   // Get AST and find node
   auto *ast = file->getAst();
-  if (!ast)
+  if (!ast) {
+    LSP_LOG("Hover: ast is null");
     return result;
+  }
 
   NodeFinder finder(ast);
   auto findResult = finder.findNodeAt(offset);
 
-  if (!findResult.valid())
+  if (!findResult.valid()) {
+    LSP_LOG("Hover: findNodeAt returned invalid");
     return result;
+  }
 
   // Get semantic model
   auto *model = impl_->getSemanticModel(file);
 
   // Build hover content based on node type
   ast::AstNode *node = findResult.node();
+  LSP_LOG("Hover: found node kind=" << ast::astKindToString(node->kind));
 
   if (auto *ident = ast::ast_cast<ast::IdentifierNode>(node)) {
+    LSP_LOG("Hover: node is IdentifierNode");
     // Look up symbol
     if (model) {
       if (auto *sym = model->getResolvedSymbol(node)) {
+        LSP_LOG("Hover: found resolved symbol " << sym->name());
         result.contents = createHoverMarkdown(sym, sym->type());
         result.range = file->toRange(node->range);
       } else if (auto *defSym = model->getDefiningSymbol(node)) {
+        LSP_LOG("Hover: found defining symbol " << defSym->name());
         result.contents = createHoverMarkdown(defSym, defSym->type());
         result.range = file->toRange(node->range);
+      } else {
+        LSP_LOG("Hover: no symbol found for identifier");
+      }
+    }
+  } else if (auto *varDecl = ast::ast_cast<ast::VarDeclNode>(node)) {
+    LSP_LOG("Hover: node is VarDeclNode");
+    if (model) {
+      if (auto *defSym = model->getDefiningSymbol(node)) {
+        LSP_LOG("Hover: found defining symbol " << defSym->name());
+        result.contents = createHoverMarkdown(defSym, defSym->type());
+        result.range = file->toRange(node->range);
+      } else {
+        LSP_LOG("Hover: no symbol found for vardecl");
+      }
+    }
+  } else if (auto *inferredType = ast::ast_cast<ast::InferredTypeNode>(node)) {
+    LSP_LOG("Hover: node is InferredTypeNode");
+    // Handle 'auto' keyword - find the parent VarDecl and get the inferred type
+    if (model) {
+      auto *parent = findResult.context.parent();
+      if (parent) {
+        LSP_LOG("Hover: parent kind=" << ast::astKindToString(parent->kind));
+      } else {
+        LSP_LOG("Hover: parent is null");
+      }
+      if (auto *varDecl = ast::ast_cast<ast::VarDeclNode>(parent)) {
+        // The type of the VarDeclNode itself is the inferred type
+        types::TypeRef varType = model->getNodeType(varDecl);
+        if (varType) {
+          LSP_LOG("Hover: varType=" << varType->toString());
+        } else {
+          LSP_LOG("Hover: varType is null");
+        }
+        if (varType && !varType->isUnknown()) {
+          result.contents = "```lang\n" + varType->toString() + "\n```";
+          result.range = file->toRange(inferredType->range);
+        } else {
+          // Fallback to symbol type if node type is unknown
+          if (auto *sym = model->getDefiningSymbol(varDecl)) {
+            result.contents = "```lang\n" + sym->type()->toString() + "\n```";
+            result.range = file->toRange(inferredType->range);
+          }
+        }
       }
     }
   } else if (auto *literal = ast::ast_cast<ast::IntLiteralNode>(node)) {
@@ -765,6 +818,37 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
     result.contents =
         std::string("```lang\nbool\n```\nValue: ") + (literal->value ? "true" : "false");
     result.range = file->toRange(node->range);
+  } else if (auto *memberAccess = ast::ast_cast<ast::MemberAccessExprNode>(node)) {
+    // Handle hover on member access (e.g., abc.value)
+    LSP_LOG("Hover: MemberAccessExpr, memberRange=[" << memberAccess->memberRange.begin.offset
+                                                     << "-" << memberAccess->memberRange.end.offset
+                                                     << "], offset=" << offset);
+    // Check if offset is within memberRange (the member name part)
+    if (memberAccess->memberRange.isValid() && offset >= memberAccess->memberRange.begin.offset &&
+        offset < memberAccess->memberRange.end.offset) {
+      LSP_LOG("Hover: offset in memberRange, looking up member type");
+      if (model) {
+        // Get the type of the base expression
+        types::TypeRef baseType = model->getNodeType(memberAccess->base);
+        if (baseType && !baseType->isUnknown()) {
+          LSP_LOG("Hover: baseType=" << baseType->toString());
+          // Try to find the member in the base type
+          if (auto *classType = dynamic_cast<const types::ClassType *>(baseType.get())) {
+            // Look for the member in the class
+            std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
+            std::string memberName(memberNameView);
+            for (const auto &field : classType->fields()) {
+              if (field.name == memberName) {
+                LSP_LOG("Hover: found field " << field.name);
+                result.contents = "```lang\n" + field.type->toString() + "\n```";
+                result.range = file->toRange(memberAccess->memberRange);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   return result;
@@ -832,9 +916,8 @@ CompletionResult LspService::completion(std::string_view uri, Position position,
     break;
   }
 
-  case CompletionTrigger::NewExpression:
   case CompletionTrigger::TypeAnnotation: {
-    LSP_LOG("case: NewExpression/TypeAnnotation");
+    LSP_LOG("case: TypeAnnotation");
     // Type completion
     impl_->addTypeCompletions(result.items);
 
@@ -1000,14 +1083,13 @@ SignatureHelp LspService::signatureHelp(std::string_view uri, Position position)
   if (!findResult.valid())
     return result;
 
-  // Look for enclosing call expression or new expression
+  // Look for enclosing call expression
   auto *callExpr = findResult.context.findAncestor<ast::CallExprNode>();
-  auto *newExpr = findResult.context.findAncestor<ast::NewExprNode>();
   
   // If no CallExprNode found, try to find identifier before cursor
   // This handles incomplete calls like "add(" where parser hasn't created CallExprNode yet
   ast::IdentifierNode *calleeIdent = nullptr;
-  if (!callExpr && !newExpr) {
+  if (!callExpr) {
     // Check if the found node is an identifier (the function name being typed)
     calleeIdent = ast::ast_cast<ast::IdentifierNode>(findResult.context.node);
     if (!calleeIdent) {
@@ -1053,8 +1135,8 @@ SignatureHelp LspService::signatureHelp(std::string_view uri, Position position)
       }
     }
   }
-  
-  if (!callExpr && !newExpr && !calleeIdent)
+
+  if (!callExpr && !calleeIdent)
     return result;
 
   // Get function type and declaration
@@ -1069,16 +1151,6 @@ SignatureHelp LspService::signatureHelp(std::string_view uri, Position position)
     if (funcSymbol && funcSymbol->astNode()) {
       funcDecl = ast::ast_cast<ast::FunctionDeclNode>(funcSymbol->astNode());
       methodDecl = ast::ast_cast<ast::MethodDeclNode>(funcSymbol->astNode());
-    }
-  } else if (newExpr) {
-    // For new expression, get the constructor (__init) type
-    types::TypeRef classType = model->getNodeType(newExpr->typeName);
-    if (classType && classType->isClass()) {
-      auto *ct = static_cast<const types::ClassType *>(classType.get());
-      auto *initMethod = ct->findMethod("__init");
-      if (initMethod) {
-        funcType = initMethod->type;
-      }
     }
   } else if (calleeIdent) {
     // For incomplete call, look up the identifier's type
@@ -1196,6 +1268,67 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
 
   if (!findResult.valid())
     return result;
+
+  // Special handling for MemberAccessExpr - check if offset is in memberRange
+  if (auto *memberAccess = ast::ast_cast<ast::MemberAccessExprNode>(findResult.node())) {
+    if (memberAccess->memberRange.isValid() && offset >= memberAccess->memberRange.begin.offset &&
+        offset < memberAccess->memberRange.end.offset) {
+      LSP_LOG("Definition: MemberAccessExpr member, looking up field definition");
+      // Get the type of the base expression
+      types::TypeRef baseType = model->getNodeType(memberAccess->base);
+      if (baseType && !baseType->isUnknown()) {
+        LSP_LOG("Definition: baseType=" << baseType->toString());
+        if (auto *classType = dynamic_cast<const types::ClassType *>(baseType.get())) {
+          std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
+          std::string memberName(memberNameView);
+
+          // Find the field in the class type
+          const types::FieldInfo *fieldInfo = classType->findField(memberName);
+          if (fieldInfo) {
+            LSP_LOG("Definition: found field " << fieldInfo->name);
+
+            // Find the ClassSymbol to get the FieldSymbol with definition location
+            // First, find the class declaration node
+            ast::ClassDeclNode *classDecl = nullptr;
+            for (size_t i = 0; i < ast->statements.size(); ++i) {
+              if (auto *declStmt = ast::ast_cast<ast::DeclStmtNode>(ast->statements[i])) {
+                if (auto *cd = ast::ast_cast<ast::ClassDeclNode>(declStmt->decl)) {
+                  if (cd->name.isValid()) {
+                    auto className = file->factory().strings().get(cd->name);
+                    if (className == classType->name()) {
+                      classDecl = cd;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+
+            if (classDecl) {
+              // Find the field declaration in the class
+              for (auto *fieldDecl : classDecl->fields) {
+                auto fieldName = file->factory().strings().get(fieldDecl->name);
+                if (fieldName == memberName) {
+                  LSP_LOG("Definition: found field declaration at line "
+                          << fieldDecl->range.begin.line);
+                  LocationLink link;
+                  link.targetUri = std::string(uri);
+                  link.targetRange = file->toRange(fieldDecl->range);
+                  // 使用 nameRange 作为选择范围，如果没有则使用整个 range
+                  link.targetSelectionRange = fieldDecl->nameRange.isValid()
+                                                  ? file->toRange(fieldDecl->nameRange)
+                                                  : link.targetRange;
+                  link.originSelectionRange = file->toRange(memberAccess->memberRange);
+                  result.push_back(std::move(link));
+                  return result;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Look up symbol
   semantic::Symbol *sym = model->getResolvedSymbol(findResult.node());

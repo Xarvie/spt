@@ -270,6 +270,15 @@ public:
     }
 
     auto memberName = getString(node->member);
+
+    // Check if the member corresponds to a known symbol in the current scope
+    // For example, if it is a class definition like `NS.Inner`
+    if (Symbol *sym = currentScope_->resolve(memberName)) {
+      if (sym->isClass()) {
+        return setType(node, sym->type());
+      }
+    }
+
     if (baseType->isClass()) {
       auto *classType = static_cast<const types::ClassType *>(baseType.get());
       if (auto *field = classType->findField(memberName)) {
@@ -284,6 +293,9 @@ public:
                             classType->name() + "'",
                         "E002");
       }
+    } else if (baseType->isAny()) {
+      // Fallback for ANY
+      return setType(node, model_.typeContext().anyType());
     }
     return setType(node, model_.typeContext().unknownType());
   }
@@ -302,11 +314,6 @@ public:
     }
     if (baseType->isString())
       return setType(node, model_.typeContext().stringType());
-    return setType(node, model_.typeContext().unknownType());
-  }
-
-  types::TypeRef visitColonLookupExpr(ast::ColonLookupExprNode *node) {
-    visit(node->base);
     return setType(node, model_.typeContext().unknownType());
   }
 
@@ -342,18 +349,6 @@ public:
     }
     if (calleeType->isClass())
       return setType(node, calleeType);
-    return setType(node, model_.typeContext().unknownType());
-  }
-
-  types::TypeRef visitNewExpr(ast::NewExprNode *node) {
-    for (auto *arg : node->arguments)
-      visit(arg);
-    if (node->typeName && !node->typeName->parts.empty()) {
-      auto className = getString(node->typeName->parts[0]);
-      if (auto classType = model_.typeContext().findClassType(className)) {
-        return setType(node, classType);
-      }
-    }
     return setType(node, model_.typeContext().unknownType());
   }
 
@@ -589,6 +584,11 @@ public:
     else
       final_ = model_.typeContext().anyType();
 
+    // Ensure the node's type node gets the final type if it's InferredTypeNode
+    if (auto *inferredType = ast::ast_cast<ast::InferredTypeNode>(node->type)) {
+      setType(inferredType, final_);
+    }
+
     if (Symbol *existing = currentScope_->resolveLocal(name)) {
       if (existing->type()->isUnknown())
         existing->setType(final_);
@@ -812,6 +812,10 @@ public:
   }
 
   types::TypeRef visitInferredType(ast::InferredTypeNode *node) {
+    // If the node type was already set (e.g. by VarDecl), return it
+    if (auto t = model_.getNodeType(node)) {
+      return t;
+    }
     return setType(node, model_.typeContext().unknownType());
   }
 

@@ -283,7 +283,7 @@ int main() {
     int result = 10 ~/ 3;
     result ~/= 2;
     
-    Calculator calc = new Calculator();
+    Calculator calc = Calculator();
     calc.setValue(5);
     calc.add(3);
     

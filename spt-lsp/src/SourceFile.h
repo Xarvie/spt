@@ -618,6 +618,9 @@ inline void SourceFile::reparse() {
         Diagnostic d;
         // 注意：ANTLR 也是 1-based 行号，0-based 列号，需要对应你的 Range 定义
         // 这里假设你的 Range 需要 1-based
+        // ⚠️ ANTLR API: charPositionInLine 是字符索引（非字节偏移）
+        //    对于纯 ASCII 代码没问题，含中文时列号可能有偏差
+        //    但诊断信息对精确度要求不高，暂时可以接受
         Position start{static_cast<uint32_t>(line), static_cast<uint32_t>(charPositionInLine + 1)};
         Position end = start;
         if (offendingSymbol) {
@@ -641,7 +644,9 @@ inline void SourceFile::reparse() {
 
     // 6. AST 转换 (CST -> AST)
     // 实例化你的宽容构建器
-    ast::TolerantAstBuilder builder(factory_, filename());
+    // ⚠️ 必须传入 content_ 用于 ANTLR 字符索引到 UTF-8 字节偏移的转换
+    //    ANTLR 的 getStartIndex() 返回字符索引，需要源代码来计算字节偏移
+    ast::TolerantAstBuilder builder(factory_, content_, filename());
 
     // 执行转换
     ast_ = builder.build(tree);

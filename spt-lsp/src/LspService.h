@@ -685,8 +685,11 @@ public:
    */
   void removeWorkspaceFolder(std::string_view uri);
 
-private:
   class Impl;
+
+  Impl *getImplForTest() { return impl_.get(); }
+
+private:
   std::unique_ptr<Impl> impl_;
 };
 

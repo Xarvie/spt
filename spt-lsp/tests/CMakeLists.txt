@@ -24,6 +24,19 @@ set(LSP_TEST_SOURCES
 
 add_executable(lsp_tests ${LSP_TEST_SOURCES})
 
+add_executable(lsp_tests2 test_behavior_chain2.cpp ${ANTLR_GENERATED_SOURCES} ${LSP_CORE_SOURCES})
+target_include_directories(lsp_tests2 PRIVATE
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/generated
+        ${PROJECT_SOURCE_DIR}/runtime/src
+        ${PROJECT_SOURCE_DIR}/external
+        ${PROJECT_SOURCE_DIR}/external/nlohmann
+)
+target_link_libraries(lsp_tests2 PRIVATE antlr4_static)
+if (NOT MSVC)
+    target_link_options(lsp_tests2 PRIVATE "-static-libgcc" "-static-libstdc++")
+endif ()
+
 target_include_directories(lsp_tests PRIVATE 
     ${PROJECT_SOURCE_DIR}/src
     ${PROJECT_SOURCE_DIR}/generated

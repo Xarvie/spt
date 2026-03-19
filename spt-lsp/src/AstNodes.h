@@ -40,11 +40,15 @@ struct TypeNode;
 
 /**
  * @brief Represents a single position in source code
+ *
+ * ⚠️ IMPORTANT: offset 和 column 都是 UTF-8 字节偏移，不是字符索引！
+ *    - ANTLR 的 getStartIndex() 返回字符索引，需要通过 charIndexToByteOffset() 转换
+ *    - 这里的 offset 是字节偏移（与 LSP 协议和 LineOffsetTable 一致）
  */
 struct SourceLoc {
   uint32_t line = 0;   ///< 1-based line number
-  uint32_t column = 0; ///< 1-based column number (UTF-8 bytes)
-  uint32_t offset = 0; ///< 0-based byte offset from file start
+  uint32_t column = 0; ///< 1-based column number (UTF-8 byte offset within line)
+  uint32_t offset = 0; ///< 0-based UTF-8 byte offset from file start
 
   [[nodiscard]] bool isValid() const noexcept { return line > 0; }
 
@@ -116,7 +120,6 @@ enum class AstKind : uint16_t {
   QualifiedIdentifier, ///< a.b.c style qualified name
   MemberAccessExpr,    ///< obj.member (may be incomplete: obj.)
   IndexExpr,           ///< expr[index]
-  ColonLookupExpr,     ///< expr:member
 
   // Operators
   BinaryExpr, ///< Binary operations (+, -, *, etc.)
@@ -124,7 +127,6 @@ enum class AstKind : uint16_t {
 
   // Calls & Construction
   CallExpr, ///< function(args)
-  NewExpr,  ///< new ClassName(args)
 
   // Compound Expressions
   ListExpr,     ///< [elem1, elem2, ...]
@@ -321,7 +323,6 @@ enum class PrimitiveKind : uint8_t {
   Null,
   Coroutine,
   Function,
-
   Invalid,
 };
 
@@ -559,6 +560,7 @@ struct QualifiedIdentifierNode : Expr {
 struct MemberAccessExprNode : Expr {
   Expr *base = nullptr;  ///< The object being accessed (NEVER null - use ErrorExpr)
   InternedString member; ///< Member name (may be empty if incomplete)
+  SourceRange memberRange; ///< Location of the member name (for hover/definition)
 
   // When incomplete (obj.), member is empty and flags has Incomplete
   // This is the key trigger for member completion
@@ -574,18 +576,6 @@ struct IndexExprNode : Expr {
   Expr *index = nullptr; ///< Index expression (NEVER null - use ErrorExpr)
 
   static constexpr AstKind Kind = AstKind::IndexExpr;
-};
-
-/**
- * @brief Colon lookup expression (expr:member)
- *
- * Used for method lookup (different from dot access in some semantics)
- */
-struct ColonLookupExprNode : Expr {
-  Expr *base = nullptr;
-  InternedString member;
-
-  static constexpr AstKind Kind = AstKind::ColonLookupExpr;
 };
 
 // --------------------------------------------------------------------------
@@ -632,18 +622,6 @@ struct CallExprNode : Expr {
   SourceRange parenRange; ///< Range of parentheses (for completion)
 
   static constexpr AstKind Kind = AstKind::CallExpr;
-};
-
-/**
- * @brief New expression (object construction)
- *
- * new ClassName(args)
- */
-struct NewExprNode : Expr {
-  QualifiedIdentifierNode *typeName = nullptr; ///< Class to instantiate
-  ArrayView<Expr *> arguments;                 ///< Constructor arguments
-
-  static constexpr AstKind Kind = AstKind::NewExpr;
 };
 
 // --------------------------------------------------------------------------
@@ -1066,6 +1044,7 @@ struct FunctionDeclNode : Decl {
 struct FieldDeclNode : Decl {
   struct TypeNode *type = nullptr; ///< Field type (NEVER null)
   Expr *initializer = nullptr;     ///< Default value (may be null)
+  SourceRange nameRange;           ///< Location of the field name (for definition navigation)
 
   // isStatic, isConst via base class flags
 
@@ -1250,16 +1229,12 @@ public:
       return derived().visitMemberAccessExpr(static_cast<MemberAccessExprNode *>(node));
     case AstKind::IndexExpr:
       return derived().visitIndexExpr(static_cast<IndexExprNode *>(node));
-    case AstKind::ColonLookupExpr:
-      return derived().visitColonLookupExpr(static_cast<ColonLookupExprNode *>(node));
     case AstKind::BinaryExpr:
       return derived().visitBinaryExpr(static_cast<BinaryExprNode *>(node));
     case AstKind::UnaryExpr:
       return derived().visitUnaryExpr(static_cast<UnaryExprNode *>(node));
     case AstKind::CallExpr:
       return derived().visitCallExpr(static_cast<CallExprNode *>(node));
-    case AstKind::NewExpr:
-      return derived().visitNewExpr(static_cast<NewExprNode *>(node));
     case AstKind::ListExpr:
       return derived().visitListExpr(static_cast<ListExprNode *>(node));
     case AstKind::MapExpr:
@@ -1374,11 +1349,9 @@ protected:
   DEFAULT_VISIT(QualifiedIdentifier)
   DEFAULT_VISIT(MemberAccessExpr)
   DEFAULT_VISIT(IndexExpr)
-  DEFAULT_VISIT(ColonLookupExpr)
   DEFAULT_VISIT(BinaryExpr)
   DEFAULT_VISIT(UnaryExpr)
   DEFAULT_VISIT(CallExpr)
-  DEFAULT_VISIT(NewExpr)
   DEFAULT_VISIT(ListExpr)
   DEFAULT_VISIT(MapEntry)
   DEFAULT_VISIT(MapExpr)
@@ -1471,16 +1444,12 @@ private:
     return "MemberAccessExpr";
   case AstKind::IndexExpr:
     return "IndexExpr";
-  case AstKind::ColonLookupExpr:
-    return "ColonLookupExpr";
   case AstKind::BinaryExpr:
     return "BinaryExpr";
   case AstKind::UnaryExpr:
     return "UnaryExpr";
   case AstKind::CallExpr:
     return "CallExpr";
-  case AstKind::NewExpr:
-    return "NewExpr";
   case AstKind::ListExpr:
     return "ListExpr";
   case AstKind::MapExpr:

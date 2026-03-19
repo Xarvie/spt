@@ -87,7 +87,6 @@ enum class CompletionTrigger : uint8_t {
   None,
   DotAccess,      ///< After '.' (member completion)
   ColonAccess,    ///< After ':' (method completion)
-  NewExpression,  ///< After 'new' (class completion)
   TypeAnnotation, ///< In type position (type completion)
   Import,         ///< In import statement (module completion)
   Identifier,     ///< Regular identifier (scope completion)
@@ -169,7 +168,10 @@ public:
 
     if (best) {
       result.context.node = best;
-      // path 现在是从根到叶的正确顺序
+      // path 现在是从根到叶的正确顺序，但不应该包含 node 本身作为祖先
+      if (!path.empty() && path.back() == best) {
+        path.pop_back();
+      }
       result.context.ancestors = std::move(path);
       result.completion = analyzeCompletionContext(result.context, offset);
       LSP_LOG("result.context.node=" << ast::astKindToString(result.context.node->kind));
@@ -398,18 +400,6 @@ public:
       visitor(n->index);
       break;
     }
-    case ast::AstKind::ColonLookupExpr: {
-      auto *n = static_cast<ast::ColonLookupExprNode *>(node);
-      visitor(n->base);
-      break;
-    }
-    case ast::AstKind::NewExpr: {
-      auto *n = static_cast<ast::NewExprNode *>(node);
-      visitor(n->typeName);
-      for (auto *arg : n->arguments)
-        visitor(arg);
-      break;
-    }
     case ast::AstKind::ListExpr: {
       auto *n = static_cast<ast::ListExprNode *>(node);
       for (auto *elem : n->elements)
@@ -525,6 +515,11 @@ public:
     // Declarations
     case ast::AstKind::VarDecl: {
       auto *n = static_cast<ast::VarDeclNode *>(node);
+      // Ensure name range is also checked (synthesize an IdentifierNode for the name)
+      // For LSP hover/completion, we need to be able to find the name identifier itself
+      // But since we don't have a child node for it, we just visit type and initializer
+      // Wait, the name offset might be what we are hovering over. If we are on the name,
+      // the deepest node will just be the VarDeclNode.
       visitor(n->type);
       if (n->initializer)
         visitor(n->initializer);
@@ -623,6 +618,7 @@ private:
    *
    * 修复: 现在正确地构建从根到叶的路径
    * 修复: CompilationUnit 即使 range 无效也继续搜索子节点
+   * 修复: MemberAccessExpr 的 member 没有单独节点，需要检查 memberRange
    */
   [[nodiscard]] ast::AstNode *findDeepestAt(ast::AstNode *node, uint32_t offset,
                                             std::vector<ast::AstNode *> &path) const {
@@ -675,6 +671,19 @@ private:
       }
     });
 
+    // 特殊处理: MemberAccessExpr 的 member 没有单独节点
+    // 如果 offset 在 memberRange 内，返回 MemberAccessExprNode 本身
+    if (!deeperResult && node->kind == ast::AstKind::MemberAccessExpr) {
+      auto *memberAccess = static_cast<ast::MemberAccessExprNode *>(node);
+      if (memberAccess->memberRange.isValid() && offset >= memberAccess->memberRange.begin.offset &&
+          offset < memberAccess->memberRange.end.offset) {
+        LSP_LOG("  -> offset in memberRange [" << memberAccess->memberRange.begin.offset << ", "
+                                               << memberAccess->memberRange.end.offset
+                                               << "), returning MemberAccessExpr");
+        return node;
+      }
+    }
+
     // 如果在子节点中找到了，返回那个结果
     // 否则返回当前节点
     if (deeperResult) {
@@ -720,6 +729,30 @@ private:
     CompletionContext result;
     result.enclosingNode = ctx.parent();
 
+    // The node itself might not be the member access if offset is right after the dot,
+    // it could just be an empty identifier or error node.
+    // But if we can find an incomplete MemberAccessExpr nearby in the tree, we should use it.
+
+    auto findIncompleteMemberAccess = [&]() -> ast::MemberAccessExprNode * {
+      if (auto *member = ast::ast_cast<ast::MemberAccessExprNode>(ctx.node)) {
+        if (member->isIncomplete())
+          return member;
+      }
+      for (auto it = ctx.ancestors.rbegin(); it != ctx.ancestors.rend(); ++it) {
+        if (auto *member = ast::ast_cast<ast::MemberAccessExprNode>(*it)) {
+          if (member->isIncomplete())
+            return member;
+        }
+      }
+      return nullptr;
+    };
+
+    if (auto *member = findIncompleteMemberAccess()) {
+      result.trigger = CompletionTrigger::DotAccess;
+      result.baseExpr = member->base;
+      return result;
+    }
+
     // Check if we're in a member access expression
     if (auto *member = ast::ast_cast<ast::MemberAccessExprNode>(ctx.node)) {
       result.trigger = CompletionTrigger::DotAccess;
@@ -736,19 +769,6 @@ private:
           return result;
         }
       }
-    }
-
-    // Check for colon lookup
-    if (auto *colon = ast::ast_cast<ast::ColonLookupExprNode>(ctx.node)) {
-      result.trigger = CompletionTrigger::ColonAccess;
-      result.baseExpr = colon->base;
-      return result;
-    }
-
-    // Check for new expression
-    if (ast::ast_cast<ast::NewExprNode>(ctx.node) || ctx.findAncestor<ast::NewExprNode>()) {
-      result.trigger = CompletionTrigger::NewExpression;
-      return result;
     }
 
     // Check for function call (argument completion)

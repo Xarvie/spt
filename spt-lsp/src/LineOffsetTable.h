@@ -32,10 +32,15 @@ namespace lsp {
  *
  * Note: LSP protocol uses 0-based positions externally.
  * This struct uses 1-based internally for consistency with compiler diagnostics.
+ *
+ * ⚠️ IMPORTANT: column 是 UTF-8 字节偏移，不是字符索引！
+ *    - ANTLR 的 getCharPositionInLine() 返回字符索引
+ *    - 这里的 column 是字节偏移（与 LSP 协议一致）
+ *    - 对于纯 ASCII 代码，两者相同；对于含中文的代码，不同
  */
 struct Position {
   uint32_t line = 1;   ///< 1-based line number
-  uint32_t column = 1; ///< 1-based column (byte offset within line)
+  uint32_t column = 1; ///< 1-based column (UTF-8 byte offset within line)
 
   [[nodiscard]] bool isValid() const noexcept { return line > 0 && column > 0; }
 

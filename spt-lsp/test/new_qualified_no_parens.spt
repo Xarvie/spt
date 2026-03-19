@@ -8,8 +8,8 @@ class Inner {
 
 map<any, any> NS = {};
 NS.Inner = Inner;
-
-auto obj = new NS.Inner;
-assert(obj.value == 100, "obj.value should be 100");
+Inner abc = NS.Inner();
+abc.value = 10;
+assert(abc.value == 100, "obj.value should be 100");
 
 print("new_qualified_no_parens tests passed!");

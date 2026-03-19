@@ -43,7 +43,6 @@ EXPORT: 'export';
 
 // 面向对象
 CLASS: 'class';         // 类定义
-NEW: 'new';             // 创建实例
 
 // --- 内建函数名作为 IDENTIFIER 处理 ---
 // PRINT, ERROR, PCALL, XPCALL, REQUIRE, TYPEOF 等现在是标识符

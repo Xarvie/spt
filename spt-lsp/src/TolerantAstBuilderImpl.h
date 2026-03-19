@@ -78,7 +78,14 @@ Expr *visitLValue(LangParser::LvalueContext *ctx) {
       // 使用 std::string 避免悬空引用（getText() 返回临时 string）
       std::string member = mem->IDENTIFIER() ? mem->IDENTIFIER()->getText() : "";
       auto range = SourceRange{result->range.begin, getRange(mem).end};
-      result = factory_.makeMemberAccessExpr(range, result, member);
+      // 计算 member 的位置范围
+      SourceRange memberRange =
+          mem->IDENTIFIER() ? getRange(mem->IDENTIFIER()) : SourceRange::invalid();
+      LSP_LOG("visitLValue: IDENTIFIER='" << member << "', memberRange=["
+                                          << memberRange.begin.offset << "-"
+                                          << memberRange.end.offset << "]"
+                                          << ", line=" << memberRange.begin.line);
+      result = factory_.makeMemberAccessExpr(range, result, member, memberRange);
     }
   }
   return result;
@@ -417,7 +424,7 @@ std::any visitTypePrimitive(LangParser::TypePrimitiveContext *ctx) override {
     kind = PrimitiveKind::Float;
   else if (p->NUMBER())
     kind = PrimitiveKind::Number;
-  else if (p->STRING())
+  else if (p->STR())
     kind = PrimitiveKind::String;
   else if (p->BOOL())
     kind = PrimitiveKind::Bool;
@@ -709,12 +716,17 @@ std::any visitClassFieldMember(LangParser::ClassFieldMemberContext *ctx) overrid
   TypeNode *type = nullptr;
   // 使用 std::string 确保安全
   std::string name = "";
+  SourceRange nameRange = SourceRange::invalid();
 
   if (ctx->declaration_item()) {
     auto v = visit(ctx->declaration_item());
     if (auto *vd = tryCast<VarDeclNode>(v)) {
       type = vd->type;
       name = std::string(factory_.strings().get(vd->name));
+    }
+    // 获取字段名的位置
+    if (ctx->declaration_item()->IDENTIFIER()) {
+      nameRange = getRange(ctx->declaration_item()->IDENTIFIER());
     }
   }
   if (!type)
@@ -723,7 +735,7 @@ std::any visitClassFieldMember(LangParser::ClassFieldMemberContext *ctx) overrid
   Expr *init = ctx->expression() ? expectExpr(ctx->expression()) : nullptr;
 
   return static_cast<FieldDeclNode *>(
-      factory_.makeFieldDecl(getRange(ctx), name, type, init, mods));
+      factory_.makeFieldDecl(getRange(ctx), name, type, init, mods, nameRange));
 }
 
 std::any visitClassMethodMember(LangParser::ClassMethodMemberContext *ctx) override {

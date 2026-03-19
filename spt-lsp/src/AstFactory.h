@@ -415,11 +415,13 @@ public:
    * @param range Source range
    * @param base Base expression (MUST NOT be null - use ErrorExpr)
    * @param member Member name (empty for incomplete "obj.")
+   * @param memberRange Location of the member name (for hover/definition)
    * @param isIncomplete True if cursor is after dot (for completion)
    */
   [[nodiscard]] MemberAccessExprNode *makeMemberAccessExpr(SourceRange range, Expr *base,
                                                            std::string_view member,
-                                                           bool isIncomplete = false) {
+                       SourceRange memberRange = SourceRange::invalid(),
+                       bool isIncomplete = false) {
     assert(base && "base must not be null - use ErrorExpr");
 
     auto *node = arena_.make<MemberAccessExprNode>();
@@ -427,6 +429,7 @@ public:
     node->range = range;
     node->base = base;
     node->member = strings_.intern(member);
+    node->memberRange = memberRange;
     if (isIncomplete) {
       node->flags = node->flags | NodeFlags::Incomplete;
     }
@@ -445,21 +448,6 @@ public:
     node->base = base;
     node->index = index;
     if (base->hasError() || index->hasError()) {
-      node->flags = node->flags | NodeFlags::HasError;
-    }
-    return node;
-  }
-
-  [[nodiscard]] ColonLookupExprNode *makeColonLookupExpr(SourceRange range, Expr *base,
-                                                         std::string_view member) {
-    assert(base && "base must not be null");
-
-    auto *node = arena_.make<ColonLookupExprNode>();
-    node->kind = AstKind::ColonLookupExpr;
-    node->range = range;
-    node->base = base;
-    node->member = strings_.intern(member);
-    if (base->hasError()) {
       node->flags = node->flags | NodeFlags::HasError;
     }
     return node;
@@ -527,16 +515,6 @@ public:
         node->flags = node->flags | NodeFlags::HasError;
       }
     }
-    return node;
-  }
-
-  [[nodiscard]] NewExprNode *makeNewExpr(SourceRange range, QualifiedIdentifierNode *typeName,
-                                         const std::vector<Expr *> &args) {
-    auto *node = arena_.make<NewExprNode>();
-    node->kind = AstKind::NewExpr;
-    node->range = range;
-    node->typeName = typeName;
-    node->arguments = arena_.makeArrayView(args);
     return node;
   }
 
@@ -899,7 +877,8 @@ public:
 
   [[nodiscard]] FieldDeclNode *makeFieldDecl(SourceRange range, std::string_view name,
                                              TypeNode *type, Expr *initializer = nullptr,
-                                             NodeFlags modifiers = NodeFlags::None) {
+                                             NodeFlags modifiers = NodeFlags::None,
+                                             SourceRange nameRange = SourceRange::invalid()) {
     assert(type && "type must not be null");
 
     auto *node = arena_.make<FieldDeclNode>();
@@ -909,6 +888,7 @@ public:
     node->type = type;
     node->initializer = initializer;
     node->flags = modifiers;
+    node->nameRange = nameRange;
     return node;
   }
 

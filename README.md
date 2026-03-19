@@ -7,6 +7,7 @@
 C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -noe -c "&{Import-Module 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Microsoft.VisualStudio.DevShell.dll'; Enter-VsDevShell bc8a024f; cd C:\Users\ftp\Desktop\spt\build; cmake --build . -j 16}"
 ```
 
+C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe -noe -c "&{Import-Module 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Microsoft.VisualStudio.DevShell.dll'; Enter-VsDevShell bc8a024f; cd C:\Users\ftp\Desktop\spt\spt-lsp\build; cmake --build . -j 16}"
 ---
 
 ## 1. 核心差异速查

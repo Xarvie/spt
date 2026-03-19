@@ -248,7 +248,6 @@ primaryExp
     | IDENTIFIER           #primaryIdentifier   // 标识符
     | DDD                  #primaryVarArgs      // 可变参数 '...' (在函数体内使用时)
     | OP expression CP     #primaryParenExp     // 圆括号表达式
-    | newExp               #primaryNew          // new 表达式
     | lambdaExpression     #primaryLambda       // Lambda/匿名函数
     ;
 
@@ -284,11 +283,6 @@ mapEntry
     | STRING_LITERAL COL expression  #mapEntryStringKey    // "key": value
     | INTEGER COL expression         #mapEntryIntKey       // 1: value
     | FLOAT_LITERAL COL expression   #mapEntryFloatKey     // 1.5: value
-    ;
-
-/** 'new' 表达式: 支持 new ClassName(), new Module.ClassName(), new Module.ClassName */
-newExp
-    : NEW qualifiedIdentifier (OP arguments? CP)? #newExpressionDef
     ;
 
 // --- 控制流语句 ---
