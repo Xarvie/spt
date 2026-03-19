@@ -110,7 +110,6 @@ public:
   std::any visitPrimaryIdentifier(LangParser::PrimaryIdentifierContext *ctx) override;
   std::any visitPrimaryVarArgs(LangParser::PrimaryVarArgsContext *ctx) override;
   std::any visitPrimaryParenExp(LangParser::PrimaryParenExpContext *ctx) override;
-  std::any visitPrimaryNew(LangParser::PrimaryNewContext *ctx) override;
   std::any visitPrimaryLambda(LangParser::PrimaryLambdaContext *ctx) override;
 
   std::any visitAtomexp(LangParser::AtomexpContext *ctx) override;

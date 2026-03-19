@@ -1977,14 +1977,6 @@ std::any AstBuilderVisitor::visitPrimaryParenExp(LangParser::PrimaryParenExpCont
   return visit(ctx->expression());
 }
 
-std::any AstBuilderVisitor::visitPrimaryNew(LangParser::PrimaryNewContext *ctx) {
-  if (!ctx)
-    throw std::runtime_error("AstBuilderVisitor::visitPrimaryNewnullptr");
-  if (!ctx->newExp())
-    throw std::runtime_error("AstBuilderVisitor::visitPrimaryNewnullptr");
-  return visit(ctx->newExp());
-}
-
 std::any AstBuilderVisitor::visitPrimaryLambda(LangParser::PrimaryLambdaContext *ctx) {
   if (!ctx)
     throw std::runtime_error("AstBuilderVisitor::visitPrimaryLambdanullptr");

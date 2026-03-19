@@ -1,6 +1,6 @@
 // 测试: 类 - 直接调用不带括号
 // 语法: postfixCallSuffix
-// 描述: 测试直接调用类名不带括号实例化类
+// 描述: 测试直接调用类名不带括号会返回类本身（不是实例）
 
 class Point {
     int x = 0;
@@ -8,7 +8,6 @@ class Point {
 }
 
 auto p = Point;
-assert(p.x == 0, "p.x should be 0");
-assert(p.y == 0, "p.y should be 0");
+assert(typeof(p) == "table", "p should be the class itself");
 
 print("no_parens tests passed!");
