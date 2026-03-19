@@ -1,0 +1,9 @@
+import { Inner } from "export_test.spt";
+import { Inner as MyInner } from "export_test.spt";
+
+Inner abc = Inner();
+
+MyInner xyz = MyInner();
+
+abc.value = 10;
+xyz.value = 20;
