@@ -175,6 +175,21 @@ public:
     return scope ? scope->allVisibleSymbols() : std::vector<Symbol *>{};
   }
 
+  // Exported Symbols (for cross-file import resolution)
+  void addExportedSymbol(const std::string &name, Symbol *symbol) {
+    if (symbol)
+      exportedSymbols_[name] = symbol;
+  }
+
+  [[nodiscard]] Symbol *findExportedSymbol(std::string_view name) const {
+    auto it = exportedSymbols_.find(std::string(name));
+    return it != exportedSymbols_.end() ? it->second : nullptr;
+  }
+
+  [[nodiscard]] const std::unordered_map<std::string, Symbol *> &exportedSymbols() const noexcept {
+    return exportedSymbols_;
+  }
+
 private:
   std::unordered_map<const ast::AstNode *, types::TypeRef> nodeTypes_;
   std::unordered_map<const ast::AstNode *, Symbol *> resolvedSymbols_;
@@ -184,6 +199,8 @@ private:
   size_t errorCount_ = 0;
   SymbolTable symbolTable_;
   mutable types::TypeContext typeContext_;
+  std::unordered_map<std::string, Symbol *>
+      exportedSymbols_; ///< Exported symbols for import resolution
 };
 
 // ============================================================================
@@ -196,6 +213,14 @@ private:
 class SemanticAnalyzer : public ast::AstVisitor<SemanticAnalyzer, types::TypeRef> {
 public:
   explicit SemanticAnalyzer(const ast::StringTable &strings) : strings_(strings) {}
+
+  // ImportResolver callback type
+  using ImportResolverCallback =
+      std::function<void(ast::ImportStmtNode *, ImportSymbol *, const std::string &)>;
+
+  void setImportResolver(ImportResolverCallback resolver) { importResolver_ = std::move(resolver); }
+
+  void setCurrentFilePath(const std::string *path) { currentFilePath_ = path; }
 
   [[nodiscard]] SemanticModel analyze(ast::CompilationUnitNode *unit) {
     model_ = SemanticModel();
@@ -343,11 +368,11 @@ public:
     for (auto *arg : node->arguments)
       visit(arg);
 
-    if (calleeType->isFunction()) {
+    if (calleeType && calleeType->isFunction()) {
       auto *ft = static_cast<const types::FunctionType *>(calleeType.get());
       return setType(node, ft->returnType());
     }
-    if (calleeType->isClass())
+    if (calleeType && calleeType->isClass())
       return setType(node, calleeType);
     return setType(node, model_.typeContext().unknownType());
   }
@@ -551,11 +576,21 @@ public:
       auto *is = model_.symbolTable().createImport(alias, path, node->range.begin);
       currentScope_->define(is);
       model_.setDefiningSymbol(node, is);
+      // Resolve import if resolver is set
+      if (importResolver_ && currentFilePath_) {
+        importResolver_(node, is, *currentFilePath_);
+      }
     } else {
       for (auto &s : node->specifiers) {
-        auto name = getString(s.alias);
-        auto *is = model_.symbolTable().createImport(name, path, s.range.begin);
+        auto alias = getString(s.alias);
+        auto originalName = getString(s.name);
+        auto *is = model_.symbolTable().createImport(alias, path, s.range.begin, originalName);
         currentScope_->define(is);
+        model_.setDefiningSymbol(node, is);
+        // Resolve import if resolver is set
+        if (importResolver_ && currentFilePath_) {
+          importResolver_(node, is, *currentFilePath_);
+        }
       }
     }
     return model_.typeContext().voidType();
@@ -747,9 +782,14 @@ public:
     if (!cs) {
       cs = model_.symbolTable().createClass(className, node->range.begin);
       cs->setAstNode(node);
-      if (node->isExport())
+      if (node->isExport()) {
         cs->addFlag(SymbolFlags::Export);
+        model_.addExportedSymbol(std::string(className), cs);
+      }
       currentScope_->define(cs);
+    } else if (node->isExport() && cs) {
+      cs->addFlag(SymbolFlags::Export);
+      model_.addExportedSymbol(std::string(className), cs);
     }
 
     auto *classType = model_.typeContext().getOrCreateClassType(className);
@@ -877,11 +917,62 @@ public:
   types::TypeRef visitQualifiedType(ast::QualifiedTypeNode *node) {
     if (node->name && !node->name->parts.empty()) {
       auto typeName = getString(node->name->parts[0]);
-      if (auto ct = model_.typeContext().findClassType(typeName)) {
+      LSP_LOG("visitQualifiedType: typeName=" << typeName);
+
+      // First try to find the type in TypeContext
+      types::TypeRef ct = model_.typeContext().findClassType(typeName);
+
+      // If not found, try to resolve from scope (for imported types)
+      if (!ct) {
+        LSP_LOG("visitQualifiedType: type not in TypeContext, trying scope resolve");
+        Symbol *sym = currentScope_->resolve(typeName);
+        LSP_LOG("visitQualifiedType: scope resolve sym=" << (void *)sym);
+        if (sym) {
+          LSP_LOG("visitQualifiedType: sym->kind=" << (int)sym->kind());
+          // If it's an import symbol, get the target and its type
+          if (auto *importSym = symbol_cast<ImportSymbol>(sym)) {
+            LSP_LOG("visitQualifiedType: found ImportSymbol, targetSymbol="
+                    << (void *)importSym->targetSymbol());
+            if (importSym->targetSymbol()) {
+              Symbol *targetSym = importSym->targetSymbol();
+              if (targetSym->isClass()) {
+                // Create or get the ClassType for this imported class
+                ct = types::TypeRef(model_.typeContext().getOrCreateClassType(typeName));
+                LSP_LOG("visitQualifiedType: created ClassType for import: " << typeName);
+              }
+            }
+          }
+        }
+      }
+
+      if (ct) {
         setType(node, ct);
         // Also set type on child QualifiedIdentifierNode for hover/definition
         // This allows direct type lookup without checking parent nodes
         setType(node->name, ct);
+
+        // Find the ClassSymbol and set resolvedSymbol for definition navigation
+        // First try to resolve from current scope (for local classes)
+        Symbol *sym = currentScope_->resolve(typeName);
+        LSP_LOG("visitQualifiedType: resolve from scope, sym=" << (void *)sym);
+        if (sym) {
+          LSP_LOG("visitQualifiedType: sym->kind=" << (int)sym->kind()
+                                                   << ", isClass=" << sym->isClass());
+          // If it's an import symbol, get the target
+          if (auto *importSym = symbol_cast<ImportSymbol>(sym)) {
+            LSP_LOG("visitQualifiedType: found ImportSymbol, targetSymbol="
+                    << (void *)importSym->targetSymbol());
+            if (importSym->targetSymbol()) {
+              sym = importSym->targetSymbol();
+              LSP_LOG("visitQualifiedType: using targetSymbol, isClass=" << sym->isClass());
+            }
+          }
+          if (sym && sym->isClass()) {
+            LSP_LOG("visitQualifiedType: setting resolvedSymbol for node->name");
+            model_.setResolvedSymbol(node->name, sym);
+          }
+        }
+
         return ct;
       }
     }
@@ -950,6 +1041,8 @@ private:
   const ast::StringTable &strings_;
   SemanticModel model_;
   Scope *currentScope_ = nullptr;
+  ImportResolverCallback importResolver_;
+  const std::string *currentFilePath_ = nullptr;
 };
 
 } // namespace semantic

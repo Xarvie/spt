@@ -512,8 +512,8 @@ public:
    * @brief Create an import symbol
    */
   [[nodiscard]] ImportSymbol *createImport(std::string_view name, std::string_view modulePath,
-                                           ast::SourceLoc loc) {
-    auto symbol = std::make_unique<ImportSymbol>(name, modulePath, loc);
+                                           ast::SourceLoc loc, std::string_view originalName = "") {
+    auto symbol = std::make_unique<ImportSymbol>(name, modulePath, loc, nullptr, originalName);
     ImportSymbol *ptr = symbol.get();
     symbols_.push_back(std::move(symbol));
     return ptr;

@@ -700,6 +700,22 @@ private:
       }
     }
 
+    // 特殊处理: ImportStmtNode 的 specifiers 中的名字没有单独节点
+    // 如果 offset 在某个 specifier 的 range 内，返回 ImportStmtNode 本身
+    if (!deeperResult && node->kind == ast::AstKind::ImportStmt) {
+      auto *importStmt = static_cast<ast::ImportStmtNode *>(node);
+      for (size_t i = 0; i < importStmt->specifiers.size(); ++i) {
+        const auto &spec = importStmt->specifiers[i];
+        if (spec.range.isValid() && offset >= spec.range.begin.offset &&
+            offset < spec.range.end.offset) {
+          LSP_LOG("  -> offset in specifier[" << i << "] [" << spec.range.begin.offset << ", "
+                                              << spec.range.end.offset
+                                              << "), returning ImportStmt");
+          return node;
+        }
+      }
+    }
+
     // 如果在子节点中找到了，返回那个结果
     // 否则返回当前节点
     if (deeperResult) {

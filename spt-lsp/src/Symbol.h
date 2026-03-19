@@ -572,11 +572,14 @@ private:
 class ImportSymbol : public Symbol {
 public:
   ImportSymbol(std::string_view name, std::string_view modulePath, ast::SourceLoc loc,
-               Symbol *targetSymbol = nullptr)
+               Symbol *targetSymbol = nullptr, std::string_view originalName = "")
       : Symbol(SymbolKind::Import, name, types::TypeRef(), loc), modulePath_(modulePath),
-        targetSymbol_(targetSymbol) {}
+        targetSymbol_(targetSymbol),
+        originalName_(originalName.empty() ? std::string(name) : std::string(originalName)) {}
 
   [[nodiscard]] const std::string &modulePath() const noexcept { return modulePath_; }
+
+  [[nodiscard]] const std::string &originalName() const noexcept { return originalName_; }
 
   [[nodiscard]] Symbol *targetSymbol() const noexcept { return targetSymbol_; }
 
@@ -599,6 +602,7 @@ public:
 private:
   std::string modulePath_;
   Symbol *targetSymbol_; ///< The actual symbol being imported
+  std::string originalName_; ///< Original name (before alias)
 };
 
 // ============================================================================
@@ -624,6 +628,8 @@ template <typename T> [[nodiscard]] inline T *symbol_cast(Symbol *symbol) noexce
     return symbol->kind() == SymbolKind::Field ? static_cast<T *>(symbol) : nullptr;
   } else if constexpr (std::is_same_v<T, MethodSymbol>) {
     return symbol->kind() == SymbolKind::Method ? static_cast<T *>(symbol) : nullptr;
+  } else if constexpr (std::is_same_v<T, ImportSymbol>) {
+    return symbol->kind() == SymbolKind::Import ? static_cast<T *>(symbol) : nullptr;
   } else if constexpr (std::is_same_v<T, ImportSymbol>) {
     return symbol->kind() == SymbolKind::Import ? static_cast<T *>(symbol) : nullptr;
   }

@@ -22,9 +22,9 @@
 #include <sstream>
 #include <string>
 
-// 默认日志文件路径 - Windows 桌面
+// 默认日志文件路径 - spt-lsp/test 目录
 #ifndef LSP_LOG_FILE
-#define LSP_LOG_FILE "C:/Users/ftp/Desktop/lsp_debug.log"
+#define LSP_LOG_FILE "C:/Users/ftp/Desktop/spt/spt-lsp/test/lsp_debug.log"
 #endif
 
 namespace lang {
