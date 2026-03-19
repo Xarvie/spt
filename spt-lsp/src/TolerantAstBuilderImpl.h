@@ -541,6 +541,7 @@ std::any visitVariableDeclarationDef(LangParser::VariableDeclarationDefContext *
 
   TypeNode *type = nullptr;
   std::string name = "";
+  SourceRange nameRange = SourceRange::invalid();
 
   if (ctx->declaration_item()) {
     auto v = visit(ctx->declaration_item());
@@ -548,13 +549,18 @@ std::any visitVariableDeclarationDef(LangParser::VariableDeclarationDefContext *
       type = vd->type;
       name = std::string(factory_.strings().get(vd->name));
     }
+    // Get the name position from IDENTIFIER
+    if (ctx->declaration_item()->IDENTIFIER()) {
+      nameRange = getRange(ctx->declaration_item()->IDENTIFIER());
+    }
   }
   if (!type)
     type = factory_.makeErrorType(getRange(ctx), "missing type");
 
   Expr *init = ctx->expression() ? expectExpr(ctx->expression()) : nullptr;
 
-  return static_cast<Decl *>(factory_.makeVarDecl(getRange(ctx), name, type, init, mods));
+  return static_cast<Decl *>(
+      factory_.makeVarDecl(getRange(ctx), name, type, init, mods, nameRange));
 }
 
 std::any
@@ -565,8 +571,11 @@ visitMutiVariableDeclarationDef(LangParser::MutiVariableDeclarationDefContext *c
   // VARS GLOBAL? CONST? IDENTIFIER (COMMA GLOBAL? CONST? IDENTIFIER)*
   // 每个IDENTIFIER都可以有自己的修饰符
   std::vector<std::string> namesStorage;
-  for (auto *id : ctx->IDENTIFIER())
+  std::vector<SourceRange> nameRanges;
+  for (auto *id : ctx->IDENTIFIER()) {
     namesStorage.push_back(id->getText());
+    nameRanges.push_back(getRange(id));
+  }
 
   // 转换为 string_view
   std::vector<std::string_view> names;
@@ -582,7 +591,8 @@ visitMutiVariableDeclarationDef(LangParser::MutiVariableDeclarationDefContext *c
 
   Expr *init = ctx->expression() ? expectExpr(ctx->expression()) : nullptr;
 
-  return static_cast<Decl *>(factory_.makeMultiVarDecl(getRange(ctx), names, init, mods));
+  return static_cast<Decl *>(
+      factory_.makeMultiVarDecl(getRange(ctx), names, nameRanges, init, mods));
 }
 
 // ------------------------------------------------------------------------

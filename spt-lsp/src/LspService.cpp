@@ -919,6 +919,32 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
         }
       }
     }
+  } else if (auto *multiVar = ast::ast_cast<ast::MultiVarDeclNode>(findResult.node())) {
+    // Handle hover on multi-variable declaration (e.g., x in "vars x, y, z")
+    LSP_LOG("Hover: MultiVarDecl, names=" << multiVar->names.size());
+    if (model) {
+      // Find which name the offset is in
+      for (size_t i = 0; i < multiVar->nameRanges.size(); ++i) {
+        const auto &nameRange = multiVar->nameRanges[i];
+        LSP_LOG("Hover: nameRanges[" << i << "] range=[" << nameRange.begin.offset << "-"
+                                     << nameRange.end.offset << "], offset=" << offset);
+        if (nameRange.isValid() && offset >= nameRange.begin.offset &&
+            offset < nameRange.end.offset) {
+          LSP_LOG("Hover: offset in nameRanges[" << i << "]");
+          // Get the variable name
+          std::string varName(file->factory().strings().get(multiVar->names[i]));
+          LSP_LOG("Hover: varName='" << varName << "'");
+          // Look up the symbol
+          semantic::Symbol *sym = model->symbolTable().globalScope()->resolve(varName);
+          LSP_LOG("Hover: resolved symbol=" << (void *)sym);
+          if (sym) {
+            result.contents = createHoverMarkdown(sym, sym->type());
+            result.range = file->toRange(nameRange);
+          }
+          break;
+        }
+      }
+    }
   }
 
   return result;
@@ -1398,6 +1424,39 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
           const types::FieldInfo *fieldInfo = classType->findField(memberName);
           LSP_LOG("Definition: findField result=" << (void *)fieldInfo);
 
+          // Also try to get the ClassSymbol for the base expression
+          // For imported classes, the ClassType may not have field info, but ClassSymbol does
+          semantic::Symbol *baseSym = model->getResolvedSymbol(memberAccess->base);
+          LSP_LOG("Definition: baseSym=" << (void *)baseSym);
+
+          semantic::ClassSymbol *classSym = nullptr;
+          if (baseSym) {
+            LSP_LOG("Definition: baseSym kind=" << (int)baseSym->kind());
+            // If it's a variable, get its type's class symbol
+            if (baseSym->isVariable()) {
+              types::TypeRef varType = baseSym->type();
+              LSP_LOG("Definition: varType=" << (varType ? varType->toString() : "null"));
+              if (varType && varType->isClass()) {
+                // Find the ClassSymbol by name
+                semantic::Symbol *typeSym =
+                    model->symbolTable().globalScope()->resolve(classType->name());
+                LSP_LOG("Definition: typeSym=" << (void *)typeSym);
+                if (typeSym) {
+                  // If it's an import symbol, get the target
+                  if (auto *importSym = semantic::symbol_cast<semantic::ImportSymbol>(typeSym)) {
+                    typeSym = importSym->targetSymbol();
+                    LSP_LOG("Definition: typeSym from import=" << (void *)typeSym);
+                  }
+                  if (typeSym && typeSym->isClass()) {
+                    classSym = static_cast<semantic::ClassSymbol *>(typeSym);
+                    LSP_LOG("Definition: found ClassSymbol with " << classSym->fields().size()
+                                                                  << " fields");
+                  }
+                }
+              }
+            }
+          }
+
           if (fieldInfo) {
             LSP_LOG("Definition: found field " << fieldInfo->name);
 
@@ -1452,6 +1511,81 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
             }
           } else {
             LSP_LOG("Definition: fieldInfo is null, field not found in ClassType");
+
+            // Try to find the field from ClassSymbol (for imported classes)
+            if (classSym) {
+              LSP_LOG("Definition: trying ClassSymbol, has " << classSym->fields().size()
+                                                             << " fields");
+              for (auto *fld : classSym->fields()) {
+                LSP_LOG("Definition: ClassSymbol field '" << fld->name() << "'");
+              }
+
+              semantic::FieldSymbol *fieldSym = classSym->findField(memberName);
+              LSP_LOG("Definition: ClassSymbol::findField result=" << (void *)fieldSym);
+
+              if (fieldSym) {
+                LSP_LOG("Definition: found FieldSymbol '" << fieldSym->name() << "'");
+
+                // Get the FieldDeclNode from the symbol
+                ast::FieldDeclNode *fieldDecl =
+                    ast::ast_cast<ast::FieldDeclNode>(fieldSym->astNode());
+                LSP_LOG("Definition: fieldDecl=" << (void *)fieldDecl);
+
+                // Find the file containing this class
+                SourceFile *targetFile = nullptr;
+                impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
+                  if (!targetFile) {
+                    semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
+                    if (targetModel) {
+                      for (const auto &[name, sym] : targetModel->exportedSymbols()) {
+                        if (sym == classSym) {
+                          targetFile = &f;
+                          return;
+                        }
+                      }
+                    }
+                  }
+                });
+
+                if (!targetFile) {
+                  // Try to find by checking all ClassSymbols in all models
+                  impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
+                    if (!targetFile) {
+                      semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
+                      if (targetModel) {
+                        for (const auto &symPtr : targetModel->symbolTable().allSymbols()) {
+                          if (symPtr.get() == classSym) {
+                            targetFile = &f;
+                            return;
+                          }
+                        }
+                      }
+                    }
+                  });
+                }
+
+                LSP_LOG("Definition: targetFile=" << (targetFile ? targetFile->path() : "null"));
+
+                if (targetFile && fieldDecl) {
+                  // Use nameRange if available, otherwise use the full range
+                  ast::SourceRange targetRange =
+                      fieldDecl->nameRange.isValid() ? fieldDecl->nameRange : fieldDecl->range;
+                  LSP_LOG("Definition: targetRange=[" << targetRange.begin.offset << "-"
+                                                      << targetRange.end.offset << "]");
+
+                  Position defStartPos = targetFile->getPosition(targetRange.begin.offset);
+                  Position defEndPos = targetFile->getPosition(targetRange.end.offset);
+                  LocationLink link;
+                  link.targetUri = targetFile->uri();
+                  link.targetRange = Range{defStartPos, defEndPos};
+                  link.targetSelectionRange = link.targetRange;
+                  link.originSelectionRange = file->toRange(memberAccess->memberRange);
+                  result.push_back(std::move(link));
+                  LSP_LOG("Definition: returning result with 1 location from ClassSymbol");
+                  return result;
+                }
+              }
+            }
           }
         } else {
           LSP_LOG("Definition: baseType is not a ClassType");
@@ -2266,12 +2400,18 @@ std::string formatSymbolSignature(const semantic::Symbol *symbol) {
   std::string result;
 
   switch (symbol->kind()) {
-  case semantic::SymbolKind::Variable:
-    result = "var " + symbol->name();
+  case semantic::SymbolKind::Variable: {
+    auto *var = static_cast<const semantic::VariableSymbol *>(symbol);
+    if (var->isGlobal())
+      result += "global ";
+    if (var->isConst())
+      result += "const ";
+    result += symbol->name();
     if (symbol->type()) {
       result += ": " + symbol->type()->toString();
     }
     break;
+  }
 
   case semantic::SymbolKind::Parameter: {
     auto *param = static_cast<const semantic::ParameterSymbol *>(symbol);

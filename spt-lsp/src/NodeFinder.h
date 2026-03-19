@@ -716,6 +716,25 @@ private:
       }
     }
 
+    // 特殊处理: MultiVarDeclNode 的每个变量名没有单独节点
+    // 如果 offset 在某个 nameRange 内，返回 MultiVarDeclNode 本身
+    if (!deeperResult && node->kind == ast::AstKind::MultiVarDecl) {
+      auto *multiVar = static_cast<ast::MultiVarDeclNode *>(node);
+      LSP_LOG(
+          "  -> MultiVarDecl special handling, nameRanges.size=" << multiVar->nameRanges.size());
+      for (size_t i = 0; i < multiVar->nameRanges.size(); ++i) {
+        const auto &nameRange = multiVar->nameRanges[i];
+        LSP_LOG("  -> nameRanges[" << i << "] valid=" << nameRange.isValid() << ", range=["
+                                   << nameRange.begin.offset << ", " << nameRange.end.offset
+                                   << "]");
+        if (nameRange.isValid() && offset >= nameRange.begin.offset &&
+            offset < nameRange.end.offset) {
+          LSP_LOG("  -> offset in nameRanges[" << i << "], returning MultiVarDecl");
+          return node;
+        }
+      }
+    }
+
     // 如果在子节点中找到了，返回那个结果
     // 否则返回当前节点
     if (deeperResult) {

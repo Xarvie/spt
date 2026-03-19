@@ -1,0 +1,47 @@
+// Phase 1.1 变量声明与类型推断测试
+
+// 测试1: 基本类型声明
+// 预期: hover显示int类型，点击a可跳转到定义
+int a = 10;
+
+// 测试2: auto类型推断
+// 预期: hover显示推断类型int
+auto b = 10;
+
+// 测试3: auto推断字符串
+// 预期: hover显示推断类型str
+auto s = "hello";
+
+// 测试4: const声明
+// 预期: hover显示const int
+const int c = 100;
+
+// 测试5: 多变量声明
+// 预期: 每个变量独立跳转
+vars x, y, z;
+
+// 测试6: global声明
+// 预期: 正确识别全局变量
+global int g = 1;
+
+// 测试7: 浮点类型
+float f = 3.14;
+
+// 测试8: 字符串类型
+str name = "test";
+
+// 测试9: 布尔类型
+bool flag = true;
+
+// 测试10: 变量引用测试
+// 预期: 点击a可跳转到上面的定义
+void testFunc() {
+    a = 20;
+    b = a + 1;
+    s = "world";
+    c = 200;
+    g = 2;
+    x = 1;
+    y = 2;
+    z = 3;
+}

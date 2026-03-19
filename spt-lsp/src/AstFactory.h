@@ -821,7 +821,8 @@ public:
 
   [[nodiscard]] VarDeclNode *makeVarDecl(SourceRange range, std::string_view name, TypeNode *type,
                                          Expr *initializer = nullptr,
-                                         NodeFlags modifiers = NodeFlags::None) {
+                                         NodeFlags modifiers = NodeFlags::None,
+                                         SourceRange nameRange = SourceRange{}) {
     assert(type && "type must not be null - use ErrorType or InferredType");
 
     auto *node = arena_.make<VarDeclNode>();
@@ -831,6 +832,7 @@ public:
     node->type = type;
     node->initializer = initializer;
     node->flags = modifiers;
+    node->nameRange = nameRange;
     return node;
   }
 
@@ -848,6 +850,27 @@ public:
       internedNames.push_back(strings_.intern(n));
     }
     node->names = arena_.makeArrayView(internedNames);
+    node->initializer = initializer;
+    node->flags = modifiers;
+    return node;
+  }
+
+  [[nodiscard]] MultiVarDeclNode *makeMultiVarDecl(SourceRange range,
+                                                   const std::vector<std::string_view> &names,
+                                                   const std::vector<SourceRange> &nameRanges,
+                                                   Expr *initializer,
+                                                   NodeFlags modifiers = NodeFlags::None) {
+    auto *node = arena_.make<MultiVarDeclNode>();
+    node->kind = AstKind::MultiVarDecl;
+    node->range = range;
+
+    std::vector<InternedString> internedNames;
+    internedNames.reserve(names.size());
+    for (const auto &n : names) {
+      internedNames.push_back(strings_.intern(n));
+    }
+    node->names = arena_.makeArrayView(internedNames);
+    node->nameRanges = arena_.makeArrayView(nameRanges);
     node->initializer = initializer;
     node->flags = modifiers;
     return node;

@@ -985,6 +985,7 @@ struct VarDeclNode : Decl {
   struct TypeNode *type =
       nullptr;                 ///< Declared type (NEVER null - use ErrorType/InferredType for auto)
   Expr *initializer = nullptr; ///< Initial value (null if no initializer)
+  SourceRange nameRange;       ///< Position of the variable name
 
   // Note: isGlobal, isConst accessed via base class flags
 
@@ -997,8 +998,9 @@ struct VarDeclNode : Decl {
  * mutivar a, b, c = expr;
  */
 struct MultiVarDeclNode : Decl {
-  ArrayView<InternedString> names; ///< Variable names
-  Expr *initializer = nullptr;     ///< Shared initializer
+  ArrayView<InternedString> names;   ///< Variable names
+  ArrayView<SourceRange> nameRanges; ///< Position of each variable name
+  Expr *initializer = nullptr;       ///< Shared initializer
 
   // Type is always inferred for mutivar
 

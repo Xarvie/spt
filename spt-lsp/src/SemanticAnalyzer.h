@@ -632,7 +632,8 @@ public:
       return setType(node, final_);
     }
 
-    auto *vs = model_.symbolTable().createVariable(name, final_, node->range.begin);
+    auto *vs = model_.symbolTable().createVariable(
+        name, final_, node->nameRange.isValid() ? node->nameRange.begin : node->range.begin);
     if (node->isConst())
       vs->addFlag(SymbolFlags::Const);
     if (node->isGlobal())
@@ -658,7 +659,12 @@ public:
         if (i < tt->elementTypes().size())
           vt = tt->elementTypes()[i];
       }
-      auto *vs = model_.symbolTable().createVariable(name, vt, node->range.begin);
+      // Use the specific name position if available, otherwise fall back to node start
+      ast::SourceLoc defLoc = node->range.begin;
+      if (i < node->nameRanges.size() && node->nameRanges[i].isValid()) {
+        defLoc = node->nameRanges[i].begin;
+      }
+      auto *vs = model_.symbolTable().createVariable(name, vt, defLoc);
       vs->addFlag(SymbolFlags::Inferred);
       currentScope_->define(vs);
     }
@@ -805,6 +811,7 @@ public:
       auto fn = getString(f->name);
       types::TypeRef ft = resolveTypeNode(f->type);
       auto *fld = model_.symbolTable().createField(fn, ft, f->range.begin, cs);
+      fld->setAstNode(f);
       if (f->isStatic())
         fld->addFlag(SymbolFlags::Static);
       if (f->isConst())
