@@ -86,15 +86,22 @@ public:
 
     std::lock_guard<std::mutex> lock(modelsMutex_);
 
-    auto it = semanticModels_.find(file->uri());
-    if (it != semanticModels_.end()) {
-      return &it->second;
-    }
-
-    // Parse and analyze
+    // Get current AST
     ast::CompilationUnitNode *ast = file->getAst();
     if (!ast)
       return nullptr;
+
+    auto it = semanticModels_.find(file->uri());
+    if (it != semanticModels_.end()) {
+      // Check if the AST has changed (re-parsed)
+      if (it->second.astRoot() == ast) {
+        // AST is the same, return cached model
+        return &it->second;
+      }
+      // AST has changed, need to re-analyze
+      LSP_LOG("getSemanticModel: AST changed for " << file->uri() << ", re-analyzing");
+      semanticModels_.erase(it);
+    }
 
     // 使用文件自己的 StringTable，确保 InternedString 一致
     semantic::SemanticAnalyzer analyzer(file->factory().stringTable());
@@ -130,16 +137,21 @@ public:
     if (!file)
       return nullptr;
 
-    // Check if already exists (no lock needed if called from within locked section)
-    auto it = semanticModels_.find(file->uri());
-    if (it != semanticModels_.end()) {
-      return &it->second;
-    }
-
-    // Parse and analyze
+    // Get current AST
     ast::CompilationUnitNode *ast = file->getAst();
     if (!ast)
       return nullptr;
+
+    // Check if already exists (no lock needed if called from within locked section)
+    auto it = semanticModels_.find(file->uri());
+    if (it != semanticModels_.end()) {
+      // Check if the AST has changed (re-parsed)
+      if (it->second.astRoot() == ast) {
+        return &it->second;
+      }
+      // AST has changed, need to re-analyze
+      semanticModels_.erase(it);
+    }
 
     semantic::SemanticAnalyzer analyzer(file->factory().stringTable());
     // Don't set import resolver for nested calls to avoid infinite recursion
@@ -792,12 +804,149 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
   ast::AstNode *node = findResult.node();
   LSP_LOG("Hover: found node kind=" << ast::astKindToString(node->kind));
 
+  // Special handling for CallExprNode - check if offset is in callee range
+  if (auto *callExpr = ast::ast_cast<ast::CallExprNode>(node)) {
+    LSP_LOG("Hover: node is CallExprNode");
+    LSP_LOG("Hover: callExpr->callee kind=" << ast::astKindToString(callExpr->callee->kind));
+    LSP_LOG("Hover: callExpr->callee range=[" << callExpr->callee->range.begin.offset << "-"
+                                              << callExpr->callee->range.end.offset << "]");
+
+    // Check if offset is in callee range
+    if (offset >= callExpr->callee->range.begin.offset &&
+        offset < callExpr->callee->range.end.offset) {
+      LSP_LOG("Hover: offset in callee range, looking up function symbol");
+
+      if (model) {
+        semantic::Symbol *calleeSym = model->getResolvedSymbol(callExpr->callee);
+        LSP_LOG("Hover: calleeSym=" << (void *)calleeSym);
+
+        if (calleeSym) {
+          LSP_LOG("Hover: calleeSym name=" << calleeSym->name()
+                                           << ", kind=" << (int)calleeSym->kind());
+
+          // Handle ImportSymbol
+          if (auto *importSym = semantic::symbol_cast<semantic::ImportSymbol>(calleeSym)) {
+            LSP_LOG("Hover: calleeSym is ImportSymbol");
+            LSP_LOG("Hover: importSym->modulePath()=" << importSym->modulePath());
+            LSP_LOG("Hover: importSym->originalName()=" << importSym->originalName());
+
+            // Re-resolve the import to avoid dangling pointer
+            std::string modulePath = importSym->modulePath();
+            std::string currentFilePath = file->path();
+            std::string resolvedPath =
+                impl_->workspace_.resolveModulePath(modulePath, currentFilePath);
+            LSP_LOG("Hover: resolvedPath=" << resolvedPath);
+
+            if (!resolvedPath.empty()) {
+              SourceFile *targetFile = impl_->workspace_.openFileFromDisk(resolvedPath);
+              LSP_LOG("Hover: targetFile=" << (void *)targetFile);
+
+              if (targetFile) {
+                semantic::SemanticModel *targetModel = impl_->getSemanticModel(targetFile);
+                LSP_LOG("Hover: targetModel=" << (void *)targetModel);
+
+                if (targetModel) {
+                  std::string originalName = importSym->originalName();
+                  LSP_LOG("Hover: looking for originalName='" << originalName << "'");
+
+                  semantic::Symbol *exportedSym = targetModel->findExportedSymbol(originalName);
+                  LSP_LOG("Hover: findExportedSymbol result=" << (void *)exportedSym);
+
+                  if (exportedSym) {
+                    LSP_LOG("Hover: exportedSym name=" << exportedSym->name()
+                                                       << ", kind=" << (int)exportedSym->kind());
+                    calleeSym = exportedSym;
+                  }
+                }
+              }
+            } else {
+              // Fallback to stored targetSymbol
+              semantic::Symbol *targetSym = importSym->targetSymbol();
+              LSP_LOG("Hover: fallback targetSym=" << (void *)targetSym);
+
+              if (targetSym) {
+                LSP_LOG("Hover: targetSym name=" << targetSym->name()
+                                                 << ", kind=" << (int)targetSym->kind());
+                calleeSym = targetSym;
+              }
+            }
+          }
+
+          result.contents = createHoverMarkdown(calleeSym, calleeSym->type());
+          result.range = file->toRange(callExpr->callee->range);
+          LSP_LOG("Hover: returning hover content from CallExprNode callee");
+          return result;
+        }
+      }
+    }
+  }
+
   if (auto *ident = ast::ast_cast<ast::IdentifierNode>(node)) {
     LSP_LOG("Hover: node is IdentifierNode");
     // Look up symbol
     if (model) {
       if (auto *sym = model->getResolvedSymbol(node)) {
-        LSP_LOG("Hover: found resolved symbol " << sym->name());
+        LSP_LOG("Hover: found resolved symbol " << sym->name() << ", kind=" << (int)sym->kind());
+
+        // Handle ImportSymbol specially - re-resolve to avoid dangling pointer
+        if (sym->kind() == semantic::SymbolKind::Import) {
+          auto *importSym = static_cast<const semantic::ImportSymbol *>(sym);
+          const std::string &modulePath = importSym->modulePath();
+          const std::string &originalName = importSym->originalName();
+          const std::string &importName = importSym->name();
+
+          LSP_LOG("Hover: ImportSymbol - modulePath=" << modulePath << ", originalName='"
+                                                      << originalName << "', importName='"
+                                                      << importName << "'");
+
+          // Check if this is a namespace import (originalName is empty)
+          // For namespace import like "import * as utils from 'utils'", originalName is empty
+          // For named import like "import { foo } from 'm'", originalName is 'foo'
+          if (originalName.empty()) {
+            // This is a namespace import like "import * as utils from 'utils'"
+            LSP_LOG("Hover: namespace import detected");
+            std::string resolvedPath =
+                impl_->workspace_.resolveModulePath(modulePath, file->path());
+            LSP_LOG("Hover: namespace import - resolvedPath=" << resolvedPath);
+
+            if (!resolvedPath.empty()) {
+              SourceFile *targetFile = impl_->workspace_.openFileFromDisk(resolvedPath);
+              if (targetFile) {
+                result.contents = "```lang\nnamespace " + importName + "\n```";
+                result.range = file->toRange(node->range);
+                LSP_LOG("Hover: returning namespace import info");
+                return result;
+              }
+            }
+          }
+
+          // For named imports (import { foo } from 'm'), re-resolve to the actual target symbol
+          // The importName is the local name (e.g., 'foo' after import)
+          // We need to find the actual function/type in the target module
+          std::string resolvedPath = impl_->workspace_.resolveModulePath(modulePath, file->path());
+          LSP_LOG("Hover: named import - resolvedPath=" << resolvedPath);
+
+          SourceFile *targetFile = impl_->workspace_.getFileByPath(resolvedPath);
+          if (targetFile) {
+            semantic::SemanticModel *targetModel = impl_->getSemanticModel(targetFile);
+            if (targetModel) {
+              // Try to find the symbol by originalName (the name in the source module)
+              semantic::Symbol *targetSym = targetModel->findExportedSymbol(originalName);
+              LSP_LOG("Hover: findExportedSymbol('" << originalName
+                                                    << "') result=" << (void *)targetSym);
+
+              if (targetSym) {
+                LSP_LOG("Hover: re-resolved target symbol " << targetSym->name()
+                                                            << ", kind=" << (int)targetSym->kind());
+                result.contents = createHoverMarkdown(targetSym, targetSym->type());
+                result.range = file->toRange(node->range);
+                return result;
+              }
+            }
+          }
+          LSP_LOG("Hover: failed to re-resolve import symbol");
+        }
+
         result.contents = createHoverMarkdown(sym, sym->type());
         result.range = file->toRange(node->range);
       } else if (auto *defSym = model->getDefiningSymbol(node)) {
@@ -869,24 +1018,88 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
     LSP_LOG("Hover: MemberAccessExpr, memberRange=[" << memberAccess->memberRange.begin.offset
                                                      << "-" << memberAccess->memberRange.end.offset
                                                      << "], offset=" << offset);
+    LSP_LOG("Hover: memberAccess->base kind=" << ast::astKindToString(memberAccess->base->kind));
+    LSP_LOG("Hover: memberAccess->member id=" << memberAccess->member.id);
+
     // Check if offset is within memberRange (the member name part)
     if (memberAccess->memberRange.isValid() && offset >= memberAccess->memberRange.begin.offset &&
         offset < memberAccess->memberRange.end.offset) {
       LSP_LOG("Hover: offset in memberRange, looking up member type");
+      LSP_LOG("Hover: model=" << (void *)model);
       if (model) {
         // Get the type of the base expression
+        LSP_LOG("Hover: memberAccess->base=" << (void *)memberAccess->base);
         types::TypeRef baseType = model->getNodeType(memberAccess->base);
+        LSP_LOG("Hover: baseType=" << (baseType ? baseType->toString() : "null"));
+        LSP_LOG("Hover: baseType->isUnknown()=" << (baseType ? baseType->isUnknown() : false));
+        LSP_LOG("Hover: baseType->isClass()=" << (baseType ? baseType->isClass() : false));
+
+        // Check if base is an ImportSymbol (namespace import)
+        semantic::Symbol *baseSym = model->getResolvedSymbol(memberAccess->base);
+        LSP_LOG("Hover: baseSym=" << (void *)baseSym);
+        if (baseSym && baseSym->kind() == semantic::SymbolKind::Import) {
+          LSP_LOG("Hover: base is ImportSymbol, trying namespace member lookup");
+          auto *importSym = static_cast<const semantic::ImportSymbol *>(baseSym);
+          bool isNamespaceImport =
+              importSym->originalName().empty() || importSym->originalName() == importSym->name();
+          LSP_LOG("Hover: isNamespaceImport=" << isNamespaceImport);
+
+          if (isNamespaceImport) {
+            // Get member name
+            std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
+            std::string memberName(memberNameView);
+            LSP_LOG("Hover: namespace memberName='" << memberName << "'");
+
+            // Resolve the import path
+            std::string modulePath = importSym->modulePath();
+            std::string resolvedPath =
+                impl_->workspace_.resolveModulePath(modulePath, file->path());
+            LSP_LOG("Hover: resolvedPath=" << resolvedPath);
+
+            if (!resolvedPath.empty()) {
+              SourceFile *targetFile = impl_->workspace_.openFileFromDisk(resolvedPath);
+              LSP_LOG("Hover: targetFile=" << (void *)targetFile);
+
+              if (targetFile) {
+                semantic::SemanticModel *targetModel = impl_->getSemanticModel(targetFile);
+                LSP_LOG("Hover: targetModel=" << (void *)targetModel);
+
+                if (targetModel) {
+                  semantic::Symbol *memberSym = targetModel->findExportedSymbol(memberName);
+                  LSP_LOG("Hover: findExportedSymbol result=" << (void *)memberSym);
+
+                  if (memberSym) {
+                    LSP_LOG("Hover: memberSym name=" << memberSym->name()
+                                                     << ", kind=" << (int)memberSym->kind());
+                    result.contents = createHoverMarkdown(memberSym, memberSym->type());
+                    result.range = file->toRange(memberAccess->memberRange);
+                    LSP_LOG("Hover: returning namespace member hover");
+                    return result;
+                  }
+                }
+              }
+            }
+          }
+        }
+
         if (baseType && !baseType->isUnknown()) {
           LSP_LOG("Hover: baseType=" << baseType->toString());
           // Try to find the member in the base type
           if (auto *classType = dynamic_cast<const types::ClassType *>(baseType.get())) {
+            LSP_LOG("Hover: baseType is ClassType, name=" << classType->name());
+            LSP_LOG("Hover: classType->fields().size()=" << classType->fields().size());
+            LSP_LOG("Hover: classType->methods().size()=" << classType->methods().size());
+
             // Look for the member in the class
             std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
             std::string memberName(memberNameView);
+            LSP_LOG("Hover: memberName='" << memberName << "'");
 
             // First try to find field
             bool found = false;
+            LSP_LOG("Hover: searching for field...");
             for (const auto &field : classType->fields()) {
+              LSP_LOG("Hover: checking field '" << field.name << "'");
               if (field.name == memberName) {
                 LSP_LOG("Hover: found field " << field.name);
                 result.contents = "```lang\n" + field.type->toString() + "\n```";
@@ -898,7 +1111,9 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
 
             // If not found, try to find method
             if (!found) {
+              LSP_LOG("Hover: field not found, searching for method...");
               for (const auto &method : classType->methods()) {
+                LSP_LOG("Hover: checking method '" << method.name << "'");
                 if (method.name == memberName) {
                   LSP_LOG("Hover: found method " << method.name);
                   // Show method signature: methodName(param1: type1, ...) -> returnType
@@ -1467,6 +1682,84 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
   LSP_LOG("Definition: findResult.node() range=[" << findResult.node()->range.begin.offset << "-"
                                                   << findResult.node()->range.end.offset << "]");
 
+  // Special handling for CallExprNode - check if offset is in callee range
+  if (auto *callExpr = ast::ast_cast<ast::CallExprNode>(findResult.node())) {
+    LSP_LOG("Definition: node is CallExprNode");
+    LSP_LOG("Definition: callExpr->callee kind=" << ast::astKindToString(callExpr->callee->kind));
+    LSP_LOG("Definition: callExpr->callee range=[" << callExpr->callee->range.begin.offset << "-"
+                                                   << callExpr->callee->range.end.offset << "]");
+
+    // Check if offset is in callee range
+    if (offset >= callExpr->callee->range.begin.offset &&
+        offset < callExpr->callee->range.end.offset) {
+      LSP_LOG("Definition: offset IS in callee range, looking up function definition");
+
+      // Try to get the resolved symbol from the callee
+      semantic::Symbol *calleeSym = model->getResolvedSymbol(callExpr->callee);
+      LSP_LOG("Definition: calleeSym=" << (void *)calleeSym);
+
+      if (calleeSym) {
+        LSP_LOG("Definition: calleeSym name=" << calleeSym->name()
+                                              << ", kind=" << (int)calleeSym->kind());
+
+        // Handle ImportSymbol
+        if (auto *importSym = semantic::symbol_cast<semantic::ImportSymbol>(calleeSym)) {
+          LSP_LOG("Definition: calleeSym is ImportSymbol");
+          semantic::Symbol *targetSym = importSym->targetSymbol();
+          LSP_LOG("Definition: targetSym=" << (void *)targetSym);
+
+          if (targetSym) {
+            LSP_LOG("Definition: targetSym name=" << targetSym->name()
+                                                  << ", kind=" << (int)targetSym->kind());
+            calleeSym = targetSym;
+          }
+        }
+
+        // Find the file containing this symbol
+        SourceFile *targetFile = nullptr;
+        impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
+          if (!targetFile) {
+            semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
+            if (targetModel) {
+              for (const auto &[name, sym] : targetModel->exportedSymbols()) {
+                if (sym == calleeSym) {
+                  targetFile = &f;
+                  LSP_LOG("Definition: found target file in exportedSymbols: " << f.uri());
+                  return;
+                }
+              }
+              // Also check all symbols
+              for (const auto &symPtr : targetModel->symbolTable().allSymbols()) {
+                if (symPtr.get() == calleeSym) {
+                  targetFile = &f;
+                  LSP_LOG("Definition: found target file in allSymbols: " << f.uri());
+                  return;
+                }
+              }
+            }
+          }
+        });
+
+        if (targetFile) {
+          ast::SourceLoc defLoc = calleeSym->definitionLoc();
+          LSP_LOG("Definition: defLoc valid=" << defLoc.isValid() << ", offset=" << defLoc.offset);
+
+          if (defLoc.isValid()) {
+            Position defPos = targetFile->getPosition(defLoc.offset);
+            LocationLink link;
+            link.targetUri = targetFile->uri();
+            link.targetRange = Range{defPos, defPos};
+            link.targetSelectionRange = link.targetRange;
+            link.originSelectionRange = file->toRange(callExpr->callee->range);
+            result.push_back(std::move(link));
+            LSP_LOG("Definition: returning location from CallExprNode callee");
+            return result;
+          }
+        }
+      }
+    }
+  }
+
   // Special handling for MemberAccessExpr - check if offset is in memberRange
   if (auto *memberAccess = ast::ast_cast<ast::MemberAccessExprNode>(findResult.node())) {
     LSP_LOG("Definition: node is MemberAccessExprNode");
@@ -1488,6 +1781,88 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
       if (baseType && !baseType->isUnknown()) {
         LSP_LOG("Definition: baseType is valid, checking if class");
         LSP_LOG("Definition: baseType->isClass()=" << baseType->isClass());
+
+        // First, check if base is a namespace import (ImportSymbol)
+        semantic::Symbol *baseSym = model->getResolvedSymbol(memberAccess->base);
+        LSP_LOG("Definition: baseSym=" << (void *)baseSym);
+
+        if (auto *importSym = semantic::symbol_cast<semantic::ImportSymbol>(baseSym)) {
+          LSP_LOG("Definition: base is ImportSymbol, name=" << importSym->name());
+          LSP_LOG("Definition: importSym->modulePath()=" << importSym->modulePath());
+          LSP_LOG("Definition: importSym->originalName()=" << importSym->originalName());
+
+          // Check if this is a namespace import
+          bool isNamespaceImport =
+              importSym->originalName().empty() || importSym->originalName() == importSym->name();
+          LSP_LOG("Definition: isNamespaceImport=" << isNamespaceImport);
+
+          if (isNamespaceImport) {
+            // Get member name
+            std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
+            std::string memberName(memberNameView);
+            LSP_LOG("Definition: namespace memberName='" << memberName << "'");
+
+            // Resolve the import path
+            std::string modulePath = importSym->modulePath();
+            std::string currentFilePath = file->path();
+            std::string absolutePath;
+            if (modulePath.size() >= 2 && (modulePath[0] == '/' || modulePath[1] == ':')) {
+              absolutePath = modulePath;
+            } else {
+              size_t lastSlash = currentFilePath.find_last_of("/\\");
+              std::string baseDir =
+                  (lastSlash != std::string::npos) ? currentFilePath.substr(0, lastSlash) : ".";
+              absolutePath = baseDir;
+              if (!absolutePath.empty() && absolutePath.back() != '/' &&
+                  absolutePath.back() != '\\') {
+                absolutePath += '/';
+              }
+              absolutePath += modulePath;
+              if (absolutePath.size() < 4 ||
+                  absolutePath.substr(absolutePath.size() - 4) != ".spt") {
+                absolutePath += ".spt";
+              }
+            }
+
+            LSP_LOG("Definition: resolved absolutePath=" << absolutePath);
+
+            // Open the target file
+            SourceFile *targetFile = impl_->workspace_.openFileFromDisk(absolutePath);
+            LSP_LOG("Definition: targetFile=" << (void *)targetFile);
+
+            if (targetFile) {
+              semantic::SemanticModel *targetModel = impl_->getSemanticModel(targetFile);
+              LSP_LOG("Definition: targetModel=" << (void *)targetModel);
+
+              if (targetModel) {
+                // Look for the member in the target module
+                semantic::Symbol *memberSym = targetModel->findExportedSymbol(memberName);
+                LSP_LOG("Definition: findExportedSymbol result=" << (void *)memberSym);
+
+                if (memberSym) {
+                  LSP_LOG("Definition: memberSym name=" << memberSym->name()
+                                                        << ", kind=" << (int)memberSym->kind());
+
+                  ast::SourceLoc defLoc = memberSym->definitionLoc();
+                  LSP_LOG("Definition: defLoc valid=" << defLoc.isValid()
+                                                      << ", offset=" << defLoc.offset);
+
+                  if (defLoc.isValid()) {
+                    Position defPos = targetFile->getPosition(defLoc.offset);
+                    LocationLink link;
+                    link.targetUri = targetFile->uri();
+                    link.targetRange = Range{defPos, defPos};
+                    link.targetSelectionRange = link.targetRange;
+                    link.originSelectionRange = file->toRange(memberAccess->memberRange);
+                    result.push_back(std::move(link));
+                    LSP_LOG("Definition: returning result from namespace import member");
+                    return result;
+                  }
+                }
+              }
+            }
+          }
+        }
 
         if (auto *classType = dynamic_cast<const types::ClassType *>(baseType.get())) {
           LSP_LOG("Definition: baseType is ClassType, name=" << classType->name());
@@ -1682,15 +2057,29 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
                     ast::ast_cast<ast::MethodDeclNode>(methodSym->astNode());
                 LSP_LOG("Definition: methodDecl=" << (void *)methodDecl);
 
-                if (methodDecl) {
-                  // Find the file containing this class
-                  SourceFile *targetFile = nullptr;
+                // Find the file containing this class (needed for both cases)
+                SourceFile *targetFile = nullptr;
+                impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
+                  if (!targetFile) {
+                    semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
+                    if (targetModel) {
+                      for (const auto &[name, sym] : targetModel->exportedSymbols()) {
+                        if (sym == classSym) {
+                          targetFile = &f;
+                          return;
+                        }
+                      }
+                    }
+                  }
+                });
+
+                if (!targetFile) {
                   impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
                     if (!targetFile) {
                       semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
                       if (targetModel) {
-                        for (const auto &[name, sym] : targetModel->exportedSymbols()) {
-                          if (sym == classSym) {
+                        for (const auto &symPtr : targetModel->symbolTable().allSymbols()) {
+                          if (symPtr.get() == classSym) {
                             targetFile = &f;
                             return;
                           }
@@ -1698,29 +2087,15 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
                       }
                     }
                   });
+                }
 
-                  if (!targetFile) {
-                    impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
-                      if (!targetFile) {
-                        semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
-                        if (targetModel) {
-                          for (const auto &symPtr : targetModel->symbolTable().allSymbols()) {
-                            if (symPtr.get() == classSym) {
-                              targetFile = &f;
-                              return;
-                            }
-                          }
-                        }
-                      }
-                    });
-                  }
+                if (!targetFile) {
+                  targetFile = file;
+                }
 
-                  if (!targetFile) {
-                    targetFile = file;
-                  }
+                LSP_LOG("Definition: targetFile=" << (targetFile ? targetFile->path() : "null"));
 
-                  LSP_LOG("Definition: targetFile=" << (targetFile ? targetFile->path() : "null"));
-
+                if (methodDecl) {
                   // Use the method name range for selection
                   ast::SourceRange targetRange =
                       methodDecl->nameRange.isValid() ? methodDecl->nameRange : methodDecl->range;
@@ -1737,6 +2112,23 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
                   result.push_back(std::move(link));
                   LSP_LOG("Definition: returning result with 1 location from MethodSymbol");
                   return result;
+                } else {
+                  // Fallback: use definitionLoc from the symbol
+                  ast::SourceLoc defLoc = methodSym->definitionLoc();
+                  LSP_LOG("Definition: methodDecl is null, using definitionLoc, valid="
+                          << defLoc.isValid() << ", offset=" << defLoc.offset);
+
+                  if (defLoc.isValid()) {
+                    Position defPos = targetFile->getPosition(defLoc.offset);
+                    LocationLink link;
+                    link.targetUri = targetFile->uri();
+                    link.targetRange = Range{defPos, defPos};
+                    link.targetSelectionRange = link.targetRange;
+                    link.originSelectionRange = file->toRange(memberAccess->memberRange);
+                    result.push_back(std::move(link));
+                    LSP_LOG("Definition: returning result using definitionLoc");
+                    return result;
+                  }
                 }
               } else {
                 LSP_LOG("Definition: fieldSym and methodSym both null");
@@ -1750,6 +2142,81 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
         }
       } else {
         LSP_LOG("Definition: baseType is null or unknown");
+
+        // Even if baseType is null, check if base is a namespace import
+        semantic::Symbol *baseSym = model->getResolvedSymbol(memberAccess->base);
+        LSP_LOG("Definition: baseSym (fallback)=" << (void *)baseSym);
+
+        if (baseSym && baseSym->kind() == semantic::SymbolKind::Import) {
+          LSP_LOG("Definition: base is ImportSymbol despite null baseType");
+          auto *importSym = static_cast<const semantic::ImportSymbol *>(baseSym);
+          bool isNamespaceImport =
+              importSym->originalName().empty() || importSym->originalName() == importSym->name();
+          LSP_LOG("Definition: isNamespaceImport=" << isNamespaceImport);
+
+          if (isNamespaceImport) {
+            std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
+            std::string memberName(memberNameView);
+            LSP_LOG("Definition: namespace memberName='" << memberName << "'");
+
+            std::string modulePath = importSym->modulePath();
+            std::string currentFilePath = file->path();
+            std::string absolutePath;
+            if (modulePath.size() >= 2 && (modulePath[0] == '/' || modulePath[1] == ':')) {
+              absolutePath = modulePath;
+            } else {
+              size_t lastSlash = currentFilePath.find_last_of("/\\");
+              std::string baseDir =
+                  (lastSlash != std::string::npos) ? currentFilePath.substr(0, lastSlash) : ".";
+              absolutePath = baseDir;
+              if (!absolutePath.empty() && absolutePath.back() != '/' &&
+                  absolutePath.back() != '\\') {
+                absolutePath += '/';
+              }
+              absolutePath += modulePath;
+              if (absolutePath.size() < 4 ||
+                  absolutePath.substr(absolutePath.size() - 4) != ".spt") {
+                absolutePath += ".spt";
+              }
+            }
+
+            LSP_LOG("Definition: resolved absolutePath=" << absolutePath);
+            SourceFile *targetFile = impl_->workspace_.openFileFromDisk(absolutePath);
+            LSP_LOG("Definition: targetFile=" << (void *)targetFile);
+
+            if (targetFile) {
+              semantic::SemanticModel *targetModel = impl_->getSemanticModel(targetFile);
+              LSP_LOG("Definition: targetModel=" << (void *)targetModel);
+
+              if (targetModel) {
+                semantic::Symbol *memberSym = targetModel->findExportedSymbol(memberName);
+                LSP_LOG("Definition: findExportedSymbol result=" << (void *)memberSym);
+
+                if (memberSym) {
+                  LSP_LOG("Definition: memberSym name=" << memberSym->name()
+                                                        << ", kind=" << (int)memberSym->kind());
+
+                  ast::SourceLoc defLoc = memberSym->definitionLoc();
+                  LSP_LOG("Definition: defLoc valid=" << defLoc.isValid()
+                                                      << ", offset=" << defLoc.offset);
+
+                  if (defLoc.isValid()) {
+                    Position defPos = targetFile->getPosition(defLoc.offset);
+                    LocationLink link;
+                    link.targetUri = targetFile->uri();
+                    link.targetRange = Range{defPos, defPos};
+                    link.targetSelectionRange = link.targetRange;
+                    link.originSelectionRange = file->toRange(memberAccess->memberRange);
+                    result.push_back(std::move(link));
+                    LSP_LOG("Definition: returning result from namespace import (null baseType "
+                            "fallback)");
+                    return result;
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     } else {
       LSP_LOG("Definition: offset NOT in memberRange");
@@ -1908,28 +2375,202 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
   }
 
   // Look up symbol
+  LSP_LOG("Definition: Looking up symbol for node kind="
+          << ast::astKindToString(findResult.node()->kind));
   semantic::Symbol *sym = model->getResolvedSymbol(findResult.node());
-  if (!sym)
-    return result;
+  LSP_LOG("Definition: getResolvedSymbol returned=" << (void *)sym);
+
+  if (!sym) {
+    LSP_LOG("Definition: sym is null, trying to find symbol in other ways");
+
+    // Try to find the symbol by name in the global scope
+    if (auto *ident = ast::ast_cast<ast::IdentifierNode>(findResult.node())) {
+      std::string_view nameView = file->factory().strings().get(ident->name);
+      std::string name(nameView);
+      LSP_LOG("Definition: identifier name='" << name << "'");
+
+      semantic::Symbol *globalSym = model->symbolTable().globalScope()->resolve(name);
+      LSP_LOG("Definition: globalScope resolve result=" << (void *)globalSym);
+
+      if (globalSym) {
+        LSP_LOG("Definition: globalSym name=" << globalSym->name()
+                                              << ", kind=" << (int)globalSym->kind());
+        sym = globalSym;
+      }
+    }
+
+    if (!sym) {
+      LSP_LOG("Definition: still no symbol found, returning empty result");
+      return result;
+    }
+  }
 
   // Handle ImportSymbol - check if it has a target symbol
   if (auto *importSym = semantic::symbol_cast<semantic::ImportSymbol>(sym)) {
-    if (semantic::Symbol *targetSym = importSym->targetSymbol()) {
+    LSP_LOG("Definition: symbol is ImportSymbol, name=" << sym->name());
+    LSP_LOG("Definition: importSym->modulePath()=" << importSym->modulePath());
+    LSP_LOG("Definition: importSym->originalName()=" << importSym->originalName());
+
+    // Check if this is a namespace import (originalName is empty or same as name)
+    bool isNamespaceImport =
+        importSym->originalName().empty() || importSym->originalName() == importSym->name();
+    LSP_LOG("Definition: isNamespaceImport=" << isNamespaceImport);
+
+    semantic::Symbol *targetSym = importSym->targetSymbol();
+    LSP_LOG("Definition: targetSymbol=" << (void *)targetSym);
+
+    // Resolve the import path to find the target file
+    std::string modulePath = importSym->modulePath();
+    std::string currentFilePath = file->path();
+
+    // Resolve relative path
+    std::string absolutePath;
+    if (modulePath.size() >= 2 && (modulePath[0] == '/' || modulePath[1] == ':')) {
+      absolutePath = modulePath;
+    } else {
+      size_t lastSlash = currentFilePath.find_last_of("/\\");
+      std::string baseDir =
+          (lastSlash != std::string::npos) ? currentFilePath.substr(0, lastSlash) : ".";
+      absolutePath = baseDir;
+      if (!absolutePath.empty() && absolutePath.back() != '/' && absolutePath.back() != '\\') {
+        absolutePath += '/';
+      }
+      absolutePath += modulePath;
+      if (absolutePath.size() < 4 || absolutePath.substr(absolutePath.size() - 4) != ".spt") {
+        absolutePath += ".spt";
+      }
+    }
+
+    LSP_LOG("Definition: resolved absolutePath=" << absolutePath);
+
+    // Open the target file
+    SourceFile *targetFile = impl_->workspace_.openFileFromDisk(absolutePath);
+    LSP_LOG("Definition: targetFile=" << (void *)targetFile);
+
+    if (targetFile) {
+      LSP_LOG("Definition: targetFile->uri()=" << targetFile->uri());
+
+      // Get semantic model for target file
+      semantic::SemanticModel *targetModel = impl_->getSemanticModel(targetFile);
+      LSP_LOG("Definition: targetModel=" << (void *)targetModel);
+
+      if (targetModel) {
+        // For namespace import, check if there's a MemberAccessExpr context
+        // The user might be clicking on namespace.member
+        std::string searchName = importSym->originalName();
+
+        // If this is a namespace import and we have a MemberAccessExpr,
+        // try to get the member name from context
+        if (isNamespaceImport) {
+          auto *memberAccess = ast::ast_cast<ast::MemberAccessExprNode>(findResult.node());
+          if (!memberAccess) {
+            // Try to find it in the AST path
+            const auto &ancestors = findResult.context.ancestors;
+            for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+              memberAccess = ast::ast_cast<ast::MemberAccessExprNode>(*it);
+              if (memberAccess)
+                break;
+            }
+          }
+
+          if (memberAccess) {
+            // Get member name from the AST
+            std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
+            searchName = std::string(memberNameView);
+            LSP_LOG("Definition: namespace import - looking for member '" << searchName << "'");
+          } else {
+            // No member access context, just use the import name
+            searchName = importSym->name();
+          }
+        }
+
+        LSP_LOG("Definition: looking for symbol '" << searchName << "' in target model");
+
+        // Log all exported symbols
+        LSP_LOG("Definition: targetModel->exportedSymbols().size()="
+                << targetModel->exportedSymbols().size());
+        for (const auto &[expName, expSym] : targetModel->exportedSymbols()) {
+          LSP_LOG("Definition: exported symbol '" << expName << "', kind=" << (int)expSym->kind());
+        }
+
+        semantic::Symbol *exportedSym = targetModel->findExportedSymbol(searchName);
+        LSP_LOG("Definition: findExportedSymbol result=" << (void *)exportedSym);
+
+        if (exportedSym) {
+          LSP_LOG("Definition: exportedSym name=" << exportedSym->name()
+                                                  << ", kind=" << (int)exportedSym->kind());
+
+          ast::SourceLoc defLoc = exportedSym->definitionLoc();
+          LSP_LOG("Definition: defLoc valid=" << defLoc.isValid() << ", offset=" << defLoc.offset);
+
+          if (defLoc.isValid()) {
+            Position defPos = targetFile->getPosition(defLoc.offset);
+            LocationLink link;
+            link.targetUri = targetFile->uri();
+            link.targetRange = Range{defPos, defPos};
+            link.targetSelectionRange = link.targetRange;
+            link.originSelectionRange = file->toRange(findResult.node()->range);
+            result.push_back(std::move(link));
+            LSP_LOG("Definition: returning cross-file location for namespace import member");
+            return result;
+          }
+        }
+
+        // If namespace import and member not found, return the module file itself
+        if (isNamespaceImport) {
+          LSP_LOG("Definition: namespace import member not found, returning module file");
+          Position startPos = targetFile->getPosition(0);
+          LocationLink link;
+          link.targetUri = targetFile->uri();
+          link.targetRange = Range{startPos, startPos};
+          link.targetSelectionRange = link.targetRange;
+          link.originSelectionRange = file->toRange(findResult.node()->range);
+          result.push_back(std::move(link));
+          LSP_LOG("Definition: returning module file for namespace import");
+          return result;
+        }
+
+        // If namespace import failed, also try originalName as fallback
+        if (isNamespaceImport && searchName != importSym->originalName()) {
+          LSP_LOG("Definition: namespace member not found, trying originalName");
+          semantic::Symbol *fallbackSym =
+              targetModel->findExportedSymbol(importSym->originalName());
+          if (fallbackSym) {
+            ast::SourceLoc defLoc = fallbackSym->definitionLoc();
+            if (defLoc.isValid()) {
+              Position defPos = targetFile->getPosition(defLoc.offset);
+              LocationLink link;
+              link.targetUri = targetFile->uri();
+              link.targetRange = Range{defPos, defPos};
+              link.targetSelectionRange = link.targetRange;
+              link.originSelectionRange = file->toRange(findResult.node()->range);
+              result.push_back(std::move(link));
+              LSP_LOG("Definition: returning cross-file location using originalName");
+              return result;
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: try to use the stored targetSymbol if re-resolution failed
+    if (targetSym) {
+      LSP_LOG("Definition: fallback to stored targetSymbol name=" << targetSym->name() << ", kind="
+                                                                  << (int)targetSym->kind());
       // Find the file containing the target symbol
-      // The target symbol's definition location is in another file
       ast::SourceLoc targetLoc = targetSym->definitionLoc();
+      LSP_LOG("Definition: targetLoc valid=" << targetLoc.isValid()
+                                             << ", offset=" << targetLoc.offset);
       if (targetLoc.isValid()) {
-        // We need to find the file that contains this symbol
-        // For now, we search through all open files
-        SourceFile *targetFile = nullptr;
+        SourceFile *foundFile = nullptr;
         impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
-          if (!targetFile) {
+          if (!foundFile) {
             semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
             if (targetModel) {
-              // Check if this model has the target symbol
               for (const auto &[name, sym] : targetModel->exportedSymbols()) {
                 if (sym == targetSym) {
-                  targetFile = &f;
+                  foundFile = &f;
+                  LSP_LOG("Definition: found target file " << f.uri());
                   return;
                 }
               }
@@ -1937,18 +2578,21 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
           }
         });
 
-        if (targetFile) {
+        if (foundFile) {
           LocationLink link;
-          link.targetUri = targetFile->uri();
-          Position targetPos = targetFile->getPosition(targetLoc.offset);
+          link.targetUri = foundFile->uri();
+          Position targetPos = foundFile->getPosition(targetLoc.offset);
           link.targetRange = Range{targetPos, targetPos};
           link.targetSelectionRange = link.targetRange;
           link.originSelectionRange = file->toRange(findResult.node()->range);
           result.push_back(std::move(link));
+          LSP_LOG("Definition: returning cross-file location (fallback)");
           return result;
         }
       }
     }
+    LSP_LOG("Definition: ImportSymbol resolution failed, returning empty");
+    return result;
   }
 
   // Create location link
@@ -2554,9 +3198,14 @@ std::string formatType(types::TypeRef type) {
   return type->toString();
 }
 
-std::string formatSymbolSignature(const semantic::Symbol *symbol) {
+std::string formatSymbolSignature(const semantic::Symbol *symbol, int depth) {
   if (!symbol)
     return "";
+
+  // Prevent infinite recursion
+  if (depth > 10) {
+    return symbol->name();
+  }
 
   std::string result;
 
@@ -2637,6 +3286,15 @@ std::string formatSymbolSignature(const semantic::Symbol *symbol) {
     if (method->returnType()) {
       result += " -> " + method->returnType()->toString();
     }
+    break;
+  }
+
+  case semantic::SymbolKind::Import: {
+    // For import symbols, we need to find the target symbol safely
+    // DO NOT use targetSymbol() directly as it may be a dangling pointer
+    // Instead, we return just the name for now
+    // TODO: Implement proper symbol lookup by re-resolving the import
+    result = symbol->name();
     break;
   }
 

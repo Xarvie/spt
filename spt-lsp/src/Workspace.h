@@ -418,8 +418,13 @@ public:
       basePath = basePath.parent_path();
 
       std::filesystem::path resolved = basePath / modulePath;
+      // Try .spt extension first
+      resolved.replace_extension(".spt");
+      if (std::filesystem::exists(resolved)) {
+        return resolved.string();
+      }
+      // Also try .lang extension for backwards compatibility
       resolved.replace_extension(".lang");
-
       if (std::filesystem::exists(resolved)) {
         return resolved.string();
       }
@@ -428,8 +433,11 @@ public:
     // Try workspace root
     if (!config_.rootPath.empty()) {
       std::filesystem::path resolved = std::filesystem::path(config_.rootPath) / modulePath;
+      resolved.replace_extension(".spt");
+      if (std::filesystem::exists(resolved)) {
+        return resolved.string();
+      }
       resolved.replace_extension(".lang");
-
       if (std::filesystem::exists(resolved)) {
         return resolved.string();
       }
@@ -438,8 +446,11 @@ public:
     // Try include paths
     for (const auto &includePath : config_.includePaths) {
       std::filesystem::path resolved = std::filesystem::path(includePath) / modulePath;
+      resolved.replace_extension(".spt");
+      if (std::filesystem::exists(resolved)) {
+        return resolved.string();
+      }
       resolved.replace_extension(".lang");
-
       if (std::filesystem::exists(resolved)) {
         return resolved.string();
       }

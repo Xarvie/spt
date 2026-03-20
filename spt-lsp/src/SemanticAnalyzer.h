@@ -62,6 +62,11 @@ public:
   SemanticModel(SemanticModel &&) = default;
   SemanticModel &operator=(SemanticModel &&) = default;
 
+  // AST Root tracking
+  void setAstRoot(const ast::CompilationUnitNode *root) { astRoot_ = root; }
+
+  [[nodiscard]] const ast::CompilationUnitNode *astRoot() const { return astRoot_; }
+
   // Type Mapping
   void setNodeType(const ast::AstNode *node, types::TypeRef type) {
     if (node)
@@ -191,6 +196,7 @@ public:
   }
 
 private:
+  const ast::CompilationUnitNode *astRoot_ = nullptr;
   std::unordered_map<const ast::AstNode *, types::TypeRef> nodeTypes_;
   std::unordered_map<const ast::AstNode *, Symbol *> resolvedSymbols_;
   std::unordered_map<const ast::AstNode *, Symbol *> definingSymbols_;
@@ -227,6 +233,7 @@ public:
     currentScope_ = model_.symbolTable().globalScope();
 
     if (unit) {
+      model_.setAstRoot(unit);
       collectDeclarations(unit);
       visit(unit);
     }
@@ -683,6 +690,7 @@ public:
 
   types::TypeRef visitFunctionDecl(ast::FunctionDeclNode *node) {
     auto name = getString(node->name);
+    LSP_LOG("visitFunctionDecl: name=" << name << ", isExport=" << node->isExport());
     types::TypeRef retType = resolveTypeNode(node->returnType);
 
     std::vector<types::TypeRef> paramTypes;
@@ -706,9 +714,12 @@ public:
       fs->setReturnType(retType);
       fs->setMultiReturn(node->isMultiReturn);
       fs->setAstNode(node);
-      if (node->isExport())
-        fs->addFlag(SymbolFlags::Export);
       currentScope_->define(fs);
+    }
+    // Always add to exported symbols if export flag is set
+    if (node->isExport()) {
+      fs->addFlag(SymbolFlags::Export);
+      model_.addExportedSymbol(std::string(name), fs);
     }
     model_.setDefiningSymbol(node, fs);
 
@@ -767,13 +778,12 @@ public:
     }
 
     // Add 'this' variable to method scope (for non-static methods)
-    // TODO: Need to track parent class in MethodSymbol
-    // if (!node->isStatic() && ms && ms->parentClass()) {
-    //   types::TypeRef classTypeRef =
-    //   model_.typeContext().getOrCreateClassType(ms->parentClass()->name()); auto *thisVar =
-    //   model_.symbolTable().createVariable("this", classTypeRef, node->range.begin);
-    //   currentScope_->define(thisVar);
-    // }
+    if (!node->isStatic() && ms && ms->owningClass()) {
+      types::TypeRef classTypeRef =
+          model_.typeContext().getOrCreateClassType(ms->owningClass()->name());
+      auto *thisVar = model_.symbolTable().createVariable("this", classTypeRef, node->range.begin);
+      currentScope_->define(thisVar);
+    }
 
     uint32_t idx = 0;
     for (auto *p : node->parameters) {

@@ -715,7 +715,7 @@ private:
 /**
  * @brief Format symbol signature for display
  */
-[[nodiscard]] std::string formatSymbolSignature(const semantic::Symbol *symbol);
+[[nodiscard]] std::string formatSymbolSignature(const semantic::Symbol *symbol, int depth = 0);
 
 /**
  * @brief Create markdown hover content

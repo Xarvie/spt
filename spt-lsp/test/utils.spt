@@ -1,0 +1,25 @@
+// utils 模块 - 用于测试 import * as utils from "utils"
+
+export int util_add(int a, int b) {
+    return a + b;
+}
+
+export int util_sub(int a, int b) {
+    return a - b;
+}
+
+export str util_concat(str a, str b) {
+    return a .. b;
+}
+
+export class UtilClass {
+    int value;
+    
+    void setValue(int v) {
+        this.value = v;
+    }
+    
+    int getValue() {
+        return this.value;
+    }
+}

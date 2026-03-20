@@ -1,0 +1,26 @@
+// my_module 模块 - 用于测试 import { foo, bar } from "my_module"
+
+export int foo(int x) {
+    return x * 2;
+}
+
+export int bar(int x) {
+    return x + 10;
+}
+
+export str baz(str s) {
+    return "Hello, " .. s;
+}
+
+export class MyModuleClass {
+    int id;
+    str name;
+    
+    void setId(int i) {
+        this.id = i;
+    }
+    
+    int getId() {
+        return this.id;
+    }
+}

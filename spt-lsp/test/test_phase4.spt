@@ -1,0 +1,116 @@
+// Phase 4 模块与导入测试
+
+// 测试1: 导入整个模块
+// 预期: 正确解析，utils 符号可跳转
+import * as utils from "utils";
+
+// 测试2: 导入特定名称
+// 预期: 正确解析，foo, bar 符号可跳转
+import { foo, bar } from "my_module";
+
+// 测试3: 导入并重命名
+// 预期: 正确解析，myFoo, myBar 符号可跳转
+import { foo as myFoo, bar as myBar } from "my_module";
+
+// 测试4: 使用导入的模块函数
+// 预期: 点击 foo 可跳转到 my_module.spt 中的定义
+void testImportedFunction() {
+    int result1 = foo(5);
+    int result2 = bar(10);
+    int result3 = myFoo(3);
+}
+
+// 测试5: 使用导入的模块
+// 预期: 点击 util_add 可跳转到 utils.spt 中的定义
+void testImportedModule() {
+    int sum = utils.util_add(1, 2);
+    int diff = utils.util_sub(5, 3);
+}
+
+// 测试5.5: 使用导入的类
+// 预期: 点击 MyModuleClass 可跳转到 my_module.spt 中的定义
+import { MyModuleClass } from "my_module";
+
+void testImportedClass() {
+    MyModuleClass obj;
+    obj.setId(100);
+    int id = obj.getId();
+}
+
+// 测试6: 泛型类型
+// 预期: hover显示 list<int>
+list<int> intList = [1, 2, 3];
+
+// 测试7: 泛型类型
+// 预期: hover显示 map<str, int>
+map<str, int> strIntMap = { a: 1, b: 2 };
+
+// 测试8: 嵌套泛型
+// 预期: hover显示 list<list<int>>
+list<list<int>> nestedList = [[1, 2], [3, 4]];
+
+// 测试9: 类定义
+class MyClass {
+    int x;
+    int y;
+    
+    void setPos(int px, int py) {
+        this.x = px;
+        this.y = py;
+    }
+    
+    int getX() {
+        return this.x;
+    }
+}
+
+// 测试10: 类实例化和字段访问
+void testClass() {
+    MyClass obj;
+    obj.setPos(10, 20);
+    int val = obj.getX();
+}
+
+// 测试11: 静态字段
+class Counter {
+    static int count = 0;
+    
+    void increment() {
+        Counter.count = Counter.count + 1;
+    }
+}
+
+// 测试12: const 字段
+class Constants {
+    const int MAX = 100;
+    const str NAME = "test";
+}
+
+// 测试13: 导出函数
+export int add(int a, int b) {
+    return a + b;
+}
+
+// 测试14: 导出类
+export class ExportedClass {
+    int value;
+    
+    int getValue() {
+        return this.value;
+    }
+}
+
+// 测试15: Map 字面量
+map<str, str> stringMap = {
+    name: "John",
+    age: "30",
+    city: "NYC"
+};
+
+// 测试16: List 操作
+list<str> names = ["Alice", "Bob", "Charlie"];
+
+// 测试17: 复杂表达式
+int compute(int a, int b) {
+    return (a + b) * 2 - a / b;
+}

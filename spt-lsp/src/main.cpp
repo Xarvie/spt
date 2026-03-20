@@ -1000,7 +1000,7 @@ int main(int argc, char *argv[]) {
   std::cin.tie(nullptr);
   
   // Parse command line arguments
-  std::string logPath = "lsp_trace.log";
+  std::string logPath = "C:/Users/ftp/Desktop/spt/spt-lsp/test/lsp_trace.log";
   bool enableLog = false;
   
   for (int i = 1; i < argc; ++i) {
@@ -1032,7 +1032,10 @@ int main(int argc, char *argv[]) {
       logPath = envPath;
     }
   }
-  
+
+  // Always enable logging for debugging
+  enableLog = true;
+
   if (enableLog) {
     lang::lsp::JsonRpcLogger::instance().enable(logPath);
     lang::lsp::JSONRPC_LOG("=== LSP Server Started ===");

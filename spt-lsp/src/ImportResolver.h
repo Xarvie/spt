@@ -137,6 +137,11 @@ inline std::string ImportResolver::resolveImportPath(std::string_view modulePath
   }
   result += modulePath;
 
+  // Add .spt extension if not present
+  if (result.size() < 4 || result.substr(result.size() - 4) != ".spt") {
+    result += ".spt";
+  }
+
   // Normalize path (handle . and ..)
   std::vector<std::string> parts;
   std::string current;
@@ -179,6 +184,20 @@ inline semantic::Symbol *ImportResolver::findExportedSymbol(semantic::SemanticMo
                                                             std::string_view name) const {
   if (!model)
     return nullptr;
+
+  LSP_LOG("findExportedSymbol: looking for '" << name << "'");
+  auto *sym = model->findExportedSymbol(name);
+  if (sym) {
+    LSP_LOG("findExportedSymbol: found symbol '" << sym->name() << ", kind=" << (int)sym->kind());
+    return sym;
+  }
+  LSP_LOG(
+      "findExportedSymbol: not found in exportedSymbols, size=" << model->exportedSymbols().size());
+  for (const auto &[expName, expSym] : model->exportedSymbols()) {
+    LSP_LOG("findExportedSymbol: checking exported symbol '" << expName
+                                                             << ", kind=" << (int)expSym->kind());
+  }
+  LSP_LOG("findExportedSymbol: not found");
   return model->findExportedSymbol(name);
 }
 
