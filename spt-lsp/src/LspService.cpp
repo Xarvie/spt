@@ -926,9 +926,14 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
           std::string resolvedPath = impl_->workspace_.resolveModulePath(modulePath, file->path());
           LSP_LOG("Hover: named import - resolvedPath=" << resolvedPath);
 
-          SourceFile *targetFile = impl_->workspace_.getFileByPath(resolvedPath);
+          // Use openFileFromDisk instead of getFileByPath since the file may not be loaded yet
+          SourceFile *targetFile = impl_->workspace_.openFileFromDisk(resolvedPath);
+          LSP_LOG("Hover: targetFile=" << (void *)targetFile);
+
           if (targetFile) {
             semantic::SemanticModel *targetModel = impl_->getSemanticModel(targetFile);
+            LSP_LOG("Hover: targetModel=" << (void *)targetModel);
+
             if (targetModel) {
               // Try to find the symbol by originalName (the name in the source module)
               semantic::Symbol *targetSym = targetModel->findExportedSymbol(originalName);
@@ -941,8 +946,25 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
                 result.contents = createHoverMarkdown(targetSym, targetSym->type());
                 result.range = file->toRange(node->range);
                 return result;
+              } else {
+                LSP_LOG("Hover: findExportedSymbol returned null");
+                // Try using importName as fallback (for aliased imports like import { foo as bar })
+                if (importName != originalName) {
+                  targetSym = targetModel->findExportedSymbol(importName);
+                  LSP_LOG("Hover: findExportedSymbol('"
+                          << importName << "') fallback result=" << (void *)targetSym);
+                  if (targetSym) {
+                    LSP_LOG("Hover: re-resolved target symbol (fallback) "
+                            << targetSym->name() << ", kind=" << (int)targetSym->kind());
+                    result.contents = createHoverMarkdown(targetSym, targetSym->type());
+                    result.range = file->toRange(node->range);
+                    return result;
+                  }
+                }
               }
             }
+          } else {
+            LSP_LOG("Hover: openFileFromDisk returned null for path: " << resolvedPath);
           }
           LSP_LOG("Hover: failed to re-resolve import symbol");
         }
