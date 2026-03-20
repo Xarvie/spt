@@ -865,7 +865,7 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
         std::string("```lang\nbool\n```\nValue: ") + (literal->value ? "true" : "false");
     result.range = file->toRange(node->range);
   } else if (auto *memberAccess = ast::ast_cast<ast::MemberAccessExprNode>(node)) {
-    // Handle hover on member access (e.g., abc.value)
+    // Handle hover on member access (e.g., abc.value or calc.add)
     LSP_LOG("Hover: MemberAccessExpr, memberRange=[" << memberAccess->memberRange.begin.offset
                                                      << "-" << memberAccess->memberRange.end.offset
                                                      << "], offset=" << offset);
@@ -883,12 +883,95 @@ HoverResult LspService::hover(std::string_view uri, Position position) {
             // Look for the member in the class
             std::string_view memberNameView = file->factory().strings().get(memberAccess->member);
             std::string memberName(memberNameView);
+
+            // First try to find field
+            bool found = false;
             for (const auto &field : classType->fields()) {
               if (field.name == memberName) {
                 LSP_LOG("Hover: found field " << field.name);
                 result.contents = "```lang\n" + field.type->toString() + "\n```";
                 result.range = file->toRange(memberAccess->memberRange);
+                found = true;
                 break;
+              }
+            }
+
+            // If not found, try to find method
+            if (!found) {
+              for (const auto &method : classType->methods()) {
+                if (method.name == memberName) {
+                  LSP_LOG("Hover: found method " << method.name);
+                  // Show method signature: methodName(param1: type1, ...) -> returnType
+                  std::string sig = memberName + "(";
+                  if (method.type && method.type->isFunction()) {
+                    auto *funcType = static_cast<const types::FunctionType *>(method.type.get());
+                    for (size_t i = 0; i < funcType->paramTypes().size(); ++i) {
+                      if (i > 0)
+                        sig += ", ";
+                      sig += funcType->paramTypes()[i]->toString();
+                    }
+                    sig += ")";
+                    if (funcType->returnType()) {
+                      sig += " -> " + funcType->returnType()->toString();
+                    }
+                  }
+                  result.contents = "```lang\n" + sig + "\n```";
+                  result.range = file->toRange(memberAccess->memberRange);
+                  found = true;
+                  break;
+                }
+              }
+            }
+
+            // Also try to get from ClassSymbol for imported classes
+            if (!found) {
+              semantic::Symbol *baseSym = model->getResolvedSymbol(memberAccess->base);
+              if (baseSym && baseSym->isVariable()) {
+                types::TypeRef varType = baseSym->type();
+                if (varType && varType->isClass()) {
+                  semantic::Symbol *typeSym =
+                      model->symbolTable().globalScope()->resolve(classType->name());
+                  if (typeSym) {
+                    if (auto *importSym = semantic::symbol_cast<semantic::ImportSymbol>(typeSym)) {
+                      typeSym = importSym->targetSymbol();
+                    }
+                    if (typeSym && typeSym->isClass()) {
+                      auto *classSym = static_cast<semantic::ClassSymbol *>(typeSym);
+                      // Try field
+                      if (semantic::FieldSymbol *fieldSym = classSym->findField(memberName)) {
+                        LSP_LOG("Hover: found field from ClassSymbol " << fieldSym->name());
+                        result.contents = "```lang\n" + fieldSym->type()->toString() + "\n```";
+                        result.range = file->toRange(memberAccess->memberRange);
+                        found = true;
+                      }
+                      // Try method
+                      if (!found) {
+                        if (semantic::MethodSymbol *methodSym = classSym->findMethod(memberName)) {
+                          LSP_LOG("Hover: found method from ClassSymbol " << methodSym->name());
+                          // Show method signature with parameter names
+                          std::string sig = memberName + "(";
+                          bool first = true;
+                          for (auto *param : methodSym->parameters()) {
+                            if (!first)
+                              sig += ", ";
+                            first = false;
+                            sig += param->name();
+                            if (param->type()) {
+                              sig += ": " + param->type()->toString();
+                            }
+                          }
+                          sig += ")";
+                          if (methodSym->returnType()) {
+                            sig += " -> " + methodSym->returnType()->toString();
+                          }
+                          result.contents = "```lang\n" + sig + "\n```";
+                          result.range = file->toRange(memberAccess->memberRange);
+                          found = true;
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -1449,12 +1532,19 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
                   }
                   if (typeSym && typeSym->isClass()) {
                     classSym = static_cast<semantic::ClassSymbol *>(typeSym);
-                    LSP_LOG("Definition: found ClassSymbol with " << classSym->fields().size()
-                                                                  << " fields");
+                    LSP_LOG("Definition: found ClassSymbol with " << classSym->fields().size() << " fields, "
+                            << classSym->methods().size() << " methods");
                   }
                 }
               }
             }
+          }
+
+          // Try to find method if field not found
+          semantic::MethodSymbol *methodSym = nullptr;
+          if (!fieldInfo && classSym) {
+            methodSym = classSym->findMethod(memberName);
+            LSP_LOG("Definition: findMethod result=" << (void *)methodSym);
           }
 
           if (fieldInfo) {
@@ -1584,7 +1674,75 @@ std::vector<LocationLink> LspService::definition(std::string_view uri, Position 
                   LSP_LOG("Definition: returning result with 1 location from ClassSymbol");
                   return result;
                 }
+              } else if (methodSym) {
+                LSP_LOG("Definition: found MethodSymbol '" << methodSym->name() << "'");
+
+                // Get the MethodDeclNode from the symbol
+                ast::MethodDeclNode *methodDecl =
+                    ast::ast_cast<ast::MethodDeclNode>(methodSym->astNode());
+                LSP_LOG("Definition: methodDecl=" << (void *)methodDecl);
+
+                if (methodDecl) {
+                  // Find the file containing this class
+                  SourceFile *targetFile = nullptr;
+                  impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
+                    if (!targetFile) {
+                      semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
+                      if (targetModel) {
+                        for (const auto &[name, sym] : targetModel->exportedSymbols()) {
+                          if (sym == classSym) {
+                            targetFile = &f;
+                            return;
+                          }
+                        }
+                      }
+                    }
+                  });
+
+                  if (!targetFile) {
+                    impl_->workspace_.forEachFile([&](const std::string &fileUri, SourceFile &f) {
+                      if (!targetFile) {
+                        semantic::SemanticModel *targetModel = impl_->getSemanticModel(&f);
+                        if (targetModel) {
+                          for (const auto &symPtr : targetModel->symbolTable().allSymbols()) {
+                            if (symPtr.get() == classSym) {
+                              targetFile = &f;
+                              return;
+                            }
+                          }
+                        }
+                      }
+                    });
+                  }
+
+                  if (!targetFile) {
+                    targetFile = file;
+                  }
+
+                  LSP_LOG("Definition: targetFile=" << (targetFile ? targetFile->path() : "null"));
+
+                  // Use the method name range for selection
+                  ast::SourceRange targetRange =
+                      methodDecl->nameRange.isValid() ? methodDecl->nameRange : methodDecl->range;
+                  LSP_LOG("Definition: targetRange=[" << targetRange.begin.offset << "-"
+                                                      << targetRange.end.offset << "]");
+
+                  Position defStartPos = targetFile->getPosition(targetRange.begin.offset);
+                  Position defEndPos = targetFile->getPosition(targetRange.end.offset);
+                  LocationLink link;
+                  link.targetUri = targetFile->uri();
+                  link.targetRange = Range{defStartPos, defEndPos};
+                  link.targetSelectionRange = link.targetRange;
+                  link.originSelectionRange = file->toRange(memberAccess->memberRange);
+                  result.push_back(std::move(link));
+                  LSP_LOG("Definition: returning result with 1 location from MethodSymbol");
+                  return result;
+                }
+              } else {
+                LSP_LOG("Definition: fieldSym and methodSym both null");
               }
+            } else {
+              LSP_LOG("Definition: classSym is null");
             }
           }
         } else {

@@ -1062,6 +1062,7 @@ struct MethodDeclNode : Decl {
   struct TypeNode *returnType = nullptr;     ///< Return type (NEVER null)
   ArrayView<ParameterDeclNode *> parameters; ///< Parameters
   BlockStmtNode *body = nullptr;             ///< Method body (NEVER null)
+  SourceRange nameRange;                     ///< Position of the method name
 
   bool isMultiReturn = false;
 

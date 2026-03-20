@@ -933,7 +933,8 @@ public:
   [[nodiscard]] MethodDeclNode *
   makeMethodDecl(SourceRange range, std::string_view name, TypeNode *returnType,
                  const std::vector<ParameterDeclNode *> &parameters, BlockStmtNode *body,
-                 NodeFlags modifiers = NodeFlags::None, bool isMultiReturn = false) {
+                 NodeFlags modifiers = NodeFlags::None, bool isMultiReturn = false,
+                 SourceRange nameRange = SourceRange{}) {
     assert(returnType && body && "returnType and body must not be null");
 
     auto *node = arena_.make<MethodDeclNode>();
@@ -945,6 +946,7 @@ public:
     node->body = body;
     node->flags = modifiers;
     node->isMultiReturn = isMultiReturn;
+    node->nameRange = nameRange;
     return node;
   }
 

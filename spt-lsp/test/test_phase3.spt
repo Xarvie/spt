@@ -1,0 +1,95 @@
+// Phase 3 类与面向对象测试
+
+// 测试1: 基本类声明
+// 预期: 类名跳转，字段跳转
+class Point {
+    int x;
+    int y;
+}
+
+// 测试2: 类字段跳转
+// 预期: 点击field可跳转到定义
+void testFieldAccess() {
+    Point p;
+    p.x = 1;
+    p.y = 2;
+}
+
+// 测试3: 静态字段
+// 预期: 正确识别static
+class Counter {
+    static int count;
+    int id;
+}
+
+// 测试4: 静态字段访问
+// 预期: 点击count可跳转
+void testStaticAccess() {
+    Counter.count = 0;
+}
+
+// 测试5: const字段
+// 预期: 正确识别const
+class Constants {
+    const int PI = 3;
+    const int MAX = 100;
+}
+
+// 测试6: 类方法声明
+// 预期: 方法跳转正确
+class Calculator {
+    int add(int a, int b) {
+        return a + b;
+    }
+    
+    int subtract(int a, int b) {
+        return a - b;
+    }
+}
+
+// 测试7: 方法调用跳转
+// 预期: 点击add可跳转到方法定义
+void testMethodCall() {
+    Calculator calc;
+    int result = calc.add(1, 2);
+}
+
+// 测试8: this引用
+// 预期: this.field正确跳转
+class Box {
+    int width;
+    int height;
+    
+    void setSize(int w, int h) {
+        this.width = w;
+        this.height = h;
+    }
+}
+
+// 测试9: 链式访问
+// 预期: 每步正确跳转
+class Inner {
+    int value;
+}
+
+class Outer {
+    Inner inner;
+}
+
+void testChainAccess() {
+    Outer o;
+    o.inner.value = 10;
+}
+
+// 测试10: 嵌套类访问
+// 预期: 正确识别嵌套结构
+class Node {
+    int data;
+    Node next;
+}
+
+void testNestedClass() {
+    Node head;
+    head.data = 1;
+    head.next.data = 2;
+}

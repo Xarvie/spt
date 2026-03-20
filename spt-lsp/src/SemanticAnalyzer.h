@@ -766,11 +766,21 @@ public:
       model_.setNodeScope(node, currentScope_);
     }
 
+    // Add 'this' variable to method scope (for non-static methods)
+    // TODO: Need to track parent class in MethodSymbol
+    // if (!node->isStatic() && ms && ms->parentClass()) {
+    //   types::TypeRef classTypeRef =
+    //   model_.typeContext().getOrCreateClassType(ms->parentClass()->name()); auto *thisVar =
+    //   model_.symbolTable().createVariable("this", classTypeRef, node->range.begin);
+    //   currentScope_->define(thisVar);
+    // }
+
     uint32_t idx = 0;
     for (auto *p : node->parameters) {
       auto pn = getString(p->name);
       types::TypeRef pt = resolveTypeNode(p->type);
-      auto *ps = model_.symbolTable().createParameter(pn, pt, p->range.begin, idx++);
+      ast::SourceLoc defLoc = p->nameRange.isValid() ? p->nameRange.begin : p->range.begin;
+      auto *ps = model_.symbolTable().createParameter(pn, pt, defLoc, idx++);
       currentScope_->define(ps);
       if (ms)
         ms->addParameter(ps);
@@ -838,6 +848,7 @@ public:
         pts.push_back(resolveTypeNode(p->type));
       types::TypeRef mt = model_.typeContext().makeFunctionType(pts, rt);
       auto *meth = model_.symbolTable().createMethod(mn, mt, m->range.begin, cs);
+      meth->setAstNode(m);
       if (m->isStatic())
         meth->addFlag(SymbolFlags::Static);
       currentScope_->define(meth);

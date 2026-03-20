@@ -767,6 +767,7 @@ std::any visitClassMethodMember(LangParser::ClassMethodMemberContext *ctx) overr
   TypeNode *retType = expectType(ctx->type());
   // 使用 std::string 避免悬空引用
   std::string name = ctx->IDENTIFIER() ? ctx->IDENTIFIER()->getText() : "";
+  SourceRange nameRange = ctx->IDENTIFIER() ? getRange(ctx->IDENTIFIER()) : SourceRange::invalid();
 
   std::vector<ParameterDeclNode *> params;
   if (ctx->parameterList()) {
@@ -776,7 +777,7 @@ std::any visitClassMethodMember(LangParser::ClassMethodMemberContext *ctx) overr
   BlockStmtNode *body = expectBlock(ctx->blockStatement());
 
   return static_cast<MethodDeclNode *>(
-      factory_.makeMethodDecl(getRange(ctx), name, retType, params, body, mods));
+      factory_.makeMethodDecl(getRange(ctx), name, retType, params, body, mods, false, nameRange));
 }
 
 std::any
@@ -791,6 +792,7 @@ visitMultiReturnClassMethodMember(LangParser::MultiReturnClassMethodMemberContex
   TypeNode *retType = factory_.makeMultiReturnType(getRange(ctx->VARS()));
   // 使用 std::string 避免悬空引用
   std::string name = ctx->IDENTIFIER() ? ctx->IDENTIFIER()->getText() : "";
+  SourceRange nameRange = ctx->IDENTIFIER() ? getRange(ctx->IDENTIFIER()) : SourceRange::invalid();
 
   std::vector<ParameterDeclNode *> params;
   if (ctx->parameterList()) {
@@ -800,7 +802,7 @@ visitMultiReturnClassMethodMember(LangParser::MultiReturnClassMethodMemberContex
   BlockStmtNode *body = expectBlock(ctx->blockStatement());
 
   return static_cast<MethodDeclNode *>(
-      factory_.makeMethodDecl(getRange(ctx), name, retType, params, body, mods, true));
+      factory_.makeMethodDecl(getRange(ctx), name, retType, params, body, mods, true, nameRange));
 }
 
 std::any visitClassEmptyMember(LangParser::ClassEmptyMemberContext * /*ctx*/) override {
