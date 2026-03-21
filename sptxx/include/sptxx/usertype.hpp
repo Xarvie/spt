@@ -1,6 +1,7 @@
 // usertype.hpp - Class binding system for SPT Lua 5.5 C++ bindings
 // Fully supports variadic templates for constructors and methods
 // Supports operator overloading via Lua metamethods
+// Supports multiple ownership semantics: Owned, Unowned, Shared
 
 #pragma once
 
@@ -20,6 +21,12 @@ extern "C" {
 #include <type_traits>
 
 namespace sptxx {
+
+enum class ownership {
+  owned,    // Lua owns the object, will delete on GC
+  unowned,  // Lua holds a reference, will NOT delete on GC
+  shared    // Lua holds a shared_ptr, will decrement refcount on GC
+};
 
 enum class operator_type {
   add,        // __add: +
@@ -68,6 +75,29 @@ inline const char* operator_metafield(operator_type op) {
     default: return nullptr;
   }
 }
+
+template <typename T>
+struct object_storage {
+  ownership own;
+  union {
+    T* ptr;
+    std::shared_ptr<T>* shared;
+  };
+  
+  object_storage() : own(ownership::unowned), ptr(nullptr) {}
+};
+
+template <typename T>
+T* get_object_ptr(lua_State *L, int index) {
+  object_storage<T> *storage = static_cast<object_storage<T> *>(lua_touserdata(L, index));
+  if (!storage) return nullptr;
+  
+  if (storage->own == ownership::shared) {
+    return storage->shared ? storage->shared->get() : nullptr;
+  }
+  return storage->ptr;
+}
+
 } // namespace detail
 
 template<typename T>
@@ -91,6 +121,12 @@ public:
   usertype &operator=(const usertype &) = delete;
 
   usertype(lua_State *state, const char *name) : L(state), type_name(name) {
+    if (luaL_getmetatable(L, name) == LUA_TTABLE) {
+      lua_pop(L, 1);
+      return;
+    }
+    lua_pop(L, 1);
+
     luaL_newmetatable(L, name);
 
     lua_pushstring(L, name);
@@ -120,10 +156,25 @@ public:
   ~usertype() = default;
 
   static int gc_method(lua_State *L) {
-    T **ptr = static_cast<T **>(lua_touserdata(L, 1));
-    if (ptr && *ptr) {
-      delete *ptr;
-      *ptr = nullptr;
+    using Storage = detail::object_storage<T>;
+    Storage *storage = static_cast<Storage *>(lua_touserdata(L, 1));
+    if (!storage) return 0;
+    
+    switch (storage->own) {
+      case ownership::owned:
+        if (storage->ptr) {
+          delete storage->ptr;
+          storage->ptr = nullptr;
+        }
+        break;
+      case ownership::shared:
+        if (storage->shared) {
+          delete storage->shared;
+          storage->shared = nullptr;
+        }
+        break;
+      case ownership::unowned:
+        break;
     }
     return 0;
   }
@@ -212,15 +263,16 @@ public:
     auto ctor_wrapper = [](lua_State *L) -> int {
       const char *name = lua_tostring(L, lua_upvalueindex(1));
       try {
-        void *obj = lua_newuserdatauv(L, sizeof(T *), 0);
+        using Storage = detail::object_storage<T>;
+        void *obj = lua_newuserdatauv(L, sizeof(Storage), 0);
         luaL_getmetatable(L, name);
         lua_setmetatable(L, -2);
-        T **ptr = static_cast<T **>(obj);
-
-        *ptr = nullptr;
+        
+        Storage *storage = new (obj) Storage();
+        storage->own = ownership::owned;
 
         auto args = detail::extract_args_from_3<Args...>(L);
-        *ptr = std::apply(
+        storage->ptr = std::apply(
             [](auto &&...unpacked) { return new T(std::forward<decltype(unpacked)>(unpacked)...); },
             std::move(args));
 
@@ -247,6 +299,39 @@ public:
 
     lua_setmetatable(L, -2);
     lua_pop(L, 1);
+  }
+
+  void push_owned(T *obj) {
+    using Storage = detail::object_storage<T>;
+    void *ud = lua_newuserdatauv(L, sizeof(Storage), 0);
+    luaL_getmetatable(L, type_name.c_str());
+    lua_setmetatable(L, -2);
+    
+    Storage *storage = new (ud) Storage();
+    storage->own = ownership::owned;
+    storage->ptr = obj;
+  }
+
+  void push_unowned(T *obj) {
+    using Storage = detail::object_storage<T>;
+    void *ud = lua_newuserdatauv(L, sizeof(Storage), 0);
+    luaL_getmetatable(L, type_name.c_str());
+    lua_setmetatable(L, -2);
+    
+    Storage *storage = new (ud) Storage();
+    storage->own = ownership::unowned;
+    storage->ptr = obj;
+  }
+
+  void push_shared(std::shared_ptr<T> obj) {
+    using Storage = detail::object_storage<T>;
+    void *ud = lua_newuserdatauv(L, sizeof(Storage), 0);
+    luaL_getmetatable(L, type_name.c_str());
+    lua_setmetatable(L, -2);
+    
+    Storage *storage = new (ud) Storage();
+    storage->own = ownership::shared;
+    storage->shared = new std::shared_ptr<T>(std::move(obj));
   }
 
   template <operator_type Op, typename Func>
@@ -298,26 +383,26 @@ public:
 
 private:
   template <typename U> static int member_getter(lua_State *L) {
-    T **ptr = static_cast<T **>(lua_touserdata(L, 1));
-    if (!ptr || !*ptr)
+    T *obj = detail::get_object_ptr<T>(L, 1);
+    if (!obj)
       return luaL_error(L, "null object in getter");
 
     U T::*member;
     std::memcpy(&member, lua_touserdata(L, lua_upvalueindex(1)), sizeof(member));
 
-    stack::push(L, (*ptr)->*member);
+    stack::push(L, obj->*member);
     return 1;
   }
 
   template <typename U> static int member_setter(lua_State *L) {
-    T **ptr = static_cast<T **>(lua_touserdata(L, 1));
-    if (!ptr || !*ptr)
+    T *obj = detail::get_object_ptr<T>(L, 1);
+    if (!obj)
       return luaL_error(L, "null object in setter");
 
     U T::*member;
     std::memcpy(&member, lua_touserdata(L, lua_upvalueindex(1)), sizeof(member));
 
-    (*ptr)->*member = stack::get<std::decay_t<U>>(L, 2);
+    obj->*member = stack::get<std::decay_t<U>>(L, 2);
     return 0;
   }
 
@@ -337,8 +422,8 @@ private:
   template <typename FuncType, typename R, typename... Args>
   void register_method_closure(const char *name, FuncType func) {
     store_method_upvalue(name, func, [](lua_State *L) -> int {
-      T **ptr = static_cast<T **>(lua_touserdata(L, 1));
-      if (!ptr || !*ptr)
+      T *obj = detail::get_object_ptr<T>(L, 1);
+      if (!obj)
         return luaL_error(L, "null object in method call");
 
       FuncType f;
@@ -349,15 +434,15 @@ private:
 
         if constexpr (std::is_void_v<R>) {
           std::apply(
-              [ptr, f](auto &&...unpacked) {
-                ((*ptr)->*f)(std::forward<decltype(unpacked)>(unpacked)...);
+              [obj, f](auto &&...unpacked) {
+                (obj->*f)(std::forward<decltype(unpacked)>(unpacked)...);
               },
               std::move(args));
           return 0;
         } else {
           R result = std::apply(
-              [ptr, f](auto &&...unpacked) {
-                return ((*ptr)->*f)(std::forward<decltype(unpacked)>(unpacked)...);
+              [obj, f](auto &&...unpacked) {
+                return (obj->*f)(std::forward<decltype(unpacked)>(unpacked)...);
               },
               std::move(args));
           stack::push(L, std::move(result));
@@ -371,43 +456,43 @@ private:
 
   template <typename FuncType>
   static int binary_operator_wrapper(lua_State *L) {
-    T **ptr1 = static_cast<T **>(lua_touserdata(L, 1));
+    T *obj1 = detail::get_object_ptr<T>(L, 1);
     
-    if (!ptr1 || !*ptr1)
+    if (!obj1)
       return luaL_error(L, "null object in operator");
 
     FuncType *func = static_cast<FuncType *>(lua_touserdata(L, lua_upvalueindex(1)));
     
     try {
       if constexpr (std::is_invocable_v<FuncType, const T&, const T&>) {
-        T **ptr2 = static_cast<T **>(lua_touserdata(L, 2));
-        if (!ptr2 || !*ptr2)
+        T *obj2 = detail::get_object_ptr<T>(L, 2);
+        if (!obj2)
           return luaL_error(L, "null object in operator");
-        auto result = (*func)(**ptr1, **ptr2);
+        auto result = (*func)(*obj1, *obj2);
         stack::push(L, std::move(result));
         return 1;
       } else if constexpr (std::is_invocable_v<FuncType, const T&, float>) {
         float arg2 = static_cast<float>(lua_tonumber(L, 2));
-        auto result = (*func)(**ptr1, arg2);
+        auto result = (*func)(*obj1, arg2);
         stack::push(L, std::move(result));
         return 1;
       } else if constexpr (std::is_invocable_v<FuncType, const T&, double>) {
         double arg2 = lua_tonumber(L, 2);
-        auto result = (*func)(**ptr1, arg2);
+        auto result = (*func)(*obj1, arg2);
         stack::push(L, std::move(result));
         return 1;
       } else if constexpr (std::is_invocable_v<FuncType, const T&, int>) {
         int arg2 = static_cast<int>(lua_tointeger(L, 2));
-        auto result = (*func)(**ptr1, arg2);
+        auto result = (*func)(*obj1, arg2);
         stack::push(L, std::move(result));
         return 1;
       } else if constexpr (std::is_invocable_v<FuncType, lua_State*, const T&>) {
-        return (*func)(L, **ptr1);
+        return (*func)(L, *obj1);
       } else {
-        T **ptr2 = static_cast<T **>(lua_touserdata(L, 2));
-        if (!ptr2 || !*ptr2)
+        T *obj2 = detail::get_object_ptr<T>(L, 2);
+        if (!obj2)
           return luaL_error(L, "null object in operator");
-        return (*func)(L, **ptr1, **ptr2);
+        return (*func)(L, *obj1, *obj2);
       }
     } catch (...) {
       return detail::propagate_exception(L);
@@ -416,20 +501,20 @@ private:
 
   template <typename FuncType>
   static int unary_operator_wrapper(lua_State *L) {
-    T **ptr = static_cast<T **>(lua_touserdata(L, 1));
+    T *obj = detail::get_object_ptr<T>(L, 1);
     
-    if (!ptr || !*ptr)
+    if (!obj)
       return luaL_error(L, "null object in operator");
 
     FuncType *func = static_cast<FuncType *>(lua_touserdata(L, lua_upvalueindex(1)));
     
     try {
       if constexpr (std::is_invocable_v<FuncType, const T&>) {
-        auto result = (*func)(**ptr);
+        auto result = (*func)(*obj);
         stack::push(L, std::move(result));
         return 1;
       } else {
-        auto result = (*func)(L, **ptr);
+        auto result = (*func)(L, *obj);
         return result;
       }
     } catch (...) {

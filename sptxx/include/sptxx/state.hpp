@@ -138,6 +138,15 @@ public:
     return ut;
   }
 
+  template <typename T> usertype<T> get_usertype(const char *name) {
+    if (luaL_getmetatable(L, name) == LUA_TNIL) {
+      lua_pop(L, 1);
+      throw error(std::string("Usertype '") + name + "' not found");
+    }
+    lua_pop(L, 1);
+    return usertype<T>(L, name);
+  }
+
   template <typename R = void, typename... Args> R call(const char *name, Args &&...args) {
     lua_getglobal(L, name);
     if (!lua_isfunction(L, -1)) {
