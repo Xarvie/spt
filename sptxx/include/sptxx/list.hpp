@@ -27,6 +27,12 @@ public:
     if (ref == LUA_NOREF || ref == LUA_REFNIL) {
       throw error("Invalid list reference");
     }
+    lua_getref(L, ref);
+    if (lua_gettablemode(L, -1) != 1) {
+      lua_pop(L, 1);
+      throw error("Reference is not a list (TABLE_ARRAY)");
+    }
+    lua_pop(L, 1);
   }
 
   list(const list &other) : L(other.L), ref(LUA_NOREF) {
