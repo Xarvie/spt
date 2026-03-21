@@ -1,5 +1,6 @@
 // usertype.hpp - Class binding system for SPT Lua 5.5 C++ bindings
 // Fully supports variadic templates for constructors and methods
+// Supports operator overloading via Lua metamethods
 
 #pragma once
 
@@ -12,12 +13,62 @@ extern "C" {
 #include "function.hpp"
 #include "stack.hpp"
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <tuple>
 #include <type_traits>
 
 namespace sptxx {
+
+enum class operator_type {
+  add,        // __add: +
+  sub,        // __sub: -
+  mul,        // __mul: *
+  div,        // __div: /
+  mod,        // __mod: %
+  pow,        // __pow: ^
+  unm,        // __unm: - (unary)
+  idiv,       // __idiv: //
+  band,       // __band: &
+  bor,        // __bor: |
+  bxor,       // __bxor: ~
+  bnot,       // __bnot: ~ (unary)
+  shl,        // __shl: <<
+  shr,        // __shr: >>
+  concat,     // __concat: ..
+  len,        // __len: #
+  eq,         // __eq: ==
+  lt,         // __lt: <
+  le          // __le: <=
+};
+
+namespace detail {
+inline const char* operator_metafield(operator_type op) {
+  switch (op) {
+    case operator_type::add:    return "__add";
+    case operator_type::sub:    return "__sub";
+    case operator_type::mul:    return "__mul";
+    case operator_type::div:    return "__div";
+    case operator_type::mod:    return "__mod";
+    case operator_type::pow:    return "__pow";
+    case operator_type::unm:    return "__unm";
+    case operator_type::idiv:   return "__idiv";
+    case operator_type::band:   return "__band";
+    case operator_type::bor:    return "__bor";
+    case operator_type::bxor:   return "__bxor";
+    case operator_type::bnot:   return "__bnot";
+    case operator_type::shl:    return "__shl";
+    case operator_type::shr:    return "__shr";
+    case operator_type::concat: return "__concat";
+    case operator_type::len:    return "__len";
+    case operator_type::eq:     return "__eq";
+    case operator_type::lt:     return "__lt";
+    case operator_type::le:     return "__le";
+    default: return nullptr;
+  }
+}
+} // namespace detail
 
 template<typename T>
 class usertype {
@@ -198,6 +249,53 @@ public:
     lua_pop(L, 1);
   }
 
+  template <operator_type Op, typename Func>
+  void set_operator(Func &&func) {
+    using FuncType = std::decay_t<Func>;
+    constexpr bool is_unary = (Op == operator_type::unm || 
+                               Op == operator_type::bnot || 
+                               Op == operator_type::len);
+    
+    luaL_getmetatable(L, type_name.c_str());
+    
+    void *storage = lua_newuserdatauv(L, sizeof(FuncType), 0);
+    new (storage) FuncType(std::forward<Func>(func));
+    
+    if constexpr (is_unary) {
+      lua_pushcclosure(L, &unary_operator_wrapper<FuncType>, 1);
+    } else {
+      lua_pushcclosure(L, &binary_operator_wrapper<FuncType>, 1);
+    }
+    
+    lua_setfield(L, -2, detail::operator_metafield(Op));
+    lua_pop(L, 1);
+  }
+
+  template <typename Func> void set_add(Func &&func) { set_operator<operator_type::add>(std::forward<Func>(func)); }
+  template <typename Func> void set_sub(Func &&func) { set_operator<operator_type::sub>(std::forward<Func>(func)); }
+  template <typename Func> void set_mul(Func &&func) { set_operator<operator_type::mul>(std::forward<Func>(func)); }
+  template <typename Func> void set_div(Func &&func) { set_operator<operator_type::div>(std::forward<Func>(func)); }
+  template <typename Func> void set_mod(Func &&func) { set_operator<operator_type::mod>(std::forward<Func>(func)); }
+  template <typename Func> void set_pow(Func &&func) { set_operator<operator_type::pow>(std::forward<Func>(func)); }
+  template <typename Func> void set_unm(Func &&func) { set_operator<operator_type::unm>(std::forward<Func>(func)); }
+  template <typename Func> void set_idiv(Func &&func) { set_operator<operator_type::idiv>(std::forward<Func>(func)); }
+  template <typename Func> void set_band(Func &&func) { set_operator<operator_type::band>(std::forward<Func>(func)); }
+  template <typename Func> void set_bor(Func &&func) { set_operator<operator_type::bor>(std::forward<Func>(func)); }
+  template <typename Func> void set_bxor(Func &&func) { set_operator<operator_type::bxor>(std::forward<Func>(func)); }
+  template <typename Func> void set_bnot(Func &&func) { set_operator<operator_type::bnot>(std::forward<Func>(func)); }
+  template <typename Func> void set_shl(Func &&func) { set_operator<operator_type::shl>(std::forward<Func>(func)); }
+  template <typename Func> void set_shr(Func &&func) { set_operator<operator_type::shr>(std::forward<Func>(func)); }
+  template <typename Func> void set_concat(Func &&func) { set_operator<operator_type::concat>(std::forward<Func>(func)); }
+  template <typename Func> void set_len(Func &&func) { set_operator<operator_type::len>(std::forward<Func>(func)); }
+  template <typename Func> void set_eq(Func &&func) { set_operator<operator_type::eq>(std::forward<Func>(func)); }
+  template <typename Func> void set_lt(Func &&func) { set_operator<operator_type::lt>(std::forward<Func>(func)); }
+  template <typename Func> void set_le(Func &&func) { set_operator<operator_type::le>(std::forward<Func>(func)); }
+
+  template <operator_type... Ops>
+  void set_comparable() {
+    (set_operator<Ops>([](const T& a, const T& b) { return a < b; }), ...);
+  }
+
 private:
   template <typename U> static int member_getter(lua_State *L) {
     T **ptr = static_cast<T **>(lua_touserdata(L, 1));
@@ -269,6 +367,74 @@ private:
         return detail::propagate_exception(L);
       }
     });
+  }
+
+  template <typename FuncType>
+  static int binary_operator_wrapper(lua_State *L) {
+    T **ptr1 = static_cast<T **>(lua_touserdata(L, 1));
+    
+    if (!ptr1 || !*ptr1)
+      return luaL_error(L, "null object in operator");
+
+    FuncType *func = static_cast<FuncType *>(lua_touserdata(L, lua_upvalueindex(1)));
+    
+    try {
+      if constexpr (std::is_invocable_v<FuncType, const T&, const T&>) {
+        T **ptr2 = static_cast<T **>(lua_touserdata(L, 2));
+        if (!ptr2 || !*ptr2)
+          return luaL_error(L, "null object in operator");
+        auto result = (*func)(**ptr1, **ptr2);
+        stack::push(L, std::move(result));
+        return 1;
+      } else if constexpr (std::is_invocable_v<FuncType, const T&, float>) {
+        float arg2 = static_cast<float>(lua_tonumber(L, 2));
+        auto result = (*func)(**ptr1, arg2);
+        stack::push(L, std::move(result));
+        return 1;
+      } else if constexpr (std::is_invocable_v<FuncType, const T&, double>) {
+        double arg2 = lua_tonumber(L, 2);
+        auto result = (*func)(**ptr1, arg2);
+        stack::push(L, std::move(result));
+        return 1;
+      } else if constexpr (std::is_invocable_v<FuncType, const T&, int>) {
+        int arg2 = static_cast<int>(lua_tointeger(L, 2));
+        auto result = (*func)(**ptr1, arg2);
+        stack::push(L, std::move(result));
+        return 1;
+      } else if constexpr (std::is_invocable_v<FuncType, lua_State*, const T&>) {
+        return (*func)(L, **ptr1);
+      } else {
+        T **ptr2 = static_cast<T **>(lua_touserdata(L, 2));
+        if (!ptr2 || !*ptr2)
+          return luaL_error(L, "null object in operator");
+        return (*func)(L, **ptr1, **ptr2);
+      }
+    } catch (...) {
+      return detail::propagate_exception(L);
+    }
+  }
+
+  template <typename FuncType>
+  static int unary_operator_wrapper(lua_State *L) {
+    T **ptr = static_cast<T **>(lua_touserdata(L, 1));
+    
+    if (!ptr || !*ptr)
+      return luaL_error(L, "null object in operator");
+
+    FuncType *func = static_cast<FuncType *>(lua_touserdata(L, lua_upvalueindex(1)));
+    
+    try {
+      if constexpr (std::is_invocable_v<FuncType, const T&>) {
+        auto result = (*func)(**ptr);
+        stack::push(L, std::move(result));
+        return 1;
+      } else {
+        auto result = (*func)(L, **ptr);
+        return result;
+      }
+    } catch (...) {
+      return detail::propagate_exception(L);
+    }
   }
 };
 
