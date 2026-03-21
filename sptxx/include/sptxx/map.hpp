@@ -183,8 +183,6 @@ public:
       lua_pushvalue(L, -1);
       lua_pushnil(L);
       lua_settable(L, -4);
-      lua_pushnil(L);
-      lua_settable(L, -3);
     }
     lua_pop(L, 1);
   }

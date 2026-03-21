@@ -88,7 +88,7 @@ if (BUILD_TESTS)
     # 新增：集成 sptxx 的 C++ 包装层测试
     # ====================================================================
     # 自动搜索 sptxx 目录下所有的 test_*.cpp 文件
-    file(GLOB SPTXX_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/sptxx/test_*.cpp")
+    file(GLOB SPTXX_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/sptxx/tests/test_*.cpp")
 
     foreach (TEST_SRC ${SPTXX_TEST_SOURCES})
         # 提取文件名作为目标名称 (例如 test_registry_ref)
