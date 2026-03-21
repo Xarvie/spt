@@ -10,6 +10,7 @@
 #include "sptxx/usertype.hpp"
 #include "sptxx/stack.hpp"
 #include "sptxx/error.hpp"
+#include "sptxx/coroutine.hpp"
 
 // Convenience namespace alias
 namespace spt = sptxx;
