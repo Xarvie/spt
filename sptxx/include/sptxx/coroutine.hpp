@@ -277,6 +277,12 @@ template <typename Func> struct coroutine_wrapper {
     self->func(co);
     return 0;
   }
+
+  static int gc(lua_State *L) {
+    coroutine_wrapper *self = static_cast<coroutine_wrapper *>(lua_touserdata(L, 1));
+    self->~coroutine_wrapper();
+    return 0;
+  }
 };
 } // namespace detail
 
@@ -294,14 +300,28 @@ public:
     }
 
     if constexpr (std::is_invocable_v<Func, lua_State *>) {
-      auto *wrapper = new detail::coroutine_wrapper<Func>(std::forward<Func>(func), L);
-      lua_pushlightuserdata(L, wrapper);
-      lua_pushcclosure(L, detail::coroutine_wrapper<Func>::call, 1);
+      using WrapperType = detail::coroutine_wrapper<Func>;
+      void *storage = lua_newuserdatauv(L, sizeof(WrapperType), 0);
+      new (storage) WrapperType(std::forward<Func>(func), L);
+      
+      lua_createtable(L, 0, 1);
+      lua_pushcfunction(L, WrapperType::gc);
+      lua_setfield(L, -2, "__gc");
+      lua_setmetatable(L, -2);
+      
+      lua_pushcclosure(L, WrapperType::call, 1);
     } else if constexpr (std::is_invocable_v<Func>) {
       auto wrapper = [f = std::forward<Func>(func)](lua_State *) { f(); };
-      auto *w = new detail::coroutine_wrapper<decltype(wrapper)>(std::move(wrapper), L);
-      lua_pushlightuserdata(L, w);
-      lua_pushcclosure(L, detail::coroutine_wrapper<decltype(wrapper)>::call, 1);
+      using WrapperType = detail::coroutine_wrapper<decltype(wrapper)>;
+      void *storage = lua_newuserdatauv(L, sizeof(WrapperType), 0);
+      new (storage) WrapperType(std::move(wrapper), L);
+      
+      lua_createtable(L, 0, 1);
+      lua_pushcfunction(L, WrapperType::gc);
+      lua_setfield(L, -2, "__gc");
+      lua_setmetatable(L, -2);
+      
+      lua_pushcclosure(L, WrapperType::call, 1);
     } else {
       lua_pop(L, 1);
       throw error("Invalid coroutine function signature");

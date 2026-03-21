@@ -36,23 +36,21 @@ public:
 };
 
 namespace detail {
-    // Helper to propagate C++ exceptions as Lua errors
     inline int propagate_exception(lua_State* L) {
+        std::string err_msg;
         try {
-            throw; // Re-throw the current exception
+            throw;
         } catch (const error& e) {
-            lua_pushstring(L, e.what());
-            return lua_error(L);
+            err_msg = e.what();
         } catch (const std::exception& e) {
-            lua_pushstring(L, e.what());
-            return lua_error(L);
+            err_msg = e.what();
         } catch (...) {
-            lua_pushstring(L, "Unknown C++ exception");
-            return lua_error(L);
+            err_msg = "Unknown C++ exception";
         }
+        lua_pushstring(L, err_msg.c_str());
+        return lua_error(L);
     }
     
-    // Helper to handle Lua errors as C++ exceptions
     inline void handle_lua_error(lua_State* L, int status) {
         if (status != LUA_OK) {
             const char* msg = lua_tostring(L, -1);

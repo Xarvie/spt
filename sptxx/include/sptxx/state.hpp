@@ -128,8 +128,7 @@ public:
   }
 
   template <typename Func> void set_function(const char *name, Func &&func) {
-    auto wrapper = detail::make_function_wrapper(std::forward<Func>(func));
-    lua_pushcfunction(L, wrapper);
+    detail::push_function_wrapper(L, std::forward<Func>(func));
     lua_setglobal(L, name);
   }
 

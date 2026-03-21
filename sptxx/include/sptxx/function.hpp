@@ -126,6 +126,34 @@ template <typename T> struct function_traits<std::function<T>> : function_traits
 
 template <typename T> using function_traits_t = function_traits<std::decay_t<T>>;
 
+template <typename Func> void push_function_wrapper(lua_State *L, Func &&f) {
+  using FuncType = std::decay_t<Func>;
+  using Traits = function_traits<FuncType>;
+  using ReturnType = typename Traits::return_type;
+  using ArgsTuple = typename Traits::args_tuple;
+
+  void *storage = lua_newuserdatauv(L, sizeof(FuncType), 0);
+  new (storage) FuncType(std::forward<Func>(f));
+  
+  lua_createtable(L, 0, 1);
+  lua_pushcfunction(L, [](lua_State *L) -> int {
+    FuncType *self = static_cast<FuncType *>(lua_touserdata(L, 1));
+    self->~FuncType();
+    return 0;
+  });
+  lua_setfield(L, -2, "__gc");
+  lua_setmetatable(L, -2);
+  
+  lua_pushcclosure(L, [](lua_State *L) -> int {
+    FuncType *func = static_cast<FuncType *>(lua_touserdata(L, lua_upvalueindex(1)));
+    try {
+      return function_caller<ReturnType, FuncType, ArgsTuple>::call(L, *func);
+    } catch (...) {
+      return propagate_exception(L);
+    }
+  }, 1);
+}
+
 template <typename Func> lua_CFunction make_function_wrapper(Func &&f) {
   using FuncType = std::decay_t<Func>;
   using Traits = function_traits<FuncType>;

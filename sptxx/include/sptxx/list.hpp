@@ -238,7 +238,145 @@ private:
 public:
   list() : L(nullptr), ref(LUA_NOREF) {}
 
-  list(lua_State *state, int reference) : L(state), ref(reference) {}
+  list(lua_State *state, int reference) : L(state), ref(reference) {
+    if (ref == LUA_NOREF || ref == LUA_REFNIL) {
+      throw error("Invalid list reference");
+    }
+    lua_getref(L, ref);
+    if (lua_gettablemode(L, -1) != 1) {
+      lua_pop(L, 1);
+      throw error("Reference is not a list (TABLE_ARRAY)");
+    }
+    lua_pop(L, 1);
+  }
+
+  list(const list &other) : L(other.L), ref(LUA_NOREF) {
+    if (other.valid()) {
+      lua_getref(L, other.ref);
+      ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    }
+  }
+
+  list(list &&other) noexcept : L(other.L), ref(other.ref) {
+    other.L = nullptr;
+    other.ref = LUA_NOREF;
+  }
+
+  list &operator=(const list &other) {
+    if (this != &other) {
+      if (valid()) {
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+      }
+      L = other.L;
+      if (other.valid()) {
+        lua_getref(L, other.ref);
+        ref = luaL_ref(L, LUA_REGISTRYINDEX);
+      } else {
+        ref = LUA_NOREF;
+      }
+    }
+    return *this;
+  }
+
+  list &operator=(list &&other) noexcept {
+    if (this != &other) {
+      if (valid()) {
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+      }
+      L = other.L;
+      ref = other.ref;
+      other.L = nullptr;
+      other.ref = LUA_NOREF;
+    }
+    return *this;
+  }
+
+  ~list() {
+    if (valid()) {
+      luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    }
+  }
+
+  bool valid() const { return L != nullptr && ref != LUA_NOREF && ref != LUA_REFNIL; }
+  explicit operator bool() const { return valid(); }
+
+  std::size_t size() const {
+    if (!valid()) throw error("Invalid list");
+    lua_getref(L, ref);
+    lua_Integer len = lua_arraylen(L, -1);
+    lua_pop(L, 1);
+    return static_cast<std::size_t>(len);
+  }
+
+  std::size_t capacity() const {
+    if (!valid()) throw error("Invalid list");
+    lua_getref(L, ref);
+    lua_Integer cap = lua_arraycapacity(L, -1);
+    lua_pop(L, 1);
+    return static_cast<std::size_t>(cap);
+  }
+
+  bool empty() const {
+    if (!valid()) throw error("Invalid list");
+    lua_getref(L, ref);
+    int is_empty = lua_arrayisempty(L, -1);
+    lua_pop(L, 1);
+    return is_empty != 0;
+  }
+
+  void resize(std::size_t new_size) {
+    if (!valid()) throw error("Invalid list");
+    lua_getref(L, ref);
+    lua_arraysetlen(L, -1, static_cast<lua_Integer>(new_size));
+    lua_pop(L, 1);
+  }
+
+  void reserve(std::size_t capacity) {
+    if (!valid()) throw error("Invalid list");
+    lua_getref(L, ref);
+    lua_arrayreserve(L, -1, static_cast<lua_Integer>(capacity));
+    lua_pop(L, 1);
+  }
+
+  template <typename U> U get(std::size_t index) const {
+    if (!valid()) throw error("Invalid list");
+    if (index >= size()) throw error("List index out of range");
+    lua_getref(L, ref);
+    lua_geti(L, -1, static_cast<lua_Integer>(index));
+    U result = stack::get<U>(L, -1);
+    lua_pop(L, 2);
+    return result;
+  }
+
+  template <typename U> void set(std::size_t index, const U &value) {
+    if (!valid()) throw error("Invalid list");
+    if (index >= size()) throw error("List index out of range");
+    lua_getref(L, ref);
+    stack::push(L, value);
+    lua_seti(L, -2, static_cast<lua_Integer>(index));
+    lua_pop(L, 1);
+  }
+
+  template <typename U> void push_back(const U &value) {
+    if (!valid()) throw error("Invalid list");
+    std::size_t current_size = size();
+    lua_getref(L, ref);
+    stack::push(L, value);
+    lua_seti(L, -2, static_cast<lua_Integer>(current_size));
+    lua_pop(L, 1);
+  }
+
+  template <typename U> U pop_back() {
+    if (!valid()) throw error("Invalid list");
+    std::size_t current_size = size();
+    if (current_size == 0) throw error("Cannot pop from empty list");
+    U result = get<U>(current_size - 1);
+    resize(current_size - 1);
+    return result;
+  }
+
+  lua_State *lua_state() const { return L; }
+  int registry_index() const { return ref; }
 };
 
 using object_list = list<void>;
