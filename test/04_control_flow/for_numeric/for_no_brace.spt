@@ -1,0 +1,21 @@
+// 测试: 控制流 - for 无花括号单语句体
+// 语法: forStatement -> FOR OP forControl CP statement
+// 描述: 测试数值 for 和 for-each 不使用花括号的单语句写法
+
+// 数值 for 无花括号
+int sum = 0;
+for (int i = 0, 4) sum += i;
+assert(sum == 10, "sum should be 10");
+
+// for-each 无花括号
+list<int> nums = [1, 2, 3];
+int product = 1;
+for (i, v : pairs(nums)) product *= v;
+assert(product == 6, "product should be 6");
+
+// 无花括号 for 内带 break
+int first_big = 0;
+for (int i = 0, 100) if (i > 5) { first_big = i; break; }
+assert(first_big == 6, "first_big should be 6");
+
+print("for_no_brace tests passed!");

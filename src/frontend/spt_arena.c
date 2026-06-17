@@ -9,8 +9,10 @@
 
 #define SPT_ARENA_DEFAULT_BLOCK (64 * 1024)
 
-/* 对齐到 max_align_t 的字节数。 */
-#define SPT_ARENA_ALIGN (sizeof(max_align_t))
+/* 对齐到平台最大标量类型（避免 max_align_t，MSVC C11 支持不全）。 */
+#define SPT_ARENA_ALIGN (sizeof(long double) > sizeof(void(*)()) \
+                             ? sizeof(long double) \
+                             : sizeof(void(*)()))
 
 typedef struct SptArenaBlock {
   struct SptArenaBlock *next;

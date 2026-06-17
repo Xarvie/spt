@@ -42,9 +42,9 @@ file(GLOB CODEGEN_SRCS  CONFIGURE_DEPENDS src/codegen/*.c)
 add_library(spt_core STATIC ${VM_SRCS} ${FRONTEND_SRCS} ${CODEGEN_SRCS})
 
 target_include_directories(spt_core PUBLIC
-    src/frontend
-    src/codegen
-    src/vm
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/vm
 )
 
 if(MSVC)
@@ -75,7 +75,7 @@ endif()
 file(GLOB CLI_SRCS CONFIGURE_DEPENDS src/cli/*.c)
 add_executable(sptscript ${CLI_SRCS})
 target_link_libraries(sptscript PRIVATE spt_core)
-target_include_directories(sptscript PRIVATE src/cli)
+target_include_directories(sptscript PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/cli)
 
 if(MSVC)
     target_compile_definitions(sptscript PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -105,7 +105,7 @@ if(BUILD_TESTS)
     # ---- C API 测试 ----
     add_executable(TestCApi tests/TestCApi.c)
     target_link_libraries(TestCApi PRIVATE spt_core)
-    target_include_directories(TestCApi PRIVATE src/vm)
+    target_include_directories(TestCApi PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/vm)
     add_test(NAME TestCApi
         COMMAND $<TARGET_FILE:TestCApi>
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

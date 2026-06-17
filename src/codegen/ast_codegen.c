@@ -28,6 +28,7 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "lcode.h"
 #include "ldebug.h"
@@ -1273,7 +1274,14 @@ static void compile_assignment(CompileCtx *C, AstNode *n) {
   int nlvals = (int)n->u.assign.lvalues.count;
   int nrvals = (int)n->u.assign.rvalues.count;
 
-  expdesc lhs[nlvals ? nlvals : 1];
+  /* 多目标赋值的左值表达式数组：小数量用栈，大数量用堆（避免 VLA，MSVC 不支持）。 */
+  #define ASSIGN_LHS_STACK_MAX 16
+  expdesc lhs_stack[ASSIGN_LHS_STACK_MAX];
+  expdesc *lhs = lhs_stack;
+  if (nlvals > ASSIGN_LHS_STACK_MAX) {
+    lhs = (expdesc *)malloc(sizeof(expdesc) * (size_t)nlvals);
+    if (!lhs) compile_error(C, "out of memory in assignment");
+  }
   for (int i = 0; i < nlvals; i++) {
     compile_expression(C, n->u.assign.lvalues.items[i], &lhs[i]);
     if (!vkisvar(lhs[i].k))
@@ -1312,6 +1320,10 @@ static void compile_assignment(CompileCtx *C, AstNode *n) {
       fs->freereg = cast_byte(base);
     }
   }
+
+  if (lhs != lhs_stack)
+    free(lhs);
+  #undef ASSIGN_LHS_STACK_MAX
 }
 
 /*-----------------------------------------------------------------------

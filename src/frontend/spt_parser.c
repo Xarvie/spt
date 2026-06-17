@@ -156,6 +156,7 @@ static AstList parse_expression_list(Parser *P);
 static AstNode *parse_type(Parser *P);
 static AstNode *parse_statement(Parser *P);
 static AstNode *parse_block(Parser *P);
+static AstNode *parse_body(Parser *P);
 static AstNode *parse_lambda(Parser *P);
 
 /* ===========================================================================
@@ -1216,7 +1217,7 @@ static AstNode *parse_if(Parser *P) {
   expect2(P, TOK_LPAREN);
   AstNode *cond = parse_expression(P);
   expect2(P, TOK_RPAREN);
-  AstNode *then_block = parse_block(P);
+  AstNode *then_block = parse_body(P);
   NodeVec elifs;
   nv_init(&elifs);
   AstNode *else_block = NULL;
@@ -1228,14 +1229,14 @@ static AstNode *parse_if(Parser *P) {
       expect2(P, TOK_LPAREN);
       AstNode *c = parse_expression(P);
       expect2(P, TOK_RPAREN);
-      AstNode *b = parse_block(P);
+      AstNode *b = parse_body(P);
       AstNode *clause = spt_ast_new(P->arena, NODE_IF_CLAUSE, cloc);
       clause->u.if_clause.condition = c;
       clause->u.if_clause.body = b;
       nv_push(&elifs, clause);
     } else {
       advance(P); /* else */
-      else_block = parse_block(P);
+      else_block = parse_body(P);
       break;
     }
   }
@@ -1253,7 +1254,7 @@ static AstNode *parse_while(Parser *P) {
   expect2(P, TOK_LPAREN);
   AstNode *cond = parse_expression(P);
   expect2(P, TOK_RPAREN);
-  AstNode *body = parse_block(P);
+  AstNode *body = parse_body(P);
   AstNode *n = spt_ast_new(P->arena, NODE_WHILE_STATEMENT, loc);
   n->u.while_stmt.condition = cond;
   n->u.while_stmt.body = body;
@@ -1300,7 +1301,7 @@ static AstNode *parse_for(Parser *P) {
     if (accept(P, TOK_COMMA))
       step = parse_expression(P);
     expect2(P, TOK_RPAREN);
-    AstNode *body = parse_block(P);
+    AstNode *body = parse_body(P);
     AstNode *n = spt_ast_new(P->arena, NODE_FOR_NUMERIC_STATEMENT, loc);
     n->u.for_num.var_name = var0->u.param.name;
     n->u.for_num.type_annotation = var0->u.param.type_annotation;
@@ -1319,7 +1320,7 @@ static AstNode *parse_for(Parser *P) {
   expect2(P, TOK_COLON);
   AstList iters = parse_expression_list(P);
   expect2(P, TOK_RPAREN);
-  AstNode *body = parse_block(P);
+  AstNode *body = parse_body(P);
   AstNode *n = spt_ast_new(P->arena, NODE_FOR_EACH_STATEMENT, loc);
   n->u.for_each.loop_variables = nv_finish(&vars, P->arena);
   n->u.for_each.iterable_exprs = iters;
@@ -1423,6 +1424,19 @@ static AstNode *parse_block(Parser *P) {
   n->u.block.statements = nv_finish(&stmts, P->arena);
   n->u.block.end_loc = endloc;
   n->u.block.use_end = true;
+  return n;
+}
+
+/* 控制流体：花括号代码块或单条语句（包成单语句 BLOCK，使 codegen 的 body 永远是 BLOCK）。 */
+static AstNode *parse_body(Parser *P) {
+  if (at(P, TOK_LBRACE))
+    return parse_block(P);
+  SourceLocation loc = cur_loc(P);
+  AstNode *s = parse_statement(P);
+  AstNode *n = spt_ast_new(P->arena, NODE_BLOCK, loc);
+  n->u.block.statements = spt_ast_list_from(P->arena, &s, 1);
+  n->u.block.end_loc = loc;
+  n->u.block.use_end = false;
   return n;
 }
 

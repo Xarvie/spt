@@ -286,16 +286,20 @@ mapEntry
     ;
 
 // --- 控制流语句 ---
-/** If 语句 */
+/**
+ * If 语句
+ * body 可以是 blockStatement（花括号）或单个 statement（无花括号）。
+ * dangling-else 由 ANTLR 的最长匹配默认解决（else 绑定最近的 if）。
+ */
 ifStatement
-    : IF OP expression CP blockStatement // if 块必须用 {} 包裹
-      (ELSE IF OP expression CP blockStatement)* // 零或多个 else if
-      (ELSE blockStatement)? // 可选的 else
+    : IF OP expression CP body
+      (ELSE IF OP expression CP body)*
+      (ELSE body)?
     ;
 
 /** While 语句 */
 whileStatement
-    : WHILE OP expression CP blockStatement // while 块必须用 {} 包裹
+    : WHILE OP expression CP body
     ;
 
 // --- For 循环 ---
@@ -304,10 +308,23 @@ whileStatement
  * 去掉了 C 风格 for(init;cond;update)，改为 Lua 风格数值 for
  */
 forStatement
-    : FOR OP forControl CP blockStatement // for 块必须用 {} 包裹
+    : FOR OP forControl CP body
     ;
 
-/** For 循环的控制部分 */
+/** 循环/分支体：花括号代码块或单条语句 */
+body
+    : blockStatement
+    | statement
+    ;
+
+/**
+ * For 循环的控制部分
+ *
+ * 注意：forEachControl 的 expressionList 在运行时只取前 4 个值
+ * (receiver + iteratorFunc + state + closeVar)，多余的会被静默丢弃。
+ * 这是为了对齐 SPT 的 slot-0 receiver 调用约定 + Lua 5.5 的 forlist 协议。
+ * 通常用户只写 1 个表达式（如 pairs(t)），由运行时展开为 3~4 个值。
+ */
 forControl
     // 形式一: 数值 for — 直接映射到 Lua 的 for i = start, end [, step]
     //   for ([type|auto] i = start, end)          { ... }

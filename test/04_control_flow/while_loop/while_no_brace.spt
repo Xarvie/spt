@@ -1,0 +1,24 @@
+// 测试: 控制流 - while 无花括号单语句体
+// 语法: whileStatement -> WHILE OP expression CP statement
+// 描述: 测试 while 不使用花括号的单语句写法
+
+int i = 0;
+while (i < 5) i += 1;
+assert(i == 5, "i should be 5");
+
+// 无花括号 while 内带 break
+int j = 0;
+while (true) if (j >= 3) break; else j += 1;
+assert(j == 3, "j should be 3");
+
+// 无花括号 while 内带 continue
+int k = 0;
+int count = 0;
+while (k < 10) {
+    k += 1;
+    if (k % 2 == 0) continue;
+    count += 1;
+}
+assert(count == 5, "count of odd numbers should be 5");
+
+print("while_no_brace tests passed!");

@@ -1,0 +1,21 @@
+feat: support brace-less if/for/while bodies + fix CI build
+
+Brace-less control flow bodies (g4 + C parser):
+- LangParser.g4: if/while/for bodies now use new `body` rule
+  (blockStatement | statement), allowing single-statement bodies
+  without braces. dangling-else resolved by ANTLR longest match.
+- spt_parser.c: add parse_body() — delegates to parse_block() on `{`,
+  otherwise wraps a single statement in a BLOCK node so codegen is
+  unchanged. All 6 call sites in parse_if/parse_while/parse_for updated.
+- Tests: add if_no_brace.spt, for_no_brace.spt, while_no_brace.spt.
+
+CI build fixes (ubuntu/windows were failing):
+- CMakeLists.txt: use ${CMAKE_CURRENT_SOURCE_DIR}/... absolute paths
+  in target_include_directories — relative paths broke VS/Makefile
+  generators (lobject.h not found).
+- ast_codegen.c: replace VLA `expdesc lhs[n]` with stack buffer (16)
+  + heap fallback — MSVC does not support C99 VLAs.
+- spt_arena.c: replace `max_align_t` (unsupported by MSVC C11) with
+  max(sizeof(long double), sizeof(void(*)())).
+
+212/212 tests pass on both Ninja and VS 2022 generators.
