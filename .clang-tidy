@@ -1,0 +1,20 @@
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  clang-analyzer-*,
+  performance-*,
+  -performance-no-int-to-ptr,
+  misc-*,
+  -misc-misplaced-widening-cast,
+  -misc-include-cleaner,
+  -misc-no-recursion
+
+WarningsAsErrors: ''
+
+HeaderFilterRegex: 'src/.*'
+
+CheckOptions:
+  - key:   readability-function-cognitive-complexity.Threshold
+    value: '50'

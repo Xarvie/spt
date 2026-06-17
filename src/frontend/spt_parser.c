@@ -510,6 +510,29 @@ static AstNode *parse_unary(Parser *P) {
   }
   if (is_un) {
     SourceLocation loc = cur_loc(P);
+    /* 特殊处理: 一元负号 + 整数字面量 -> 合并为负整数字面量。
+     * 解决 -9223372036854775808 (INT64_MIN) 无法直接表示的问题:
+     * 9223372036854775808 超过 LLONG_MAX, strtoll 会截断;
+     * 用 strtoull 解析后 0u - value 得到正确的负值（与标准 Lua l_str2int 一致）。 */
+    if (k == TOK_SUB && peek_kind(P, 1) == TOK_INTEGER) {
+      const SptToken *minus_t = cur(P);
+      advance(P); /* 消费 '-' */
+      const SptToken *t = cur(P);
+      char buf[64];
+      const char *s = lexeme_cstr(P, t, buf, sizeof(buf));
+      advance(P); /* 消费整数 */
+      errno = 0;
+      unsigned long long u;
+      if (t->length > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        u = strtoull(s, NULL, 16);
+      else
+        u = strtoull(s, NULL, 10);
+      if (errno == ERANGE)
+        error_at(P, minus_t, "无效或越界的整数常量 '-%s'", s);
+      AstNode *n = spt_ast_new(P->arena, NODE_LITERAL_INT, loc);
+      n->u.lit_int.value = (int64_t)(0u - u);
+      return n;
+    }
     advance(P);
     AstNode *operand = parse_unary(P); /* 右结合 */
     AstNode *n = spt_ast_new(P->arena, NODE_UNARY_OP, loc);

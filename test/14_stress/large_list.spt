@@ -1,0 +1,13 @@
+// 测试: 大 List 创建与访问不崩溃
+
+list<int> big = [];
+int i = 0;
+while (i < 10000) {
+    table.push(big, i);
+    i = i + 1;
+}
+assert(big[0] == 0, "first element");
+assert(big[9999] == 9999, "last element");
+assert(#big == 10000, "length");
+
+print("large_list tests passed!");

@@ -1,0 +1,14 @@
+// 测试: 整数边界运算
+// SPT 整数溢出为静默回绕（与 Lua 一致，使用无符号算术）
+
+int max_int = 9223372036854775807;
+int min_int = -9223372036854775808;
+assert(max_int + 0 == max_int, "max+0");
+assert(min_int + 0 == min_int, "min+0");
+
+// 溢出回绕: max + 1 == min（用变量避免编译期常量折叠）
+int one = 1;
+int wrapped = max_int + one;
+assert(wrapped == min_int, "integer overflow wraps around");
+
+print("numeric_boundary tests passed!");

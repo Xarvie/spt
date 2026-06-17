@@ -1,0 +1,19 @@
+// 测试: 深递归（受控深度）验证栈管理正确，pcall 可捕获错误
+// 注: 实际栈溢出测试在 ASan 下不实用（LUAI_MAXSTACK=1000000，动态栈增长拷贝极慢），
+//     此处用受控深度验证递归栈的正确性。
+
+int sum(int n) {
+    if (n <= 0) { return 0; }
+    return n + sum(n - 1);
+}
+
+// 5000 层递归，验证栈管理正确
+assert(sum(5000) == 12502500, "sum(5000)");
+
+// pcall 捕获运行时错误
+vars ok, err = pcall(function() -> void {
+    error("test error");
+});
+assert(ok == false, "pcall should catch error");
+
+print("stack_overflow tests passed!");

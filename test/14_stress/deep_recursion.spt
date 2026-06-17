@@ -1,0 +1,10 @@
+// 测试: 受控深度递归（不触发栈溢出）
+
+int sum(int n) {
+    if (n <= 0) { return 0; }
+    return n + sum(n - 1);
+}
+
+assert(sum(100) == 5050, "sum(100)");
+
+print("deep_recursion tests passed!");

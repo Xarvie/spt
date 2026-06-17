@@ -1,0 +1,100 @@
+// 测试: 错误路径 - 栈溢出恢复
+// 描述: 验证深递归后 VM 状态一致，pcall 能捕获递归中的错误并恢复
+// 注: 实际栈溢出测试在 ASan 下不实用（LUAI_MAXSTACK=1000000，动态栈增长拷贝极慢），
+//     此处用受控深度验证递归栈的正确性和恢复能力。
+
+// ---- 深递归正常返回 ----
+int sum(int n) {
+    if (n <= 0) { return 0; }
+    return n + sum(n - 1);
+}
+assert(sum(1000) == 500500, "sum(1000) should be 500500");
+
+// ---- 深递归后能继续正常调用 ----
+int result1 = sum(100);
+assert(result1 == 5050, "sum(100) after deep recursion");
+int result2 = sum(200);
+assert(result2 == 20100, "sum(200) after deep recursion");
+
+// ---- pcall 捕获深递归中的错误 ----
+int recurse_with_error(int n) {
+    if (n <= 0) { error("bottom reached"); }
+    return recurse_with_error(n - 1);
+}
+vars ok1, err1 = pcall(function() -> int { return recurse_with_error(500); });
+assert(ok1 == false, "deep recursion with error should be caught");
+vars pos1, _ = string.find(err1, "bottom reached");
+assert(pos1 != null, "error message should contain 'bottom reached'");
+
+// ---- 错误恢复后能继续深递归 ----
+int result3 = sum(500);
+assert(result3 == 125250, "sum(500) after error recovery");
+
+// ---- 多次 pcall 捕获深递归错误 ----
+vars ok2, err2 = pcall(function() -> int { return recurse_with_error(300); });
+assert(ok2 == false, "second deep recursion error should be caught");
+vars ok3, err3 = pcall(function() -> int { return recurse_with_error(100); });
+assert(ok3 == false, "third deep recursion error should be caught");
+
+// ---- 恢复后正常递归 ----
+assert(sum(50) == 1275, "sum(50) after multiple errors");
+
+// ---- 嵌套深递归 ----
+int outer_recurse(int n) {
+    if (n <= 0) { return sum(100); }
+    return outer_recurse(n - 1);
+}
+assert(outer_recurse(100) == 5050, "nested recursion should work");
+
+// ---- 深递归中的 pcall 恢复不影响外层 ----
+int counter = 0;
+int recurse_with_pcall(int n) {
+    if (n <= 0) { return 0; }
+    vars ok, err = pcall(function() -> int {
+        if (n == 500) { error("mid error"); }
+        return 0;
+    });
+    if (ok) { counter = counter + 1; }
+    return recurse_with_pcall(n - 1);
+}
+recurse_with_pcall(1000);
+// n==500 时 pcall 失败，counter 不增加，所以是 999
+assert(counter == 999, "counter should be 999 (n==500 fails)");
+
+// ---- 递归返回后栈空间可复用 ----
+int fib(int n) {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+assert(fib(20) == 6765, "fib(20) should be 6765");
+assert(fib(25) == 75025, "fib(25) should be 75025");
+
+// ---- 深递归后闭包仍正常 ----
+function make_adder(int n) {
+    return function(int x) -> int { return x + n; };
+}
+vars add10 = make_adder(10);
+assert(add10(5) == 15, "closure after deep recursion");
+vars add100 = make_adder(100);
+assert(add100(5) == 105, "second closure after deep recursion");
+
+// ---- 深递归后 list/map 操作正常 ----
+list<int> lst = [];
+for (int i = 0, 99) {
+    table.push(lst, i);
+}
+assert(#lst == 100, "list should have 100 elements");
+assert(lst[50] == 50, "lst[50] should be 50");
+
+map<str, int> m = {};
+for (int i = 0, 9) {
+    m["key" .. i] = i;
+}
+assert(m["key5"] == 5, "map key5 should be 5");
+int map_count = 0;
+for (k, v : pairs(m)) {
+    map_count = map_count + 1;
+}
+assert(map_count == 10, "map should have 10 entries");
+
+print("stack_recovery tests passed!");

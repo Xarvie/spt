@@ -278,3 +278,13 @@ sptxx/build/CMakeFiles/sptxx_test_usertype_trace.dir/compiler_depend.internal
 build_debug.bat
 /.trae/
 /.idea/
+
+# Coverage artifacts
+coverage.profdata
+coverage-report/
+*.profraw
+
+# Sanitize/Coverage build directories
+/build-asan/
+/build-cov/
+/build-tidy/

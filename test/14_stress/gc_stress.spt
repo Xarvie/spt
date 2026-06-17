@@ -1,0 +1,27 @@
+// 测试: 频繁 GC 触发场景 - 链表分配与遍历
+
+class Node {
+    int val;
+    Node next;
+    void __init(int v) { this.val = v; }
+}
+
+Node head = Node(0);
+Node cur = head;
+int i = 1;
+while (i < 1000) {
+    cur.next = Node(i);
+    cur = cur.next;
+    i = i + 1;
+}
+
+// 遍历验证链表完整性
+cur = head;
+int count = 0;
+while (cur != null) {
+    count = count + 1;
+    cur = cur.next;
+}
+assert(count == 1000, "linked list integrity");
+
+print("gc_stress tests passed!");

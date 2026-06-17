@@ -1,0 +1,10 @@
+// 测试: 大量分配+GC循环，验证无崩溃（泄漏由 ASan 检测）
+
+int i = 0;
+while (i < 100000) {
+    list<int> tmp = [1, 2, 3, 4, 5];
+    map<str, int> m = {"a": 1, "b": 2};
+    i = i + 1;
+}
+
+print("long_loop_leak tests passed!");

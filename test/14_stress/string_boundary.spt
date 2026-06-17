@@ -1,0 +1,14 @@
+// 测试: 空串、长串、拼接
+
+str empty = "";
+assert(#empty == 0, "empty string length");
+
+str s = "a";
+int i = 0;
+while (i < 1000) {
+    s = s .. "b";
+    i = i + 1;
+}
+assert(#s == 1001, "long string length");
+
+print("string_boundary tests passed!");
