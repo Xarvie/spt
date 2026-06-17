@@ -1,0 +1,11 @@
+// 验证 B2: assert 返回值多 receiver
+vars ok, err, extra = assert(true, "hello");
+print("B2 ok = " .. tostring(ok));
+print("B2 err = " .. tostring(err));
+print("B2 extra = " .. tostring(extra));
+print("B2 expected: ok=true, err=hello, extra=null");
+if (err == "hello" && extra == null) {
+    print("B2: PASS - assert return correct");
+} else {
+    print("B2: BUG CONFIRMED - extra is not null: " .. tostring(extra));
+}

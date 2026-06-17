@@ -42,8 +42,8 @@ global int mul(int a, int b) { return a * b; }     // 全局函数
 
 | 声明方式                 | 标准 Lua | SPT Lua  |
 |----------------------|--------|----------|
-| `x = 100`            | 全局变量   | **语法错误** |
-| `local x = 100`      | 局部变量   | **语法错误** |
+| `x = 100`（无类型声明）   | 全局变量   | **赋值语句**（对已声明变量合法；对未声明变量触发编译错误） |
+| `local x = 100`      | 局部变量   | **语法错误**（`local` 非关键字） |
 | `int x = 100`        | 不支持    | 局部变量     |
 | `global int x = 100` | 不支持    | 全局变量     |
 
@@ -109,8 +109,8 @@ SPT 采用显式 `global` 的设计，避免了标准 Lua 中常见的"忘记 `l
 | `obj:method(a)`        | `[obj, a]`           | **索引 2**    |
 | `obj.method(a)`        | `[obj, a]`           | **索引 2**    |
 | `obj[key](a)`          | `[obj, a]`           | **索引 2**    |
-| `Table(a, b)` (__call) | `[Table, nil, a, b]` | **索引 3** ⚠️ |
-| `new Class(a, b)`      | `[Class, nil, a, b]` | **索引 3** ⚠️ |
+| `Table(a, b)` (__call) | `[Table, a, b]`      | **索引 2**    |
+| `Class(a, b)` (实例化)   | `[Class, a, b]`      | **索引 2**    |
 
 ### 3.3 C 函数模板
 
@@ -125,22 +125,22 @@ static int my_func(lua_State *L) {
 
 /* __call 元方法（构造函数） */
 static int constructor(lua_State *L) {
-  /* 索引 1: 表本身, 索引 2: nil */
-  const char *name = luaL_checkstring(L, 3);  /* 从索引 3 开始！ */
-  int val = luaL_checkinteger(L, 4);
+  /* 索引 1: 表本身（被 tryfuncTM 覆盖为 Receiver） */
+  const char *name = luaL_checkstring(L, 2);  /* 从索引 2 开始 */
+  int val = luaL_checkinteger(L, 3);
   ...
 }
 ```
 
-### 3.4 ⚠️ 易错点：__call 参数索引
+### 3.4 __call 参数索引说明
 
-`__call` 元方法中，**参数从索引 3 开始**，不是索引 2！
+`__call` 元方法中，**参数从索引 2 开始**，与普通函数一致。
 
-原因：Lua VM 触发 `__call` 时，将被调用的表插入到 func 位置，导致：
+原理：Lua VM 触发 `__call` 时，tryfuncTM 用原始对象（表/类）覆盖 Slot 0 的
+Receiver，不移动栈、不增长栈。因此：
 
-- 索引 1 = 表本身（作为 Receiver）
-- 索引 2 = 原本的 nil receiver
-- 索引 3+ = 实际参数
+- 索引 1 = 表/类本身（作为 Receiver / self）
+- 索引 2+ = 实际参数
 
 ---
 
@@ -161,7 +161,7 @@ static int constructor(lua_State *L) {
 | 索引   | 仅整数，**0-based**           | 任意类型                       |
 | `#t` | 返回 `loglen`               | **返回 0**                   |
 | 越界访问 | **抛出错误**                  | 返回 nil                     |
-| 越界写入 | **抛出错误**                  | 正常插入                       |
+| 越界写入 | 写 `loglen` 位置触发**追加**；其他越界**抛出错误** | 正常插入                       |
 
 ### 4.3 List 边界检查
 
@@ -295,8 +295,12 @@ typedef struct Table {
 ```c
 table.push(list, value)   // 追加元素到末尾（loglen 位置）
 table.pop(list)           // 移除并返回最后一个元素
-table.create(n)           // 创建容量为 n 的 List
+table.create(narray, nhash)  // 创建表（注意：创建的是 Map，非 List）
 ```
+
+> **注意**：`table.create` 内部调用 `lua_createtable`，始终创建 **Map**
+> （`t->mode = TABLE_MAP`）。若需创建 List，请使用 `lua_createarray(L, cap)`
+> 或 SPT 语法 `[]` / `[a, b, c]`。
 
 ### 8.2 math 库适配
 
@@ -326,27 +330,35 @@ SPT 提供原生类定义语法，通过 `__call` 元方法实现实例化。
 
 ```spt
 class Point {
-  var x = 0
-  var y = 0
-  
-  fn __init(self, x, y) {
-    self.x = x
-    self.y = y
+  int x = 0;          // 实例字段（带类型注解，可初始化）
+  int y = 0;
+
+  void __init(int x, int y) {   // 构造函数（this 隐式，无需显式声明）
+    this.x = x;
+    this.y = y;
   }
-  
-  fn move(self, dx, dy) {
-    self.x = self.x + dx
-    self.y = self.y + dy
+
+  void move(int dx, int dy) {   // 实例方法（this 隐式）
+    this.x = this.x + dx;
+    this.y = this.y + dy;
   }
 }
 ```
 
+> **注意**：类方法的 `this` 是**隐式**的 Slot 0 Receiver，无需在参数列表中
+> 显式声明。方法体内通过 `this` 访问实例。字段声明必须带类型注解
+> （如 `int x = 0`），不支持 `var`/`fn` 关键字。方法语法为
+> `type name(params) { body }`，如 `void __init(int x, int y) { ... }`。
+
 ### 9.2 实例化
 
 ```spt
-auto p = new Point(10, 20)  // 调用 __call 元方法
-p.move(5, 5)                // 方法调用
+auto p = Point(10, 20)   // 调用 __call 元方法
+p:move(5, 5)             // 方法调用
 ```
+
+> SPT 标准实例化语法是 `ClassName(...)`，直接触发 class 表的 `__call`
+> 元方法。`new` 关键字不在 g4 文法中。
 
 ### 9.3 编译器生成的结构
 
@@ -355,9 +367,9 @@ class Point { ... } 编译后：
 
 1. local Point = {}
 2. Point.__index = Point
-3. Point.__init = function(self, x, y) ... end
-4. Point.move = function(self, dx, dy) ... end
-5. setmetatable(Point, { __call = function(cls, nil, ...) 
+3. Point.__init = function(this, x, y) ... end   // this 隐式注入
+4. Point.move = function(this, dx, dy) ... end    // this 隐式注入
+5. setmetatable(Point, { __call = function(cls, ...)
       local obj = setmetatable({}, cls)
       -- 初始化实例字段 --
       local init = obj.__init
@@ -366,25 +378,28 @@ class Point { ... } 编译后：
    end })
 ```
 
-### 9.4 ⚠️ 构造函数参数索引
+`__call` 闭包仅 1 个固定参数 `cls`（Slot 0），构造参数通过隐藏 varargs
+转发给 `__init`。
+
+### 9.4 构造函数参数索引
 
 `__init` 方法是普通方法，参数从索引 2 开始：
 
 ```c
-// __init(self, x, y) 的 C 层视角：
-// 索引 1: self (实例对象)
+// __init(this, x, y) 的 C 层视角：
+// 索引 1: this (实例对象)
 // 索引 2: x
 // 索引 3: y
 ```
 
-但 `new Point(x, y)` 触发的 `__call` 元方法，参数从索引 3 开始：
+`Point(x, y)` 触发的 `__call` 元方法同样从索引 2 开始（tryfuncTM 已将
+cls 覆盖到 Slot 0）：
 
 ```c
 // __call 闭包的 C 层视角：
-// 索引 1: Point 表 (Slot 0 Receiver)
-// 索引 2: nil (SPT 插入的 receiver)
-// 索引 3: x
-// 索引 4: y
+// 索引 1: Point 表 (cls, 作为 Receiver)
+// 索引 2: x
+// 索引 3: y
 ```
 
 ---
@@ -405,6 +420,7 @@ sptxx/
     ├── function.hpp // 函数绑定
     ├── usertype.hpp // 用户类型绑定
     ├── stack.hpp    // 栈操作
+    ├── coroutine.hpp // 协程绑定
     └── error.hpp    // 异常处理
 ```
 
@@ -435,11 +451,11 @@ int main() {
   ut.set("move", &Point::move);
   
   // 执行代码
-  lua.do_string("auto p = new Point(10, 20); p:move(5, 5);");
+  lua.do_string("auto p = Point(10, 20); p:move(5, 5);");
 }
 ```
 
-### 10.3 ⚠️ 参数索引约定
+### 10.3 参数索引约定
 
 sptxx 内部已正确处理参数索引：
 
@@ -447,7 +463,7 @@ sptxx 内部已正确处理参数索引：
 |-----------------|-----------------------|--------|
 | 全局函数            | `extract_args_from_2` | 索引 2   |
 | 方法调用            | `extract_args_from_2` | 索引 2   |
-| 构造函数 (`__call`) | `extract_args_from_3` | 索引 3   |
+| 构造函数 (`__call`) | `extract_args_from_2` | 索引 2   |
 
 ### 10.4 List/Map 模板
 
@@ -491,7 +507,7 @@ ut.set("take_damage", &Warrior::take_damage);  // 成员方法
 ```
 普通函数:     luaL_check*(L, 2)   // 索引 2 开始
 方法调用:     luaL_check*(L, 2)   // 索引 2 开始
-__call:      luaL_check*(L, 3)   // 索引 3 开始 ⚠️
+__call:      luaL_check*(L, 2)   // 索引 2 开始
 ```
 
 ### 11.2 List API 速查表
@@ -535,11 +551,11 @@ int arg = luaL_checkinteger(L, 2);
 ### 12.2 __call 参数索引错误
 
 ```c
-// ❌ 错误：__call 从索引 2 开始
-int arg = luaL_checkinteger(L, 2);
-
-// ✅ 正确：__call 从索引 3 开始
+// ❌ 错误：__call 从索引 3 开始（旧约定，已废弃）
 int arg = luaL_checkinteger(L, 3);
+
+// ✅ 正确：__call 从索引 2 开始（tryfuncTM 覆盖 receiver 后）
+int arg = luaL_checkinteger(L, 2);
 ```
 
 ### 12.3 Registry API 错误
@@ -568,4 +584,4 @@ arr[0]  // 第一个元素
 
 - **Lua 版本**: 5.5 (2026 官方版本修改)
 - **SPT 版本**: 1.0
-- **更新日期**: 2026-03-16
+- **更新日期**: 2026-06-17

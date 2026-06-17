@@ -941,6 +941,18 @@ static void compile_lambda(CompileCtx *C, AstNode *n, expdesc *e) {
  * List literal  → array constructor (using OP_NEWLIST)
  * NOTE: VM uses 0-based table indexing — handled in VM/luaK_setlist
  *---------------------------------------------------------------------*/
+/* Adaptive flush threshold — same strategy as lparser.c's maxtostore().
+ * Prevents exceeding MAX_FSTACK (255) register limit for large lists. */
+static int list_maxtostore(FuncState *fs) {
+  int numfreeregs = MAX_FSTACK - fs->freereg;
+  if (numfreeregs >= 160)   /* "lots" of registers? */
+    return numfreeregs / 5; /* use up to 1/5 of them */
+  else if (numfreeregs >= 80) /* still "enough" registers? */
+    return 10;                /* one 'SETLIST' instruction for each 10 values */
+  else                        /* save registers for potential more nesting */
+    return 1;
+}
+
 static void compile_list_literal(CompileCtx *C, AstNode *n, expdesc *e) {
   FuncState *fs = C->fs;
   setline(C, n->loc);
@@ -957,7 +969,7 @@ static void compile_list_literal(CompileCtx *C, AstNode *n, expdesc *e) {
     compile_expression(C, n->u.lit_list.elements.items[i], &val);
     luaK_exp2nextreg(fs, &val);
     na++;
-    if (na >= MAXARG_vC) {
+    if (na >= list_maxtostore(fs)) {
       luaK_setlist(fs, e->u.info, (int)i + 1 - na, na);
       na = 0;
     }
@@ -2007,7 +2019,7 @@ static void compile_class_decl(CompileCtx *C, AstNode *n) {
    * 4. Second pass: generate __call metamethod for `new` instantiation
    *
    * Equivalent Lua:
-   *   setmetatable(ClassName, { __call = function(cls, dummy, ...)
+   *   setmetatable(ClassName, { __call = function(cls, ...)
    *       local obj = setmetatable({}, cls)
    *       -- assign instance field defaults --
    *       local init = obj.__init
@@ -2017,11 +2029,11 @@ static void compile_class_decl(CompileCtx *C, AstNode *n) {
    *
    * KEY INSIGHT: when tryfuncTM fires on `new Point(10,20)`:
    *   original stack:  [Point] [nil] [10] [20]
-   *   after shift:     [__call_closure] [Point] [nil] [10] [20]
+   *   after fix:       [__call_closure] [Point] [10] [20]
+   *   (nil receiver is overwritten by Point — no dummy param needed)
    *
    * So the __call closure sees:
-   *   Slot 0 = Point (the class table)     ← pushed by tryfuncTM
-   *   Slot 1 = nil   (the dummy receiver)  ← pushed by compile_new_expr
+   *   Slot 0 = Point (the class table)     ← receiver (self)
    *   varargs = 10, 20                     ← the real constructor args
    * ================================================================ */
   {
@@ -2056,28 +2068,25 @@ static void compile_class_decl(CompileCtx *C, AstNode *n) {
       ast_open_func(C, &new_fs, &bl);
 
       /* ----------------------------------------------------------
-       * Parameters: only 2 fixed params, NOT 3.
+       * Parameters: only 1 fixed param (cls = the class table).
        *
-       * tryfuncTM shifts the original callable (Point) into Slot 0
-       * and increments narg. So:
-       *   Slot 0 = cls   (Point table)
-       *   Slot 1 = dummy (nil receiver from compile_new_expr)
+       * With the fixed tryfuncTM (Slot-0 convention):
+       *   Slot 0 = cls   (class table, becomes receiver/self)
        *   hidden varargs = constructor arguments
        * ---------------------------------------------------------- */
       int cls_vidx = ast_new_localvar(C, mkstr(C, "cls")); /* Slot 0 */
-      ast_new_localvar(C, mkstr(C, "(dummy)"));            /* Slot 1 */
-      new_fs.f->numparams = 2;
-      ast_adjustlocalvars(C, 2);
+      new_fs.f->numparams = 1;
+      ast_adjustlocalvars(C, 1);
 
       /* Varargs — hidden mode (PF_VAHID) */
       ast_new_var(C, mkstr(C, "(vararg table)"), RDKVAVAR);
       new_fs.f->flag |= PF_VAHID;
-      luaK_codeABC(&new_fs, OP_VARARGPREP, 2, 0, 0);
+      luaK_codeABC(&new_fs, OP_VARARGPREP, 1, 0, 0);
       ast_adjustlocalvars(C, 1);
 
       /* Reserve registers for all params (same as compile_params does).
        * Without this, freereg stays at 0 and obj/init locals collide
-       * with the cls/dummy parameter registers! */
+       * with the cls parameter registers! */
       luaK_reserveregs(&new_fs, C->fs->nactvar);
 
       /* ----------------------------------------------------------

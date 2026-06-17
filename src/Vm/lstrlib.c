@@ -843,7 +843,7 @@ static int gmatch(lua_State *L) {
 static void add_s(MatchState *ms, luaL_Buffer *b, const char *s, const char *e) {
   size_t l;
   lua_State *L = ms->L;
-  const char *news = lua_tolstring(L, 3, &l);
+  const char *news = lua_tolstring(L, 4, &l); /* repl is at index 4 (Slot-0) */
   const char *p;
   while ((p = (char *)memchr(news, L_ESC, l)) != NULL) {
     luaL_addlstring(b, news, ct_diff2sz(p - news));
@@ -877,14 +877,15 @@ static int add_value(MatchState *ms, luaL_Buffer *b, const char *s, const char *
   switch (tr) {
   case LUA_TFUNCTION: { /* call the function */
     int n;
-    lua_pushvalue(L, 3);         /* push the function */
+    lua_pushvalue(L, 4);         /* push the function (repl at index 4) */
+    lua_pushnil(L);              /* nil receiver (Slot-0 convention) */
     n = push_captures(ms, s, e); /* all captures as arguments */
-    lua_call(L, n, 1);           /* call it */
+    lua_call(L, n + 1, 1);       /* call it: n+1 args (nil receiver + n captures) */
     break;
   }
   case LUA_TTABLE: {              /* index the table */
     push_onecapture(ms, 0, s, e); /* first capture is the index */
-    lua_gettable(L, 3);
+    lua_gettable(L, 4);           /* repl table at index 4 (Slot-0) */
     break;
   }
   default: {            /* LUA_TNUMBER or LUA_TSTRING */

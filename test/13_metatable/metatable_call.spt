@@ -4,7 +4,7 @@
 
 map<any, any> callable = {};
 setmetatable(callable, {
-    __call: function(map<any, any> self, int x, int y) -> int {
+    __call: function(map<any, any> this, int x, int y) -> int {
         return x + y;
     }
 });

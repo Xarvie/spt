@@ -485,17 +485,22 @@ static void rethook(lua_State *L, CallInfo *ci, int nres) {
 ** invoked and how many corresponding extra arguments were pushed.
 ** (This count will be saved in the 'callstatus' of the call).
 **  Raise an error if this counter overflows.
+**
+** Slot-0 convention: func+1 is always the Receiver. The original
+** object (at func) must become the new receiver (self) for the
+** metamethod. We ALWAYS overwrite the receiver with the original
+** object — the call-site receiver (e.g. the module in `mod.Func()`)
+** is just for lookup and must NOT leak as an extra argument.
+** L->top.p is unchanged (no stack growth).
 */
 static unsigned tryfuncTM(lua_State *L, StkId func, unsigned status) {
   const TValue *tm;
-  StkId p;
   tm = luaT_gettmbyobj(L, s2v(func), TM_CALL);
   if (l_unlikely(ttisnil(tm))) /* no metamethod? */
     luaG_callerror(L, s2v(func));
-  for (p = L->top.p; p > func; p--) /* open space for metamethod */
-    setobjs2s(L, p, p - 1);
-  L->top.p++;                          /* stack space pre-allocated by the caller */
-  setobj2s(L, func, tm);               /* metamethod is the new function to be called */
+  setobj2s(L, func + 1, s2v(func)); /* receiver = self (original object) */
+  setobj2s(L, func, tm);            /* func = metamethod */
+  /* L->top.p unchanged — no stack growth */
   if ((status & MAX_CCMT) == MAX_CCMT) /* is counter full? */
     luaG_runerror(L, "'__call' chain too long");
   return status + (1u << CIST_CCMT); /* increment counter */
@@ -646,10 +651,9 @@ retry:
     return -1;
   }
   default: {                             /* not a function */
-    checkstackp(L, 1, func);             /* space for metamethod */
     status = tryfuncTM(L, func, status); /* try '__call' metamethod */
-    narg1++;
-    goto retry; /* try again */
+    /* L->top.p unchanged by tryfuncTM — narg1 stays the same */
+    goto retry;                          /* try again */
   }
   }
 }
@@ -688,7 +692,6 @@ retry:
     return ci;
   }
   default: {                             /* not a function */
-    checkstackp(L, 1, func);             /* space for metamethod */
     status = tryfuncTM(L, func, status); /* try '__call' metamethod */
     goto retry;                          /* try again with metamethod */
   }

@@ -1,0 +1,20 @@
+// 验证 B6: gsub 替换函数缺 nil receiver 垫片
+// 先测字符串替换是否正常
+vars r1, c1 = string.gsub("abc", "(.)", "X");
+print("B6 string repl: result=" .. tostring(r1) .. " count=" .. tostring(c1));
+
+// 再测函数替换
+str captured = "NONE";
+int replacer(str m) {
+    captured = tostring(m);
+    return 0;
+}
+vars result, count = string.gsub("abc", "(.)", replacer);
+print("B6 func repl: result=" .. tostring(result) .. " count=" .. tostring(count));
+print("B6 captured last match: " .. captured);
+print("B6 expected: captured=c (last match), count=3, result=000");
+if (captured == "c" && count == 3 && result == "000") {
+    print("B6: PASS - gsub function repl correct");
+} else {
+    print("B6: BUG CONFIRMED - captured=" .. captured .. ", count=" .. tostring(count) .. ", result=" .. tostring(result));
+}

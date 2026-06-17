@@ -1,0 +1,18 @@
+// 验证 R1/R2/R3: 元方法 receiver 垫片缺失
+class Vec {
+    int x;
+    void __init(int x) { this.x = x; }
+    int __add(Vec other) {
+        return this.x + other.x;
+    }
+}
+Vec a = Vec(10);
+Vec b = Vec(20);
+int sum = a + b;
+print("R1 __add result: " .. tostring(sum));
+print("R1 expected: 30");
+if (sum == 30) {
+    print("R1: PASS - __add works (arith coupling may mask the issue)");
+} else {
+    print("R1: BUG CONFIRMED - __add got " .. tostring(sum));
+}

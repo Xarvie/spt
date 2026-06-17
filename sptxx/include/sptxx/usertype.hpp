@@ -271,7 +271,7 @@ public:
         Storage *storage = new (obj) Storage();
         storage->own = ownership::owned;
 
-        auto args = detail::extract_args_from_3<Args...>(L);
+        auto args = detail::extract_args_from_2<Args...>(L);
         storage->ptr = std::apply(
             [](auto &&...unpacked) { return new T(std::forward<decltype(unpacked)>(unpacked)...); },
             std::move(args));
