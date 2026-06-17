@@ -1,0 +1,2668 @@
+/*
+** ast_codegen.cpp
+** AST-to-Lua 5.5 bytecode compiler implementation.
+**
+** This module replaces Lua's recursive-descent parser (lparser.c) with
+** an AST walker that emits identical bytecode through the lcode.h API.
+** The overall structure mirrors lparser.c closely: we maintain a
+** FuncState / BlockCnt / expdesc chain and call luaK_* helpers to
+** produce instructions.
+**
+** Design notes
+** ============
+** 1.  The AST is a C++ class hierarchy (see ast.h).  This file is
+**     compiled as C++ but wraps Lua's C headers with extern "C".
+** 2.  Every public symbol uses the prefix "astY_" to parallel "luaY_".
+** 3.  Error reporting goes through luaK_semerror / luaX_syntaxerror
+**     equivalents that ultimately call luaD_throw.
+** 4.  Memory allocation for Proto/TString/etc. uses normal Lua GC
+**     allocation (luaM_*, luaS_*, luaF_*, luaH_*).  Nothing is
+**     malloc'd outside Lua.
+*/
+
+/*=======================================================================
+ * Includes
+ *=====================================================================*/
+
+#include "ast_codegen.h"
+#include <assert.h>
+#include <stdarg.h>
+#include <string.h>
+
+#include "lcode.h"
+#include "ldebug.h"
+#include "ldo.h"
+#include "lfunc.h"
+#include "lgc.h"
+#include "llex.h"
+#include "lmem.h"
+#include "lobject.h"
+#include "lopcodes.h"
+#include "lparser.h"
+#include "lstate.h"
+#include "lstring.h"
+#include "ltable.h"
+#include "lua.h"
+
+/*=======================================================================
+ * Forward declarations
+ *=====================================================================*/
+
+typedef struct CompileCtx CompileCtx; /* per-compilation context */
+
+static void compile_block(CompileCtx *C, BlockNode *block);
+static void compile_statement(CompileCtx *C, Statement *stmt);
+static void compile_expression(CompileCtx *C, Expression *expr, expdesc *e);
+static void compile_exprlist(CompileCtx *C, AstList list, expdesc *last);
+static int compile_exprlist_n(CompileCtx *C, AstList list, expdesc *last);
+
+/*=======================================================================
+ * Compile Context
+ *=====================================================================*/
+
+struct CompileCtx {
+  lua_State *L;
+  LexState ls;     /* 伪造的 LexState，用于兼容 lcode.c */
+  FuncState *fs;   /* current function being compiled          */
+  Dyndata *dyd;    /* dynamic data (actvar, gotos, labels)     */
+  TString *source; /* source name (for debug info)             */
+  TString *envn;   /* environment name — normally "_ENV"       */
+  TString *brkn;   /* break label name                         */
+  TString *contn;  /* continue label name                      */
+  int linenumber;  /* current line (updated from AST locs)    */
+};
+
+/*-----------------------------------------------------------------------
+ * Helpers — line tracking
+ *---------------------------------------------------------------------*/
+static void setline(CompileCtx *C, SourceLocation loc) {
+  if (loc.line > 0)
+    C->linenumber = loc.line;
+}
+
+static void setline_node(CompileCtx *C, AstNode *n) {
+  if (n)
+    setline(C, n->loc);
+}
+
+/*-----------------------------------------------------------------------
+ * Helpers — error reporting
+ *---------------------------------------------------------------------*/
+static l_noret compile_error(CompileCtx *C, const char *msg) {
+  luaO_pushfstring(C->L, "%s:%d: %s", getstr(C->source), C->linenumber, msg);
+  luaD_throw(C->L, LUA_ERRSYNTAX);
+}
+
+static l_noret compile_errorf(CompileCtx *C, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  const char *inner = luaO_pushvfstring(C->L, fmt, ap);
+  va_end(ap);
+  luaO_pushfstring(C->L, "%s:%d: %s", getstr(C->source), C->linenumber, inner);
+  luaD_throw(C->L, LUA_ERRSYNTAX);
+}
+
+/*-----------------------------------------------------------------------
+ * TString helpers
+ *---------------------------------------------------------------------*/
+static TString *mkstr(CompileCtx *C, const char *s) { return luaS_new(C->L, s); }
+
+static void init_exp(expdesc *e, expkind k, int i) {
+  e->f = e->t = NO_JUMP;
+  e->k = k;
+  e->u.info = i;
+}
+
+/*=======================================================================
+ * Block management
+ *=====================================================================*/
+
+static void ast_enterblock(CompileCtx *C, FuncState *fs, BlockCnt *bl, lu_byte isloop) {
+  bl->isloop = isloop;
+  bl->nactvar = fs->nactvar;
+  bl->firstlabel = C->dyd->label.n;
+  bl->firstgoto = C->dyd->gt.n;
+  bl->upval = 0;
+  bl->insidetbc = (fs->bl != NULL && fs->bl->insidetbc);
+  bl->previous = fs->bl;
+  fs->bl = bl;
+  lua_assert(fs->freereg == luaY_nvarstack(fs));
+}
+
+static void ast_leaveblock(CompileCtx *C, FuncState *fs) {
+  BlockCnt *bl = fs->bl;
+  lu_byte stklevel = luaY_nvarstack(fs);
+
+  {
+    int nvar = bl->nactvar;
+    int reglev = 0;
+    for (int i = nvar - 1; i >= 0; i--) {
+      Vardesc *vd = &C->dyd->actvar.arr[fs->firstlocal + i];
+      if (varinreg(vd)) {
+        reglev = vd->vd.ridx + 1;
+        break;
+      }
+    }
+    stklevel = cast_byte(reglev);
+  }
+
+  if (bl->previous && bl->upval)
+    luaK_codeABC(fs, OP_CLOSE, stklevel, 0, 0);
+
+  fs->freereg = stklevel;
+
+  /* remove vars from scope */
+  C->dyd->actvar.n -= (fs->nactvar - bl->nactvar);
+  while (fs->nactvar > bl->nactvar) {
+    fs->nactvar--;
+    Vardesc *vd = &C->dyd->actvar.arr[fs->firstlocal + fs->nactvar];
+    if (varinreg(vd)) {
+      int idx = vd->vd.pidx;
+      if (idx >= 0 && idx < fs->ndebugvars)
+        fs->f->locvars[idx].endpc = fs->pc;
+    }
+  }
+  lua_assert(bl->nactvar == fs->nactvar);
+
+  /* pending breaks → label "break" */
+  if (bl->isloop == 2) {
+    Labellist *ll = &C->dyd->label;
+    int n = ll->n;
+    luaM_growvector(C->L, ll->arr, n, ll->size, Labeldesc, SHRT_MAX, "labels/gotos");
+    ll->arr[n].name = C->brkn;
+    ll->arr[n].line = C->linenumber;
+    ll->arr[n].nactvar = fs->nactvar;
+    ll->arr[n].close = 0;
+    ll->arr[n].pc = luaK_getlabel(fs);
+    ll->n = n + 1;
+  }
+
+  /* solve gotos against labels in this block */
+  {
+    Labellist *gl = &C->dyd->gt;
+    int igt = bl->firstgoto;
+    while (igt < gl->n) {
+      Labeldesc *gt = &gl->arr[igt];
+      Labeldesc *found = NULL;
+      for (int ilb = bl->firstlabel; ilb < C->dyd->label.n; ilb++) {
+        if (gt->name == C->dyd->label.arr[ilb].name) {
+          found = &C->dyd->label.arr[ilb];
+          break;
+        }
+      }
+      if (found) {
+        luaK_patchlist(fs, gt->pc, found->pc);
+        for (int j = igt; j < gl->n - 1; j++)
+          gl->arr[j] = gl->arr[j + 1];
+        gl->n--;
+      } else {
+        if (bl->upval)
+          gt->close = 1;
+        gt->nactvar = bl->nactvar;
+        igt++;
+      }
+    }
+    C->dyd->label.n = bl->firstlabel;
+  }
+
+  if (bl->previous == NULL) {
+    if (bl->firstgoto < C->dyd->gt.n)
+      compile_error(C, "undefined label");
+  }
+  fs->bl = bl->previous;
+}
+
+/*=======================================================================
+ * Variable management
+ *=====================================================================*/
+
+static Vardesc *ast_getvar(CompileCtx *C, FuncState *fs, int vidx) {
+  return &C->dyd->actvar.arr[fs->firstlocal + vidx];
+}
+
+static short ast_registerlocalvar(CompileCtx *C, FuncState *fs, TString *varname) {
+  Proto *f = fs->f;
+  int oldsize = f->sizelocvars;
+  luaM_growvector(C->L, f->locvars, fs->ndebugvars, f->sizelocvars, LocVar, SHRT_MAX,
+                  "local variables");
+  while (oldsize < f->sizelocvars)
+    f->locvars[oldsize++].varname = NULL;
+  f->locvars[fs->ndebugvars].varname = varname;
+  f->locvars[fs->ndebugvars].startpc = fs->pc;
+  luaC_objbarrier(C->L, f, varname);
+  return fs->ndebugvars++;
+}
+
+static int ast_new_var(CompileCtx *C, TString *name, lu_byte kind) {
+  lua_State *L = C->L;
+  FuncState *fs = C->fs;
+  Dyndata *dyd = C->dyd;
+  luaM_growvector(L, dyd->actvar.arr, dyd->actvar.n + 1, dyd->actvar.size, Vardesc, SHRT_MAX,
+                  "variable declarations");
+  Vardesc *var = &dyd->actvar.arr[dyd->actvar.n++];
+  var->vd.kind = kind;
+  var->vd.name = name;
+  return dyd->actvar.n - 1 - fs->firstlocal;
+}
+
+static int ast_new_localvar(CompileCtx *C, TString *name) { return ast_new_var(C, name, VDKREG); }
+
+static void ast_adjustlocalvars(CompileCtx *C, int nvars) {
+  FuncState *fs = C->fs;
+  int reglev = (int)luaY_nvarstack(fs);
+  for (int i = 0; i < nvars; i++) {
+    int vidx = fs->nactvar++;
+    Vardesc *var = ast_getvar(C, fs, vidx);
+    var->vd.ridx = cast_byte(reglev++);
+    var->vd.pidx = ast_registerlocalvar(C, fs, var->vd.name);
+    luaY_checklimit(fs, reglev, 200, "local variables");
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Variable lookup
+ *---------------------------------------------------------------------*/
+
+static int ast_searchvar(CompileCtx *C, FuncState *fs, TString *n, expdesc *var) {
+  for (int i = (int)fs->nactvar - 1; i >= 0; i--) {
+    Vardesc *vd = ast_getvar(C, fs, i);
+    if (varglobal(vd)) {
+      if (vd->vd.name == NULL) {
+        if (var->u.info < 0)
+          var->u.info = fs->firstlocal + i;
+      } else {
+        if (n == vd->vd.name) {
+          init_exp(var, VGLOBAL, fs->firstlocal + i);
+          return VGLOBAL;
+        } else if (var->u.info == -1)
+          var->u.info = -2;
+      }
+    } else if (n == vd->vd.name) {
+      if (vd->vd.kind == RDKCTC) {
+        init_exp(var, VCONST, fs->firstlocal + i);
+      } else {
+        var->f = var->t = NO_JUMP;
+        var->k = VLOCAL;
+        var->u.var.vidx = cast_short(i);
+        var->u.var.ridx = vd->vd.ridx;
+        if (vd->vd.kind == RDKVAVAR)
+          var->k = VVARGVAR;
+      }
+      return (int)var->k;
+    }
+  }
+  return -1;
+}
+
+static int ast_searchupvalue(FuncState *fs, TString *name) {
+  Upvaldesc *up = fs->f->upvalues;
+  for (int i = 0; i < fs->nups; i++) {
+    if (up[i].name == name)
+      return i;
+  }
+  return -1;
+}
+
+static void ast_markupval(FuncState *fs, int level) {
+  BlockCnt *bl = fs->bl;
+  while (bl->nactvar > level)
+    bl = bl->previous;
+  bl->upval = 1;
+  fs->needclose = 1;
+}
+
+static int ast_newupvalue(CompileCtx *C, FuncState *fs, TString *name, expdesc *v) {
+  Proto *f = fs->f;
+  int oldsize = f->sizeupvalues;
+  luaY_checklimit(fs, fs->nups + 1, 255, "upvalues");
+  luaM_growvector(C->L, f->upvalues, fs->nups, f->sizeupvalues, Upvaldesc, 255, "upvalues");
+  while (oldsize < f->sizeupvalues)
+    f->upvalues[oldsize++].name = NULL;
+  Upvaldesc *up = &f->upvalues[fs->nups];
+  FuncState *prev = fs->prev;
+  if (v->k == VLOCAL) {
+    up->instack = 1;
+    up->idx = v->u.var.ridx;
+    up->kind = ast_getvar(C, prev, v->u.var.vidx)->vd.kind;
+  } else {
+    up->instack = 0;
+    up->idx = cast_byte(v->u.info);
+    up->kind = prev->f->upvalues[v->u.info].kind;
+  }
+  up->name = name;
+  luaC_objbarrier(C->L, f, name);
+  return fs->nups++;
+}
+
+static void ast_singlevaraux(CompileCtx *C, FuncState *fs, TString *n, expdesc *var, int base) {
+  int v = ast_searchvar(C, fs, n, var);
+  if (v >= 0) {
+    if (!base) {
+      if (var->k == VVARGVAR)
+        luaK_vapar2local(fs, var);
+      if (var->k == VLOCAL)
+        ast_markupval(fs, var->u.var.vidx);
+    }
+  } else {
+    int idx = ast_searchupvalue(fs, n);
+    if (idx < 0) {
+      if (fs->prev != NULL)
+        ast_singlevaraux(C, fs->prev, n, var, 0);
+      if (var->k == VLOCAL || var->k == VUPVAL)
+        idx = ast_newupvalue(C, fs, n, var);
+      else
+        return;
+    }
+    init_exp(var, VUPVAL, idx);
+  }
+}
+
+static void ast_buildglobal(CompileCtx *C, TString *varname, expdesc *var) {
+  FuncState *fs = C->fs;
+  expdesc key;
+  init_exp(var, VGLOBAL, -1);
+  ast_singlevaraux(C, fs, C->envn, var, 1);
+  if (var->k == VGLOBAL)
+    compile_errorf(C, "%s is global when accessing variable '%s'", LUA_ENV, getstr(varname));
+  luaK_exp2anyregup(fs, var);
+  key.f = key.t = NO_JUMP;
+  key.k = VKSTR;
+  key.u.strval = varname;
+  luaK_indexed(fs, var, &key);
+}
+
+static void ast_buildvar(CompileCtx *C, TString *varname, expdesc *var) {
+  FuncState *fs = C->fs;
+  init_exp(var, VGLOBAL, -1);
+  ast_singlevaraux(C, fs, varname, var, 1);
+  if (var->k == VGLOBAL) {
+    int info = var->u.info;
+    ast_buildglobal(C, varname, var);
+    /* info>=0 表示变量名匹配了某个全局声明的 actvar 槽，才检查其 const 性；
+       自由全局（info 为 -1/-2 哨兵）无匹配声明，非 const，不可索引 actvar.arr
+       （原 C++ 用 info!=-1 会以 -2 触发 actvar.arr[-2] 负下标越界读）。 */
+    if (info >= 0 && C->dyd->actvar.arr[info].vd.kind == GDKCONST)
+      var->u.ind.ro = 1;
+  }
+}
+
+static void ast_singlevar(CompileCtx *C, const char *name, expdesc *var) {
+  TString *ts = mkstr(C, name);
+  ast_buildvar(C, ts, var);
+}
+
+/*-----------------------------------------------------------------------
+ * Read-only check
+ *---------------------------------------------------------------------*/
+static void ast_check_readonly(CompileCtx *C, expdesc *e) {
+  FuncState *fs = C->fs;
+  TString *varname = NULL;
+  switch (e->k) {
+  case VCONST:
+    varname = C->dyd->actvar.arr[e->u.info].vd.name;
+    break;
+  case VLOCAL:
+  case VVARGVAR: {
+    Vardesc *vd = ast_getvar(C, fs, e->u.var.vidx);
+    if (vd->vd.kind != VDKREG)
+      varname = vd->vd.name;
+    break;
+  }
+  case VUPVAL: {
+    Upvaldesc *up = &fs->f->upvalues[e->u.info];
+    if (up->kind != VDKREG)
+      varname = up->name;
+    break;
+  }
+  case VINDEXUP:
+  case VINDEXSTR:
+  case VINDEXED:
+    if (e->u.ind.ro)
+      varname = tsvalue(&fs->f->k[e->u.ind.keystr]);
+    break;
+  default:
+    break;
+  }
+  if (varname)
+    compile_errorf(C, "attempt to assign to const variable '%s'", getstr(varname));
+}
+
+/*=======================================================================
+ * Function state management
+ *=====================================================================*/
+
+static Proto *ast_addprototype(CompileCtx *C) {
+  Proto *clp;
+  lua_State *L = C->L;
+  FuncState *fs = C->fs;
+  Proto *f = fs->f;
+  if (fs->np >= f->sizep) {
+    int oldsize = f->sizep;
+    luaM_growvector(L, f->p, fs->np, f->sizep, Proto *, MAXARG_Bx, "functions");
+    while (oldsize < f->sizep)
+      f->p[oldsize++] = NULL;
+  }
+  f->p[fs->np++] = clp = luaF_newproto(L);
+  luaC_objbarrier(L, f, clp);
+  return clp;
+}
+
+static void ast_open_func(CompileCtx *C, FuncState *fs, BlockCnt *bl) {
+  lua_State *L = C->L;
+  Proto *f = fs->f;
+  fs->prev = C->fs;
+  fs->ls = &C->ls;
+  C->fs = fs;
+  fs->pc = 0;
+  fs->previousline = f->linedefined;
+  fs->iwthabs = 0;
+  fs->lasttarget = 0;
+  fs->freereg = 0;
+  fs->nk = 0;
+  fs->nabslineinfo = 0;
+  fs->np = 0;
+  fs->nups = 0;
+  fs->ndebugvars = 0;
+  fs->nactvar = 0;
+  fs->needclose = 0;
+  fs->firstlocal = C->dyd->actvar.n;
+  fs->firstlabel = C->dyd->label.n;
+  fs->bl = NULL;
+  f->source = C->source;
+  luaC_objbarrier(L, f, f->source);
+  f->maxstacksize = 2;
+  fs->kcache = luaH_new(L);
+  sethvalue2s(L, L->top.p, fs->kcache);
+  luaD_inctop(L);
+  ast_enterblock(C, fs, bl, 0);
+}
+
+static void ast_close_func(CompileCtx *C) {
+  lua_State *L = C->L;
+  FuncState *fs = C->fs;
+  Proto *f = fs->f;
+  luaK_ret(fs, luaY_nvarstack(fs), 0);
+  ast_leaveblock(C, fs);
+  lua_assert(fs->bl == NULL);
+  luaK_finish(fs);
+  luaM_shrinkvector(L, f->code, f->sizecode, fs->pc, Instruction);
+  luaM_shrinkvector(L, f->lineinfo, f->sizelineinfo, fs->pc, ls_byte);
+  luaM_shrinkvector(L, f->abslineinfo, f->sizeabslineinfo, fs->nabslineinfo, AbsLineInfo);
+  luaM_shrinkvector(L, f->k, f->sizek, fs->nk, TValue);
+  luaM_shrinkvector(L, f->p, f->sizep, fs->np, Proto *);
+  luaM_shrinkvector(L, f->locvars, f->sizelocvars, fs->ndebugvars, LocVar);
+  luaM_shrinkvector(L, f->upvalues, f->sizeupvalues, fs->nups, Upvaldesc);
+  C->fs = fs->prev;
+  L->top.p--;
+  luaC_checkGC(L);
+}
+
+static void ast_codeclosure(CompileCtx *C, expdesc *v) {
+  FuncState *fs = C->fs; /* ast_close_func already restored C->fs to the enclosing function */
+  init_exp(v, VRELOC, luaK_codeABx(fs, OP_CLOSURE, 0, fs->np - 1));
+  luaK_exp2nextreg(fs, v);
+}
+
+/*=======================================================================
+ * Adjust assign
+ *=====================================================================*/
+
+#define hasmultret(k) ((k) == VCALL || (k) == VVARARG)
+
+static void ast_adjust_assign(CompileCtx *C, int nvars, int nexps, expdesc *e) {
+  FuncState *fs = C->fs;
+  int needed = nvars - nexps;
+  luaK_checkstack(fs, needed);
+  if (hasmultret(e->k)) {
+    int extra = needed + 1;
+    if (extra < 0)
+      extra = 0;
+    luaK_setreturns(fs, e, extra);
+  } else {
+    if (e->k != VVOID)
+      luaK_exp2nextreg(fs, e);
+    if (needed > 0)
+      luaK_nil(fs, fs->freereg, needed);
+  }
+  if (needed > 0)
+    luaK_reserveregs(fs, needed);
+  else
+    fs->freereg = cast_byte(fs->freereg + needed);
+}
+
+/*=======================================================================
+ * Helper: compile function parameters (shared by lambda, func decl, class methods)
+ *
+ * Reads ParameterDeclNode list and the isVariadic flag from the
+ * enclosing LambdaNode / FunctionDeclNode.
+ *=====================================================================*/
+static void compile_params(CompileCtx *C, FuncState *new_fs,
+                           AstList params, bool isVariadic,
+                           bool isMethod) {
+  /*------------------------------------------------------------
+   * Implicit 'this' parameter — ALWAYS occupies Slot 0.
+   *
+   * Every function receives its Receiver in the first stack
+   * slot.  The caller is responsible for pushing it (see
+   * compile_funcall / compile_new_expr / etc.).
+   *
+   * For class instance methods  →  this = the object instance
+   * For plain global calls      →  this = _ENV / Module
+   * For closure calls           →  this = the closure itself
+   * For obj.method() / obj:m()  →  this = obj
+   *-----------------------------------------------------------*/
+  // 1. 检查是否显式提供了 this 作为第一个参数（用于模板/Mixin）
+  bool hasExplicitThis = (params.count != 0 && strcmp(params.items[0]->u.param.name, "this") == 0);
+
+  if (hasExplicitThis) {
+    /*======================================================
+     * 显式 This 模式：用户指定了第一个参数为 this
+     *======================================================*/
+    // 让用户的 explicitly named 'this' 直接占据 Slot 0
+    TString *selfname = mkstr(C, "this");
+    ast_new_localvar(C, selfname);
+    ast_adjustlocalvars(C, 1); /* Slot 0 is now occupied */
+
+    // 继续处理剩下的用户参数 (从 Slot 1 开始)
+    int nparams = 0;
+    for (int i = 1; i < params.count; i++) {
+      TString *pname = mkstr(C, params.items[i]->u.param.name);
+      ast_new_localvar(C, pname);
+      nparams++;
+    }
+    ast_adjustlocalvars(C, nparams);
+
+  } else {
+    /*======================================================
+     * 隐式 Receiver 模式 (原生行为)
+     * 类方法分配 "this"，普通函数/闭包分配 "(receiver)"
+     *======================================================*/
+    const char *recName = isMethod ? "this" : "(receiver)";
+    TString *selfname = mkstr(C, recName);
+    ast_new_localvar(C, selfname);
+    ast_adjustlocalvars(C, 1); /* Slot 0 is now occupied */
+
+    // 处理所有用户参数 (从 Slot 1 开始)
+    int nparams = 0;
+    for (int _pi = 0; _pi < params.count; _pi++) {
+    AstNode *p = params.items[_pi];
+      TString *pname = mkstr(C, p->u.param.name);
+      ast_new_localvar(C, pname);
+      nparams++;
+    }
+    ast_adjustlocalvars(C, nparams);
+  }
+
+  /* numparams includes self/receiver */
+  new_fs->f->numparams = cast_byte(C->fs->nactvar);
+
+  if (isVariadic) {
+    TString *vaname = mkstr(C, "(vararg table)");
+    ast_new_var(C, vaname, RDKVAVAR);
+    new_fs->f->flag |= PF_VAHID;
+    luaK_codeABC(C->fs, OP_VARARGPREP, new_fs->f->numparams, 0, 0);
+    ast_adjustlocalvars(C, 1);
+  }
+  luaK_reserveregs(C->fs, C->fs->nactvar);
+}
+
+/*=======================================================================
+ * Continue resolution helper
+ *
+ * Patches all pending "(continue)" gotos that belong to the current
+ * loop block so they jump to 'target'.  Must be called while the loop
+ * block is still the active block (fs->bl).
+ *=====================================================================*/
+static void resolve_continues(CompileCtx *C, FuncState *fs, int target) {
+  Labellist *gl = &C->dyd->gt;
+  int igt = fs->bl->firstgoto;
+  while (igt < gl->n) {
+    if (gl->arr[igt].name == C->contn) {
+      luaK_patchlist(fs, gl->arr[igt].pc, target);
+      /* remove resolved goto by shifting the rest down */
+      for (int j = igt; j < gl->n - 1; j++)
+        gl->arr[j] = gl->arr[j + 1];
+      gl->n--;
+    } else {
+      igt++;
+    }
+  }
+}
+
+/*=======================================================================
+ * Expression compilation
+ *=====================================================================*/
+
+/*-----------------------------------------------------------------------
+ * Literals
+ *---------------------------------------------------------------------*/
+static void compile_literal_int(CompileCtx *C, AstNode *n, expdesc *e) {
+  init_exp(e, VKINT, 0);
+  e->u.ival = (lua_Integer)n->u.lit_int.value;
+}
+
+static void compile_literal_float(CompileCtx *C, AstNode *n, expdesc *e) {
+  init_exp(e, VKFLT, 0);
+  e->u.nval = (lua_Number)n->u.lit_float.value;
+}
+
+static void compile_literal_string(CompileCtx *C, AstNode *n, expdesc *e) {
+  e->f = e->t = NO_JUMP;
+  e->k = VKSTR;
+  e->u.strval = luaS_newlstr(C->L, n->u.lit_str.data, (size_t)n->u.lit_str.len);
+}
+
+static void compile_literal_bool(CompileCtx *C, AstNode *n, expdesc *e) {
+  init_exp(e, n->u.lit_bool.value ? VTRUE : VFALSE, 0);
+}
+
+static void compile_literal_null(CompileCtx *C, AstNode *n, expdesc *e) {
+  (void)n;
+  init_exp(e, VNIL, 0);
+}
+
+/*-----------------------------------------------------------------------
+ * Identifier
+ *---------------------------------------------------------------------*/
+static void compile_identifier(CompileCtx *C, AstNode *n, expdesc *e) {
+  ast_singlevar(C, n->u.ident.name, e);
+}
+
+/*-----------------------------------------------------------------------
+ * Unary operations
+ *---------------------------------------------------------------------*/
+static void compile_unary(CompileCtx *C, AstNode *n, expdesc *e) {
+  setline(C, n->loc);
+  compile_expression(C, n->u.unary.operand, e);
+
+  UnOpr uop;
+  switch (n->u.unary.op) {
+  case OPK_NEGATE:
+    uop = OPR_MINUS;
+    break;
+  case OPK_NOT:
+    uop = OPR_NOT;
+    break;
+  case OPK_BW_NOT:
+    uop = OPR_BNOT;
+    break;
+  case OPK_LENGTH:
+    uop = OPR_LEN;
+    break;
+  default:
+    compile_error(C, "unknown unary operator");
+    return;
+  }
+  luaK_prefix(C->fs, uop, e, C->linenumber);
+}
+
+/*-----------------------------------------------------------------------
+ * Binary operations
+ *---------------------------------------------------------------------*/
+static BinOpr ast_binopr(OperatorKind op) {
+  switch (op) {
+  case OPK_ADD:
+    return OPR_ADD;
+  case OPK_SUB:
+    return OPR_SUB;
+  case OPK_MUL:
+    return OPR_MUL;
+  case OPK_MOD:
+    return OPR_MOD;
+  case OPK_DIV:
+    return OPR_DIV;
+  case OPK_IDIV:
+    return OPR_IDIV;
+  case OPK_BW_AND:
+    return OPR_BAND;
+  case OPK_BW_OR:
+    return OPR_BOR;
+  case OPK_BW_XOR:
+    return OPR_BXOR;
+  case OPK_BW_LSHIFT:
+    return OPR_SHL;
+  case OPK_BW_RSHIFT:
+    return OPR_SHR;
+  case OPK_CONCAT:
+    return OPR_CONCAT;
+  case OPK_EQ:
+    return OPR_EQ;
+  case OPK_NE:
+    return OPR_NE;
+  case OPK_LT:
+    return OPR_LT;
+  case OPK_LE:
+    return OPR_LE;
+  case OPK_GT:
+    return OPR_GT;
+  case OPK_GE:
+    return OPR_GE;
+  case OPK_AND:
+    return OPR_AND;
+  case OPK_OR:
+    return OPR_OR;
+  default:
+    return OPR_NOBINOPR;
+  }
+}
+
+static void compile_binary(CompileCtx *C, AstNode *n, expdesc *e) {
+  BinOpr opr = ast_binopr(n->u.binary.op);
+  if (opr == OPR_NOBINOPR)
+    compile_error(C, "unknown binary operator");
+
+  setline(C, n->loc);
+  compile_expression(C, n->u.binary.left, e);
+  luaK_infix(C->fs, opr, e);
+
+  expdesc e2;
+  compile_expression(C, n->u.binary.right, &e2);
+  luaK_posfix(C->fs, opr, e, &e2, C->linenumber);
+}
+
+/*-----------------------------------------------------------------------
+ * Function call — Unified Receiver Convention
+ *
+ * Stack layout at OP_CALL:
+ *   R(base)   = function
+ *   R(base+1) = Receiver  ← implicit first argument (always present)
+ *   R(base+2) = arg1
+ *   R(base+3) = arg2 ...
+ *
+ * Receiver selection by call pattern:
+ *   obj:method(args)   →  Receiver = obj            (OP_SELF)
+ *   obj.method(args)   →  Receiver = obj            (OP_SELF)
+ *   arr[i](args)       →  Receiver = nil            (push nil)
+ *   name(args)         →  Receiver = nil            (push nil)
+ *   expr(args)         →  Receiver = nil            (push nil)
+ *
+ * ALL functions receive 'self' as the first parameter.
+ * For non-method calls, self = nil.
+ *---------------------------------------------------------------------*/
+static void compile_funcall(CompileCtx *C, AstNode *n, expdesc *e, int nresults) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  AstNode *funcExpr = n->u.call.func;
+
+  /*---------- Scenario: obj:method(args) — MemberLookupNode ----------*/
+  // 1. obj:method() 形式 (保持不变)
+  if (funcExpr->type == NODE_MEMBER_LOOKUP) {
+    AstNode *ml = (funcExpr);
+    compile_expression(C, ml->u.member.object, e);
+    luaK_exp2anyregup(fs, e);
+    expdesc key;
+    key.f = key.t = NO_JUMP;
+    key.k = VKSTR;
+    key.u.strval = mkstr(C, ml->u.member.member);
+    luaK_self(fs, e, &key);
+
+    // 2. obj.method() 形式 (保持不变，已支持传递 obj)
+  } else if (funcExpr->type == NODE_MEMBER_ACCESS) {
+    AstNode *ma = (funcExpr);
+    compile_expression(C, ma->u.member.object, e);
+    luaK_exp2anyregup(fs, e);
+    expdesc key;
+    key.f = key.t = NO_JUMP;
+    key.k = VKSTR;
+    key.u.strval = mkstr(C, ma->u.member.member);
+    luaK_self(fs, e, &key);
+
+    // 3. [新增] obj[key]() 形式 (这里是这次的核心修改)
+    // 这会让 a[3]() 调用时，将 a 传给 self
+  } else if (funcExpr->type == NODE_INDEX_ACCESS) {
+    AstNode *ia = (funcExpr);
+
+    // (A) 编译对象 a
+    compile_expression(C, ia->u.index.array, e);
+    luaK_exp2anyregup(fs, e);
+
+    // (B) 编译索引 key
+    expdesc key;
+    compile_expression(C, ia->u.index.index, &key);
+    luaK_exp2val(fs, &key); // 确保 key 是数值/常量/寄存器
+
+    // (C) 生成 OP_SELF 指令
+    // 效果: R(func) = a[key];  R(self) = a;
+    luaK_self(fs, e, &key);
+
+    // 4. 普通函数调用 a() 或 (expr)()
+    // 修改为直接 push nil，不再 push _ENV 或 duplicate closure
+  } else {
+    compile_expression(C, funcExpr, e);
+    luaK_exp2nextreg(fs, e);
+
+    // 显式加载 nil 到下一个寄存器作为 receiver
+    luaK_nil(fs, fs->freereg, 1);
+    luaK_reserveregs(fs, 1);
+  }
+
+  /*---------- Compile user arguments (R(base+2) onward) --------------*/
+  expdesc args;
+  int nparams;
+  if ((n->u.call.args.count == 0)) {
+    /* No user arguments, but Receiver is already at R(base+1).
+       nparams = freereg - (base+1) = 1 (the Receiver). */
+    nparams = fs->freereg - (e->u.info + 1);
+  } else {
+    int nargs = compile_exprlist_n(C, n->u.call.args, &args);
+    if (hasmultret(args.k)) {
+      luaK_setmultret(fs, &args);
+      nparams = LUA_MULTRET;
+    } else {
+      if (args.k != VVOID)
+        luaK_exp2nextreg(fs, &args);
+      /* nparams counts Receiver + user args */
+      nparams = fs->freereg - (e->u.info + 1);
+    }
+  }
+
+  /*---------- Emit OP_CALL -------------------------------------------*/
+  lua_assert(e->k == VNONRELOC);
+  int base = e->u.info;
+  /* nparams already includes the Receiver (counted as an argument) */
+  init_exp(e, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, nresults + 1));
+  luaK_fixline(fs, C->linenumber);
+  fs->freereg = cast_byte(base + 1);
+}
+
+/*-----------------------------------------------------------------------
+ * Member access:  obj.field
+ *---------------------------------------------------------------------*/
+static void compile_member_access(CompileCtx *C, AstNode *n, expdesc *e) {
+  setline(C, n->loc);
+  compile_expression(C, n->u.member.object, e);
+  luaK_exp2anyregup(C->fs, e);
+  expdesc key;
+  key.f = key.t = NO_JUMP;
+  key.k = VKSTR;
+  key.u.strval = mkstr(C, n->u.member.member);
+  luaK_indexed(C->fs, e, &key);
+}
+
+/*-----------------------------------------------------------------------
+ * Member lookup:  obj:method  → OP_SELF
+ *---------------------------------------------------------------------*/
+static void compile_member_lookup(CompileCtx *C, AstNode *n, expdesc *e) {
+  setline(C, n->loc);
+  compile_expression(C, n->u.member.object, e);
+  luaK_exp2anyregup(C->fs, e);
+  expdesc key;
+  key.f = key.t = NO_JUMP;
+  key.k = VKSTR;
+  key.u.strval = mkstr(C, n->u.member.member);
+  luaK_self(C->fs, e, &key);
+}
+
+/*-----------------------------------------------------------------------
+ * Index access:  arr[idx]
+ *---------------------------------------------------------------------*/
+static void compile_index_access(CompileCtx *C, AstNode *n, expdesc *e) {
+  setline(C, n->loc);
+  compile_expression(C, n->u.index.array, e);
+  luaK_exp2anyregup(C->fs, e);
+  expdesc key;
+  compile_expression(C, n->u.index.index, &key);
+  luaK_exp2val(C->fs, &key);
+  luaK_indexed(C->fs, e, &key);
+}
+
+/*-----------------------------------------------------------------------
+ * Lambda / anonymous function
+ *---------------------------------------------------------------------*/
+static void compile_lambda(CompileCtx *C, AstNode *n, expdesc *e) {
+  FuncState new_fs;
+  BlockCnt bl;
+  setline(C, n->loc);
+
+  new_fs.f = ast_addprototype(C);
+  new_fs.f->linedefined = C->linenumber;
+  ast_open_func(C, &new_fs, &bl);
+
+  /* Parameters — vararg is signaled by n->u.lambda.is_variadic, not per-param */
+  compile_params(C, &new_fs, n->u.lambda.params, n->u.lambda.is_variadic, false);
+
+  /* Body */
+  if (n->u.lambda.body) {
+    if (n->u.lambda.body->type == NODE_BLOCK) {
+      compile_block(C, (n->u.lambda.body));
+    } else {
+      compile_statement(C, (n->u.lambda.body));
+    }
+  }
+
+  new_fs.f->lastlinedefined = C->linenumber;
+  ast_close_func(C);
+  ast_codeclosure(C, e);
+}
+
+/*-----------------------------------------------------------------------
+ * List literal  → array constructor (using OP_NEWLIST)
+ * NOTE: VM uses 0-based table indexing — handled in VM/luaK_setlist
+ *---------------------------------------------------------------------*/
+static void compile_list_literal(CompileCtx *C, AstNode *n, expdesc *e) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  int pc = luaK_codevABCk(fs, OP_NEWLIST, 0, 0, 0, 0);
+  luaK_code(fs, 0); /* extra arg */
+
+  init_exp(e, VNONRELOC, fs->freereg);
+  luaK_reserveregs(fs, 1);
+
+  int na = 0;
+  for (size_t i = 0; i < n->u.lit_list.elements.count; i++) {
+    expdesc val;
+    compile_expression(C, n->u.lit_list.elements.items[i], &val);
+    luaK_exp2nextreg(fs, &val);
+    na++;
+    if (na >= MAXARG_vC) {
+      luaK_setlist(fs, e->u.info, (int)i + 1 - na, na);
+      na = 0;
+    }
+  }
+  if (na > 0) {
+    luaK_setlist(fs, e->u.info, (int)n->u.lit_list.elements.count - na, na);
+  }
+  luaK_setlistsize(fs, pc, e->u.info, (int)n->u.lit_list.elements.count);
+}
+
+/*-----------------------------------------------------------------------
+ * Map literal  → table constructor (hash part)
+ *---------------------------------------------------------------------*/
+static void compile_map_literal(CompileCtx *C, AstNode *n, expdesc *e) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  int pc = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+  luaK_code(fs, 0);
+
+  init_exp(e, VNONRELOC, fs->freereg);
+  luaK_reserveregs(fs, 1);
+
+  for (int _ei = 0; _ei < n->u.lit_map.entries.count; _ei++) {
+    AstNode *entry = n->u.lit_map.entries.items[_ei];
+    lu_byte reg = fs->freereg;
+    expdesc tab = *e;
+    expdesc key;
+
+    // Compile the key expression directly - visitor handles string conversion for shorthand syntax
+    compile_expression(C, entry->u.map_entry.key, &key);
+    luaK_exp2val(fs, &key);
+
+    luaK_indexed(fs, &tab, &key);
+    expdesc val;
+    compile_expression(C, entry->u.map_entry.value, &val);
+    luaK_storevar(fs, &tab, &val);
+    fs->freereg = reg;
+  }
+
+  luaK_settablesize(fs, pc, e->u.info, 0, (int)n->u.lit_map.entries.count);
+}
+
+/*-----------------------------------------------------------------------
+ * This expression  → identifier "self"
+ *---------------------------------------------------------------------*/
+static void compile_this(CompileCtx *C, AstNode *n, expdesc *e) {
+  setline(C, n->loc);
+  ast_singlevar(C, "self", e);
+}
+
+/*-----------------------------------------------------------------------
+ * Varargs:  ...
+ *---------------------------------------------------------------------*/
+static void compile_varargs(CompileCtx *C, AstNode *n, expdesc *e) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+  if (!isvararg(fs->f))
+    compile_error(C, "cannot use '...' outside a vararg function");
+  init_exp(e, VVARARG, luaK_codeABC(fs, OP_VARARG, 0, fs->f->numparams, 1));
+}
+
+/*-----------------------------------------------------------------------
+ * Main expression dispatch
+ *---------------------------------------------------------------------*/
+static void compile_expression(CompileCtx *C, AstNode *expr, expdesc *e) {
+  if (!expr) {
+    init_exp(e, VVOID, 0);
+    return;
+  }
+  setline_node(C, expr);
+
+  switch (expr->type) {
+  case NODE_LITERAL_INT:
+    compile_literal_int(C, (expr), e);
+    break;
+  case NODE_LITERAL_FLOAT:
+    compile_literal_float(C, (expr), e);
+    break;
+  case NODE_LITERAL_STRING:
+    compile_literal_string(C, (expr), e);
+    break;
+  case NODE_LITERAL_BOOL:
+    compile_literal_bool(C, (expr), e);
+    break;
+  case NODE_LITERAL_NULL:
+    compile_literal_null(C, (expr), e);
+    break;
+  case NODE_IDENTIFIER:
+    compile_identifier(C, (expr), e);
+    break;
+  case NODE_UNARY_OP:
+    compile_unary(C, (expr), e);
+    break;
+  case NODE_BINARY_OP:
+    compile_binary(C, (expr), e);
+    break;
+  case NODE_FUNCTION_CALL:
+    compile_funcall(C, (expr), e, 1);
+    break;
+  case NODE_MEMBER_ACCESS:
+    compile_member_access(C, (expr), e);
+    break;
+  case NODE_MEMBER_LOOKUP:
+    compile_member_lookup(C, (expr), e);
+    break;
+  case NODE_INDEX_ACCESS:
+    compile_index_access(C, (expr), e);
+    break;
+  case NODE_LAMBDA:
+    compile_lambda(C, (expr), e);
+    break;
+  case NODE_LITERAL_LIST:
+    compile_list_literal(C, (expr), e);
+    break;
+  case NODE_LITERAL_MAP:
+    compile_map_literal(C, (expr), e);
+    break;
+  case NODE_THIS_EXPRESSION:
+    compile_this(C, (expr), e);
+    break;
+  case NODE_VAR_ARGS:
+    compile_varargs(C, (expr), e);
+    break;
+  default:
+    compile_errorf(C, "unsupported expression node type %d", (int)expr->type);
+    break;
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Expression list
+ *---------------------------------------------------------------------*/
+static int compile_exprlist_n(CompileCtx *C, AstList list, expdesc *last) {
+  int n = (int)list.count;
+  if (n == 0) {
+    init_exp(last, VVOID, 0);
+    return 0;
+  }
+  for (int i = 0; i < n - 1; i++) {
+    expdesc tmp;
+    compile_expression(C, list.items[i], &tmp);
+    luaK_exp2nextreg(C->fs, &tmp);
+  }
+  compile_expression(C, list.items[n - 1], last);
+  return n;
+}
+
+static void compile_exprlist(CompileCtx *C, AstList list, expdesc *last) {
+  compile_exprlist_n(C, list, last);
+}
+
+/*=======================================================================
+ * Statement compilation
+ *=====================================================================*/
+
+/*-----------------------------------------------------------------------
+ * Block
+ *---------------------------------------------------------------------*/
+static void compile_block(CompileCtx *C, AstNode *block) {
+  if (!block)
+    return;
+  FuncState *fs = C->fs;
+  BlockCnt bl;
+  ast_enterblock(C, fs, &bl, 0);
+  for (int _si = 0; _si < block->u.block.statements.count; _si++) {
+    AstNode *stmt = block->u.block.statements.items[_si];
+    compile_statement(C, stmt);
+    lua_assert(fs->f->maxstacksize >= fs->freereg && fs->freereg >= luaY_nvarstack(fs));
+    fs->freereg = luaY_nvarstack(fs);
+  }
+  ast_leaveblock(C, fs);
+}
+
+/*-----------------------------------------------------------------------
+ * Expression statement
+ *---------------------------------------------------------------------*/
+static void compile_expr_stmt(CompileCtx *C, AstNode *n) {
+  setline(C, n->loc);
+  FuncState *fs = C->fs;
+
+  if (n->u.expr_stmt.expr->type == NODE_FUNCTION_CALL) {
+    expdesc e;
+    compile_funcall(C, (n->u.expr_stmt.expr), &e, 0);
+    Instruction *inst = &fs->f->code[e.u.info];
+    SETARG_C(*inst, 1);
+  } else {
+    expdesc e;
+    compile_expression(C, n->u.expr_stmt.expr, &e);
+    luaK_exp2nextreg(fs, &e);
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Variable declaration
+ *---------------------------------------------------------------------*/
+static void compile_var_decl(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  TString *varname = mkstr(C, n->u.var_decl.name);
+  lu_byte kind = n->u.var_decl.is_const ? RDKCONST : VDKREG;
+
+  if (n->u.var_decl.is_global) {
+    kind = n->u.var_decl.is_const ? GDKCONST : GDKREG;
+    int vidx = ast_new_var(C, varname, kind);
+    fs->nactvar++;
+
+    if (n->u.var_decl.initializer) {
+      expdesc var;
+      ast_buildglobal(C, varname, &var);
+      expdesc val;
+      compile_expression(C, n->u.var_decl.initializer, &val);
+      luaK_storevar(fs, &var, &val);
+    }
+  } else {
+    int vidx = ast_new_var(C, varname, kind);
+
+    if (n->u.var_decl.initializer) {
+      expdesc e;
+      compile_expression(C, n->u.var_decl.initializer, &e);
+
+      Vardesc *var = &C->dyd->actvar.arr[fs->firstlocal + vidx];
+      if (kind == RDKCONST && luaK_exp2const(fs, &e, &var->k)) {
+        var->vd.kind = RDKCTC;
+        fs->nactvar++;
+        return;
+      }
+
+      luaK_exp2nextreg(fs, &e);
+    } else {
+      luaK_nil(fs, fs->freereg, 1);
+      luaK_reserveregs(fs, 1);
+    }
+    ast_adjustlocalvars(C, 1);
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Multi-variable declaration  (vars a, b, c = expr)
+ *
+ * ast.h: MutiVariableDeclarationNode has:
+ *   std::vector<MultiDeclVariableInfo> variables;  // .name, .isGlobal, .isConst
+ *   Expression *initializer;
+ *   bool isExported;
+ *---------------------------------------------------------------------*/
+static void compile_multi_var_decl(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  int nvars = n->u.muti_var.count;
+
+  /* Determine if these are global or local from the first variable's flags.
+     In practice all variables in a multi-decl share the same scope. */
+  bool anyGlobal = false;
+  for (int _vi = 0; _vi < n->u.muti_var.count; _vi++) {
+    MultiDeclVar vi = n->u.muti_var.vars[_vi];
+    lu_byte kind;
+    if (vi.is_global) {
+      anyGlobal = true;
+      kind = vi.is_const ? GDKCONST : GDKREG;
+    } else {
+      kind = vi.is_const ? RDKCONST : VDKREG;
+    }
+    TString *ts = mkstr(C, vi.name);
+    ast_new_var(C, ts, kind);
+  }
+
+  if (anyGlobal) {
+    /* For globals, we need to bump nactvar first so global vars are visible,
+       then compile the initializer, adjust the stack, and store each value
+       into the global table via _ENV. */
+    fs->nactvar = cast_short(fs->nactvar + nvars);
+
+    if (n->u.muti_var.initializer) {
+      expdesc e;
+      compile_expression(C, n->u.muti_var.initializer, &e);
+      ast_adjust_assign(C, nvars, 1, &e);
+    } else {
+      expdesc e;
+      e.k = VVOID;
+      ast_adjust_assign(C, nvars, 0, &e);
+    }
+
+    /* Store each value from the stack into the corresponding global */
+    for (int i = nvars - 1; i >= 0; i--) {
+      expdesc var;
+      TString *ts = mkstr(C, n->u.muti_var.vars[i].name);
+      ast_buildglobal(C, ts, &var);
+      expdesc src;
+      init_exp(&src, VNONRELOC, --fs->freereg);
+      luaK_storevar(fs, &var, &src);
+    }
+  } else {
+    expdesc e;
+    if (n->u.muti_var.initializer) {
+      compile_expression(C, n->u.muti_var.initializer, &e);
+      ast_adjust_assign(C, nvars, 1, &e);
+    } else {
+      e.k = VVOID;
+      ast_adjust_assign(C, nvars, 0, &e);
+    }
+    ast_adjustlocalvars(C, nvars);
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Assignment  (a, b = expr1, expr2)
+ *---------------------------------------------------------------------*/
+static void compile_assignment(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  int nlvals = (int)n->u.assign.lvalues.count;
+  int nrvals = (int)n->u.assign.rvalues.count;
+
+  expdesc lhs[nlvals ? nlvals : 1];
+  for (int i = 0; i < nlvals; i++) {
+    compile_expression(C, n->u.assign.lvalues.items[i], &lhs[i]);
+    if (!vkisvar(lhs[i].k))
+      compile_error(C, "invalid assignment target");
+    ast_check_readonly(C, &lhs[i]);
+  }
+
+  if (nlvals == 1 && nrvals == 1) {
+    expdesc val;
+    compile_expression(C, n->u.assign.rvalues.items[0], &val);
+    luaK_setoneret(fs, &val);
+    luaK_storevar(fs, &lhs[0], &val);
+  } else {
+    expdesc lastval;
+    int nexps = compile_exprlist_n(C, n->u.assign.rvalues, &lastval);
+    if (nexps != nlvals) {
+      ast_adjust_assign(C, nlvals, nexps, &lastval);
+      // 从栈中取值赋值给每个左值
+      for (int i = nlvals - 1; i >= 0; i--) {
+        expdesc src;
+        init_exp(&src, VNONRELOC, --fs->freereg);
+        luaK_storevar(fs, &lhs[i], &src);
+      }
+    } else {
+      // 所有右侧表达式数量等于左值数量
+      // 确保最后一个表达式也被移到寄存器中
+      luaK_exp2nextreg(fs, &lastval);
+      // 现在所有值都在连续的寄存器中，从 base 到 base + nlvals - 1
+      int base = fs->freereg - nlvals;
+      for (int i = 0; i < nlvals; i++) {
+        expdesc src;
+        init_exp(&src, VNONRELOC, base + i);
+        luaK_storevar(fs, &lhs[i], &src);
+      }
+      // 恢复 freereg
+      fs->freereg = cast_byte(base);
+    }
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Update assignment  (a += expr, a -= expr, etc.)
+ *
+ * ast.h OperatorKind: ASSIGN_ADD, ASSIGN_SUB, ASSIGN_MUL, ASSIGN_DIV,
+ *   ASSIGN_IDIV, ASSIGN_MOD, ASSIGN_CONCAT,
+ *   ASSIGN_BW_AND, ASSIGN_BW_OR, ASSIGN_BW_XOR,
+ *   ASSIGN_BW_LSHIFT, ASSIGN_BW_RSHIFT
+ *---------------------------------------------------------------------*/
+static void compile_update_assignment(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  OperatorKind binop;
+  switch (n->u.update.op) {
+  case OPK_ASSIGN_ADD:
+    binop = OPK_ADD;
+    break;
+  case OPK_ASSIGN_SUB:
+    binop = OPK_SUB;
+    break;
+  case OPK_ASSIGN_MUL:
+    binop = OPK_MUL;
+    break;
+  case OPK_ASSIGN_DIV:
+    binop = OPK_DIV;
+    break;
+  case OPK_ASSIGN_IDIV:
+    binop = OPK_IDIV;
+    break;
+  case OPK_ASSIGN_MOD:
+    binop = OPK_MOD;
+    break;
+  case OPK_ASSIGN_CONCAT:
+    binop = OPK_CONCAT;
+    break;
+  case OPK_ASSIGN_BW_AND:
+    binop = OPK_BW_AND;
+    break;
+  case OPK_ASSIGN_BW_OR:
+    binop = OPK_BW_OR;
+    break;
+  case OPK_ASSIGN_BW_XOR:
+    binop = OPK_BW_XOR;
+    break;
+  case OPK_ASSIGN_BW_LSHIFT:
+    binop = OPK_BW_LSHIFT;
+    break;
+  case OPK_ASSIGN_BW_RSHIFT:
+    binop = OPK_BW_RSHIFT;
+    break;
+  default:
+    compile_error(C, "unknown update assignment operator");
+    return;
+  }
+
+  expdesc lhs;
+  compile_expression(C, n->u.update.lvalue, &lhs);
+  if (!vkisvar(lhs.k))
+    compile_error(C, "invalid update assignment target");
+  ast_check_readonly(C, &lhs);
+
+  expdesc src = lhs;
+  luaK_exp2anyreg(fs, &src);
+
+  BinOpr opr = ast_binopr(binop);
+  luaK_infix(fs, opr, &src);
+
+  expdesc rhs;
+  compile_expression(C, n->u.update.rvalue, &rhs);
+  luaK_posfix(fs, opr, &src, &rhs, C->linenumber);
+
+  luaK_exp2nextreg(fs, &src);
+
+  expdesc storeval;
+  init_exp(&storeval, VNONRELOC, fs->freereg - 1);
+  luaK_storevar(fs, &lhs, &storeval);
+}
+
+/*-----------------------------------------------------------------------
+ * If statement
+ *---------------------------------------------------------------------*/
+static void compile_if(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+  int escapelist = NO_JUMP;
+
+  {
+    expdesc cond;
+    compile_expression(C, n->u.if_stmt.condition, &cond);
+    if (cond.k == VNIL)
+      cond.k = VFALSE;
+    luaK_goiftrue(fs, &cond);
+    int condtrue = cond.f;
+
+    if (n->u.if_stmt.then_block)
+      compile_block(C, n->u.if_stmt.then_block);
+
+    if (!(n->u.if_stmt.else_if_clauses.count == 0) || n->u.if_stmt.else_block)
+      luaK_concat(fs, &escapelist, luaK_jump(fs));
+
+    luaK_patchtohere(fs, condtrue);
+  }
+
+  for (int _ci = 0; _ci < n->u.if_stmt.else_if_clauses.count; _ci++) {
+    AstNode *clause = n->u.if_stmt.else_if_clauses.items[_ci];
+    setline(C, clause->loc);
+    expdesc cond;
+    compile_expression(C, clause->u.if_clause.condition, &cond);
+    if (cond.k == VNIL)
+      cond.k = VFALSE;
+    luaK_goiftrue(fs, &cond);
+    int condtrue = cond.f;
+
+    if (clause->u.if_clause.body)
+      compile_block(C, clause->u.if_clause.body);
+
+    if (clause != n->u.if_stmt.else_if_clauses.items[n->u.if_stmt.else_if_clauses.count - 1] || n->u.if_stmt.else_block)
+      luaK_concat(fs, &escapelist, luaK_jump(fs));
+
+    luaK_patchtohere(fs, condtrue);
+  }
+
+  if (n->u.if_stmt.else_block) {
+    compile_block(C, n->u.if_stmt.else_block);
+  }
+
+  luaK_patchtohere(fs, escapelist);
+}
+
+/*-----------------------------------------------------------------------
+ * While statement
+ *---------------------------------------------------------------------*/
+static void compile_while(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  int whileinit = luaK_getlabel(fs);
+
+  expdesc cond;
+  compile_expression(C, n->u.while_stmt.condition, &cond);
+  if (cond.k == VNIL)
+    cond.k = VFALSE;
+  luaK_goiftrue(fs, &cond);
+  int condexit = cond.f;
+
+  BlockCnt bl;
+  ast_enterblock(C, fs, &bl, 1);
+  if (n->u.while_stmt.body)
+    compile_block(C, n->u.while_stmt.body);
+  /* resolve continue → jump back to condition */
+  resolve_continues(C, fs, whileinit);
+  luaK_jumpto(fs, whileinit);
+  ast_leaveblock(C, fs);
+
+  luaK_patchtohere(fs, condexit);
+}
+
+/*-----------------------------------------------------------------------
+ * Numeric for statement  (Lua-style)
+ *
+ * ast.h: ForNumericStatementNode has:
+ *   std::string varName;
+ *   AstType *typeAnnotation;    // nullable (untyped)
+ *   Expression *startExpr;
+ *   Expression *endExpr;
+ *   Expression *stepExpr;       // nullable (default 1)
+ *   BlockNode *body;
+ *
+ * Bytecode layout (matches Lua 5.5 numeric for):
+ *   R[base+0] = start (for index)
+ *   R[base+1] = limit (for limit)
+ *   R[base+2] = step  (for step)
+ *   R[base+3] = user variable
+ *   FORPREP  base, offset    -- init & skip to FORLOOP
+ *     <body>
+ *   FORLOOP  base, offset    -- increment, test, loop back
+ *---------------------------------------------------------------------*/
+static void compile_for_numeric(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  BlockCnt outerbl;
+  ast_enterblock(C, fs, &outerbl, 1);
+
+  int base = fs->freereg;
+
+  /* 2 internal hidden variables (matches Lua 5.5 fornum) */
+  TString *s_state = mkstr(C, "(for state)");
+  ast_new_localvar(C, s_state); /* R[base+0]: for index */
+  ast_new_localvar(C, s_state); /* R[base+1]: for limit */
+
+  /* 1 user loop variable (const — user may not reassign it) */
+  TString *vname = mkstr(C, n->u.for_num.var_name);
+  ast_new_var(C, vname, RDKCONST);
+
+  /* Compile start → R[base+0] */
+  {
+    expdesc e;
+    compile_expression(C, n->u.for_num.start, &e);
+    luaK_exp2nextreg(fs, &e);
+  }
+
+  /* Compile limit → R[base+1] */
+  {
+    expdesc e;
+    compile_expression(C, n->u.for_num.end, &e);
+    luaK_exp2nextreg(fs, &e);
+  }
+
+  /* Compile step → R[base+2] (default 1 if omitted) */
+  if (n->u.for_num.step) {
+    expdesc e;
+    compile_expression(C, n->u.for_num.step, &e);
+    luaK_exp2nextreg(fs, &e);
+  } else {
+    luaK_int(fs, fs->freereg, 1);
+    luaK_reserveregs(fs, 1);
+  }
+
+  /* Activate 2 internal variables (step is consumed by FORPREP) */
+  ast_adjustlocalvars(C, 2);
+
+  /* OP_FORPREP */
+  int prep = luaK_codeABx(fs, OP_FORPREP, base, 0);
+  fs->freereg--; /* FORPREP removes the step from the stack */
+
+  /* Body block */
+  {
+    BlockCnt bodybl;
+    ast_enterblock(C, fs, &bodybl, 0);
+    ast_adjustlocalvars(C, 1); /* activate user loop variable */
+    luaK_reserveregs(fs, 1);
+
+    if (n->u.for_num.body)
+      compile_block(C, n->u.for_num.body);
+
+    ast_leaveblock(C, fs);
+  }
+
+  /* resolve continue → jump to FORLOOP */
+  resolve_continues(C, fs, luaK_getlabel(fs));
+
+  /* Fix FORPREP jump: forward past loop (to FORLOOP position) */
+  {
+    int forloop_pos = luaK_getlabel(fs);
+    int prep_offset = forloop_pos - (prep + 1);
+    SETARG_Bx(fs->f->code[prep], (unsigned int)prep_offset);
+  }
+
+  /* OP_FORLOOP */
+  int endfor = luaK_codeABx(fs, OP_FORLOOP, base, 0);
+
+  /* Fix FORLOOP jump: backward to body start */
+  {
+    int endfor_offset = endfor - prep;
+    SETARG_Bx(fs->f->code[endfor], (unsigned int)endfor_offset);
+  }
+  luaK_fixline(fs, C->linenumber);
+
+  ast_leaveblock(C, fs); /* outer block */
+}
+
+/*-----------------------------------------------------------------------
+ * For-each statement
+ *
+ * ast.h: ForEachStatementNode has:
+ *   std::vector<ParameterDeclNode *> loopVariables;   // each has .name
+ *   std::vector<Expression *> iterableExprs;
+ *   BlockNode *body;
+ *---------------------------------------------------------------------*/
+/* ========================================================================
+ * COMPILER FIXES FOR GENERIC FOR LOOP WITH RECEIVER CALLING CONVENTION
+ * ======================================================================== */
+
+/*
+ * Replace the compile_for_each function in ast_codegen.cpp
+ *
+ * Key Changes:
+ * 1. Need to reserve extra stack space for the receiver parameter
+ * 2. checkstack needs to account for 3 extra slots (receiver + func + state + control)
+ */
+
+/* ========================================================================
+ * COMPILER FIXES FOR GENERIC FOR LOOP WITH RECEIVER CALLING CONVENTION
+ * ======================================================================== */
+
+/*
+ * Replace the compile_for_each function in ast_codegen.cpp
+ *
+ * Key Changes:
+ * 1. Need to reserve extra stack space for the receiver parameter
+ * 2. checkstack needs to account for 3 extra slots (receiver + func + state + control)
+ */
+
+static void compile_for_each(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  BlockCnt outerbl;
+  ast_enterblock(C, fs, &outerbl, 1);
+
+  int base = fs->freereg;
+
+  /* 3 internal hidden variables (matches Lua 5.5 forlist) */
+  TString *s_state = mkstr(C, "(for state)");
+  ast_new_localvar(C, s_state); /* R[base+0]: iterator function */
+  ast_new_localvar(C, s_state); /* R[base+1]: state */
+  ast_new_localvar(C, s_state); /* R[base+2]: closing var */
+
+  /* User-declared loop variables: first is control (RDKCONST), rest normal */
+  int nvars = (int)n->u.for_each.loop_variables.count;
+  for (int i = 0; i < nvars; i++) {
+    TString *vname = mkstr(C, n->u.for_each.loop_variables.items[i]->u.param.name);
+    if (i == 0)
+      ast_new_var(C, vname, RDKCONST);
+    else
+      ast_new_localvar(C, vname);
+  }
+
+  /* Compile iterator expressions (expect up to 4: func, state, close, init) */
+  expdesc e;
+  int nexps = compile_exprlist_n(C, n->u.for_each.iterable_exprs, &e);
+  ast_adjust_assign(C, 4, nexps, &e);
+
+  /* Activate 3 internal variables (not 4 — control var is activated in body) */
+  ast_adjustlocalvars(C, 3);
+
+  /* Mark closing variable (3rd internal var) as to-be-closed */
+  {
+    BlockCnt *bl = fs->bl;
+    bl->upval = 1;
+    bl->insidetbc = 1;
+    fs->needclose = 1;
+  }
+
+  /*
+   * CRITICAL FIX: Need extra space for receiver calling convention
+   * Original: needs 2 extra slots (state + control to call iterator)
+   * With receiver: needs 3 extra slots (receiver + state + control)
+   * So we check for 3 instead of 2
+   */
+  luaK_checkstack(fs, 3); /* extra space to call iterator with receiver */
+
+  /* OP_TFORPREP */
+  int prep = luaK_codeABx(fs, OP_TFORPREP, base, 0);
+  fs->freereg--; /* TFORPREP removes one register from the stack */
+
+  /* Body block: activate user loop variables (control + others) */
+  {
+    BlockCnt bodybl;
+    ast_enterblock(C, fs, &bodybl, 0);
+    ast_adjustlocalvars(C, nvars);
+    luaK_reserveregs(fs, nvars);
+
+    if (n->u.for_each.body)
+      compile_block(C, n->u.for_each.body);
+
+    ast_leaveblock(C, fs);
+  }
+
+  /* resolve continue → jump to iterator call (TFORCALL) */
+  resolve_continues(C, fs, luaK_getlabel(fs));
+
+  /* Fix TFORPREP jump: forward to TFORCALL position */
+  {
+    int dest = luaK_getlabel(fs);
+    int offset = dest - (prep + 1);
+    SETARG_Bx(fs->f->code[prep], (unsigned int)offset);
+  }
+
+  /* OP_TFORCALL */
+  luaK_codeABC(fs, OP_TFORCALL, base, 0, nvars);
+  luaK_fixline(fs, C->linenumber);
+
+  /* OP_TFORLOOP */
+  int endfor = luaK_codeABx(fs, OP_TFORLOOP, base, 0);
+
+  /* Fix TFORLOOP jump: backward to body start (prep + 1) */
+  {
+    int offset = endfor - prep;
+    SETARG_Bx(fs->f->code[endfor], (unsigned int)offset);
+  }
+  luaK_fixline(fs, C->linenumber);
+
+  ast_leaveblock(C, fs);
+}
+
+/*-----------------------------------------------------------------------
+ * Return statement
+ *---------------------------------------------------------------------*/
+static void compile_return(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  int first = (int)luaY_nvarstack(fs);
+  int nret;
+
+  if ((n->u.return_stmt.values.count == 0)) {
+    nret = 0;
+  } else {
+    expdesc e;
+    nret = compile_exprlist_n(C, n->u.return_stmt.values, &e);
+    if (hasmultret(e.k)) {
+      luaK_setmultret(fs, &e);
+      if (e.k == VCALL && nret == 1 && !fs->bl->insidetbc) {
+        SET_OPCODE(fs->f->code[e.u.info], OP_TAILCALL);
+      }
+      nret = LUA_MULTRET;
+    } else {
+      if (nret == 1) {
+        first = luaK_exp2anyreg(fs, &e);
+      } else {
+        luaK_exp2nextreg(fs, &e);
+        lua_assert(nret == fs->freereg - first);
+      }
+    }
+  }
+  luaK_ret(fs, first, nret);
+}
+
+/*-----------------------------------------------------------------------
+ * Break
+ *---------------------------------------------------------------------*/
+static void compile_break(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  BlockCnt *bl;
+  for (bl = fs->bl; bl != NULL; bl = bl->previous) {
+    if (bl->isloop)
+      goto found;
+  }
+  compile_error(C, "break outside loop");
+found:
+  bl->isloop = 2;
+
+  int pc = luaK_jump(fs);
+
+  Labellist *gl = &C->dyd->gt;
+  int idx = gl->n;
+  luaM_growvector(C->L, gl->arr, idx, gl->size, Labeldesc, SHRT_MAX, "labels/gotos");
+  gl->arr[idx].name = C->brkn;
+  gl->arr[idx].line = C->linenumber;
+  gl->arr[idx].nactvar = fs->nactvar;
+  gl->arr[idx].close = 0;
+  gl->arr[idx].pc = pc;
+  gl->n = idx + 1;
+}
+
+/*-----------------------------------------------------------------------
+ * Continue
+ *---------------------------------------------------------------------*/
+static void compile_continue(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  BlockCnt *bl;
+  for (bl = fs->bl; bl != NULL; bl = bl->previous) {
+    if (bl->isloop)
+      goto found;
+  }
+  compile_error(C, "continue outside loop");
+found:
+
+  int pc = luaK_jump(fs);
+
+  Labellist *gl = &C->dyd->gt;
+  int idx = gl->n;
+  luaM_growvector(C->L, gl->arr, idx, gl->size, Labeldesc, SHRT_MAX, "labels/gotos");
+  gl->arr[idx].name = C->contn;
+  gl->arr[idx].line = C->linenumber;
+  gl->arr[idx].nactvar = fs->nactvar;
+  gl->arr[idx].close = 0;
+  gl->arr[idx].pc = pc;
+  gl->n = idx + 1;
+}
+
+/*-----------------------------------------------------------------------
+ * Function declaration
+ *---------------------------------------------------------------------*/
+static void compile_func_decl(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  TString *fname = mkstr(C, n->u.func_decl.name);
+  bool isGlobal = n->u.func_decl.is_global;
+  bool isConst = n->u.func_decl.is_const;
+
+  if (isGlobal) {
+    lu_byte kind = isConst ? GDKCONST : GDKREG;
+    ast_new_var(C, fname, kind);
+    fs->nactvar++;
+
+    expdesc var;
+    ast_buildglobal(C, fname, &var);
+
+    expdesc b;
+    {
+      FuncState new_fs;
+      BlockCnt bl;
+      new_fs.f = ast_addprototype(C);
+      new_fs.f->linedefined = C->linenumber;
+      ast_open_func(C, &new_fs, &bl);
+
+      compile_params(C, &new_fs, n->u.func_decl.params, n->u.func_decl.is_variadic, false);
+
+      if (n->u.func_decl.body)
+        compile_block(C, n->u.func_decl.body);
+
+      new_fs.f->lastlinedefined = C->linenumber;
+      ast_close_func(C);
+    }
+    ast_codeclosure(C, &b);
+    luaK_storevar(fs, &var, &b);
+    luaK_fixline(fs, n->loc.line);
+  } else {
+    /* Local function */
+    int fvar = fs->nactvar;
+    if (isConst)
+      ast_new_var(C, fname, RDKCONST);
+    else
+      ast_new_localvar(C, fname);
+    ast_adjustlocalvars(C, 1); /* enter scope before compiling body */
+
+    expdesc b;
+    {
+      FuncState new_fs;
+      BlockCnt bl;
+      new_fs.f = ast_addprototype(C);
+      new_fs.f->linedefined = C->linenumber;
+      ast_open_func(C, &new_fs, &bl);
+
+      compile_params(C, &new_fs, n->u.func_decl.params, n->u.func_decl.is_variadic, false);
+
+      if (n->u.func_decl.body)
+        compile_block(C, n->u.func_decl.body);
+
+      new_fs.f->lastlinedefined = C->linenumber;
+      ast_close_func(C);
+    }
+    ast_codeclosure(C, &b);
+
+    /* Store the closure into the local variable */
+    Vardesc *fvd = ast_getvar(C, fs, fvar);
+    if (varinreg(fvd)) {
+      int pidx = fvd->vd.pidx;
+      if (pidx >= 0 && pidx < fs->ndebugvars)
+        fs->f->locvars[pidx].startpc = fs->pc;
+
+      /* Store closure to the local variable's register */
+      expdesc var;
+      var.f = var.t = NO_JUMP;
+      var.k = VLOCAL;
+      var.u.var.vidx = cast_short(fvar);
+      var.u.var.ridx = fvd->vd.ridx;
+      luaK_storevar(fs, &var, &b);
+    }
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Class declaration
+ *---------------------------------------------------------------------*/
+/*-----------------------------------------------------------------------
+ * Helper: properly initialize a VLOCAL expdesc with correct vidx AND ridx.
+ *
+ * init_exp(&e, VLOCAL, idx) is WRONG because it writes e->u.info (int),
+ * but VLOCAL reads e->u.var.vidx (short) + e->u.var.ridx (byte).
+ * On little-endian, init_exp(e, VLOCAL, 3) gives vidx=3 but ridx=0,
+ * silently pointing to R(0) instead of the correct register.
+ *---------------------------------------------------------------------*/
+static void init_exp_local(CompileCtx *C, FuncState *fs, expdesc *e, int vidx) {
+  e->f = e->t = NO_JUMP;
+  e->k = VLOCAL;
+  e->u.var.vidx = cast_short(vidx);
+  e->u.var.ridx = ast_getvar(C, fs, vidx)->vd.ridx;
+}
+
+static void compile_class_decl(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  TString *clsname = mkstr(C, n->u.class_decl.name);
+
+  /* ================================================================
+   * 1. local ClassName = {}
+   * ================================================================ */
+  ast_new_localvar(C, clsname);
+  {
+    int pc = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+    luaK_code(fs, 0);
+    expdesc tbl;
+    init_exp(&tbl, VNONRELOC, fs->freereg);
+    luaK_reserveregs(fs, 1);
+    luaK_settablesize(fs, pc, tbl.u.info, 0, 0);
+  }
+  ast_adjustlocalvars(C, 1);
+
+  /* ================================================================
+   * 2. ClassName.__index = ClassName
+   * ================================================================ */
+  {
+    expdesc cls;
+    ast_singlevar(C, n->u.class_decl.name, &cls);
+    luaK_exp2anyregup(fs, &cls);
+
+    expdesc key;
+    init_exp(&key, VKSTR, 0);
+    key.u.strval = mkstr(C, "__index");
+    luaK_indexed(fs, &cls, &key);
+
+    expdesc val;
+    ast_singlevar(C, n->u.class_decl.name, &val);
+    luaK_storevar(fs, &cls, &val);
+  }
+
+  /* ================================================================
+   * 3. First pass: bind methods & static fields onto the class table
+   * ================================================================ */
+  for (int _mi = 0; _mi < n->u.class_decl.members.count; _mi++) {
+    AstNode *member = n->u.class_decl.members.items[_mi];
+    if (!member->u.class_member.member_declaration)
+      continue;
+
+    bool isStatic = member->u.class_member.is_static;
+    AstNode *decl = member->u.class_member.member_declaration;
+
+    if (decl->type == NODE_FUNCTION_DECL) {
+      AstNode *fdecl = (decl);
+      expdesc cls;
+      ast_singlevar(C, n->u.class_decl.name, &cls);
+      luaK_exp2anyregup(fs, &cls);
+
+      expdesc key;
+      init_exp(&key, VKSTR, 0);
+      key.u.strval = mkstr(C, fdecl->u.func_decl.name);
+      luaK_indexed(fs, &cls, &key);
+
+      expdesc b;
+      {
+        FuncState new_fs;
+        BlockCnt bl;
+        new_fs.f = ast_addprototype(C);
+        new_fs.f->linedefined = C->linenumber;
+        ast_open_func(C, &new_fs, &bl);
+
+        compile_params(C, &new_fs, fdecl->u.func_decl.params, fdecl->u.func_decl.is_variadic, !isStatic);
+
+        if (fdecl->u.func_decl.body)
+          compile_block(C, fdecl->u.func_decl.body);
+
+        new_fs.f->lastlinedefined = C->linenumber;
+        ast_close_func(C);
+      }
+      ast_codeclosure(C, &b);
+      luaK_storevar(fs, &cls, &b);
+
+    } else if (decl->type == NODE_VARIABLE_DECL && isStatic) {
+      AstNode *vdecl = (decl);
+      if (vdecl->u.var_decl.initializer) {
+        expdesc cls;
+        ast_singlevar(C, n->u.class_decl.name, &cls);
+        luaK_exp2anyregup(fs, &cls);
+
+        expdesc key;
+        init_exp(&key, VKSTR, 0);
+        key.u.strval = mkstr(C, vdecl->u.var_decl.name);
+        luaK_indexed(fs, &cls, &key);
+
+        expdesc val;
+        compile_expression(C, vdecl->u.var_decl.initializer, &val);
+        luaK_storevar(fs, &cls, &val);
+      }
+    }
+    fs->freereg = luaY_nvarstack(fs);
+  }
+
+  /* ================================================================
+   * 4. Second pass: generate __call metamethod for `new` instantiation
+   *
+   * Equivalent Lua:
+   *   setmetatable(ClassName, { __call = function(cls, dummy, ...)
+   *       local obj = setmetatable({}, cls)
+   *       -- assign instance field defaults --
+   *       local init = obj.__init
+   *       if init then init(obj, ...) end
+   *       return obj
+   *   end })
+   *
+   * KEY INSIGHT: when tryfuncTM fires on `new Point(10,20)`:
+   *   original stack:  [Point] [nil] [10] [20]
+   *   after shift:     [__call_closure] [Point] [nil] [10] [20]
+   *
+   * So the __call closure sees:
+   *   Slot 0 = Point (the class table)     ← pushed by tryfuncTM
+   *   Slot 1 = nil   (the dummy receiver)  ← pushed by compile_new_expr
+   *   varargs = 10, 20                     ← the real constructor args
+   * ================================================================ */
+  {
+    /* Prepare outer: setmetatable(nil, ClassName, mt) */
+    expdesc sm;
+    ast_singlevar(C, "setmetatable", &sm);
+    luaK_exp2nextreg(fs, &sm);
+
+    expdesc inil;
+    init_exp(&inil, VNIL, 0);
+    luaK_exp2nextreg(fs, &inil);
+
+    expdesc cls;
+    ast_singlevar(C, n->u.class_decl.name, &cls);
+    luaK_exp2nextreg(fs, &cls);
+
+    /* mt = {} (the metatable that will hold __call) */
+    int pc2 = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+    luaK_code(fs, 0);
+    expdesc mt;
+    init_exp(&mt, VNONRELOC, fs->freereg);
+    luaK_reserveregs(fs, 1);
+    luaK_settablesize(fs, pc2, mt.u.info, 0, 1);
+
+    /* Build the __call closure */
+    expdesc call_closure;
+    {
+      FuncState new_fs;
+      BlockCnt bl;
+      new_fs.f = ast_addprototype(C);
+      new_fs.f->linedefined = C->linenumber;
+      ast_open_func(C, &new_fs, &bl);
+
+      /* ----------------------------------------------------------
+       * Parameters: only 2 fixed params, NOT 3.
+       *
+       * tryfuncTM shifts the original callable (Point) into Slot 0
+       * and increments narg. So:
+       *   Slot 0 = cls   (Point table)
+       *   Slot 1 = dummy (nil receiver from compile_new_expr)
+       *   hidden varargs = constructor arguments
+       * ---------------------------------------------------------- */
+      int cls_vidx = ast_new_localvar(C, mkstr(C, "cls")); /* Slot 0 */
+      ast_new_localvar(C, mkstr(C, "(dummy)"));            /* Slot 1 */
+      new_fs.f->numparams = 2;
+      ast_adjustlocalvars(C, 2);
+
+      /* Varargs — hidden mode (PF_VAHID) */
+      ast_new_var(C, mkstr(C, "(vararg table)"), RDKVAVAR);
+      new_fs.f->flag |= PF_VAHID;
+      luaK_codeABC(&new_fs, OP_VARARGPREP, 2, 0, 0);
+      ast_adjustlocalvars(C, 1);
+
+      /* Reserve registers for all params (same as compile_params does).
+       * Without this, freereg stays at 0 and obj/init locals collide
+       * with the cls/dummy parameter registers! */
+      luaK_reserveregs(&new_fs, C->fs->nactvar);
+
+      /* ----------------------------------------------------------
+       * local obj = setmetatable({}, cls)
+       * ---------------------------------------------------------- */
+      int obj_vidx = ast_new_localvar(C, mkstr(C, "obj"));
+      luaK_reserveregs(&new_fs, 1);
+      ast_adjustlocalvars(C, 1);
+
+      {
+        expdesc ism;
+        ast_singlevar(C, "setmetatable", &ism);
+        luaK_exp2nextreg(&new_fs, &ism);
+
+        /* nil receiver for setmetatable call */
+        expdesc rpad;
+        init_exp(&rpad, VNIL, 0);
+        luaK_exp2nextreg(&new_fs, &rpad);
+
+        /* arg1: {} (the new instance table) */
+        int ipc = luaK_codevABCk(&new_fs, OP_NEWTABLE, 0, 0, 0, 0);
+        luaK_code(&new_fs, 0);
+        expdesc empty;
+        init_exp(&empty, VNONRELOC, new_fs.freereg);
+        luaK_reserveregs(&new_fs, 1);
+        luaK_settablesize(&new_fs, ipc, empty.u.info, 0, 0);
+
+        /* arg2: cls — MUST use init_exp_local, NOT init_exp! */
+        expdesc icls;
+        init_exp_local(C, &new_fs, &icls, cls_vidx);
+        luaK_exp2nextreg(&new_fs, &icls);
+
+        int smbase = ism.u.info;
+        luaK_codeABC(&new_fs, OP_CALL, smbase, 4, 2); /* 4 slots, 1 result */
+
+        /* Store result into obj */
+        expdesc call_result;
+        init_exp(&call_result, VNONRELOC, smbase);
+        expdesc obj_dst;
+        init_exp_local(C, &new_fs, &obj_dst, obj_vidx);
+        luaK_storevar(&new_fs, &obj_dst, &call_result);
+        new_fs.freereg = cast_byte(smbase);
+      }
+
+      /* ----------------------------------------------------------
+       * Instance field default values: obj.field = initializer
+       * ---------------------------------------------------------- */
+      for (int _mi = 0; _mi < n->u.class_decl.members.count; _mi++) {
+    AstNode *member = n->u.class_decl.members.items[_mi];
+        if (member->u.class_member.member_declaration &&
+            member->u.class_member.member_declaration->type == NODE_VARIABLE_DECL && !member->u.class_member.is_static) {
+          AstNode *vdecl = (member->u.class_member.member_declaration);
+          if (vdecl->u.var_decl.initializer) {
+            expdesc iobj;
+            init_exp_local(C, &new_fs, &iobj, obj_vidx);
+            luaK_exp2anyregup(&new_fs, &iobj);
+
+            expdesc key;
+            init_exp(&key, VKSTR, 0);
+            key.u.strval = mkstr(C, vdecl->u.var_decl.name);
+            luaK_indexed(&new_fs, &iobj, &key);
+
+            expdesc val;
+            compile_expression(C, vdecl->u.var_decl.initializer, &val);
+            luaK_storevar(&new_fs, &iobj, &val);
+          }
+        }
+      }
+
+      /* ----------------------------------------------------------
+       * local init = obj.__init
+       * if init then init(obj, ...) end
+       * ---------------------------------------------------------- */
+      int init_vidx = ast_new_localvar(C, mkstr(C, "init"));
+      luaK_reserveregs(&new_fs, 1);
+      ast_adjustlocalvars(C, 1);
+
+      /* init = obj.__init */
+      {
+        expdesc iobj;
+        init_exp_local(C, &new_fs, &iobj, obj_vidx);
+        luaK_exp2anyregup(&new_fs, &iobj);
+
+        expdesc key;
+        init_exp(&key, VKSTR, 0);
+        key.u.strval = mkstr(C, "__init");
+        luaK_indexed(&new_fs, &iobj, &key);
+
+        expdesc init_dst;
+        init_exp_local(C, &new_fs, &init_dst, init_vidx);
+        luaK_storevar(&new_fs, &init_dst, &iobj);
+      }
+
+      /* if init then init(obj, ...) end */
+      {
+        expdesc cond;
+        init_exp_local(C, &new_fs, &cond, init_vidx);
+        luaK_goiftrue(&new_fs, &cond);
+        int jf = cond.f; /* jump-to-false patch point */
+
+        /* Push: init, obj, ... */
+        expdesc call_func;
+        init_exp_local(C, &new_fs, &call_func, init_vidx);
+        luaK_exp2nextreg(&new_fs, &call_func);
+
+        expdesc call_self;
+        init_exp_local(C, &new_fs, &call_self, obj_vidx);
+        luaK_exp2nextreg(&new_fs, &call_self);
+
+        /* Forward varargs as remaining arguments */
+        expdesc args;
+        init_exp(&args, VVARARG, luaK_codeABC(&new_fs, OP_VARARG, 0, new_fs.f->numparams, 1));
+        luaK_setmultret(&new_fs, &args);
+
+        int base = call_func.u.info;
+        luaK_codeABC(&new_fs, OP_CALL, base, LUA_MULTRET + 1, 1);
+        new_fs.freereg = cast_byte(base);
+
+        luaK_patchtohere(&new_fs, jf);
+      }
+
+      /* ----------------------------------------------------------
+       * return obj
+       * ---------------------------------------------------------- */
+      {
+        expdesc ret;
+        init_exp_local(C, &new_fs, &ret, obj_vidx);
+        luaK_exp2nextreg(&new_fs, &ret);
+        luaK_ret(&new_fs, ret.u.info, 1);
+      }
+
+      new_fs.f->lastlinedefined = C->linenumber;
+      ast_close_func(C);
+    }
+    ast_codeclosure(C, &call_closure);
+
+    /* mt.__call = call_closure */
+    expdesc tab = mt;
+    expdesc mkey;
+    init_exp(&mkey, VKSTR, 0);
+    mkey.u.strval = mkstr(C, "__call");
+    luaK_indexed(fs, &tab, &mkey);
+    luaK_storevar(fs, &tab, &call_closure);
+    luaK_settablesize(fs, pc2, mt.u.info, 0, 1);
+
+    /* Emit: setmetatable(nil, ClassName, mt) — sets class's metatable */
+    int smbase_final = sm.u.info;
+    init_exp(&sm, VCALL, luaK_codeABC(fs, OP_CALL, smbase_final, 4, 1));
+    luaK_fixline(fs, C->linenumber);
+    fs->freereg = cast_byte(smbase_final);
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Import statements
+ *---------------------------------------------------------------------*/
+static void compile_import_namespace(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  /* Compile require("modulePath") first, then store result to local variable */
+
+  /* 1. Get require function */
+  expdesc req;
+  ast_singlevar(C, "require", &req);
+  luaK_exp2nextreg(fs, &req);
+
+  /* 2. Push nil as Receiver (global function call pattern) */
+  expdesc recv;
+  init_exp(&recv, VNIL, 0);
+  luaK_exp2nextreg(fs, &recv);
+
+  /* 3. Push module path argument */
+  expdesc arg;
+  arg.f = arg.t = NO_JUMP;
+  arg.k = VKSTR;
+  arg.u.strval = mkstr(C, n->u.import_ns.module_path);
+  luaK_exp2nextreg(fs, &arg);
+
+  /* 4. Emit OP_CALL: require(nil, "modulePath")
+     B = 3 (function + receiver + arg = 3 items)
+     C = 2 (want 1 result) */
+  int base = req.u.info;
+  init_exp(&req, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
+  luaK_fixline(fs, C->linenumber);
+  fs->freereg = cast_byte(base + 1); /* call returns result at base */
+
+  /* 5. Now create local variable and store result */
+  TString *alias = mkstr(C, n->u.import_ns.alias);
+  ast_new_localvar(C, alias);
+
+  /* The VCALL result is already at 'base', which becomes the local variable */
+  ast_adjustlocalvars(C, 1);
+}
+
+static void compile_import_named(CompileCtx *C, AstNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  /* Compile require("modulePath") first, then store result to temp variable */
+
+  /* 1. Get require function */
+  expdesc req;
+  ast_singlevar(C, "require", &req);
+  luaK_exp2nextreg(fs, &req);
+
+  /* 2. Push nil as Receiver (global function call pattern) */
+  expdesc recv;
+  init_exp(&recv, VNIL, 0);
+  luaK_exp2nextreg(fs, &recv);
+
+  /* 3. Push module path argument */
+  expdesc arg;
+  arg.f = arg.t = NO_JUMP;
+  arg.k = VKSTR;
+  arg.u.strval = mkstr(C, n->u.import_named.module_path);
+  luaK_exp2nextreg(fs, &arg);
+
+  /* 4. Emit OP_CALL: require(nil, "modulePath")
+     B = 3 (function + receiver + arg = 3 items)
+     C = 2 (want 1 result) */
+  int base = req.u.info;
+  init_exp(&req, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
+  luaK_fixline(fs, C->linenumber);
+  fs->freereg = cast_byte(base + 1);
+
+  /* 5. Create temp variable for module result */
+  TString *tmpname = mkstr(C, "(import tmp)");
+  ast_new_localvar(C, tmpname);
+  ast_adjustlocalvars(C, 1);
+
+  /* For each specifier: local name = __tmp.originalName */
+  for (int _spi = 0; _spi < n->u.import_named.specifiers.count; _spi++) {
+    AstNode *spec = n->u.import_named.specifiers.items[_spi];
+    /* getLocalName() returns alias if present, otherwise importedName */
+    TString *localname = mkstr(C, spec->u.import_spec.alias ? spec->u.import_spec.alias : spec->u.import_spec.imported_name);
+    ast_new_localvar(C, localname);
+
+    expdesc tmp;
+    ast_singlevar(C, "(import tmp)", &tmp);
+    luaK_exp2anyregup(fs, &tmp);
+
+    expdesc key;
+    key.f = key.t = NO_JUMP;
+    key.k = VKSTR;
+    key.u.strval = mkstr(C, spec->u.import_spec.imported_name);
+    luaK_indexed(fs, &tmp, &key);
+    luaK_exp2nextreg(fs, &tmp);
+
+    ast_adjustlocalvars(C, 1);
+  }
+}
+
+/*-----------------------------------------------------------------------
+ * Defer statement
+ *---------------------------------------------------------------------*/
+static void compile_defer(CompileCtx *C, DeferStatementNode *n) {
+  FuncState *fs = C->fs;
+  setline(C, n->loc);
+
+  /* Create the deferred closure — now has implicit 'self' via compile_params.
+     The VM calls __close(obj, err), so self = obj. */
+  expdesc closure;
+  {
+    FuncState new_fs;
+    BlockCnt bl;
+    new_fs.f = ast_addprototype(C);
+    new_fs.f->linedefined = C->linenumber;
+    ast_open_func(C, &new_fs, &bl);
+
+    /* Use compile_params with empty param list — adds implicit self */
+    AstList empty_params = spt_ast_list_empty();
+    compile_params(C, &new_fs, empty_params, false, false);
+
+    if (n->u.defer_stmt.body)
+      compile_block(C, n->u.defer_stmt.body);
+
+    new_fs.f->lastlinedefined = C->linenumber;
+    ast_close_func(C);
+  }
+  ast_codeclosure(C, &closure);
+  luaK_exp2nextreg(fs, &closure);
+
+  /* Wrap: setmetatable({}, {__close = <closure>}) */
+  {
+    /* Load setmetatable */
+    expdesc sm;
+    ast_singlevar(C, "setmetatable", &sm);
+    luaK_exp2nextreg(fs, &sm);
+
+    /* Push _ENV as Receiver (Scenario A: global function call) */
+    expdesc env;
+    ast_buildvar(C, C->envn, &env);
+    luaK_exp2nextreg(fs, &env);
+
+    /* First arg: {} */
+    int pc1 = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+    luaK_code(fs, 0);
+    expdesc empty;
+    init_exp(&empty, VNONRELOC, fs->freereg);
+    luaK_reserveregs(fs, 1);
+    luaK_settablesize(fs, pc1, empty.u.info, 0, 0);
+
+    /* Second arg: {__close = <closure>} */
+    int pc2 = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+    luaK_code(fs, 0);
+    expdesc mt;
+    init_exp(&mt, VNONRELOC, fs->freereg);
+    luaK_reserveregs(fs, 1);
+
+    /* mt.__close = closure */
+    expdesc tab = mt;
+    expdesc mkey;
+    mkey.f = mkey.t = NO_JUMP;
+    mkey.k = VKSTR;
+    mkey.u.strval = mkstr(C, "__close");
+    luaK_indexed(fs, &tab, &mkey);
+    luaK_storevar(fs, &tab, &closure);
+    luaK_settablesize(fs, pc2, mt.u.info, 0, 1);
+
+    /* Call setmetatable(_ENV, {}, mt)
+       nparams = 3 (Receiver + 2 args), B = 4 */
+    int smbase = sm.u.info;
+    init_exp(&sm, VCALL, luaK_codeABC(fs, OP_CALL, smbase, 4, 2));
+    luaK_fixline(fs, C->linenumber);
+    fs->freereg = cast_byte(smbase + 1);
+  }
+
+  /* Create to-be-closed local */
+  TString *defername = mkstr(C, "(defer)");
+  ast_new_var(C, defername, RDKTOCLOSE);
+  ast_adjustlocalvars(C, 1);
+
+  /* Mark to-be-closed */
+  {
+    BlockCnt *bl = fs->bl;
+    bl->upval = 1;
+    bl->insidetbc = 1;
+    fs->needclose = 1;
+  }
+  lu_byte tbclevel = luaY_nvarstack(fs) - 1;
+  luaK_codeABC(fs, OP_TBC, tbclevel, 0, 0);
+}
+
+/*-----------------------------------------------------------------------
+ * Statement dispatch
+ *---------------------------------------------------------------------*/
+static void compile_statement(CompileCtx *C, AstNode *stmt) {
+  if (!stmt)
+    return;
+  setline_node(C, stmt);
+  FuncState *fs = C->fs;
+
+  switch (stmt->type) {
+  case NODE_BLOCK:
+    compile_block(C, (stmt));
+    break;
+  case NODE_EXPRESSION_STATEMENT:
+    compile_expr_stmt(C, (stmt));
+    break;
+  case NODE_VARIABLE_DECL:
+    compile_var_decl(C, (stmt));
+    break;
+  case NODE_MUTI_VARIABLE_DECL:
+    compile_multi_var_decl(C, (stmt));
+    break;
+  case NODE_ASSIGNMENT:
+    compile_assignment(C, (stmt));
+    break;
+  case NODE_UPDATE_ASSIGNMENT:
+    compile_update_assignment(C, (stmt));
+    break;
+  case NODE_IF_STATEMENT:
+    compile_if(C, (stmt));
+    break;
+  case NODE_WHILE_STATEMENT:
+    compile_while(C, (stmt));
+    break;
+  case NODE_FOR_NUMERIC_STATEMENT:
+    compile_for_numeric(C, (stmt));
+    break;
+  case NODE_FOR_EACH_STATEMENT:
+    compile_for_each(C, (stmt));
+    break;
+  case NODE_RETURN_STATEMENT:
+    compile_return(C, (stmt));
+    break;
+  case NODE_BREAK_STATEMENT:
+    compile_break(C, (stmt));
+    break;
+  case NODE_CONTINUE_STATEMENT:
+    compile_continue(C, (stmt));
+    break;
+  case NODE_FUNCTION_DECL:
+    compile_func_decl(C, (stmt));
+    break;
+  case NODE_CLASS_DECL:
+    compile_class_decl(C, (stmt));
+    break;
+  case NODE_IMPORT_NAMESPACE:
+    compile_import_namespace(C, (stmt));
+    break;
+  case NODE_IMPORT_NAMED:
+    compile_import_named(C, (stmt));
+    break;
+  case NODE_DEFER_STATEMENT:
+    compile_defer(C, (stmt));
+    break;
+  default:
+    compile_errorf(C, "unsupported statement type %d", (int)stmt->type);
+    break;
+  }
+
+  lua_assert(fs->f->maxstacksize >= fs->freereg && fs->freereg >= luaY_nvarstack(fs));
+  fs->freereg = luaY_nvarstack(fs);
+}
+
+/*=======================================================================
+ * Main entry point
+ *=====================================================================*/
+
+static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
+  BlockCnt bl;
+  ast_open_func(C, fs, &bl);
+
+  /* Main function is always vararg */
+  fs->f->flag |= PF_VAHID;
+  luaK_codeABC(fs, OP_VARARGPREP, 0, 0, 0);
+
+  /* Set up _ENV upvalue */
+  Upvaldesc *env = &fs->f->upvalues[0];
+  {
+    Proto *f = fs->f;
+    int oldsize = f->sizeupvalues;
+    luaY_checklimit(fs, fs->nups + 1, 255, "upvalues");
+    luaM_growvector(C->L, f->upvalues, fs->nups, f->sizeupvalues, Upvaldesc, 255, "upvalues");
+    while (oldsize < f->sizeupvalues)
+      f->upvalues[oldsize++].name = NULL;
+    env = &f->upvalues[fs->nups++];
+  }
+  env->instack = 1;
+  env->idx = 0;
+  env->kind = VDKREG;
+  env->name = C->envn;
+  luaC_objbarrier(C->L, fs->f, env->name);
+
+  /* Root must be a BlockNode */
+  AstNode *block = NULL;
+  if (root->type == NODE_BLOCK) {
+    block = (root);
+  } else {
+    compile_error(C, "root AST node must be a BlockNode");
+  }
+
+  /* Collect exported declarations（仅 变量/函数/类，门控 is_module_root + is_exported；
+     与原 dynamic_cast 链等价：multi-var 不在此收集）。 */
+  const char *exported_names[512];
+  int n_exported = 0;
+  for (int _si = 0; _si < block->u.block.statements.count; _si++) {
+    AstNode *stmt = block->u.block.statements.items[_si];
+    const char *exp_name = NULL;
+    if (stmt->type == NODE_VARIABLE_DECL && stmt->u.var_decl.is_module_root &&
+        stmt->u.var_decl.is_exported)
+      exp_name = stmt->u.var_decl.name;
+    else if (stmt->type == NODE_FUNCTION_DECL && stmt->u.func_decl.is_module_root &&
+             stmt->u.func_decl.is_exported)
+      exp_name = stmt->u.func_decl.name;
+    else if (stmt->type == NODE_CLASS_DECL && stmt->u.class_decl.is_module_root &&
+             stmt->u.class_decl.is_exported)
+      exp_name = stmt->u.class_decl.name;
+    if (exp_name) {
+      if (n_exported >= (int)(sizeof(exported_names) / sizeof(exported_names[0])))
+        compile_error(C, "too many exported names");
+      exported_names[n_exported++] = exp_name;
+    }
+  }
+
+  for (int _si = 0; _si < block->u.block.statements.count; _si++) {
+    AstNode *stmt = block->u.block.statements.items[_si];
+    compile_statement(C, stmt);
+    C->fs->freereg = luaY_nvarstack(C->fs);
+  }
+
+  /* If there are exported names, return an exports table */
+  if (n_exported > 0) {
+    int exports_reg = fs->freereg;
+    int pc = luaK_codeABC(fs, OP_NEWTABLE, exports_reg, 0, 0);
+    luaK_code(fs, CREATE_Ax(OP_EXTRAARG, 0));
+    fs->freereg++;
+
+    for (int _ni = 0; _ni < n_exported; _ni++) {
+      const char *name = exported_names[_ni];
+      expdesc key, val;
+      key.f = key.t = NO_JUMP;
+      key.k = VKSTR;
+      key.u.strval = mkstr(C, name);
+
+      ast_singlevar(C, name, &val);
+
+      /* Use luaK_indexed to set up the table indexing, then store the value */
+      expdesc table_exp;
+      table_exp.k = VNONRELOC;
+      table_exp.u.info = exports_reg;
+      table_exp.f = table_exp.t = NO_JUMP;
+
+      /* Index the table with the key */
+      luaK_indexed(fs, &table_exp, &key);
+
+      /* Store the value into the indexed position */
+      luaK_storevar(fs, &table_exp, &val);
+    }
+
+    luaK_codeABC(fs, OP_RETURN, exports_reg, 2, 0);
+  }
+
+  ast_close_func(C);
+}
+
+LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *name) {
+  CompileCtx ctx = {0};
+  FuncState funcstate = {};
+
+  LClosure *cl = luaF_newLclosure(L, 1);
+  setclLvalue2s(L, L->top.p, cl);
+  luaD_inctop(L);
+
+  ctx.L = L;
+  ctx.ls.L = L; // 关键：lcode.c 需要通过 fs->ls->L 访问 L
+  ctx.ls.dyd = dyd;
+  ctx.fs = NULL;
+  ctx.dyd = dyd;
+
+  ctx.source = luaS_new(L, name);
+  ctx.ls.source = ctx.source; /* lcode.c may access fs->ls->source */
+  ctx.envn = luaS_newliteral(L, LUA_ENV);
+  ctx.brkn = luaS_newliteral(L, "break");
+  ctx.contn = luaS_newliteral(L, "(continue)");
+  ctx.linenumber = 1;
+
+  funcstate.f = cl->p = luaF_newproto(L);
+  luaC_objbarrier(L, cl, cl->p);
+  funcstate.f->source = ctx.source;
+  luaC_objbarrier(L, funcstate.f, funcstate.f->source);
+
+  dyd->actvar.n = dyd->gt.n = dyd->label.n = 0;
+
+  ast_mainfunc(&ctx, &funcstate, root);
+
+  lua_assert(!funcstate.prev && funcstate.nups == 1 && !ctx.fs);
+  lua_assert(dyd->actvar.n == 0 && dyd->gt.n == 0 && dyd->label.n == 0);
+
+  luaF_initupvals(L, cl);
+  if (cl->nupvalues >= 1) {
+    TValue gt;
+    Table *registry = hvalue(&G(L)->l_registry);
+    luaH_getint(L, registry, LUA_RIDX_GLOBALS, &gt);
+    setobj(L, cl->upvals[0]->v.p, &gt);
+    luaC_barrier(L, cl->upvals[0], &gt);
+  }
+
+  /* 释放 Dyndata 暂存数组（actvar/gt/label），与 luaD_protectedparser 一致，
+     避免泄漏。这些是编译期 scratch，主函数编译完成后不再需要。 */
+  luaM_freearray(L, dyd->actvar.arr, cast_sizet(dyd->actvar.size));
+  luaM_freearray(L, dyd->gt.arr, cast_sizet(dyd->gt.size));
+  luaM_freearray(L, dyd->label.arr, cast_sizet(dyd->label.size));
+  dyd->actvar.arr = NULL;
+  dyd->actvar.size = 0;
+  dyd->gt.arr = NULL;
+  dyd->gt.size = 0;
+  dyd->label.arr = NULL;
+  dyd->label.size = 0;
+
+  return cl;
+}
+
+Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
+                                       AstNode *funcNode, const char *name) {
+  CompileCtx ctx = {0};
+  ctx.L = L;
+  ctx.ls.L = L;
+  ctx.ls.dyd = dyd;
+  ctx.fs = parent_fs;
+  ctx.dyd = dyd;
+  ctx.source = luaS_new(L, name);
+  ctx.ls.source = ctx.source; /* lcode.c may access fs->ls->source */
+  ctx.envn = luaS_newliteral(L, LUA_ENV);
+  ctx.brkn = luaS_newliteral(L, "break");
+  ctx.contn = luaS_newliteral(L, "(continue)");
+  ctx.linenumber = 1;
+
+  if (funcNode->type == NODE_LAMBDA) {
+    expdesc e;
+    compile_lambda(&ctx, (funcNode), &e);
+    return parent_fs->f->p[parent_fs->np - 1];
+  } else if (funcNode->type == NODE_FUNCTION_DECL) {
+    compile_func_decl(&ctx, (funcNode));
+    return parent_fs->f->p[parent_fs->np - 1];
+  }
+  return NULL;
+}

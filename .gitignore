@@ -271,3 +271,10 @@ sptxx/build/CMakeFiles/sptxx_test_usertype_trace.dir/compiler_depend.internal
 /gen/LangLexer.interp
 /gen/LangLexer.java
 /gen/LangLexer.tokens
+
+# 新增：合并后的构建产物和临时文件
+/spt-lsp/build/
+*.zip
+build_debug.bat
+/.trae/
+/.idea/

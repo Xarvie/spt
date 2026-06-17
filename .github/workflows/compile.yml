@@ -8,7 +8,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     concurrency:
-      group: ${{ github.ref }}-${{ github.base_ref }}-${{ github.head_ref }}-${{ matrix.os }}-${{ matrix.arch }}
+      group: ${{ github.ref }}-${{ github.base_ref }}-${{ github.head_ref }}-${{ matrix.os }}
       cancel-in-progress: true
 
     strategy:
@@ -20,33 +20,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Dependencies (Linux Only)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y uuid-dev
-
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build --config Release
 
-      - name: Run C API tests
+      - name: Run tests
         run: |
           cd build
-          ctest -C Release --output-on-failure -j4 -R TestCApi
-
-      - name: Run SPT tests (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          chmod +x scripts/run_spt_tests.sh
-          ./scripts/run_spt_tests.sh
-
-      - name: Run SPT tests (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          python scripts/run_spt_tests.py
+          ctest -C Release --output-on-failure -j4
 
       - name: Upload test results
         uses: actions/upload-artifact@v4

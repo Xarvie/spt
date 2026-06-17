@@ -50,7 +50,8 @@ static int auxresume(lua_State *L, lua_State *co, int narg) {
   }
 }
 
-/* luaB_coresume - receiver is arg1, co is arg2, args start from arg3 */
+/* luaB_coresume - receiver is arg1, co is arg2, args start from arg3.
+** Receiver (slot 0) is passed to the coroutine as the first argument. */
 static int luaB_coresume(lua_State *L) {
   lua_State *co = getco(L);
   int r;

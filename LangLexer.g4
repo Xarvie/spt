@@ -38,7 +38,6 @@ STATIC: 'static';       // 类静态成员/方法
 IMPORT: 'import';       // 模块导入提示 (编译时)
 AS:     'as';           // 模块导入别名
 FROM:   'from';         // 用于 import { ... } from "..."
-PRIVATE: 'private';     // 私有访问修饰符提示 (静态分析用)
 EXPORT: 'export';
 
 // 面向对象
