@@ -15,6 +15,7 @@ static int host_print(spt_State *L) {
     if (i > 1) printf("\t");
     int idx = i + 1;                     /* arg i is at stack index i+1 */
     if (spt_isnull(L, idx)) { printf("null"); continue; }
+    if (spt_isbool(L, idx)) { printf(spt_tobool(L, idx) ? "true" : "false"); continue; }
     const char *s = spt_tostring(L, idx);
     if (s) printf("%s", s);
     else {
@@ -168,6 +169,54 @@ int main(void) {
       "print(a * b);");
   expect_reject(L, "int x = \"hello\";");
   expect_reject(L, "const int K = 5;\nK = 6;");
+
+  printf("-- explicit type conversion (cast) --\n\n");
+  /* numeric casts: int <-> float */
+  run(L, "int-to-float",
+      "int n = 42;\n"
+      "float f = (float)n;\n"
+      "print(f);");
+  run(L, "float-to-int",
+      "float pi = 3.99;\n"
+      "int whole = (int)pi;\n"
+      "print(whole);");
+  /* string casts */
+  run(L, "int-to-string",
+      "int n = 123;\n"
+      "string s = (string)n;\n"
+      "print(s);");
+  run(L, "string-to-int",
+      "string s = \"456\";\n"
+      "int n = (int)s;\n"
+      "print(n + 1);");
+  run(L, "float-to-string",
+      "float x = 3.14;\n"
+      "print((string)x);");
+  run(L, "string-to-float",
+      "string s = \"2.5\";\n"
+      "float f = (float)s;\n"
+      "print(f + 1.0);");
+  /* bool casts */
+  run(L, "int-to-bool",
+      "print((bool)0);\n"
+      "print((bool)7);");
+  run(L, "bool-to-int",
+      "print((int)true);\n"
+      "print((int)false);");
+  /* the key use case: crossing the dynamic→typed boundary */
+  run(L, "dynamic-to-typed",
+      "function get_value() { return 42; }\n"
+      "int n = (int)get_value();\n"
+      "print(n * 2);");
+  run(L, "cast-in-expression",
+      "int a = 7;\n"
+      "float b = 2.0;\n"
+      "print((int)a + (int)b);");
+  /* cast enables sound typing: assign dynamic to typed via explicit cast */
+  run(L, "typed-var-from-dynamic",
+      "dyn = 100;\n"
+      "int typed = (int)dyn;\n"
+      "print(typed + 1);");
 
 #ifdef SPT_HAS_JIT
   printf("-- typed source through the JIT --\n\n");

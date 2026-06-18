@@ -170,8 +170,27 @@ static Node *parse_postfix(P *p) {
   return e;
 }
 
-/* unary := (- | !) unary | postfix */
+/* unary := (type) unary | (- | !) unary | postfix
+ *
+ * The cast `(type)expr` is recognised by a one-token lookahead: when we see
+ * `(` followed by a type keyword followed by `)`, it's a cast, not a grouping.
+ * The operand is parsed as another unary so `(int)-(float)x` works as written. */
 static Node *parse_unary(P *p) {
+  if (check(p, TK_LPAREN)) {
+    Lexer save_lex = p->lex;
+    Token  save_cur = p->cur;
+    advance(p);                            /* consume '(' */
+    if (is_type_kw(p->cur.type)) {
+      Type ty = parse_type(p);
+      expect(p, TK_RPAREN, "')'");
+      Node *n = node(p, N_CAST);
+      n->u.cast.target = ty;
+      n->u.cast.e = parse_unary(p);
+      return n;
+    }
+    p->lex = save_lex;                     /* not a cast: restore and fall through */
+    p->cur = save_cur;
+  }
   if (check(p, TK_MINUS) || check(p, TK_NOT)) {
     Node *n = node(p, N_UNOP);
     n->u.bin.op = p->cur.type;

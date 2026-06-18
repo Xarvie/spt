@@ -87,6 +87,10 @@ typedef enum {
   OP_GETINDEX,    /* A B C   R[A] = R[B][R[C]]                            */
   OP_SETINDEX,    /* A B C   R[A][R[B]] = R[C]                            */
 
+  /* Explicit type conversion — the dynamic→typed boundary.              */
+  /* B encodes the target Type (TY_INT..TY_BOOL). Runtime checks & conv. */
+  OP_CAST,        /* A B     R[A] = cast(R[A], B)                          */
+
   /* Globals (a Map held by the state).                                   */
   OP_GETGLOBAL,   /* A Bx    R[A] = _G[K[Bx]]                              */
   OP_SETGLOBAL,   /* A Bx    _G[K[Bx]] = R[A]                              */

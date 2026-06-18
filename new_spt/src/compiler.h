@@ -58,7 +58,7 @@ void lex_next(Lexer *lx, Token *t);
 /* ---- AST ---- */
 typedef enum {
   N_INT, N_FLOAT, N_STR, N_BOOL, N_NULL, N_NAME,
-  N_BINOP, N_UNOP, N_CALL, N_INDEX, N_LIST,
+  N_BINOP, N_UNOP, N_CALL, N_INDEX, N_LIST, N_CAST,
   N_BLOCK, N_IF, N_WHILE, N_RETURN, N_ASSIGN, N_GLOBAL, N_FUNC, N_EXPRSTMT,
   N_VARDECL
 } NodeKind;
@@ -76,6 +76,7 @@ struct Node {
     struct { Node *fn; Node **args; int nargs; } call;   /* N_CALL             */
     struct { Node *obj, *idx; } index;                   /* N_INDEX            */
     struct { Node **elems; int n; } list;                /* N_LIST, N_BLOCK    */
+    struct { Type target; Node *e; } cast;               /* N_CAST             */
     struct { Node *cond, *a, *b; } ctrl;                 /* N_IF/N_WHILE       */
     struct { Node *e; } one;                             /* N_RETURN/N_EXPRSTMT*/
     struct { Node *target, *value; } assign;             /* N_ASSIGN           */

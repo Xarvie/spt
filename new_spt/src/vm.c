@@ -14,9 +14,11 @@
  * converting OP_CALL into a non-recursive re-dispatch is a later optimisation.
  */
 #include "spt/mem.h"
+#include "compiler.h"   /* Type enum — used by OP_CAST */
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <setjmp.h>
 
 #ifdef SPT_HAS_JIT
@@ -29,7 +31,7 @@ const char *const spt_opnames[OP_NUM_OPCODES] = {
   "ADD","SUB","MUL","DIV","MOD","NEG",
   "EQ","LT","LE","NOT","JMP","TEST","TESTSET","CONCAT","LEN",
   "NEWLIST","GETLIST","SETLIST","LISTPUSH","NEWMAP","GETMAP","SETMAP",
-  "GETINDEX","SETINDEX","GETGLOBAL","SETGLOBAL","GETUPVAL","SETUPVAL",
+  "GETINDEX","SETINDEX","CAST","GETGLOBAL","SETGLOBAL","GETUPVAL","SETUPVAL",
   "CLOSURE","CALL","RETURN","HALT"
 };
 
@@ -234,6 +236,99 @@ static void do_call(spt_State *L, ptrdiff_t funcidx, int nargs, int wantres) {
 }
 
 /* ================================================================== */
+/* Explicit type conversion (OP_CAST)                                  */
+/* ================================================================== */
+/* Cast the value in `ra` to the target Type `target` (one of TY_INT,
+ * TY_FLOAT, TY_STRING, TY_BOOL). This is the dynamic→typed boundary: it
+ * performs a runtime check and a real conversion, raising an error when the
+ * value cannot be meaningfully represented in the target type. */
+static void do_cast(spt_State *L, TValue *ra, Type target) {
+  switch (target) {
+    case TY_INT: {
+      switch (ra->tt) {
+        case SPT_TINT:                                    break;  /* identity */
+        case SPT_TFLOAT: setint(ra, (spt_Integer)fltvalue(ra)); break;
+        case SPT_TBOOL:  setint(ra, bvalue(ra) ? 1 : 0);        break;
+        case SPT_TSTRING: {
+          char *end; const char *s = str_cstr(strvalue(ra));
+          long long v = strtoll(s, &end, 10);
+          if (*s == '\0' || *end != '\0')
+            spt_runtime_error(L, "cannot cast string \"%s\" to int", s);
+          setint(ra, (spt_Integer)v);
+          break;
+        }
+        default:
+          spt_runtime_error(L, "cannot cast %s to int", spt_opnames[ra->tt]);
+      }
+      break;
+    }
+    case TY_FLOAT: {
+      switch (ra->tt) {
+        case SPT_TINT:   setflt(ra, (spt_Number)ivalue(ra));    break;
+        case SPT_TFLOAT:                                         break;  /* identity */
+        case SPT_TBOOL:  setflt(ra, bvalue(ra) ? 1.0 : 0.0);    break;
+        case SPT_TSTRING: {
+          char *end; const char *s = str_cstr(strvalue(ra));
+          double v = strtod(s, &end);
+          if (*s == '\0' || *end != '\0')
+            spt_runtime_error(L, "cannot cast string \"%s\" to float", s);
+          setflt(ra, (spt_Number)v);
+          break;
+        }
+        default:
+          spt_runtime_error(L, "cannot cast %s to float", spt_opnames[ra->tt]);
+      }
+      break;
+    }
+    case TY_STRING: {
+      char buf[64];
+      switch (ra->tt) {
+        case SPT_TINT: {
+          int n = snprintf(buf, sizeof buf, "%lld", (long long)ivalue(ra));
+          String *s = spt_str_newlen(L, buf, (size_t)n);
+          setgco(ra, (GCObject *)s, SPT_TSTRING);
+          break;
+        }
+        case SPT_TFLOAT: {
+          int n = snprintf(buf, sizeof buf, "%.14g", fltvalue(ra));
+          String *s = spt_str_newlen(L, buf, (size_t)n);
+          setgco(ra, (GCObject *)s, SPT_TSTRING);
+          break;
+        }
+        case SPT_TBOOL: {
+          const char *t = bvalue(ra) ? "true" : "false";
+          String *s = spt_str_newlen(L, t, strlen(t));
+          setgco(ra, (GCObject *)s, SPT_TSTRING);
+          break;
+        }
+        case SPT_TSTRING: break;                              /* identity */
+        case SPT_TNULL: {
+          String *s = spt_str_newlen(L, "null", 4);
+          setgco(ra, (GCObject *)s, SPT_TSTRING);
+          break;
+        }
+        default:
+          spt_runtime_error(L, "cannot cast %s to string", spt_opnames[ra->tt]);
+      }
+      break;
+    }
+    case TY_BOOL: {
+      switch (ra->tt) {
+        case SPT_TINT:   setbool(ra, ivalue(ra) != 0);        break;
+        case SPT_TFLOAT: setbool(ra, fltvalue(ra) != 0.0);    break;
+        case SPT_TBOOL:                                        break;  /* identity */
+        case SPT_TNULL:  setbool(ra, 0);                       break;
+        default:
+          spt_runtime_error(L, "cannot cast %s to bool", spt_opnames[ra->tt]);
+      }
+      break;
+    }
+    default:
+      spt_runtime_error(L, "invalid cast target type %d", (int)target);
+  }
+}
+
+/* ================================================================== */
 /* The dispatch loop                                                   */
 /* ================================================================== */
 #define R(i)   (base[i])
@@ -273,6 +368,7 @@ int spt_execute(spt_State *L) {
     [OP_SETLIST]=&&OPL_OP_SETLIST, [OP_LISTPUSH]=&&OPL_OP_LISTPUSH,
     [OP_NEWMAP]=&&OPL_OP_NEWMAP, [OP_GETMAP]=&&OPL_OP_GETMAP, [OP_SETMAP]=&&OPL_OP_SETMAP,
     [OP_GETINDEX]=&&OPL_OP_GETINDEX, [OP_SETINDEX]=&&OPL_OP_SETINDEX,
+    [OP_CAST]=&&OPL_OP_CAST,
     [OP_GETGLOBAL]=&&OPL_OP_GETGLOBAL, [OP_SETGLOBAL]=&&OPL_OP_SETGLOBAL,
     [OP_GETUPVAL]=&&OPL_OP_GETUPVAL, [OP_SETUPVAL]=&&OPL_OP_SETUPVAL,
     [OP_CLOSURE]=&&OPL_OP_CLOSURE, [OP_CALL]=&&OPL_OP_CALL,
@@ -455,6 +551,12 @@ vm_loop:
     } else {
       spt_runtime_error(L, "attempt to index a non-indexable value");
     }
+    VM_NEXT();
+  }
+
+  /* ---- explicit type conversion ---- */
+  VM_CASE(OP_CAST): {
+    do_cast(L, &R(SPT_GETA(inst)), (Type)SPT_GETB(inst));
     VM_NEXT();
   }
 

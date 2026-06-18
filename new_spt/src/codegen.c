@@ -252,6 +252,8 @@ static Type infer(FuncState *fs, Node *e) {
            ? ctx_ret(fs->ctx, e->u.call.fn->u.str.s, e->u.call.fn->u.str.len)
            : TY_DYN;
     case N_INDEX: return TY_DYN;
+    case N_CAST:
+      return e->u.cast.target;
     default:      return TY_DYN;
   }
 }
@@ -308,6 +310,11 @@ static int expr_next(FuncState *fs, Node *e) {
       int a = expr_next(fs, e->u.bin.l);
       if (e->u.bin.op == TK_MINUS) emit(fs, SPT_MK_ABC(OP_NEG, a, a, 0));
       else                          emit(fs, SPT_MK_ABC(OP_NOT, a, a, 0));
+      return a;
+    }
+    case N_CAST: {
+      int a = expr_next(fs, e->u.cast.e);
+      emit(fs, SPT_MK_ABC(OP_CAST, a, (unsigned)e->u.cast.target, 0));
       return a;
     }
     case N_BINOP: {

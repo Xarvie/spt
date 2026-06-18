@@ -25,6 +25,7 @@ SPT_API void spt_pushcfunction(spt_State *L, spt_CFunction fn);
 
 /* --- reading values (by absolute 1-based stack index) --- */
 SPT_API int          spt_isnull(spt_State *L, int idx);
+SPT_API int          spt_isbool(spt_State *L, int idx);
 SPT_API spt_Integer  spt_toint(spt_State *L, int idx);
 SPT_API spt_Number   spt_tofloat(spt_State *L, int idx);
 SPT_API int          spt_tobool(spt_State *L, int idx);
