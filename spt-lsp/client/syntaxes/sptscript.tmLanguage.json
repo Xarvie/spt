@@ -34,6 +34,20 @@
       "comments": {
         "patterns": [
           {
+            "name": "comment.block.documentation.sptscript",
+            "begin": "/\\*\\*",
+            "end": "\\*/",
+            "patterns": [
+              {
+                "include": "#comments"
+              }
+            ]
+          },
+          {
+            "name": "comment.line.documentation.sptscript",
+            "match": "///.*"
+          },
+          {
             "name": "comment.line.double-slash.sptscript",
             "match": "//.*"
           },
@@ -79,11 +93,15 @@
         "patterns": [
           {
             "name": "keyword.control.sptscript",
-            "match": "\\b(if|else|while|for|break|continue|return)\\b"
+            "match": "\\b(if|else|while|for|break|continue|return|defer)\\b"
           },
           {
             "name": "keyword.control.import.sptscript",
-            "match": "\\b(import|from|export)\\b"
+            "match": "\\b(import|from|export|as)\\b"
+          },
+          {
+            "name": "keyword.control.declare.sptscript",
+            "match": "\\b(declare)\\b"
           },
           {
              "name": "keyword.operator.new.sptscript",
@@ -111,7 +129,7 @@
           "patterns": [
                {
                   "name": "storage.type.primitive.sptscript",
-                  "match": "\\b(int|float|number|string|bool|any|void|null|list|map|coro|union|tuple)\\b"
+                  "match": "\\b(int|float|number|str|bool|any|void|null|list|map|coro|vars)\\b"
                }
           ]
        },

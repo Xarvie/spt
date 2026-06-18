@@ -1170,6 +1170,10 @@ static void compile_var_decl(CompileCtx *C, AstNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->loc);
 
+  /* declare 声明：编译期擦除，不产生任何绑定/代码。 */
+  if (n->u.var_decl.is_ambient)
+    return;
+
   TString *varname = mkstr(C, n->u.var_decl.name);
   lu_byte kind = n->u.var_decl.is_const ? RDKCONST : VDKREG;
 
@@ -1822,6 +1826,10 @@ static void compile_func_decl(CompileCtx *C, AstNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->loc);
 
+  /* declare 声明：编译期擦除，不产生任何绑定/代码。 */
+  if (n->u.func_decl.is_ambient)
+    return;
+
   TString *fname = mkstr(C, n->u.func_decl.name);
   bool isGlobal = n->u.func_decl.is_global;
   bool isConst = n->u.func_decl.is_const;
@@ -1919,6 +1927,10 @@ static void init_exp_local(CompileCtx *C, FuncState *fs, expdesc *e, int vidx) {
 static void compile_class_decl(CompileCtx *C, AstNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->loc);
+
+  /* declare 声明：编译期擦除，不产生任何绑定/代码。 */
+  if (n->u.class_decl.is_ambient)
+    return;
 
   TString *clsname = mkstr(C, n->u.class_decl.name);
 
@@ -2494,6 +2506,9 @@ static void compile_statement(CompileCtx *C, AstNode *stmt) {
     break;
   case NODE_DEFER_STATEMENT:
     compile_defer(C, (stmt));
+    break;
+  case NODE_DECLARE_MODULE:
+    /* declare from "..." 模块声明块：编译期擦除，不产生任何代码。 */
     break;
   default:
     compile_errorf(C, "unsupported statement type %d", (int)stmt->type);

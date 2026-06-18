@@ -30,6 +30,8 @@ statement
     | blockStatement                     #blockStmt         // 显式代码块 {...}
     | importStatement SEMICOLON #importStmt
     | deferStatement                       #deferStmt
+    | ambientDeclaration                   #ambientDeclStmt   // 环境声明 (顶层外部符号，编译期擦除)
+    | declareModule                        #declareModuleStmt // 模块声明块 (描述外部模块形状)
     ;
 
 //-- 导入语句 --
@@ -44,6 +46,52 @@ importSpecifier
 
 deferStatement
     : DEFER blockStatement #deferBlockStmt
+    ;
+
+// --- 外部符号声明 (declare) ---
+/**
+ * declare 用于声明「存在但实现在别处」的符号 —— 典型是 C 绑定的外部库
+ * (如 SDL)、或运行时由宿主注册的全局。它在编译期被完全擦除 (不产生任何
+ * 字节码、不创建任何绑定)，仅供类型检查与 LSP 消费 (跳转/hover/补全)。
+ * 描述通过前置文档注释 (/// 或 /**) 提供。
+ *
+ * 设计与 SPT「类型/const 是提示、运行期无效」的既有哲学一致。
+ */
+
+/**
+ * 模块声明块：描述一个外部模块的导出形状。
+ * 复用 import 的 `from "..."`，与 `import ... from "..."` 的绑定关系一一对应：
+ *   declare from "sdl" { int Init(int flags); ... }
+ */
+declareModule
+    : DECLARE FROM STRING_LITERAL OCB declarationMember* CCB #declareModuleDef
+    ;
+
+/** 环境声明：顶层单个外部符号 (宿主注册为全局时使用)。 */
+ambientDeclaration
+    : DECLARE declarationMember #ambientDeclarationDef
+    ;
+
+/**
+ * 声明成员 = 「签名」。与普通声明同形，但：
+ *   - 不允许 auto (声明必须给出确切类型，无初始化器可推断)；
+ *   - 不允许初始化器；
+ *   - 函数/方法体替换为 ';'。
+ */
+declarationMember
+    : GLOBAL? CONST? type IDENTIFIER SEMICOLON                        #declVarMember
+    | CONST? type qualifiedIdentifier OP parameterList? CP SEMICOLON  #declFuncMember
+    | CONST? VARS  qualifiedIdentifier OP parameterList? CP SEMICOLON #declMultiFuncMember
+    | CLASS IDENTIFIER OCB declClassMember* CCB                       #declClassMember
+    | SEMICOLON                                                       #declEmptyMember
+    ;
+
+/** 声明里的类成员：字段签名 + 方法签名 (无体、无初始化器、无 auto)。 */
+declClassMember
+    : STATIC? CONST? type IDENTIFIER SEMICOLON                          #declFieldMember
+    | STATIC? CONST? type IDENTIFIER OP parameterList? CP SEMICOLON     #declMethodMember
+    | STATIC? CONST? VARS IDENTIFIER OP parameterList? CP SEMICOLON     #declMultiMethodMember
+    | SEMICOLON                                                         #declClassEmptyMember
     ;
 
 // --- 赋值语句 ---

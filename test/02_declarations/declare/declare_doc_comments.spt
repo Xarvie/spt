@@ -1,0 +1,26 @@
+// 测试: 声明 - 文档注释作为描述 (/// 与 /**)
+// 语法: DOC_LINE_COMMENT / DOC_BLOCK_COMMENT (DOCS 通道)
+// 描述: 文档注释挂在声明上供工具消费, 对编译/运行完全透明 (不破坏编译)
+
+/// 这是 Init 的行文档描述。
+/// 可以多行累积。
+declare int Init(int flags);
+
+/**
+ * 这是块文档描述。
+ * 用来给外部符号写说明。
+ */
+declare from "gfx" {
+    /// 用指定颜色清屏。
+    void Clear(int color);
+    /** 把后台缓冲呈现到屏幕。 */
+    void Present();
+}
+
+// 普通块注释 /* ... */ 与行注释 // ... 仍照常跳过,不当作文档。
+/* 普通块注释 */
+// 普通行注释
+int v = 10;
+assert(v == 10, "v should be 10");
+
+print("declare_doc_comments tests passed!");

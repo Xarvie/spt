@@ -52,6 +52,7 @@ typedef enum {
   TOK_AS,
   TOK_FROM,
   TOK_EXPORT,
+  TOK_DECLARE, /* declare */
 
   /* ---- 面向对象 ---- */
   TOK_CLASS,
@@ -117,6 +118,7 @@ typedef struct {
   int length;         /* 词素字节数 */
   int line;           /* 起始行（1 起） */
   int column;         /* 起始列（1 起，按字节计） */
+  const char *doc;    /* 紧邻其前的文档注释（行文档或块文档），NUL 结尾；无则 NULL */
 } SptToken;
 
 /* 返回 token 种类的可读名（用于错误信息），如 TOK_RPAREN -> "')'"。 */

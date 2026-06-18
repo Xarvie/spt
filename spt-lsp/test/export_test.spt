@@ -1,5 +1,0 @@
-export class Inner {
-    int value = 100;
-}
-
-export int globalVar = 10;

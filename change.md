@@ -57,3 +57,55 @@ List 字面量编译的自适应 flush 阈值：
 compile_list_literal 采用自适应策略 list_maxtostore 决定何时 flush：剩余寄存器 ≥160 用
 1/5，≥80 用 10，否则用 1。与 lparser.c 的 maxtostore 策略一致，保证 flush 前不耗尽
 MAX_FSTACK（255）寄存器上限，避免大 list 编译失败。
+==================== 外部符号声明 declare（编译期擦除） ====================
+
+新增 `declare` 语法，用于声明「存在但实现在别处」的符号 —— 典型是 C 绑定的外部库
+（如 SDL）或宿主注册的全局。两种形式：
+
+  declare from "sdl" { int Init(int flags); class Window { void Destroy(); } ... }   // 模块声明块
+  declare int SDL_Init(int flags);                                                   // 环境声明（单符号）
+
+成员为「签名」：与普通声明同形，但函数/方法体替换为 ';'，不允许 auto、不允许初始化器。
+复用既有 `from "..."`（与 import 一一对应），dotted 名（video.SetMode）天然表达子命名空间。
+
+编译期完全擦除：codegen 对 NODE_DECLARE_MODULE 空操作，对 is_ambient 的 var/func/class
+提前返回，不产生任何字节码/绑定。运行期 import 仍走真实 require，由 C 侧真实绑定接管；
+声明的符号若无宿主提供则运行期为 null（证明未产生绑定），且不替换同名真实绑定。
+
+描述：紧邻声明之前的文档注释作为符号描述，挂到 AST 节点的 doc 字段供工具（LSP）消费。
+词法层新增 DOC_LINE_COMMENT（///）与 DOC_BLOCK_COMMENT（/** */，进 DOCS 通道）；
+普通注释 // 与 /* */ 仍跳过，空块注释 /**/ 不算文档注释。多行 /// 累积。
+
+实现落点（纯 C 工具链）：
+  - spt_token.h：新增 TOK_DECLARE；SptToken 增 doc 字段（旁路，不污染 token 流）。
+  - spt_lexer.c：keyword 表加 "declare"；skip_trivia 捕获文档注释，lex_push 挂到后随 token。
+  - spt_ast.h：新增 NODE_DECLARE_MODULE；var_decl/func_decl/class_decl 增 is_ambient + doc。
+  - spt_parser.c：parse_declare / parse_decl_member / parse_decl_class；parse_statement 分派 TOK_DECLARE。
+  - ast_codegen.c：NODE_DECLARE_MODULE 空操作；三个 compile_*_decl 对 is_ambient 提前返回。
+
+g4（仅作文档标准）：LangLexer.g4 增 DECLARE + 文档注释规则 + channels{DOCS}；
+LangParser.g4 增 declareModule / ambientDeclaration / declarationMember / declClassMember。
+
+测试：test/02_declarations/declare/*.spt（模块/擦除/外部库共存/文档注释/类，5 个集成用例）
++ tests/TestDeclare.c（AST 契约：节点类型、is_ambient、doc 精确文本、auto/初始化器/函数体拒绝）。
+
+==================== 模块系统（import/export）====================
+
+语法：类 ES6 的 import/export，底层编译为 Lua require 调用。
+
+import 两种形式：
+- 命名空间：import * as m from "path"  →  local m = require("path")
+- 具名：import { a, b as c } from "path"  →  local __tmp = require("path"); local a = __tmp.a; local c = __tmp.b
+
+export 作为声明前缀：export int x = 0; / export int f() {...} / export class C {...}
+仅顶层（scope_depth==0）的 export 有效，codegen 自动收集导出名构造 exports 表并 return。
+
+模块路径：script_dir/?.spt ; $SPT_PATH ; ./?.spt，不支持相对路径和点分路径。
+可透明导入 Lua 内置库（import { abs } from "math"），因 SPT searcher 追加在标准 searcher 之后。
+
+加载时机：运行时（执行到 import 语句才 require）。缓存：复用 package.loaded。循环依赖无保护（同 Lua）。
+
+已知限制：
+- export vars a,b=... 语法合法但不导出（codegen 不收集 NODE_MUTI_VARIABLE_DECL）
+- 无导出模块返回 true，命名空间导入后访问成员报错
+- 嵌套 export 语法通过但不导出（is_module_root=false）

@@ -1,0 +1,25 @@
+// 测试: 声明 - 类/类型声明 (declClassMember)
+// 语法: declClassMember -> 字段签名 / 方法签名 / 静态成员 (无体、无初始化器)
+// 描述: declare class 声明外部类型的字段与方法签名, 编译期擦除
+
+declare class Texture {
+    int width;
+    int height;
+    static Texture FromFile(str path);
+    void Bind(int unit);
+    vars Query();
+}
+
+declare from "engine" {
+    class Entity {
+        int id;
+        void Update(float dt);
+    }
+    Entity Spawn(str kind);
+    void Run();
+}
+
+int n = 3;
+assert(n == 3, "n should be 3");
+
+print("declare_class tests passed!");

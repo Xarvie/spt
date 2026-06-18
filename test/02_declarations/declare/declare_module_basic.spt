@@ -1,0 +1,20 @@
+// 测试: 声明 - 模块声明块基础
+// 语法: declareModule -> DECLARE FROM STRING_LITERAL OCB declarationMember* CCB
+// 描述: declare from "..." 声明外部模块形状,编译期完全擦除,不影响运行
+
+declare from "sdl" {
+    int Init(int flags);
+    Window CreateWindow(str title, int x, int y, int w, int h, int flags);
+    const int INIT_VIDEO;
+    class Window {
+        void Destroy();
+        void SetTitle(str title);
+    }
+}
+
+// 声明被擦除: 不产生任何绑定,也不报错。真实代码照常运行。
+int x = 41;
+x = x + 1;
+assert(x == 42, "x should be 42");
+
+print("declare_module_basic tests passed!");

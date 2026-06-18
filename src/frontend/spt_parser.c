@@ -1463,6 +1463,234 @@ static AstNode *parse_body(Parser *P) {
   return n;
 }
 
+/* ===========================================================================
+ * 外部符号声明 (declare) —— 编译期擦除，仅供工具/类型检查消费
+ * ========================================================================= */
+
+/* 声明里的类：CLASS IDENT { declClassMember* }。成员为签名（无体、无初始化器、无 auto）。 */
+static AstNode *parse_decl_class(Parser *P, SourceLocation loc, const char *doc) {
+  expect2(P, TOK_CLASS);
+  const SptToken *name = expect2(P, TOK_IDENTIFIER);
+  expect2(P, TOK_LBRACE);
+  NodeVec members;
+  nv_init(&members);
+  while (!at(P, TOK_RBRACE) && !at_end(P)) {
+    if (accept(P, TOK_SEMICOLON))
+      continue; /* 空成员 */
+    SourceLocation mloc = cur_loc(P);
+    const char *mdoc = cur(P)->doc;
+    int is_static = accept(P, TOK_STATIC) ? 1 : 0;
+    int is_const = accept(P, TOK_CONST) ? 1 : 0;
+    AstNode *inner = NULL;
+    if (at(P, TOK_VARS)) {
+      /* 多返回方法签名：vars IDENT ( params ) ; */
+      advance(P);
+      const SptToken *mn = expect2(P, TOK_IDENTIFIER);
+      expect2(P, TOK_LPAREN);
+      int variadic = 0;
+      AstList params = parse_parameter_list(P, &variadic);
+      expect2(P, TOK_RPAREN);
+      expect2(P, TOK_SEMICOLON);
+      inner = spt_ast_new(P->arena, NODE_FUNCTION_DECL, mloc);
+      inner->u.func_decl.name = spt_arena_strndup(P->arena, mn->lexeme, (size_t)mn->length);
+      inner->u.func_decl.params = params;
+      inner->u.func_decl.return_type = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, mloc);
+      inner->u.func_decl.body = NULL;
+      inner->u.func_decl.is_static = is_static != 0;
+      inner->u.func_decl.is_const = is_const != 0;
+      inner->u.func_decl.is_variadic = variadic != 0;
+      inner->u.func_decl.is_ambient = true;
+      inner->u.func_decl.doc = mdoc;
+    } else {
+      /* type IDENT ... -> 方法签名或字段签名（无 auto） */
+      AstNode *type = parse_type(P);
+      const SptToken *mn = expect2(P, TOK_IDENTIFIER);
+      if (at(P, TOK_LPAREN)) {
+        advance(P);
+        int variadic = 0;
+        AstList params = parse_parameter_list(P, &variadic);
+        expect2(P, TOK_RPAREN);
+        expect2(P, TOK_SEMICOLON);
+        inner = spt_ast_new(P->arena, NODE_FUNCTION_DECL, mloc);
+        inner->u.func_decl.name = spt_arena_strndup(P->arena, mn->lexeme, (size_t)mn->length);
+        inner->u.func_decl.params = params;
+        inner->u.func_decl.return_type = type;
+        inner->u.func_decl.body = NULL;
+        inner->u.func_decl.is_static = is_static != 0;
+        inner->u.func_decl.is_const = is_const != 0;
+        inner->u.func_decl.is_variadic = variadic != 0;
+        inner->u.func_decl.is_ambient = true;
+        inner->u.func_decl.doc = mdoc;
+      } else {
+        /* 字段签名：type IDENT ;（无初始化器） */
+        expect2(P, TOK_SEMICOLON);
+        inner = spt_ast_new(P->arena, NODE_VARIABLE_DECL, mloc);
+        inner->u.var_decl.name = spt_arena_strndup(P->arena, mn->lexeme, (size_t)mn->length);
+        inner->u.var_decl.type_annotation = type;
+        inner->u.var_decl.initializer = NULL;
+        inner->u.var_decl.is_static = is_static != 0;
+        inner->u.var_decl.is_const = is_const != 0;
+        inner->u.var_decl.is_ambient = true;
+        inner->u.var_decl.doc = mdoc;
+      }
+    }
+    AstNode *cm = spt_ast_new(P->arena, NODE_CLASS_MEMBER, mloc);
+    cm->u.class_member.member_declaration = inner;
+    cm->u.class_member.is_static = is_static != 0;
+    nv_push(&members, cm);
+    if (P->panic)
+      synchronize(P);
+  }
+  expect2(P, TOK_RBRACE);
+  AstNode *n = spt_ast_new(P->arena, NODE_CLASS_DECL, loc);
+  n->u.class_decl.name = spt_arena_strndup(P->arena, name->lexeme, (size_t)name->length);
+  n->u.class_decl.members = nv_finish(&members, P->arena);
+  n->u.class_decl.is_ambient = true;
+  n->u.class_decl.doc = doc;
+  return n;
+}
+
+/* 单个声明成员：返回 var_decl/func_decl/class_decl（均 is_ambient），或 NULL（空成员 ';'）。
+   doc 在成员首 token 上读取（模块块内逐成员；环境声明的单成员由 parse_declare 补挂）。 */
+static AstNode *parse_decl_member(Parser *P) {
+  SourceLocation loc = cur_loc(P);
+  const char *doc = cur(P)->doc;
+
+  if (accept(P, TOK_SEMICOLON))
+    return NULL; /* 空成员 */
+
+  if (at(P, TOK_CLASS))
+    return parse_decl_class(P, loc, doc);
+
+  int is_global = accept(P, TOK_GLOBAL) ? 1 : 0;
+  int is_const = accept(P, TOK_CONST) ? 1 : 0;
+
+  if (at(P, TOK_VARS)) {
+    /* 多返回函数签名：vars qualifiedIdent ( params ) ; */
+    advance(P);
+    const char *name = parse_qualified_name(P);
+    expect2(P, TOK_LPAREN);
+    int variadic = 0;
+    AstList params = parse_parameter_list(P, &variadic);
+    expect2(P, TOK_RPAREN);
+    expect2(P, TOK_SEMICOLON);
+    AstNode *n = spt_ast_new(P->arena, NODE_FUNCTION_DECL, loc);
+    n->u.func_decl.name = name;
+    n->u.func_decl.params = params;
+    n->u.func_decl.return_type = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, loc);
+    n->u.func_decl.body = NULL;
+    n->u.func_decl.is_global = is_global != 0;
+    n->u.func_decl.is_const = is_const != 0;
+    n->u.func_decl.is_variadic = variadic != 0;
+    n->u.func_decl.is_ambient = true;
+    n->u.func_decl.doc = doc;
+    return n;
+  }
+
+  /* type 后跟名字：函数签名或变量签名（不允许 auto / 初始化器 / 函数体）。
+     注意：parse_type 不接受 'auto'，故 `declare auto x;` 会在此报错并使解析失败。 */
+  AstNode *type = parse_type(P);
+  const SptToken *id = expect2(P, TOK_IDENTIFIER);
+
+  if (at(P, TOK_DOT) || at(P, TOK_LPAREN)) {
+    /* 函数签名：type qualifiedIdent ( params ) ; —— 名字可能点号限定 */
+    int total = id->length;
+    int save = P->pos;
+    while (tok_at(P, P->pos)->kind == TOK_DOT && tok_at(P, P->pos + 1)->kind == TOK_IDENTIFIER) {
+      total += 1 + tok_at(P, P->pos + 1)->length;
+      P->pos += 2;
+    }
+    P->pos = save;
+    char *nbuf = (char *)spt_arena_alloc(P->arena, (size_t)total + 1);
+    int oi = 0;
+    memcpy(nbuf, id->lexeme, (size_t)id->length);
+    oi += id->length;
+    while (tok_at(P, P->pos)->kind == TOK_DOT && tok_at(P, P->pos + 1)->kind == TOK_IDENTIFIER) {
+      advance(P);
+      nbuf[oi++] = '.';
+      const SptToken *seg = cur(P);
+      memcpy(nbuf + oi, seg->lexeme, (size_t)seg->length);
+      oi += seg->length;
+      advance(P);
+    }
+    nbuf[oi] = '\0';
+    expect2(P, TOK_LPAREN);
+    int variadic = 0;
+    AstList params = parse_parameter_list(P, &variadic);
+    expect2(P, TOK_RPAREN);
+    expect2(P, TOK_SEMICOLON);
+    AstNode *n = spt_ast_new(P->arena, NODE_FUNCTION_DECL, loc);
+    n->u.func_decl.name = nbuf;
+    n->u.func_decl.params = params;
+    n->u.func_decl.return_type = type;
+    n->u.func_decl.body = NULL;
+    n->u.func_decl.is_global = is_global != 0;
+    n->u.func_decl.is_const = is_const != 0;
+    n->u.func_decl.is_variadic = variadic != 0;
+    n->u.func_decl.is_ambient = true;
+    n->u.func_decl.doc = doc;
+    return n;
+  }
+
+  /* 变量签名：type IDENT ;（无初始化器；写了 '=' 会在此因期望 ';' 而报错） */
+  expect2(P, TOK_SEMICOLON);
+  AstNode *n = spt_ast_new(P->arena, NODE_VARIABLE_DECL, loc);
+  n->u.var_decl.name = spt_arena_strndup(P->arena, id->lexeme, (size_t)id->length);
+  n->u.var_decl.type_annotation = type;
+  n->u.var_decl.initializer = NULL;
+  n->u.var_decl.is_global = is_global != 0;
+  n->u.var_decl.is_const = is_const != 0;
+  n->u.var_decl.is_ambient = true;
+  n->u.var_decl.doc = doc;
+  return n;
+}
+
+/* declare 语句：DECLARE FROM "..." { members }  |  DECLARE <member> */
+static AstNode *parse_declare(Parser *P) {
+  SourceLocation loc = cur_loc(P);
+  const char *doc = cur(P)->doc; /* declare 前的文档（模块级或单符号级） */
+  expect2(P, TOK_DECLARE);
+
+  if (at(P, TOK_FROM)) {
+    /* 模块声明块：declare from "path" { members } */
+    advance(P); /* from */
+    const SptToken *path = expect2(P, TOK_STRING_LITERAL);
+    int len = 0;
+    const char *mp = process_string(P, path, &len);
+    expect2(P, TOK_LBRACE);
+    NodeVec members;
+    nv_init(&members);
+    while (!at(P, TOK_RBRACE) && !at_end(P)) {
+      int before = P->pos;
+      AstNode *m = parse_decl_member(P);
+      if (m)
+        nv_push(&members, m);
+      if (P->panic)
+        synchronize(P);
+      if (P->pos == before)
+        advance(P); /* 防止无进展死循环 */
+    }
+    expect2(P, TOK_RBRACE);
+    AstNode *n = spt_ast_new(P->arena, NODE_DECLARE_MODULE, loc);
+    n->u.declare_module.module_path = mp;
+    n->u.declare_module.members = nv_finish(&members, P->arena);
+    n->u.declare_module.doc = doc;
+    return n;
+  }
+
+  /* 环境声明：单个外部符号。doc 挂在 declare token 上，补挂到成员节点。 */
+  AstNode *m = parse_decl_member(P);
+  if (m) {
+    if (m->type == NODE_FUNCTION_DECL && !m->u.func_decl.doc)
+      m->u.func_decl.doc = doc;
+    else if (m->type == NODE_VARIABLE_DECL && !m->u.var_decl.doc)
+      m->u.var_decl.doc = doc;
+    else if (m->type == NODE_CLASS_DECL && !m->u.class_decl.doc)
+      m->u.class_decl.doc = doc;
+  }
+  return m;
+}
+
 static AstNode *parse_statement(Parser *P) {
   switch (cur_kind(P)) {
   case TOK_SEMICOLON:
@@ -1497,6 +1725,8 @@ static AstNode *parse_statement(Parser *P) {
   }
   case TOK_DEFER:
     return parse_defer(P);
+  case TOK_DECLARE:
+    return parse_declare(P);
   default:
     break;
   }
@@ -1508,7 +1738,9 @@ static AstNode *parse_statement(Parser *P) {
 /* ===========================================================================
  * 入口
  * ========================================================================= */
-AstNode *spt_parse(const SptTokenArray *toks, SptArena *arena, SptDiag *diag) {
+/* 解析核心：始终构建并返回尽力而为的根节点（带 panic-mode 恢复）。
+** 错误写入 diag；是否因错误而对外返回 NULL 由各入口决定。 */
+static AstNode *run_parser(const SptTokenArray *toks, SptArena *arena, SptDiag *diag) {
   Parser P;
   P.toks = toks->tokens;
   P.count = toks->count;
@@ -1533,14 +1765,22 @@ AstNode *spt_parse(const SptTokenArray *toks, SptArena *arena, SptDiag *diag) {
   }
   SourceLocation endloc = cur_loc(&P);
 
-  if (spt_diag_has_error(diag)) {
-    free(stmts.data);
-    return NULL;
-  }
-
   AstNode *root = spt_ast_new(arena, NODE_BLOCK, loc);
   root->u.block.statements = nv_finish(&stmts, arena);
   root->u.block.end_loc = endloc;
   root->u.block.use_end = true;
   return root;
+}
+
+AstNode *spt_parse(const SptTokenArray *toks, SptArena *arena, SptDiag *diag) {
+  AstNode *root = run_parser(toks, arena, diag);
+  if (spt_diag_has_error(diag))
+    return NULL; /* 编译路径语义：有错即失败 */
+  return root;
+}
+
+/* 容错解析（供 LSP 使用）：无论有无错误，都返回尽力而为的根节点。
+** 诊断仍写入 diag，调用方据此报告问题。 */
+AstNode *spt_parse_tolerant(const SptTokenArray *toks, SptArena *arena, SptDiag *diag) {
+  return run_parser(toks, arena, diag);
 }

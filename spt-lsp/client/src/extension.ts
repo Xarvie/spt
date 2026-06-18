@@ -1,5 +1,7 @@
 // 导入 Node.js 的 'path' 模块，用于处理文件路径
 import * as path from 'path';
+// 导入 Node.js 的 'fs' 模块，用于检查文件是否存在
+import * as fs from 'fs';
 // 导入 VS Code 扩展 API
 import * as vscode from 'vscode';
 
@@ -37,7 +39,7 @@ export function activate(context: vscode.ExtensionContext) {
         // 计算相对于扩展安装目录的路径。
         // 假设 C++ 项目构建在与 client 目录同级的 cmake-build-debug 目录下。
         // !! 请根据您的实际构建输出位置调整此相对路径 !!
-        const relativePath = path.join('..', 'cmake-build-debug', serverExeName);
+        const relativePath = path.join('..', 'server', 'build', 'bin', serverExeName);
         // context.asAbsolutePath 将相对路径转换为扩展安装目录下的绝对路径
         serverCommand = context.asAbsolutePath(relativePath);
         console.log(`[SptScript Client] 'sptscript.lsp.serverPath' not configured. Trying default path relative to extension: ${serverCommand}`);
@@ -51,17 +53,17 @@ export function activate(context: vscode.ExtensionContext) {
         console.error('[SptScript Client] CRITICAL: Failed to determine server path. Aborting activation.');
         return; // 无法启动服务器，退出激活函数
     }
-    serverCommand = 'C:\\Users\\ftp\\Desktop\\spt\\spt-lsp\\build\\sptscript-lsp.exe';
+    // (已移除硬编码路径)
     // serverCommand = 'C:\\Users\\ftp\\Desktop\\sptscript-lsp\\cmake-build-release-mingw-clang64\\sptscript-lsp.exe';
 
-    /*
-    import * as fs from 'fs';
+    // 诊断：确认 exe 是否存在
+    console.log(`[SptScript Client] serverCommand = ${serverCommand}`);
     if (!fs.existsSync(serverCommand)) {
-        vscode.window.showErrorMessage(`SptScript LSP server executable not found at the determined path: ${serverCommand}. Please check the path or your build output.`);
+        vscode.window.showErrorMessage(`SptScript LSP server executable not found: ${serverCommand}`);
         console.error(`[SptScript Client] Server executable check failed. Path does not exist: ${serverCommand}`);
-        return; // 文件不存在，无法启动
+        return;
     }
-    */
+    console.log(`[SptScript Client] server executable found, starting...`);
 
     // --- 2. 配置日志模式 ---
     // 读取配置中的日志设置

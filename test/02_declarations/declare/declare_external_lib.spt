@@ -1,0 +1,18 @@
+// 测试: 声明 - 外部库声明与真实 C 绑定共存 (SDL 场景,以 math 为真实替身)
+// 语法: declareModule + importStatement
+// 描述: 声明外部模块的子集形状后, import 该模块仍走真实 require;
+//       声明不替换、不破坏真实 C 绑定。这正是 SDL 等 C 库的目标用法。
+
+/// 数学库 (宿主以 C 实现,此处仅声明常用子集形状供工具消费)。
+declare from "math" {
+    /// 向下取整。
+    float floor(float x);
+    /// 绝对值。
+    int abs(int x);
+}
+
+import { floor, abs } from "math";
+assert(floor(3.7) == 3, "floor(3.7) should be 3");
+assert(abs(-7) == 7, "abs(-7) should be 7");
+
+print("declare_external_lib tests passed!");

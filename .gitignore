@@ -288,3 +288,22 @@ coverage-report/
 /build-asan/
 /build-cov/
 /build-tidy/
+
+# SPT 2.0 engine build artifacts
+/new_spt/build/
+
+# New C LSP server: runtime logs and build artifacts
+/spt-lsp/server/lsp-debug.log
+/spt-lsp/server/lsp-record.jsonl
+/spt-lsp/server/build/
+
+# VSCode extension client: dependencies and compiled output
+/spt-lsp/client/node_modules/
+/spt-lsp/client/out/
+
+# Old LSP backup (kept locally, not version controlled)
+/spt-lsp-backup/
+
+# Scratch / temp files
+_out.txt
+

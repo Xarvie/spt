@@ -113,6 +113,14 @@ if(BUILD_TESTS)
         COMMAND $<TARGET_FILE:TestCApi>
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+    # ---- 声明 (declare) AST 契约测试 ----
+    # spt_core 的 PUBLIC include 目录已含 src/frontend，故无需额外 include。
+    add_executable(TestDeclare tests/TestDeclare.c)
+    target_link_libraries(TestDeclare PRIVATE spt_core)
+    add_test(NAME TestDeclare
+        COMMAND $<TARGET_FILE:TestDeclare>
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
     # ---- sptxx C++ 绑定层测试 ----
     # FIXME: 以下 3 个测试使用了非标准语法 `new ClassName(...)`,
     #        但 g4 文法不支持 `new` 关键字（SPT 标准实例化语法是 `ClassName(...)`）。

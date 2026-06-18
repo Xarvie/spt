@@ -77,6 +77,7 @@ typedef enum {
   NODE_FUNCTION_DECL,
   NODE_CLASS_DECL,
   NODE_CLASS_MEMBER,
+  NODE_DECLARE_MODULE, /* declare from "..." { ... } 外部模块声明块（编译期擦除） */
 
   /* 类型节点 */
   NODE_TYPE_PRIMITIVE,
@@ -295,6 +296,8 @@ struct AstNode {
       bool is_static;
       bool is_exported;
       bool is_module_root;
+      bool is_ambient;  /* declare 声明：编译期擦除，不产生绑定 */
+      const char *doc;  /* 前置文档注释（描述），可空 */
     } var_decl;
     struct {
       MultiDeclVar *vars;
@@ -318,6 +321,8 @@ struct AstNode {
       bool is_exported;
       bool is_const;
       bool is_module_root;
+      bool is_ambient;  /* declare 声明：编译期擦除，body 为空 */
+      const char *doc;  /* 前置文档注释（描述），可空 */
     } func_decl;
     struct {
       AstNode *member_declaration;
@@ -328,7 +333,14 @@ struct AstNode {
       AstList members;
       bool is_exported;
       bool is_module_root;
+      bool is_ambient;  /* declare 声明：编译期擦除 */
+      const char *doc;  /* 前置文档注释（描述），可空 */
     } class_decl;
+    struct {
+      const char *module_path; /* declare from "<module_path>" */
+      AstList members;         /* var_decl/func_decl/class_decl 节点，均 is_ambient=true */
+      const char *doc;         /* 模块级文档注释（描述），可空 */
+    } declare_module;
 
     /* ---- 类型节点 ---- */
     struct {

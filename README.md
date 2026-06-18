@@ -580,8 +580,165 @@ arr[0]  // 第一个元素
 
 ---
 
+## 13. 外部符号声明 `declare`（编译期擦除）
+
+`declare` 用于声明「存在但实现在别处」的符号 —— 典型是 **C 绑定的外部库**
+（如 SDL）、或运行时由宿主注册的全局。它在编译期被**完全擦除**：不产生任何
+字节码、不创建任何绑定，仅供类型检查与 LSP 消费（跳转 / hover / 补全）。
+
+> 设计与 SPT「类型 / `const` 是提示、运行期无效」的既有哲学一致 —— `declare`
+> 是这套「提示即擦除」的极致形态。
+
+### 13.1 两种形式
+
+```spt
+// 形式一：模块声明块 —— 描述外部模块的导出形状。
+// 复用 import 的 `from "..."`，与 import 一一对应。
+declare from "sdl" {
+    int Init(int flags);
+    Window CreateWindow(str title, int x, int y, int w, int h, int flags);
+    const int INIT_VIDEO;
+    void video.SetMode(int w, int h);     // dotted 名 -> 子命名空间
+    vars GetVersion();                    // 多返回函数签名
+    class Window {                        // 外部类型的字段/方法签名
+        int w;
+        void SetTitle(str title);
+        static Window Create(str title, int w, int h);
+    }
+}
+
+// 形式二：环境声明 —— 顶层单个外部符号（宿主注册为全局时）。
+declare int SDL_Init(int flags);
+declare const int SDL_INIT_VIDEO;
+```
+
+业务代码照常书写，工具全程可解析符号；运行期 `import ... from "sdl"` 仍走真实
+`require`，由 C 侧的真实绑定接管：
+
+```spt
+import { Init, CreateWindow, INIT_VIDEO } from "sdl";
+int rc = Init(INIT_VIDEO);                 // 跳转到声明处；hover 显示签名+描述
+auto win = CreateWindow("hi", 0, 0, 800, 600, 0);
+win:SetTitle("ready");                     // 补全列出 Window 的方法
+```
+
+### 13.2 描述：文档注释 `///` 与 `/** ... */`
+
+紧邻声明之前的文档注释作为该符号的**描述**，挂到 AST 节点上供工具消费；对
+编译 / 运行完全透明。多行 `///` 会累积。
+
+```spt
+/// 数学库（宿主以 C 实现，此处仅声明子集形状）。
+declare from "math" {
+    /// 向下取整。
+    float floor(float x);
+    /** 绝对值。 */
+    int abs(int x);
+}
+```
+
+> 普通注释 `// ...` 与 `/* ... */` 仍照常跳过，不作为描述；`/**/` 是空块注释，
+> 也不是文档注释。
+
+### 13.3 约束
+
+| 规则                       | 说明                                              |
+|--------------------------|-------------------------------------------------|
+| 不允许 `auto`              | 声明必须给出确切类型（无初始化器可推断）。`declare auto x;` 报错 |
+| 不允许初始化器              | `declare int x = 5;` 报错                          |
+| 不允许函数 / 方法体          | 体必须替换为 `;`。`declare int f(){...}` 报错          |
+| 编译期擦除                  | 声明的符号若无宿主提供，运行期为 `null`（不产生任何绑定）       |
+| 与真实定义共存              | 声明不替换、不破坏同名真实绑定（如 `import ... from "math"`） |
+
+---
+
+## 14. 模块系统（import / export）
+
+SPT 采用类 ES6 的 `import`/`export` 语法，底层编译为 Lua `require` 调用，完全复用 Lua 模块缓存机制。
+
+### 14.1 import 语法
+
+**命名空间导入**（整个模块表）：
+```spt
+import * as m from "math";
+m.abs(-42);  // 42
+```
+
+**具名导入**（支持 `as` 别名）：
+```spt
+import { abs, max as big } from "math";
+abs(-10);  // 10
+big(3, 5);  // 5
+```
+
+**不支持**：默认导入 `import x from "path"`、副作用导入 `import "path"`、动态 `import("path")`。
+
+### 14.2 export 语法
+
+`export` 作为声明前缀，仅顶层（`scope_depth==0`）有效：
+
+```spt
+export int val = 42;              // 导出变量
+export int square(int x) { ... }  // 导出函数
+export class Point { ... }        // 导出类
+```
+
+**不支持**：`export { a, b }`、`export default`、`export * from "path"`、`export vars a,b=...`（多变量 export 语法合法但不生效）。
+
+### 14.3 模块路径解析
+
+路径是**模块名**（不含扩展名），搜索顺序：
+
+1. 主脚本所在目录：`script_dir/?.spt`
+2. 环境变量 `SPT_PATH`（分号分隔）
+3. 当前工作目录：`./?.spt`
+
+```spt
+import * as utils from "utils";  // 查找 utils.spt
+```
+
+**可透明导入 Lua 内置库**：`import { abs } from "math"` 会先走 Lua 标准 searcher，返回 math 库。
+
+**不支持**：相对路径 `./xxx`、绝对路径、点分路径 `a.b.c`（会查找 `a.b.c.spt` 而非 `a/b/c.spt`）。
+
+### 14.4 加载时机与缓存
+
+- **运行时加载**：import 编译为 `require("path")`，执行到该语句才加载
+- **复用 `package.loaded` 缓存**：首次加载执行模块体，后续直接返回缓存
+- **循环依赖**：无保护，行为同 Lua（被依赖方拿到 `true` 而非 exports 表，访问成员报运行时错误）
+
+### 14.5 exports 表构造
+
+模块体执行完毕后，编译器自动：
+1. 收集所有 `is_module_root && is_exported` 的声明（变量/函数/类）
+2. 构造 exports 表 `{ name1 = val1, name2 = val2, ... }`
+3. `return` 该表
+
+无导出的模块不 return，`require` 返回 `true`——命名空间导入后访问成员会报错。
+
+### 14.6 命名空间 vs 具名导入的语义差异
+
+| 维度 | `import * as m` | `import { a }` |
+|------|-----------------|----------------|
+| 绑定 | 整个 exports 表 | 每个名字独立局部变量 |
+| 访问 | `m.member` 动态索引 | 直接变量引用 |
+| 模块表后续变更 | 可见（持表引用） | 不可见（值已拷贝） |
+| 无导出模块 | `m=true`，访问报错 | `__tmp.a` 返回 `nil`，不报错 |
+
+### 14.7 与标准 Lua 对比
+
+| 特性 | 标准 Lua | SPT |
+|------|----------|-----|
+| 导入 | `local m = require("path")` | `import * as m from "path"` |
+| 导出 | 手动 `return { a = a }` | 声明前加 `export`，自动收集 |
+| 别名 | 无语法，手动赋值 | `import { a as b }` |
+| 路径 | `package.path`，支持 `.` 分隔 | `?.spt` 模板，不支持 `.` 分隔 |
+| 内置库 | `require("math")` | `import * as math from "math"` 透明支持 |
+
+---
+
 ## 版本信息
 
 - **Lua 版本**: 5.5 (2026 官方版本修改)
 - **SPT 版本**: 1.0
-- **更新日期**: 2026-06-17
+- **更新日期**: 2026-06-18

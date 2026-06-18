@@ -30,7 +30,36 @@ typedef struct {
   SptToken *toks;
   int count;
   int cap;
+
+  /* 文档注释累积缓冲（独立 malloc）。skip_trivia 累积，下一次 lex_push 挂到 token 后清空。 */
+  char *docbuf;
+  size_t doclen;
+  size_t doccap;
 } Lexer;
+
+/* 把一段文本追加进文档累积缓冲；多段之间以换行分隔。 */
+static void doc_append(Lexer *L, const char *p, size_t n) {
+  /* 去掉本段尾部的空白/CR */
+  while (n > 0 && (p[n - 1] == ' ' || p[n - 1] == '\t' || p[n - 1] == '\r'))
+    n--;
+  /* 去掉本段开头的单个空格（/// foo -> "foo"，块注释 inner 由调用方处理） */
+  size_t need = L->doclen + n + 2; /* 可能的分隔换行 + NUL */
+  if (need > L->doccap) {
+    size_t nc = L->doccap ? L->doccap * 2 : 64;
+    while (nc < need)
+      nc *= 2;
+    char *nb = (char *)realloc(L->docbuf, nc);
+    if (!nb)
+      return;
+    L->docbuf = nb;
+    L->doccap = nc;
+  }
+  if (L->doclen > 0)
+    L->docbuf[L->doclen++] = '\n';
+  memcpy(L->docbuf + L->doclen, p, n);
+  L->doclen += n;
+  L->docbuf[L->doclen] = '\0';
+}
 
 static int lex_col(const Lexer *L, size_t at) {
   return (int)(at - L->line_start) + 1;
@@ -53,6 +82,15 @@ static void lex_push(Lexer *L, SptTokenKind kind, size_t start, size_t end, int 
   t->length = (int)(end - start);
   t->line = line;
   t->column = col;
+  /* 挂载累积的文档注释（若有），并清空缓冲供下一个 token 使用。 */
+  if (L->doclen > 0) {
+    t->doc = spt_arena_strndup(L->arena, L->docbuf, L->doclen);
+    L->doclen = 0;
+    if (L->docbuf)
+      L->docbuf[0] = '\0';
+  } else {
+    t->doc = NULL;
+  }
 }
 
 static void lex_error(Lexer *L, int line, int col, const char *fmt, const char *arg) {
@@ -173,6 +211,7 @@ static const Keyword KEYWORDS[] = {
     {"static", TOK_STATIC},   {"import", TOK_IMPORT},
     {"as", TOK_AS},           {"from", TOK_FROM},
     {"export", TOK_EXPORT},
+    {"declare", TOK_DECLARE},
     {"class", TOK_CLASS},
 };
 
@@ -214,17 +253,32 @@ static void skip_trivia(Lexer *L) {
       L->line++;
       L->line_start = L->pos;
     } else if (c == '/' && peek_at(L, 1) == '/') {
-      /* 行注释 */
-      L->pos += 2;
+      /* 行注释：/// 为文档注释（捕获），// 为普通注释（跳过） */
+      int is_doc = (peek_at(L, 2) == '/');
+      L->pos += is_doc ? 3 : 2;
+      size_t text_start = L->pos;
       while (L->pos < L->len && L->src[L->pos] != '\n')
         L->pos++;
+      if (is_doc) {
+        size_t s = text_start;
+        /* 去掉文本开头的空格/制表符 */
+        while (s < L->pos && (L->src[s] == ' ' || L->src[s] == '\t'))
+          s++;
+        doc_append(L, L->src + s, L->pos - s);
+      }
     } else if (c == '/' && peek_at(L, 1) == '*') {
-      /* 块注释（可跨行） */
+      /* 块注释（可跨行）。三字符起始的块（斜杠-星-星）为文档注释并捕获，
+         普通的斜杠-星块仅跳过。注意空块注释（斜杠-星-星-斜杠）不算文档注释，
+         其 peek(3) 为 '/'。 */
+      int is_doc = (peek_at(L, 2) == '*' && peek_at(L, 3) != '/');
       int sline = L->line, scol = lex_col(L, L->pos);
-      L->pos += 2;
+      L->pos += is_doc ? 3 : 2;
+      size_t inner_start = L->pos;
       int closed = 0;
+      size_t inner_end = L->pos;
       while (L->pos < L->len) {
         if (L->src[L->pos] == '*' && peek_at(L, 1) == '/') {
+          inner_end = L->pos;
           L->pos += 2;
           closed = 1;
           break;
@@ -235,8 +289,19 @@ static void skip_trivia(Lexer *L) {
         }
         L->pos++;
       }
-      if (!closed)
+      if (!closed) {
         lex_error(L, sline, scol, "%s", "块注释未闭合（缺少 '*/'）");
+      } else if (is_doc) {
+        size_t s = inner_start, e = inner_end;
+        /* 去掉内文的首尾空白（含换行） */
+        while (s < e && (L->src[s] == ' ' || L->src[s] == '\t' || L->src[s] == '\r' ||
+                         L->src[s] == '\n'))
+          s++;
+        while (e > s && (L->src[e - 1] == ' ' || L->src[e - 1] == '\t' || L->src[e - 1] == '\r' ||
+                         L->src[e - 1] == '\n'))
+          e--;
+        doc_append(L, L->src + s, e - s);
+      }
     } else {
       return;
     }
@@ -382,6 +447,9 @@ int spt_lex(const char *source, size_t len, SptArena *arena, SptDiag *diag, SptT
   L.toks = NULL;
   L.count = 0;
   L.cap = 0;
+  L.docbuf = NULL;
+  L.doclen = 0;
+  L.doccap = 0;
 
   while (1) {
     skip_trivia(&L);
@@ -515,6 +583,7 @@ int spt_lex(const char *source, size_t len, SptArena *arena, SptDiag *diag, SptT
 
   if (L.had_error) {
     free(L.toks);
+    free(L.docbuf);
     return 0;
   }
 
@@ -522,10 +591,12 @@ int spt_lex(const char *source, size_t len, SptArena *arena, SptDiag *diag, SptT
   SptToken *arr = (SptToken *)spt_arena_alloc(arena, sizeof(SptToken) * (size_t)L.count);
   if (!arr) {
     free(L.toks);
+    free(L.docbuf);
     return 0;
   }
   memcpy(arr, L.toks, sizeof(SptToken) * (size_t)L.count);
   free(L.toks);
+  free(L.docbuf);
 
   out->tokens = arr;
   out->count = L.count;

@@ -119,6 +119,7 @@ const char *spt_node_type_name(NodeType t) {
   case NODE_FUNCTION_DECL:         return "FunctionDecl";
   case NODE_CLASS_DECL:            return "ClassDecl";
   case NODE_CLASS_MEMBER:          return "ClassMember";
+  case NODE_DECLARE_MODULE:        return "DeclareModule";
   case NODE_TYPE_PRIMITIVE:        return "PrimitiveType";
   case NODE_TYPE_ANY:              return "AnyType";
   case NODE_TYPE_AUTO:             return "AutoType";
@@ -166,6 +167,7 @@ const char *spt_token_name(SptTokenKind kind) {
   case TOK_AS:             return "'as'";
   case TOK_FROM:           return "'from'";
   case TOK_EXPORT:         return "'export'";
+  case TOK_DECLARE:        return "'declare'";
   case TOK_CLASS:          return "'class'";
   case TOK_ADD:            return "'+'";
   case TOK_SUB:            return "'-'";

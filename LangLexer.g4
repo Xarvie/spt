@@ -1,5 +1,9 @@
 lexer grammar LangLexer; // 定义词法分析器 LangLexer
 
+// 文档注释进入独立通道（不影响解析，仅供工具读取作为符号描述）
+channels { DOCS }
+
+
 // --- 关键字 (Keywords) ---
 // 类型相关
 INT: 'int';             // 整数类型
@@ -37,8 +41,9 @@ GLOBAL: 'global';       // 全局作用域声明
 STATIC: 'static';       // 类静态成员/方法
 IMPORT: 'import';       // 模块导入提示 (编译时)
 AS:     'as';           // 模块导入别名
-FROM:   'from';         // 用于 import { ... } from "..."
+FROM:   'from';         // 用于 import { ... } from "..." 以及 declare from "..."
 EXPORT: 'export';
+DECLARE: 'declare';     // 外部符号声明 (编译期擦除，仅供工具/类型检查消费)
 
 // 面向对象
 CLASS: 'class';         // 类定义
@@ -150,6 +155,14 @@ fragment IDENT_PART
 
 // --- 空白与注释 (Whitespace and Comments) ---
 WS: [ \t\r\n]+ -> skip;             // 跳过空白字符
+
+// 文档注释 (描述)：必须排在普通注释之前。
+// 同长匹配时 ANTLR 取先声明者；/// 与 // 对整行同长，/** */ 与 /* */ 同长。
+// 进入 DOCS 通道，作为紧随其后那条声明的前置描述 (供 LSP hover / 补全)。
+// 注意 '/**/' 是空块注释，不是文档注释 (DOC_BLOCK 要求 /** 之后不是 '/')。
+DOC_LINE_COMMENT:  '///' ~[\r\n]*               -> channel(DOCS);
+DOC_BLOCK_COMMENT: '/**' ~[/] .*? '*/'          -> channel(DOCS);
+
 LINE_COMMENT: '//' ~[\r\n]* -> skip; // 跳过单行注释
 BLOCK_COMMENT: '/*' .*? '*/' -> skip; // 跳过多行注释
 

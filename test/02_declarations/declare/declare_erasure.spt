@@ -1,0 +1,18 @@
+// 测试: 声明 - 编译期擦除 (不创建运行时绑定)
+// 语法: ambientDeclaration -> DECLARE declarationMember
+// 描述: declare 的符号若无宿主提供,运行期为 null,证明未产生任何绑定/初始化代码
+
+declare int phantomFunc(int a);
+declare const int PHANTOM_FLAG;
+declare str phantomVar;
+
+// 擦除证明: 声明未创建绑定,读取得到 null (Lua 全局缺省语义)
+assert(phantomFunc == null, "declared func must not be bound");
+assert(PHANTOM_FLAG == null, "declared const must not be bound");
+assert(phantomVar == null, "declared var must not be bound");
+
+// 同名真实定义不受声明干扰
+int realOne = 5;
+assert(realOne == 5, "realOne should be 5");
+
+print("declare_erasure tests passed!");
