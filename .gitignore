@@ -291,6 +291,7 @@ coverage-report/
 
 # SPT 2.0 engine build artifacts
 /new_spt/build/
+/new_spt/build-jit/
 
 # New C LSP server: runtime logs and build artifacts
 /spt-lsp/server/lsp-debug.log

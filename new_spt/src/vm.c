@@ -625,6 +625,7 @@ vm_loop:
   default:
     spt_runtime_error(L, "illegal opcode %u", (unsigned)SPT_OPCODE(inst));
   }
+  return 0;  /* unreachable — spt_runtime_error longjmps */
 #endif
 }
 
