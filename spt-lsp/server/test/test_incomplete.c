@@ -1,9 +1,17 @@
 /*
-** test_incomplete.c — 残缺代码健壮性测试。
+** test_incomplete.c — 残缺代码健壮性 + 类型推导测试。
 **
 ** 遍历 test/incomplete/ 目录下的 .spt 文件，模拟用户编辑中的残缺代码。
 ** 对每个文件执行 didOpen → documentSymbol → semanticTokens/full → hover，
-** 验证 server 不崩溃且返回合理结果（允许诊断错误，但不允许段错误）。
+** 验证 server 不崩溃且返回合理结果。
+**
+** 两层验证：
+**   1. 健壮性：所有 LSP 调用不崩溃（返回非 NULL）
+**   2. 类型推导：hover 在已知变量上返回正确的类型信息
+**      所有 case 的前 4 行是相同的完整声明：
+**        line 0: int a = 10;       → hover 应包含 "int"
+**        line 2: str s = "hello";  → hover 应包含 "str"
+**      这验证了即使代码后面残缺，前面的类型推导仍然正确。
 **
 ** 测试覆盖的残缺场景：
 **   - 变量声明缺右值 / 缺到行尾
@@ -88,6 +96,23 @@ static char *read_file(const char *path, long *out_len) {
   return buf;
 }
 
+/* 从 hover 响应中提取 contents.value 字符串 */
+static const char *extract_hover_value(cJSON *resp) {
+  if (!resp) return NULL;
+  cJSON *result = cJSON_GetObjectItem(resp, "result");
+  if (!result) return NULL;
+  cJSON *contents = cJSON_GetObjectItem(result, "contents");
+  if (!contents) return NULL;
+  cJSON *value = cJSON_GetObjectItem(contents, "value");
+  if (!value || !cJSON_IsString(value)) return NULL;
+  return value->valuestring;
+}
+
+/* 检查字符串中是否包含子串 */
+static int contains(const char *hay, const char *needle) {
+  return hay && needle && strstr(hay, needle) != NULL;
+}
+
 static void test_one_file(const char *path, const char *name) {
   printf("  [%s] ", name);
 
@@ -132,17 +157,19 @@ static void test_one_file(const char *path, const char *name) {
     cJSON_Delete(m);
   }
 
+  /* ---- Layer 1: 健壮性 — 不崩溃 ---- */
+
   /* documentSymbol — 允许返回空或错误，但不能崩溃 */
+  cJSON *sym_resp;
   {
-    cJSON *resp = call(&s, "textDocument/documentSymbol", docp(uri));
-    if (!resp) {
+    sym_resp = call(&s, "textDocument/documentSymbol", docp(uri));
+    if (!sym_resp) {
       printf("FAIL: documentSymbol crashed\n");
       failed++;
       free(text);
       lsp_server_free(&s);
       return;
     }
-    cJSON_Delete(resp);
   }
 
   /* semanticTokens/full — 之前的崩溃点 */
@@ -151,6 +178,7 @@ static void test_one_file(const char *path, const char *name) {
     if (!resp) {
       printf("FAIL: semanticTokens/full crashed\n");
       failed++;
+      cJSON_Delete(sym_resp);
       free(text);
       lsp_server_free(&s);
       return;
@@ -158,25 +186,80 @@ static void test_one_file(const char *path, const char *name) {
     cJSON_Delete(resp);
   }
 
-  /* hover on line 1 char 1 — 测试残缺代码上的 hover */
+  /* ---- Layer 2: 类型推导 — hover 返回正确类型 ---- */
+  /* 所有 case 的前 4 行是相同的完整声明：
+   *   line 0: int a = 10;
+   *   line 1: auto b = 20;
+   *   line 2: str s = "hello";
+   *   line 3: const int c = 100;
+   * 即使代码后面残缺，这些变量的类型推导应该仍然正确。
+   */
+
+  /* hover on 'a' at line 0, char 4 → 应包含 "int" */
+  int type_ok = 1;
   {
-    cJSON *resp = call(&s, "textDocument/hover", posp(uri, 0, 1));
+    cJSON *resp = call(&s, "textDocument/hover", posp(uri, 0, 4));
     if (!resp) {
-      printf("FAIL: hover crashed\n");
+      printf("FAIL: hover(a) crashed\n");
       failed++;
+      cJSON_Delete(sym_resp);
       free(text);
       lsp_server_free(&s);
       return;
     }
+    const char *val = extract_hover_value(resp);
+    if (!contains(val, "int")) {
+      printf("FAIL: hover(a) type mismatch (got \"%s\", want \"int\")\n", val ? val : "null");
+      type_ok = 0;
+    }
     cJSON_Delete(resp);
   }
 
-  /* hover on line 11 char 5 (函数体内) */
+  /* hover on 's' at line 2, char 4 → 应包含 "str" */
+  {
+    cJSON *resp = call(&s, "textDocument/hover", posp(uri, 2, 4));
+    if (!resp) {
+      printf("FAIL: hover(s) crashed\n");
+      failed++;
+      cJSON_Delete(sym_resp);
+      free(text);
+      lsp_server_free(&s);
+      return;
+    }
+    const char *val = extract_hover_value(resp);
+    if (!contains(val, "str")) {
+      printf("FAIL: hover(s) type mismatch (got \"%s\", want \"str\")\n", val ? val : "null");
+      type_ok = 0;
+    }
+    cJSON_Delete(resp);
+  }
+
+  /* hover on 'add' at line 5, char 5 → 应包含 "add" (函数符号) */
+  {
+    cJSON *resp = call(&s, "textDocument/hover", posp(uri, 5, 5));
+    if (!resp) {
+      printf("FAIL: hover(add) crashed\n");
+      failed++;
+      cJSON_Delete(sym_resp);
+      free(text);
+      lsp_server_free(&s);
+      return;
+    }
+    const char *val = extract_hover_value(resp);
+    if (!contains(val, "add")) {
+      printf("FAIL: hover(add) symbol mismatch (got \"%s\", want \"add\")\n", val ? val : "null");
+      type_ok = 0;
+    }
+    cJSON_Delete(resp);
+  }
+
+  /* hover on line 10, char 5 (函数体内) — 不崩溃即可 */
   {
     cJSON *resp = call(&s, "textDocument/hover", posp(uri, 10, 5));
     if (!resp) {
       printf("FAIL: hover(in-func) crashed\n");
       failed++;
+      cJSON_Delete(sym_resp);
       free(text);
       lsp_server_free(&s);
       return;
@@ -184,8 +267,24 @@ static void test_one_file(const char *path, const char *name) {
     cJSON_Delete(resp);
   }
 
-  printf("OK\n");
-  passed++;
+  /* ---- 验证 documentSymbol 返回了符号 ---- */
+  {
+    cJSON *result = cJSON_GetObjectItem(sym_resp, "result");
+    int nsyms = 0;
+    if (result && cJSON_IsArray(result)) nsyms = cJSON_GetArraySize(result);
+    if (nsyms < 3) {
+      printf("FAIL: documentSymbol returned only %d symbols (want >= 3)\n", nsyms);
+      type_ok = 0;
+    }
+  }
+  cJSON_Delete(sym_resp);
+
+  if (type_ok) {
+    printf("OK\n");
+    passed++;
+  } else {
+    failed++;
+  }
   free(text);
   lsp_server_free(&s);
 }
