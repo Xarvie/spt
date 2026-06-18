@@ -241,7 +241,6 @@ static Type infer(FuncState *fs, Node *e) {
       TokenType op = e->u.bin.op;
       if (op == TK_EQ || op == TK_NE || op == TK_LT ||
           op == TK_LE || op == TK_GT || op == TK_GE) return TY_BOOL;
-      if (op == TK_SLASH) return TY_DYN;            /* division kept dynamic   */
       Type lt = infer(fs, e->u.bin.l), rt = infer(fs, e->u.bin.r);
       if (lt == TY_INT && rt == TY_INT) return TY_INT;
       if (lt == TY_FLOAT && rt == TY_FLOAT && op != TK_PERCENT) return TY_FLOAT;
@@ -268,7 +267,7 @@ static void emit_binop(FuncState *fs, TokenType op, int a, int b, Type lt, Type 
     case TK_PLUS:    emit(fs, SPT_MK_ABC(ii ? OP_IADD : ff ? OP_FADD : OP_ADD, a, a, b)); break;
     case TK_MINUS:   emit(fs, SPT_MK_ABC(ii ? OP_ISUB : ff ? OP_FSUB : OP_SUB, a, a, b)); break;
     case TK_STAR:    emit(fs, SPT_MK_ABC(ii ? OP_IMUL : ff ? OP_FMUL : OP_MUL, a, a, b)); break;
-    case TK_SLASH:   emit(fs, SPT_MK_ABC(ff ? OP_FDIV : OP_DIV, a, a, b)); break;
+    case TK_SLASH:   emit(fs, SPT_MK_ABC(ii ? OP_IDIV : ff ? OP_FDIV : OP_DIV, a, a, b)); break;
     case TK_PERCENT: emit(fs, SPT_MK_ABC(ii ? OP_IMOD : OP_MOD, a, a, b)); break;
     case TK_EQ:      emit(fs, SPT_MK_ABC(OP_EQ, a, a, b)); break;
     case TK_NE:      emit(fs, SPT_MK_ABC(OP_EQ, a, a, b));

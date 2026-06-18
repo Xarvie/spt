@@ -22,5 +22,10 @@ SPT_API int  spt_val_le_rt(spt_State *L, const TValue *a, const TValue *b);
 SPT_API int  spt_truthy_v(const TValue *v);
 SPT_API void spt_jit_do_return(spt_State *L, int a, int nret);
 
+/* Helpers for opcodes whose semantics require runtime type dispatch or
+ * side-effects that are not worth inlining into native code. */
+SPT_API void spt_jit_do_neg(spt_State *L, int a, int b);   /* OP_NEG */
+SPT_API void spt_jit_do_cast(spt_State *L, int a, int target); /* OP_CAST */
+
 #endif /* SPT_HAS_JIT */
 #endif /* SPT_JIT_RT_H */

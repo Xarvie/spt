@@ -148,6 +148,8 @@ static const char *concat_cstr(const TValue *v, char *buf, size_t bufsz, size_t 
 /* ================================================================== */
 /* JIT runtime helpers (called from generated native code)             */
 /* ================================================================== */
+static void do_cast(spt_State *L, TValue *ra, Type target);  /* fwd decl */
+
 #ifdef SPT_HAS_JIT
 int  spt_val_eq(const TValue *a, const TValue *b)                       { return val_eq(a, b); }
 int  spt_val_lt_rt(spt_State *L, const TValue *a, const TValue *b)      { return val_lt(L, a, b); }
@@ -160,6 +162,17 @@ void spt_jit_do_return(spt_State *L, int a, int nret) {
   close_upvals(L, base);
   for (int i = 0; i < nret; i++) setobj(func + i, &base[a + i]);
   L->top = func + nret;
+}
+
+void spt_jit_do_neg(spt_State *L, int a, int b) {
+  TValue *rb = &L->ci->base[b];
+  if (ttisint(rb))        setint(&L->ci->base[a], -ivalue(rb));
+  else if (ttisfloat(rb)) setflt(&L->ci->base[a], -fltvalue(rb));
+  else spt_runtime_error(L, "attempt to negate a non-number value");
+}
+
+void spt_jit_do_cast(spt_State *L, int a, int target) {
+  do_cast(L, &L->ci->base[a], (Type)target);
 }
 #endif
 

@@ -95,6 +95,145 @@ static void demo_jit_from_source(spt_State *L) {
                                       : "MISMATCH")
                   : "not compiled (bailed)");
 }
+
+/* Exercise the expanded JIT coverage: integer division/modulo and float
+ * arithmetic.  All operands are typed so codegen emits OP_IDIV/OP_IMOD/
+ * OP_FADD/OP_FMUL/OP_FDIV — exactly the opcodes the JIT now lowers. */
+static void demo_jit_arith(spt_State *L) {
+  const char *src =
+    "function intmath(int n) {\n"
+    "  int sum = 0;\n"
+    "  int i = 1;\n"
+    "  while (i <= n) { sum = sum + i * i; i = i + 1; }\n"
+    "  int q = sum / 7;\n"
+    "  int r = sum % 7;\n"
+    "  return q * 100 + r;\n"
+    "}\n"
+    "function floatmath(float x) {\n"
+    "  float pi = 3.14;\n"
+    "  float area = pi * x * x;\n"
+    "  float half = area / 2.0;\n"
+    "  return half;\n"
+    "}\n";
+  if (spt_load(L, src, "jit-arith") != 0) { printf("compile error: %s\n", L->errmsg); return; }
+  setnull(L->top); L->top++;
+  spt_call(L, 0, 0);
+  L->top = L->stack;
+
+  /* intmath: interp vs native */
+  spt_getglobal(L, "intmath");
+  Proto *pi = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  spt_getglobal(L, "intmath"); setnull(L->top); L->top++; spt_pushint(L, 100);
+  spt_call(L, 1, 1);
+  long long i_interp = spt_toint(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, pi);
+  int i_compiled = (pi->jit_entry != NULL);
+
+  spt_getglobal(L, "intmath"); setnull(L->top); L->top++; spt_pushint(L, 100);
+  spt_call(L, 1, 1);
+  long long i_native = spt_toint(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT int arithmetic (IDIV, IMOD) ---\n");
+  printf("  intmath(100): interp=%lld  native=%lld  [%s]\n\n",
+         i_interp, i_native,
+         !i_compiled ? "not compiled (bailed)"
+                     : (i_interp == i_native ? "compiled, results match" : "MISMATCH"));
+
+  /* floatmath: interp vs native */
+  spt_getglobal(L, "floatmath");
+  Proto *pf = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  spt_getglobal(L, "floatmath"); setnull(L->top); L->top++; spt_pushfloat(L, 5.0);
+  spt_call(L, 1, 1);
+  double f_interp = spt_tofloat(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, pf);
+  int f_compiled = (pf->jit_entry != NULL);
+
+  spt_getglobal(L, "floatmath"); setnull(L->top); L->top++; spt_pushfloat(L, 5.0);
+  spt_call(L, 1, 1);
+  double f_native = spt_tofloat(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT float arithmetic (FADD, FMUL, FDIV) ---\n");
+  printf("  floatmath(5.0): interp=%.6f  native=%.6f  [%s]\n\n",
+         f_interp, f_native,
+         !f_compiled ? "not compiled (bailed)"
+                     : (f_interp == f_native ? "compiled, results match" : "MISMATCH"));
+}
+
+/* Exercise OP_NEG, OP_NOT, OP_CAST through the JIT. */
+static void demo_jit_unary(spt_State *L) {
+  const char *src =
+    "function negtest(int n) {\n"
+    "  int x = -n;\n"
+    "  return x + n;\n"              /* -n + n == 0 */
+    "}\n"
+    "function casttest(float f) {\n"
+    "  int n = (int)f;\n"
+    "  float g = (float)n;\n"
+    "  return (int)(g + 0.5);\n"     /* round to nearest */
+    "}\n";
+  if (spt_load(L, src, "jit-unary") != 0) { printf("compile error: %s\n", L->errmsg); return; }
+  setnull(L->top); L->top++;
+  spt_call(L, 0, 0);
+  L->top = L->stack;
+
+  /* negtest: interp vs native */
+  spt_getglobal(L, "negtest");
+  Proto *pn = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  spt_getglobal(L, "negtest"); setnull(L->top); L->top++; spt_pushint(L, 42);
+  spt_call(L, 1, 1);
+  long long n_interp = spt_toint(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, pn);
+  int n_compiled = (pn->jit_entry != NULL);
+
+  spt_getglobal(L, "negtest"); setnull(L->top); L->top++; spt_pushint(L, 42);
+  spt_call(L, 1, 1);
+  long long n_native = spt_toint(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT unary (NEG) ---\n");
+  printf("  negtest(42): interp=%lld  native=%lld  [%s]\n\n",
+         n_interp, n_native,
+         !n_compiled ? "not compiled (bailed)"
+                     : (n_interp == n_native ? "compiled, results match" : "MISMATCH"));
+
+  /* casttest: interp vs native */
+  spt_getglobal(L, "casttest");
+  Proto *pc = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  spt_getglobal(L, "casttest"); setnull(L->top); L->top++; spt_pushfloat(L, 3.7);
+  spt_call(L, 1, 1);
+  long long c_interp = spt_toint(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, pc);
+  int c_compiled = (pc->jit_entry != NULL);
+
+  spt_getglobal(L, "casttest"); setnull(L->top); L->top++; spt_pushfloat(L, 3.7);
+  spt_call(L, 1, 1);
+  long long c_native = spt_toint(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT cast (CAST) ---\n");
+  printf("  casttest(3.7): interp=%lld  native=%lld  [%s]\n\n",
+         c_interp, c_native,
+         !c_compiled ? "not compiled (bailed)"
+                     : (c_interp == c_native ? "compiled, results match" : "MISMATCH"));
+}
 #endif
 
 int main(void) {
@@ -221,6 +360,8 @@ int main(void) {
 #ifdef SPT_HAS_JIT
   printf("-- typed source through the JIT --\n\n");
   demo_jit_from_source(L);
+  demo_jit_arith(L);
+  demo_jit_unary(L);
 #endif
 
   printf("== done ==\n");

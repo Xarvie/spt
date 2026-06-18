@@ -91,7 +91,11 @@ int spt_jit_is_enabled(spt_State *L) {
 static int op_supported(spt_OpCode op, Instr inst) {
   switch (op) {
     case OP_MOVE: case OP_LOADK: case OP_LOADINT:
+    case OP_LOADBOOL: case OP_LOADNULL:
     case OP_IADD: case OP_ISUB: case OP_IMUL:
+    case OP_IDIV: case OP_IMOD:
+    case OP_FADD: case OP_FSUB: case OP_FMUL: case OP_FDIV:
+    case OP_NEG: case OP_NOT: case OP_CAST:
     case OP_LT:   case OP_LE:   case OP_EQ:
     case OP_JMP:  case OP_TEST:
       return 1;
@@ -104,6 +108,7 @@ static int op_supported(spt_OpCode op, Instr inst) {
 
 /* Memory operands for register A's value field and tag byte. */
 #define MEM_VAL(base, slot)  MIR_new_mem_op(c, MIR_T_I64, (MIR_disp_t)(slot)*TV_SZ,          (base), 0, 0)
+#define MEM_FLT(base, slot)  MIR_new_mem_op(c, MIR_T_D,   (MIR_disp_t)(slot)*TV_SZ,          (base), 0, 0)
 #define MEM_TT(base, slot)   MIR_new_mem_op(c, MIR_T_U8,  (MIR_disp_t)(slot)*TV_SZ + TT_OFF, (base), 0, 0)
 #define ROP(r)  MIR_new_reg_op(c, (r))
 #define IOP(i)  MIR_new_int_op(c, (int64_t)(i))
@@ -151,6 +156,8 @@ static void *compile_proto(MIR_context_t c, Proto *p, unsigned id) {
   MIR_reg_t tf    = MIR_new_func_reg(c, func, MIR_T_I64, "tf");
   MIR_reg_t pa    = MIR_new_func_reg(c, func, MIR_T_I64, "pa");
   MIR_reg_t pb    = MIR_new_func_reg(c, func, MIR_T_I64, "pb");
+  MIR_reg_t vd0   = MIR_new_func_reg(c, func, MIR_T_D,   "vd0");
+  MIR_reg_t vd1   = MIR_new_func_reg(c, func, MIR_T_D,   "vd1");
 
   /* prologue: base = L->ci->base */
   EMIT(INSN(MIR_MOV, ROP(vci),
@@ -192,15 +199,75 @@ static void *compile_proto(MIR_context_t c, Proto *p, unsigned id) {
         break;
       }
 
-      case OP_IADD: case OP_ISUB: case OP_IMUL: {
+      case OP_IADD: case OP_ISUB: case OP_IMUL:
+      case OP_IDIV: case OP_IMOD: {
         MIR_insn_code_t mop = (SPT_OPCODE(inst) == OP_IADD) ? MIR_ADD
-                            : (SPT_OPCODE(inst) == OP_ISUB) ? MIR_SUB : MIR_MUL;
+                            : (SPT_OPCODE(inst) == OP_ISUB) ? MIR_SUB
+                            : (SPT_OPCODE(inst) == OP_IMUL) ? MIR_MUL
+                            : (SPT_OPCODE(inst) == OP_IDIV) ? MIR_DIV : MIR_MOD;
         EMIT(INSN(MIR_MOV, ROP(t0), MEM_VAL(vbase, B)));
         EMIT(INSN(MIR_MOV, ROP(t1), MEM_VAL(vbase, Cc)));
         EMIT(INSN(mop,     ROP(t0), ROP(t0), ROP(t1)));
         EMIT(INSN(MIR_MOV, MEM_VAL(vbase, A), ROP(t0)));
         EMIT(INSN(MIR_MOV, ROP(t1), IOP(SPT_TINT)));
         EMIT(INSN(MIR_MOV, MEM_TT(vbase, A), ROP(t1)));
+        break;
+      }
+
+      case OP_FADD: case OP_FSUB: case OP_FMUL: case OP_FDIV: {
+        MIR_insn_code_t mop = (SPT_OPCODE(inst) == OP_FADD) ? MIR_DADD
+                            : (SPT_OPCODE(inst) == OP_FSUB) ? MIR_DSUB
+                            : (SPT_OPCODE(inst) == OP_FMUL) ? MIR_DMUL : MIR_DDIV;
+        EMIT(INSN(MIR_DMOV, ROP(vd0), MEM_FLT(vbase, B)));
+        EMIT(INSN(MIR_DMOV, ROP(vd1), MEM_FLT(vbase, Cc)));
+        EMIT(INSN(mop,      ROP(vd0), ROP(vd0), ROP(vd1)));
+        EMIT(INSN(MIR_DMOV, MEM_FLT(vbase, A), ROP(vd0)));
+        EMIT(INSN(MIR_MOV,  ROP(t1), IOP(SPT_TFLOAT)));
+        EMIT(INSN(MIR_MOV,  MEM_TT(vbase, A), ROP(t1)));
+        break;
+      }
+
+      case OP_LOADBOOL: {
+        EMIT(INSN(MIR_MOV, ROP(t0), IOP(SPT_GETB(inst))));
+        EMIT(INSN(MIR_MOV, MEM_VAL(vbase, A), ROP(t0)));
+        EMIT(INSN(MIR_MOV, ROP(t1), IOP(SPT_TBOOL)));
+        EMIT(INSN(MIR_MOV, MEM_TT(vbase, A), ROP(t1)));
+        break;
+      }
+
+      case OP_LOADNULL: {
+        int b = B;
+        for (int j = 0; j <= b; j++) {
+          EMIT(INSN(MIR_MOV, MEM_VAL(vbase, A + j), IOP(0)));
+          EMIT(INSN(MIR_MOV, ROP(t1), IOP(SPT_TNULL)));
+          EMIT(INSN(MIR_MOV, MEM_TT(vbase, A + j), ROP(t1)));
+        }
+        break;
+      }
+
+      case OP_NEG: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_neg)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B)));
+        break;
+      }
+
+      case OP_NOT: {
+        EMIT(INSN(MIR_ADD, ROP(pa), ROP(vbase), IOP((MIR_disp_t)B * TV_SZ)));
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_truthy_v)));
+        EMIT(MIR_new_call_insn(c, 4, MIR_new_ref_op(c, proto_tru), ROP(tf),
+                               ROP(tr), ROP(pa)));
+        EMIT(INSN(MIR_XOR, ROP(tr), ROP(tr), IOP(1)));   /* !truthy = falsy */
+        EMIT(INSN(MIR_MOV, MEM_VAL(vbase, A), ROP(tr)));
+        EMIT(INSN(MIR_MOV, ROP(t1), IOP(SPT_TBOOL)));
+        EMIT(INSN(MIR_MOV, MEM_TT(vbase, A), ROP(t1)));
+        break;
+      }
+
+      case OP_CAST: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_cast)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B)));
         break;
       }
 
