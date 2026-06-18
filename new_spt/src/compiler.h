@@ -38,8 +38,9 @@ typedef enum {
   TK_DOTDOT,                                                  /* .. concat       */
   TK_HASH,                                                    /* # length        */
   TK_EQ, TK_NE, TK_LT, TK_LE, TK_GT, TK_GE, TK_ASSIGN, TK_NOT,
+  TK_ANDAND, TK_OROR,                                        /* && || short-circuit */
   TK_LPAREN, TK_RPAREN, TK_LBRACE, TK_RBRACE, TK_LBRACKET, TK_RBRACKET,
-  TK_COMMA, TK_SEMI, TK_ARROW
+  TK_COMMA, TK_SEMI, TK_ARROW, TK_COLON
 } TokenType;
 
 typedef struct {
@@ -62,7 +63,7 @@ void lex_next(Lexer *lx, Token *t);
 /* ---- AST ---- */
 typedef enum {
   N_INT, N_FLOAT, N_STR, N_BOOL, N_NULL, N_NAME,
-  N_BINOP, N_UNOP, N_CALL, N_INDEX, N_LIST, N_CAST, N_LEN,
+  N_BINOP, N_UNOP, N_CALL, N_INDEX, N_LIST, N_MAP, N_CAST, N_LEN,
   N_BLOCK, N_IF, N_WHILE, N_RETURN, N_ASSIGN, N_GLOBAL, N_FUNC, N_EXPRSTMT,
   N_VARDECL, N_BREAK, N_CONTINUE
 } NodeKind;
@@ -79,7 +80,9 @@ struct Node {
     struct { TokenType op; Node *l, *r; } bin;           /* N_BINOP, N_UNOP    */
     struct { Node *fn; Node **args; int nargs; } call;   /* N_CALL             */
     struct { Node *obj, *idx; } index;                   /* N_INDEX            */
-    struct { Node **elems; int n; } list;                /* N_LIST, N_BLOCK    */
+    struct { Node **elems; int n; } list;                /* N_LIST, N_BLOCK;
+                                                            N_MAP: elems holds
+                                                            n*2 nodes k0,v0,k1,v1… */
     struct { Type target; Node *e; } cast;               /* N_CAST             */
     struct { Node *cond, *a, *b; } ctrl;                 /* N_IF/N_WHILE       */
     struct { Node *e; } one;                             /* N_RETURN/N_EXPRSTMT*/

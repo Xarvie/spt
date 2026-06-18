@@ -1,0 +1,15 @@
+/* Typed-map workload: insert n integer-keyed entries, then sum all values n
+ * times. Exercises the hash-table fast paths (OP_SETMAP / OP_GETMAP). */
+function bench(int n) {
+  map m = {};
+  int i = 0;
+  while (i < n) { m[i] = i * 2; i = i + 1; }
+  s = 0;
+  int rep = 0;
+  while (rep < n) {
+    int j = 0;
+    while (j < n) { s = s + m[j]; j = j + 1; }
+    rep = rep + 1;
+  }
+  return s;
+}

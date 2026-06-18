@@ -242,6 +242,7 @@ static Type infer(FuncState *fs, Node *e) {
     case N_BOOL:  return TY_BOOL;
     case N_NULL:  return TY_NULL;
     case N_LIST:  return TY_LIST;
+    case N_MAP:   return TY_MAP;
     case N_NAME:
       return name_type(fs, e->u.str.s, e->u.str.len);
     case N_UNOP:
@@ -336,6 +337,22 @@ static int expr_next(FuncState *fs, Node *e) {
       return a;
     }
     case N_BINOP: {
+      /* Short-circuit logical operators evaluate the right operand only when
+       * needed, so they cannot use the eager two-operand path below. The result
+       * lands in the same register `ra` on both paths: `||` keeps the left when
+       * it is truthy (TEST C=1) and otherwise overwrites it with the right;
+       * `&&` keeps the left when it is falsy (TEST C=0). */
+      if (e->u.bin.op == TK_OROR || e->u.bin.op == TK_ANDAND) {
+        int cval = (e->u.bin.op == TK_OROR) ? 1 : 0;
+        int ra = expr_next(fs, e->u.bin.l);          /* left -> ra            */
+        emit(fs, SPT_MK_ABC(OP_TEST, ra, 0, cval));  /* decide short-circuit  */
+        int j_skip = emit_jmp(fs);                   /* taken => keep left     */
+        setfree(fs, ra);                             /* right reuses ra        */
+        int rb = expr_next(fs, e->u.bin.r);          /* right -> ra            */
+        (void)rb;                                    /* rb == ra by allocation */
+        patch_here(fs, j_skip);
+        return ra;
+      }
       Type lt = infer(fs, e->u.bin.l);
       Type rt = infer(fs, e->u.bin.r);
       int a = expr_next(fs, e->u.bin.l);
@@ -365,6 +382,17 @@ static int expr_next(FuncState *fs, Node *e) {
         int v = expr_next(fs, e->u.list.elems[idx]);
         emit(fs, SPT_MK_ABC(OP_LISTPUSH, r, v, 0));
         setfree(fs, r + 1);
+      }
+      return r;
+    }
+    case N_MAP: {
+      int r = reserve(fs);
+      emit(fs, SPT_MK_ABC(OP_NEWMAP, r, 0, 0));
+      for (int idx = 0; idx < e->u.list.n; idx++) {
+        int kreg = expr_next(fs, e->u.list.elems[2 * idx]);      /* key   -> r+1 */
+        int vreg = expr_next(fs, e->u.list.elems[2 * idx + 1]);  /* value -> r+2 */
+        emit(fs, SPT_MK_ABC(OP_SETMAP, r, kreg, vreg));          /* R[r][k] = v  */
+        setfree(fs, r + 1);   /* pop key+value, keep map at r */
       }
       return r;
     }

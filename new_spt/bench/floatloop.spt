@@ -1,0 +1,14 @@
+/* Typed-float arithmetic loop (FADD/FMUL/FSUB). The driver value drifts slowly
+ * so all quantities stay bounded (no inf/overflow); IEEE-754 doubles make the
+ * result match Lua to full precision. */
+function bench(int n) {
+  float s = 0.0;
+  float x = 0.5;
+  int i = 0;
+  while (i < n) {
+    s = s + x * x - x;
+    x = x + 0.0000001;
+    i = i + 1;
+  }
+  return s;
+}

@@ -12,6 +12,14 @@
 #include <stdarg.h>
 #include <setjmp.h>
 
+/* growable temp vector of Node* (malloc-backed, copied into the arena) */
+typedef struct { Node **items; int n, cap; } NodeVec;
+
+/* Parser state. Heap-allocated so that fields written during parsing remain
+ * valid to read in the setjmp error handler (a stack-local P would make those
+ * reads undefined). `vecstack` records every NodeVec whose malloc-backed buffer
+ * is still live, so a perror_at longjmp can free them instead of leaking. */
+#define SPT_PARSE_VECMAX 256
 typedef struct {
   Lexer    lex;
   Token    cur;
@@ -19,13 +27,17 @@ typedef struct {
   char    *err;
   size_t   errsz;
   jmp_buf  jb;
+  NodeVec *vecstack[SPT_PARSE_VECMAX];
+  int      vecsp;
 } P;
 
-/* growable temp vector of Node* (malloc-backed, copied into the arena) */
-typedef struct { Node **items; int n, cap; } NodeVec;
-static void vec_push(NodeVec *v, Node *n) {
-  if (v->n == v->cap) { v->cap = v->cap ? v->cap * 2 : 8;
-    v->items = (Node **)realloc(v->items, (size_t)v->cap * sizeof(Node *)); }
+static void vec_push(P *p, NodeVec *v, Node *n) {
+  if (v->n == v->cap) {
+    if (v->cap == 0 && p->vecsp < SPT_PARSE_VECMAX)
+      p->vecstack[p->vecsp++] = v;          /* track on first allocation     */
+    v->cap = v->cap ? v->cap * 2 : 8;
+    v->items = (Node **)realloc(v->items, (size_t)v->cap * sizeof(Node *));
+  }
   v->items[v->n++] = n;
 }
 static Node **vec_to_arena(P *p, NodeVec *v, int *out_n) {
@@ -36,6 +48,11 @@ static Node **vec_to_arena(P *p, NodeVec *v, int *out_n) {
     memcpy(arr, v->items, (size_t)v->n * sizeof(Node *));
   }
   free(v->items);
+  for (int i = p->vecsp - 1; i >= 0; i--)   /* untrack (LIFO in practice)    */
+    if (p->vecstack[i] == v) {
+      for (int j = i; j < p->vecsp - 1; j++) p->vecstack[j] = p->vecstack[j + 1];
+      p->vecsp--; break;
+    }
   return arr;
 }
 
@@ -134,10 +151,43 @@ static Node *parse_primary(P *p) {
       advance(p);
       NodeVec v = {0};
       if (!check(p, TK_RBRACKET)) {
-        do { vec_push(&v, parse_expr(p)); } while (accept(p, TK_COMMA));
+        do { vec_push(p, &v, parse_expr(p)); } while (accept(p, TK_COMMA));
       }
       expect(p, TK_RBRACKET, "']'");
       n->u.list.elems = vec_to_arena(p, &v, &n->u.list.n);
+      return n;
+    }
+    case TK_LBRACE: {                     /* map literal: { k: v, ... } */
+      n = node(p, N_MAP);
+      advance(p);
+      NodeVec v = {0};
+      if (!check(p, TK_RBRACE)) {
+        do {
+          Node *key;
+          if (check(p, TK_LBRACKET)) {            /* computed key: [expr]   */
+            advance(p);
+            key = parse_expr(p);
+            expect(p, TK_RBRACKET, "']'");
+          } else if (check(p, TK_STR)) {          /* string-literal key     */
+            key = node(p, N_STR);
+            unescape(p, p->cur.s, p->cur.len, &key->u.str.s, &key->u.str.len);
+            advance(p);
+          } else if (check(p, TK_NAME)) {         /* bare ident -> str key  */
+            key = node(p, N_STR);
+            key->u.str.s = p->cur.s; key->u.str.len = p->cur.len;
+            advance(p);
+          } else {
+            perror_at(p, "expected a map key (string, identifier, or [expr])");
+            return NULL;
+          }
+          expect(p, TK_COLON, "':'");
+          Node *val = parse_expr(p);
+          vec_push(p, &v, key); vec_push(p, &v, val);   /* interleaved k,v         */
+        } while (accept(p, TK_COMMA));
+      }
+      expect(p, TK_RBRACE, "'}'");
+      n->u.list.elems = vec_to_arena(p, &v, &n->u.list.n);
+      n->u.list.n /= 2;                  /* count is entries, elems is 2*n   */
       return n;
     }
     default:
@@ -156,7 +206,7 @@ static Node *parse_postfix(P *p) {
       advance(p);
       NodeVec v = {0};
       if (!check(p, TK_RPAREN)) {
-        do { vec_push(&v, parse_expr(p)); } while (accept(p, TK_COMMA));
+        do { vec_push(p, &v, parse_expr(p)); } while (accept(p, TK_COMMA));
       }
       expect(p, TK_RPAREN, "')'");
       c->u.call.args = vec_to_arena(p, &v, &c->u.call.nargs);
@@ -247,7 +297,7 @@ static Node *parse_concat(P *p) {
 }
 
 /* compare := concat ( (== != < <= > >=) concat )* */
-static Node *parse_expr(P *p) {
+static Node *parse_cmp(P *p) {
   Node *l = parse_concat(p);
   while (check(p, TK_EQ) || check(p, TK_NE) || check(p, TK_LT) ||
          check(p, TK_LE) || check(p, TK_GT) || check(p, TK_GE)) {
@@ -257,11 +307,31 @@ static Node *parse_expr(P *p) {
   return l;
 }
 
+/* logic-and := compare ( && compare )*   (short-circuit; below comparison) */
+static Node *parse_and(P *p) {
+  Node *l = parse_cmp(p);
+  while (check(p, TK_ANDAND)) {
+    advance(p);
+    l = bin(p, TK_ANDAND, l, parse_cmp(p));
+  }
+  return l;
+}
+
+/* logic-or := logic-and ( || logic-and )*   (short-circuit; lowest precedence) */
+static Node *parse_expr(P *p) {
+  Node *l = parse_and(p);
+  while (check(p, TK_OROR)) {
+    advance(p);
+    l = bin(p, TK_OROR, l, parse_and(p));
+  }
+  return l;
+}
+
 static Node *parse_block(P *p) {
   expect(p, TK_LBRACE, "'{'");
   Node *b = node(p, N_BLOCK);
   NodeVec v = {0};
-  while (!check(p, TK_RBRACE) && !check(p, TK_EOF)) vec_push(&v, parse_stmt(p));
+  while (!check(p, TK_RBRACE) && !check(p, TK_EOF)) vec_push(p, &v, parse_stmt(p));
   expect(p, TK_RBRACE, "'}'");
   b->u.list.elems = vec_to_arena(p, &v, &b->u.list.n);
   return b;
@@ -294,7 +364,7 @@ static Node *parse_stmt(P *p) {
           if (!check(p, TK_NAME)) perror_at(p, "expected parameter name");
           Node *pm = node(p, N_NAME); pm->u.str.s = p->cur.s; pm->u.str.len = p->cur.len;
           advance(p);
-          vec_push(&v, pm);
+          vec_push(p, &v, pm);
           if (npt >= 64) perror_at(p, "too many parameters");
           ptypes[npt++] = pty;
         } while (accept(p, TK_COMMA));
@@ -354,6 +424,7 @@ static Node *parse_stmt(P *p) {
     case TK_LBRACE:
       return parse_block(p);
     case TK_KW_INT: case TK_KW_FLOAT: case TK_KW_STRING: case TK_KW_BOOL:
+    case TK_KW_LIST: case TK_KW_MAP:
     case TK_CONST: {
       int is_const = 0;
       Type ty = TY_DYN;
@@ -391,14 +462,23 @@ static Node *parse_stmt(P *p) {
 
 Node *spt_parse(spt_State *L, AstArena *arena, const char *src, char *err, size_t errsz) {
   (void)L;
-  P p;
-  p.arena = arena; p.err = err; p.errsz = errsz;
-  lex_init(&p.lex, src);
-  if (setjmp(p.jb) != 0) return NULL;
-  advance(&p);
-  Node *b = node(&p, N_BLOCK);
+  /* Heap-allocated so the error handler may safely read fields written during
+   * parsing (a stack-local P would be undefined to read after longjmp). The
+   * `p` pointer itself is set once before setjmp and never reassigned. */
+  P *p = (P *)calloc(1, sizeof(P));
+  if (!p) { snprintf(err, errsz, "out of memory"); return NULL; }
+  p->arena = arena; p->err = err; p->errsz = errsz;
+  lex_init(&p->lex, src);
+  if (setjmp(p->jb) != 0) {
+    for (int i = 0; i < p->vecsp; i++) free(p->vecstack[i]->items);  /* no leak */
+    free(p);
+    return NULL;
+  }
+  advance(p);
+  Node *b = node(p, N_BLOCK);
   NodeVec v = {0};
-  while (!check(&p, TK_EOF)) vec_push(&v, parse_stmt(&p));
-  b->u.list.elems = vec_to_arena(&p, &v, &b->u.list.n);
+  while (!check(p, TK_EOF)) vec_push(p, &v, parse_stmt(p));
+  b->u.list.elems = vec_to_arena(p, &v, &b->u.list.n);
+  free(p);
   return b;
 }

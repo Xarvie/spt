@@ -1,0 +1,16 @@
+/* Typed-list access: build a size-n list, then sum it n times. The inner sum
+ * loop is the hot path the JIT lowers to an inline bounds-checked array load
+ * (OP_GETLIST). */
+function bench(int n) {
+  list xs = [0];
+  int i = 1;
+  while (i < n) { xs[i] = i; i = i + 1; }
+  s = 0;
+  int rep = 0;
+  while (rep < n) {
+    int j = 0;
+    while (j < n) { s = s + xs[j]; j = j + 1; }
+    rep = rep + 1;
+  }
+  return s;
+}

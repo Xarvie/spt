@@ -589,6 +589,56 @@ static void demo_jit_typed_containers(spt_State *L) {
            ? "compiled to native, results match interpreter"
            : (all ? "MISMATCH" : "a prototype unexpectedly bailed"));
 }
+static long long call0_int(spt_State *L, const char *fn) {
+  L->top = L->stack; spt_getglobal(L, fn); setnull(L->top); L->top++;
+  spt_call(L, 0, 1);
+  long long r = spt_toint(L, 1); L->top = L->stack; return r;
+}
+
+static void demo_jit_maps_logic(spt_State *L) {
+  const char *src =
+    "function inventory() {\n"                    /* map literal, mixed keys    */
+    "  map m = {gold: 100, gems: 7, [\"potions\"]: 3};\n"
+    "  return m[\"gold\"] + m[\"gems\"] * 10 + m[\"potions\"];\n"  /* 100+70+3=173 */
+    "}\n"
+    "function pick() {\n"                          /* short-circuit value result */
+    "  x = false || 42; y = true && 7; return x + y;\n"          /* 42+7 = 49     */
+    "}\n"
+    "function combo() {\n"                         /* map read guarded by &&     */
+    "  map m = {hp: 100, mp: 30};\n"
+    "  if (m[\"hp\"] > 50 && m[\"mp\"] > 0) { return m[\"hp\"] + m[\"mp\"]; }\n" /* 130 */
+    "  return 0;\n"
+    "}\n";
+  if (spt_load(L, src, "jit-maps") != 0) { printf("compile error: %s\n", L->errmsg); return; }
+  setnull(L->top); L->top++; spt_call(L, 0, 0); L->top = L->stack;
+
+  printf("--- JIT map literals + && / || ---\n");
+
+  long long i_inv = call0_int(L, "inventory");
+  long long i_pick = call0_int(L, "pick");
+  long long i_combo = call0_int(L, "combo");
+
+  spt_getglobal(L, "inventory"); Proto *p1 = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_getglobal(L, "pick");      Proto *p2 = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_getglobal(L, "combo");     Proto *p3 = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_jit_try_compile(L, p1);
+  spt_jit_try_compile(L, p2);
+  spt_jit_try_compile(L, p3);
+  int all = p1->jit_entry && p2->jit_entry && p3->jit_entry;
+
+  long long n_inv = call0_int(L, "inventory");
+  long long n_pick = call0_int(L, "pick");
+  long long n_combo = call0_int(L, "combo");
+
+  printf("  compiled: inventory=%s pick=%s combo=%s\n",
+         p1->jit_entry ? "yes" : "no", p2->jit_entry ? "yes" : "no",
+         p3->jit_entry ? "yes" : "no");
+  printf("  inventory=%lld pick=%lld combo=%lld  [%s]\n\n",
+         n_inv, n_pick, n_combo,
+         (all && i_inv == n_inv && i_pick == n_pick && i_combo == n_combo)
+           ? "compiled to native, results match interpreter"
+           : (all ? "MISMATCH" : "a prototype unexpectedly bailed"));
+}
 #endif
 
 int main(void) {
@@ -761,6 +811,7 @@ int main(void) {
   demo_jit_mixed(L);
   demo_jit_calls(L);
   demo_jit_typed_containers(L);
+  demo_jit_maps_logic(L);
 #endif
 
   printf("== done ==\n");

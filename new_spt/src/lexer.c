@@ -129,6 +129,11 @@ void lex_next(Lexer *lx, Token *t) {
     case '!': if (*lx->p == '=') { lx->p++; t->type = TK_NE; } else t->type = TK_NOT; return;
     case '<': if (*lx->p == '=') { lx->p++; t->type = TK_LE; } else t->type = TK_LT; return;
     case '>': if (*lx->p == '=') { lx->p++; t->type = TK_GE; } else t->type = TK_GT; return;
+    case ':': t->type = TK_COLON; return;
+    case '&': if (*lx->p == '&') { lx->p++; t->type = TK_ANDAND; return; }
+              t->type = TK_EOF; return;   /* lone '&' is not a token */
+    case '|': if (*lx->p == '|') { lx->p++; t->type = TK_OROR; return; }
+              t->type = TK_EOF; return;   /* lone '|' is not a token */
     default:  t->type = TK_EOF; return;   /* unknown char -> treated as EOF */
   }
 }

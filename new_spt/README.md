@@ -117,10 +117,13 @@ checks the native result against the interpreter.)
   frame for the receiver; named arguments occupy registers 1..N. Plain calls pass
   a null receiver. This is what lets method-call and `__call` semantics share one
   uniform frame layout.
-- **Typed opcodes.** When the (future) codegen proves both operands are `int` or
-  `float`, it emits typed arithmetic (`OP_IADD`, `OP_FADD`, …) that skips all
-  runtime tag dispatch. Together with the List ops, this is how the interpreter is
-  designed to beat stock Lua without relying on the JIT.
+- **Typed opcodes.** When the codegen proves both operands are `int` or `float`,
+  it emits typed arithmetic (`OP_IADD`, `OP_FADD`, …) that skips all runtime tag
+  dispatch. These (together with the List/Map ops) are what the **JIT** turns into
+  native code: on arithmetic kernels the JIT beats reference PUC-Lua 5.4 by ≈2×.
+  The *interpreter* on its own does **not** outrun PUC-Lua 5.4 — its highly-tuned
+  interpreter is ≈3–4× faster than SPT's here. See [BENCHMARKS.md](BENCHMARKS.md)
+  for the measured three-way comparison (interpreter / JIT / PUC-Lua).
 - **Dispatch.** Direct-threaded (computed goto) on GCC/Clang — the same technique
   PUC-Lua uses — with an automatic switch fallback on toolchains without
   labels-as-values (e.g. MSVC).
@@ -182,9 +185,12 @@ round trip. The implemented subset:
   Parameter and return types are optional; a declared return type lets callers
   infer the result type. Calls follow the Slot-0 convention automatically.
 
-Comments are `//` line and `/* … */` block. Not yet in the frontend: explicit
-casts at the dynamic/typed boundary, Map literals, `&&` / `||`, and block-scoped
-locals.
+Comments are `//` line and `/* … */` block. **Map literals** are written
+`{ key: value, … }`, where a key is a string literal, a bare identifier (taken as
+a string key), or a computed `[expr]`; e.g. `{ name: "hp", [k]: 1 }`. **`&&` and
+`||`** are short-circuit logical operators (only `null` and `false` are falsy).
+Not yet in the frontend: explicit casts at the dynamic/typed boundary and
+block-scoped locals.
 
 ## Building
 
@@ -268,9 +274,10 @@ CMakeLists.txt primary build      Makefile  quick build
 3. **Frontend: casts and more sugar.** Lexer, parser, codegen, a gradual static
    **type system** (`int`/`float`/`string`/`bool`/`list`/`map`, `const`, compile-time
    checking, typed-opcode emission), and **closures** with upvalue capture are all
-   in place. Remaining: explicit casts at the dynamic/typed boundary (to move values
-   soundly between dynamic and typed code and to type `declare`d externs), Map literals,
-   `&&` / `||` short-circuit, and block-scoped locals.
+   in place, as are **map literals** (`{ k: v }`) and **short-circuit `&&` / `||`**.
+   Remaining: explicit casts at the dynamic/typed boundary (to move values soundly
+   between dynamic and typed code and to type `declare`d externs) and block-scoped
+   locals.
 4. **Interpreter polish.** Non-recursive (soft) `OP_CALL` to remove C-stack depth
    limits on SPT recursion, Map deletion with tombstones, string indexing in the
    generic index path, and metatable dispatch.
