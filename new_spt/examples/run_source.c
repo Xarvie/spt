@@ -234,6 +234,197 @@ static void demo_jit_unary(spt_State *L) {
          !c_compiled ? "not compiled (bailed)"
                      : (c_interp == c_native ? "compiled, results match" : "MISMATCH"));
 }
+
+static void demo_jit_concat(spt_State *L) {
+  const char *src =
+    "function greet(string name, int n) {\n"
+    "  string s = \"Hello, \" .. name .. \"! You are \" .. n .. \" years old.\";\n"
+    "  return s;\n"
+    "}\n";
+  if (spt_load(L, src, "jit-concat") != 0) { printf("compile error: %s\n", L->errmsg); return; }
+  setnull(L->top); L->top++;
+  spt_call(L, 0, 0);
+  L->top = L->stack;
+
+  spt_getglobal(L, "greet");
+  Proto *pc = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  spt_getglobal(L, "greet"); setnull(L->top); L->top++;
+  spt_pushstring(L, "Alice"); spt_pushint(L, 30);
+  spt_call(L, 2, 1);
+  const char *s_interp = spt_tostring(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, pc);
+  int compiled = (pc->jit_entry != NULL);
+
+  spt_getglobal(L, "greet"); setnull(L->top); L->top++;
+  spt_pushstring(L, "Alice"); spt_pushint(L, 30);
+  spt_call(L, 2, 1);
+  const char *s_native = spt_tostring(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT concat (CONCAT) ---\n");
+  printf("  greet(\"Alice\",30): interp=\"%s\"  native=\"%s\"  [%s]\n\n",
+         s_interp ? s_interp : "(null)",
+         s_native ? s_native : "(null)",
+         !compiled ? "not compiled (bailed)"
+                   : (s_interp && s_native && strcmp(s_interp, s_native) == 0
+                      ? "compiled, results match" : "MISMATCH"));
+}
+
+/* Exercise globals, upvalues, indexing, lists, maps, generic arith, len —
+ * all the newly JIT-supported opcodes — in one function. */
+static void demo_jit_mixed(spt_State *L) {
+  const char *src =
+    "global counter = 42;\n"
+    "function make_acc() {\n"
+    "  int total = 0;\n"
+    "  function add(int x) { total = total + x; return total; }\n"
+    "  return add;\n"
+    "}\n"
+    "function sum_list(xs) {\n"
+    "  s = 0;\n"
+    "  int i = 0;\n"
+    "  while (i < #xs) { s = s + xs[i]; i = i + 1; }\n"
+    "  return s;\n"
+    "}\n"
+    "function build_and_sum() {\n"
+    "  xs = [10, 20, 30, 40, 50];\n"
+    "  return sum_list(xs);\n"
+    "}\n"
+    "function dyn_arith(a, b) {\n"
+    "  return a + b * 2 - 1;\n"
+    "}\n"
+    "function read_global() {\n"
+    "  return counter;\n"
+    "}\n";
+  if (spt_load(L, src, "jit-mixed") != 0) { printf("compile error: %s\n", L->errmsg); return; }
+  setnull(L->top); L->top++;
+  spt_call(L, 0, 0);
+  L->top = L->stack;
+
+  /* --- test upvalues (GETUPVAL/SETUPVAL) ---
+   * make_acc itself bails (it contains OP_CLOSURE), but the inner `add`
+   * function only uses OP_GETUPVAL/OP_SETUPVAL/OP_IADD/OP_RETURN — all
+   * JIT-supported.  We force-compile `add`'s proto and verify it runs
+   * correctly when called through the interpreter. */
+  spt_getglobal(L, "make_acc");
+  Proto *p_make = clvalue(L->top - 1)->p;
+  Proto *p_add  = p_make->p[0];             /* the nested `add` function */
+  L->top = L->stack;
+
+  /* interpreter baseline: call make_acc() then add(10), add(20) */
+  spt_getglobal(L, "make_acc"); setnull(L->top); L->top++;
+  spt_call(L, 0, 1);                         /* stack[1] = add closure   */
+  spt_pushvalue(L, 1); setnull(L->top); L->top++; spt_pushint(L, 10);
+  spt_call(L, 1, 1);                         /* stack[2] = 10            */
+  long long acc1 = spt_toint(L, 2);
+  spt_pushvalue(L, 1); setnull(L->top); L->top++; spt_pushint(L, 20);
+  spt_call(L, 1, 1);                         /* stack[3] = 30            */
+  long long acc2 = spt_toint(L, 3);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, p_add);
+  int add_compiled = (p_add->jit_entry != NULL);
+
+  /* native run: add proto is now JIT-compiled */
+  spt_getglobal(L, "make_acc"); setnull(L->top); L->top++;
+  spt_call(L, 0, 1);
+  spt_pushvalue(L, 1); setnull(L->top); L->top++; spt_pushint(L, 10);
+  spt_call(L, 1, 1);
+  long long acc1n = spt_toint(L, 2);
+  spt_pushvalue(L, 1); setnull(L->top); L->top++; spt_pushint(L, 20);
+  spt_call(L, 1, 1);
+  long long acc2n = spt_toint(L, 3);
+  L->top = L->stack;
+
+  printf("--- JIT upvalues (GETUPVAL/SETUPVAL) ---\n");
+  printf("  make_acc/add: interp=%lld,%lld  native=%lld,%lld  [%s]\n\n",
+         acc1, acc2, acc1n, acc2n,
+         !add_compiled ? "not compiled (bailed)"
+                       : (acc1 == acc1n && acc2 == acc2n ? "compiled, results match" : "MISMATCH"));
+
+  /* --- test build_and_sum (NEWLIST/LISTPUSH + GETINDEX/LEN + CALL) ---
+   * Note: build_and_sum calls sum_list, which uses OP_CALL. Since OP_CALL
+   * is not yet JIT-supported, build_and_sum will bail. But sum_list itself
+   * (when called directly with a list arg) can be JIT-compiled. */
+  spt_getglobal(L, "sum_list");
+  Proto *p_sl = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  /* call build_and_sum to get the reference result (uses interpreter) */
+  spt_getglobal(L, "build_and_sum"); setnull(L->top); L->top++;
+  spt_call(L, 0, 1);
+  long long sl_interp = spt_toint(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, p_sl);
+  int sl_compiled = (p_sl->jit_entry != NULL);
+
+  /* call build_and_sum again — sum_list will run JIT-compiled when called */
+  spt_getglobal(L, "build_and_sum"); setnull(L->top); L->top++;
+  spt_call(L, 0, 1);
+  long long sl_native = spt_toint(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT list+index+len (GETINDEX/LEN/NEWLIST/LISTPUSH) ---\n");
+  printf("  sum_list([10..50]): interp=%lld  native=%lld  [%s]\n\n",
+         sl_interp, sl_native,
+         !sl_compiled ? "not compiled (bailed)"
+                      : (sl_interp == sl_native ? "compiled, results match" : "MISMATCH"));
+
+  /* --- test dyn_arith (generic ADD/SUB/MUL) --- */
+  spt_getglobal(L, "dyn_arith");
+  Proto *p_da = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  spt_getglobal(L, "dyn_arith"); setnull(L->top); L->top++;
+  spt_pushint(L, 3); spt_pushint(L, 4);
+  spt_call(L, 2, 1);
+  long long da_interp = spt_toint(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, p_da);
+  int da_compiled = (p_da->jit_entry != NULL);
+
+  spt_getglobal(L, "dyn_arith"); setnull(L->top); L->top++;
+  spt_pushint(L, 3); spt_pushint(L, 4);
+  spt_call(L, 2, 1);
+  long long da_native = spt_toint(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT generic arith (ADD/SUB/MUL) ---\n");
+  printf("  dyn_arith(3,4): interp=%lld  native=%lld  [%s]\n\n",
+         da_interp, da_native,
+         !da_compiled ? "not compiled (bailed)"
+                      : (da_interp == da_native ? "compiled, results match" : "MISMATCH"));
+
+  /* --- test globals (GETGLOBAL) --- */
+  spt_getglobal(L, "read_global");
+  Proto *p_rg = clvalue(L->top - 1)->p;
+  L->top = L->stack;
+
+  spt_getglobal(L, "read_global"); setnull(L->top); L->top++;
+  spt_call(L, 0, 1);
+  long long g_interp = spt_toint(L, 1);
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, p_rg);
+  int g_compiled = (p_rg->jit_entry != NULL);
+
+  spt_getglobal(L, "read_global"); setnull(L->top); L->top++;
+  spt_call(L, 0, 1);
+  long long g_native = spt_toint(L, 1);
+  L->top = L->stack;
+
+  printf("--- JIT globals (GETGLOBAL) ---\n");
+  printf("  read_global(): interp=%lld  native=%lld  [%s]\n\n",
+         g_interp, g_native,
+         !g_compiled ? "not compiled (bailed)"
+                     : (g_interp == g_native ? "compiled, results match" : "MISMATCH"));
+}
 #endif
 
 int main(void) {
@@ -357,11 +548,53 @@ int main(void) {
       "int typed = (int)dyn;\n"
       "print(typed + 1);");
 
+  run(L, "string-concat",
+      "string s = \"Hello\" .. \" \" .. \"World\";\n"
+      "print(s);");
+
+  run(L, "concat-with-coercion",
+      "int n = 42;\n"
+      "print(\"answer = \" .. n);");
+
+  run(L, "break-in-loop",
+      "int i = 0;\n"
+      "int sum = 0;\n"
+      "while (i < 100) {\n"
+      "  if (i == 10) { break; }\n"
+      "  sum = sum + i;\n"
+      "  i = i + 1;\n"
+      "}\n"
+      "print(sum);");
+
+  run(L, "continue-in-loop",
+      "int i = 0;\n"
+      "int sum = 0;\n"
+      "while (i < 10) {\n"
+      "  i = i + 1;\n"
+      "  if (i == 3) { continue; }\n"
+      "  if (i == 7) { continue; }\n"
+      "  sum = sum + i;\n"
+      "}\n"
+      "print(sum);");
+
+  run(L, "break-and-continue",
+      "int i = 0;\n"
+      "int count = 0;\n"
+      "while (i < 50) {\n"
+      "  i = i + 1;\n"
+      "  if (i == 5) { continue; }\n"
+      "  if (i == 8) { break; }\n"
+      "  count = count + 1;\n"
+      "}\n"
+      "print(count);");
+
 #ifdef SPT_HAS_JIT
   printf("-- typed source through the JIT --\n\n");
   demo_jit_from_source(L);
   demo_jit_arith(L);
   demo_jit_unary(L);
+  demo_jit_concat(L);
+  demo_jit_mixed(L);
 #endif
 
   printf("== done ==\n");

@@ -26,6 +26,34 @@ SPT_API void spt_jit_do_return(spt_State *L, int a, int nret);
  * side-effects that are not worth inlining into native code. */
 SPT_API void spt_jit_do_neg(spt_State *L, int a, int b);   /* OP_NEG */
 SPT_API void spt_jit_do_cast(spt_State *L, int a, int target); /* OP_CAST */
+SPT_API void spt_jit_do_concat(spt_State *L, int a, int b, int c); /* OP_CONCAT */
+
+/* Globals — `key` points into the Proto's constant table (known at JIT time). */
+SPT_API void spt_jit_do_getglobal(spt_State *L, int a, const TValue *key);
+SPT_API void spt_jit_do_setglobal(spt_State *L, int a, const TValue *key);
+
+/* Upvalues — the closure is read from ci->func at runtime. */
+SPT_API void spt_jit_do_getupval(spt_State *L, int a, int b);
+SPT_API void spt_jit_do_setupval(spt_State *L, int a, int b);
+
+/* Length operator. */
+SPT_API void spt_jit_do_len(spt_State *L, int a, int b);
+
+/* Generic indexing (List | Map dispatch). */
+SPT_API void spt_jit_do_getindex(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_setindex(spt_State *L, int a, int b, int c);
+
+/* List / Map construction. */
+SPT_API void spt_jit_do_newlist(spt_State *L, int a, int hint);
+SPT_API void spt_jit_do_listpush(spt_State *L, int a, int b);
+SPT_API void spt_jit_do_newmap(spt_State *L, int a);
+
+/* Generic arithmetic (runtime-typed operands). */
+SPT_API void spt_jit_do_add(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_sub(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_mul(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_div(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_mod(spt_State *L, int a, int b, int c);
 
 #endif /* SPT_HAS_JIT */
 #endif /* SPT_JIT_RT_H */

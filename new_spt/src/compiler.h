@@ -30,9 +30,12 @@ typedef enum {
 typedef enum {
   TK_EOF, TK_INT, TK_FLOAT, TK_STR, TK_NAME,
   TK_GLOBAL, TK_FUNCTION, TK_IF, TK_ELSE, TK_WHILE, TK_RETURN,
+  TK_BREAK, TK_CONTINUE,
   TK_TRUE, TK_FALSE, TK_NULL,
   TK_KW_INT, TK_KW_FLOAT, TK_KW_STRING, TK_KW_BOOL, TK_CONST,   /* type system */
   TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT,
+  TK_DOTDOT,                                                  /* .. concat       */
+  TK_HASH,                                                    /* # length        */
   TK_EQ, TK_NE, TK_LT, TK_LE, TK_GT, TK_GE, TK_ASSIGN, TK_NOT,
   TK_LPAREN, TK_RPAREN, TK_LBRACE, TK_RBRACE, TK_LBRACKET, TK_RBRACKET,
   TK_COMMA, TK_SEMI, TK_ARROW
@@ -58,9 +61,9 @@ void lex_next(Lexer *lx, Token *t);
 /* ---- AST ---- */
 typedef enum {
   N_INT, N_FLOAT, N_STR, N_BOOL, N_NULL, N_NAME,
-  N_BINOP, N_UNOP, N_CALL, N_INDEX, N_LIST, N_CAST,
+  N_BINOP, N_UNOP, N_CALL, N_INDEX, N_LIST, N_CAST, N_LEN,
   N_BLOCK, N_IF, N_WHILE, N_RETURN, N_ASSIGN, N_GLOBAL, N_FUNC, N_EXPRSTMT,
-  N_VARDECL
+  N_VARDECL, N_BREAK, N_CONTINUE
 } NodeKind;
 
 typedef struct Node Node;

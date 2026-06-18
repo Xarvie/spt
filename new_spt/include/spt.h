@@ -22,6 +22,7 @@ SPT_API void spt_pushint(spt_State *L, spt_Integer i);
 SPT_API void spt_pushfloat(spt_State *L, spt_Number n);
 SPT_API void spt_pushstring(spt_State *L, const char *s);
 SPT_API void spt_pushcfunction(spt_State *L, spt_CFunction fn);
+SPT_API void spt_pushvalue(spt_State *L, int idx);   /* push a copy of stack[idx] */
 
 /* --- reading values (by absolute 1-based stack index) --- */
 SPT_API int          spt_isnull(spt_State *L, int idx);

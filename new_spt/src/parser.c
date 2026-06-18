@@ -198,6 +198,12 @@ static Node *parse_unary(P *p) {
     n->u.bin.l = parse_unary(p);
     return n;
   }
+  if (check(p, TK_HASH)) {
+    advance(p);
+    Node *n = node(p, N_LEN);
+    n->u.one.e = parse_unary(p);
+    return n;
+  }
   return parse_postfix(p);
 }
 
@@ -227,13 +233,23 @@ static Node *parse_add(P *p) {
   return l;
 }
 
-/* compare := additive ( (== != < <= > >=) additive )* */
-static Node *parse_expr(P *p) {
+/* concat := additive ( .. additive )*    (left-associative; lower than +/-) */
+static Node *parse_concat(P *p) {
   Node *l = parse_add(p);
+  while (check(p, TK_DOTDOT)) {
+    TokenType op = p->cur.type; advance(p);
+    l = bin(p, op, l, parse_add(p));
+  }
+  return l;
+}
+
+/* compare := concat ( (== != < <= > >=) concat )* */
+static Node *parse_expr(P *p) {
+  Node *l = parse_concat(p);
   while (check(p, TK_EQ) || check(p, TK_NE) || check(p, TK_LT) ||
          check(p, TK_LE) || check(p, TK_GT) || check(p, TK_GE)) {
     TokenType op = p->cur.type; advance(p);
-    l = bin(p, op, l, parse_add(p));
+    l = bin(p, op, l, parse_concat(p));
   }
   return l;
 }
@@ -317,6 +333,18 @@ static Node *parse_stmt(P *p) {
       Node *n = node(p, N_RETURN);
       advance(p);
       n->u.one.e = check(p, TK_SEMI) ? NULL : parse_expr(p);
+      expect(p, TK_SEMI, "';'");
+      return n;
+    }
+    case TK_BREAK: {
+      Node *n = node(p, N_BREAK);
+      advance(p);
+      expect(p, TK_SEMI, "';'");
+      return n;
+    }
+    case TK_CONTINUE: {
+      Node *n = node(p, N_CONTINUE);
+      advance(p);
       expect(p, TK_SEMI, "';'");
       return n;
     }

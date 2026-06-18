@@ -174,6 +174,92 @@ void spt_jit_do_neg(spt_State *L, int a, int b) {
 void spt_jit_do_cast(spt_State *L, int a, int target) {
   do_cast(L, &L->ci->base[a], (Type)target);
 }
+
+void spt_jit_do_concat(spt_State *L, int a, int b, int c) {
+  TValue *base = L->ci->base;
+  char ba[48], bb[48]; size_t la, lb;
+  const char *sa = concat_cstr(&base[b], ba, sizeof ba, &la);
+  const char *sb = concat_cstr(&base[c], bb, sizeof bb, &lb);
+  char *tmp = (char *)spt_alloc(L, la + lb);
+  memcpy(tmp, sa, la); memcpy(tmp + la, sb, lb);
+  String *s = spt_str_newlen(L, tmp, la + lb);
+  spt_free(L, tmp, la + lb);
+  setgco(&base[a], (GCObject *)s, SPT_TSTRING);
+}
+
+void spt_jit_do_getglobal(spt_State *L, int a, const TValue *key) {
+  spt_map_get(L->G->globals, key, &L->ci->base[a]);
+}
+
+void spt_jit_do_setglobal(spt_State *L, int a, const TValue *key) {
+  spt_map_set(L, L->G->globals, key, &L->ci->base[a]);
+}
+
+void spt_jit_do_getupval(spt_State *L, int a, int b) {
+  Closure *cl = clvalue(L->ci->func);
+  setobj(&L->ci->base[a], cl->ups[b]->v);
+}
+
+void spt_jit_do_setupval(spt_State *L, int a, int b) {
+  Closure *cl = clvalue(L->ci->func);
+  Upval *uv = cl->ups[b];
+  setobj(uv->v, &L->ci->base[a]);
+  spt_barrier(L, (GCObject *)uv, uv->v);
+}
+
+void spt_jit_do_len(spt_State *L, int a, int b) {
+  setint(&L->ci->base[a], spt_obj_len(&L->ci->base[b]));
+}
+
+void spt_jit_do_getindex(spt_State *L, int a, int b, int c) {
+  TValue *base = L->ci->base;
+  TValue *tb = &base[b], *ix = &base[c], *ra = &base[a];
+  if (ttislist(tb)) {
+    if (!ttisint(ix)) spt_runtime_error(L, "list index must be an integer");
+    if (spt_list_get(tblvalue(tb), ivalue(ix), ra) < 0)
+      spt_runtime_error(L, "list index out of bounds");
+  } else if (ttismap(tb)) {
+    spt_map_get(tblvalue(tb), ix, ra);
+  } else {
+    spt_runtime_error(L, "attempt to index a non-indexable value");
+  }
+}
+
+void spt_jit_do_setindex(spt_State *L, int a, int b, int c) {
+  TValue *base = L->ci->base;
+  TValue *tb = &base[a], *ix = &base[b], *rv = &base[c];
+  if (ttislist(tb)) {
+    if (!ttisint(ix)) spt_runtime_error(L, "list index must be an integer");
+    if (spt_list_set(L, tblvalue(tb), ivalue(ix), rv) < 0)
+      spt_runtime_error(L, "list index out of bounds");
+  } else if (ttismap(tb)) {
+    spt_map_set(L, tblvalue(tb), ix, rv);
+  } else {
+    spt_runtime_error(L, "attempt to index a non-indexable value");
+  }
+}
+
+void spt_jit_do_newlist(spt_State *L, int a, int hint) {
+  Table *t = spt_list_new(L, hint);
+  setgco(&L->ci->base[a], (GCObject *)t, SPT_TLIST);
+}
+
+void spt_jit_do_listpush(spt_State *L, int a, int b) {
+  TValue *base = L->ci->base;
+  if (!ttislist(&base[a])) spt_runtime_error(L, "attempt to push to a non-list value");
+  spt_list_push(L, tblvalue(&base[a]), &base[b]);
+}
+
+void spt_jit_do_newmap(spt_State *L, int a) {
+  Table *t = spt_map_new(L);
+  setgco(&L->ci->base[a], (GCObject *)t, SPT_TMAP);
+}
+
+void spt_jit_do_add(spt_State *L, int a, int b, int c) { arith(L, OP_ADD, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
+void spt_jit_do_sub(spt_State *L, int a, int b, int c) { arith(L, OP_SUB, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
+void spt_jit_do_mul(spt_State *L, int a, int b, int c) { arith(L, OP_MUL, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
+void spt_jit_do_div(spt_State *L, int a, int b, int c) { arith(L, OP_DIV, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
+void spt_jit_do_mod(spt_State *L, int a, int b, int c) { arith(L, OP_MOD, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
 #endif
 
 /* ================================================================== */

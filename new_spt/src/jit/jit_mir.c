@@ -96,8 +96,17 @@ static int op_supported(spt_OpCode op, Instr inst) {
     case OP_IDIV: case OP_IMOD:
     case OP_FADD: case OP_FSUB: case OP_FMUL: case OP_FDIV:
     case OP_NEG: case OP_NOT: case OP_CAST:
+    case OP_CONCAT: case OP_LEN:
     case OP_LT:   case OP_LE:   case OP_EQ:
     case OP_JMP:  case OP_TEST:
+    /* generic arithmetic (runtime-typed) */
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+    /* globals + upvalues */
+    case OP_GETGLOBAL: case OP_SETGLOBAL:
+    case OP_GETUPVAL:  case OP_SETUPVAL:
+    /* indexing + data structures */
+    case OP_GETINDEX: case OP_SETINDEX:
+    case OP_NEWLIST:  case OP_LISTPUSH:  case OP_NEWMAP:
       return 1;
     case OP_RETURN:
       return SPT_GETB(inst) != 0;   /* multret form not lowered yet */
@@ -130,18 +139,24 @@ static void *compile_proto(MIR_context_t c, Proto *p, unsigned id) {
   MIR_var_t  v_eq[2]    = { {MIR_T_P,"a",0}, {MIR_T_P,"b",0} };
   MIR_var_t  v_tru[1]   = { {MIR_T_P,"v",0} };
   MIR_var_t  v_ret[3]   = { {MIR_T_P,"L",0}, {MIR_T_I64,"a",0}, {MIR_T_I64,"n",0} };
+  MIR_var_t  v_cc[4]    = { {MIR_T_P,"L",0}, {MIR_T_I64,"a",0}, {MIR_T_I64,"b",0}, {MIR_T_I64,"c",0} };
+  MIR_var_t  v_2[2]     = { {MIR_T_P,"L",0}, {MIR_T_I64,"a",0} };
 
-  char pn[5][24];
+  char pn[7][24];
   snprintf(pn[0], 24, "p_cmp3_%u", id);
   snprintf(pn[1], 24, "p_eq_%u",   id);
   snprintf(pn[2], 24, "p_tru_%u",  id);
   snprintf(pn[3], 24, "p_ret_%u",  id);
+  snprintf(pn[4], 24, "p_cc_%u",   id);
+  snprintf(pn[5], 24, "p_2_%u",    id);
 
   MIR_module_t mod = MIR_new_module(c, name);
   MIR_item_t proto_cmp3 = MIR_new_proto_arr(c, pn[0], 1, res_i64, 3, v_cmp3);
   MIR_item_t proto_eq   = MIR_new_proto_arr(c, pn[1], 1, res_i64, 2, v_eq);
   MIR_item_t proto_tru  = MIR_new_proto_arr(c, pn[2], 1, res_i64, 1, v_tru);
   MIR_item_t proto_ret  = MIR_new_proto_arr(c, pn[3], 0, NULL,    3, v_ret);
+  MIR_item_t proto_cc   = MIR_new_proto_arr(c, pn[4], 0, NULL,    4, v_cc);
+  MIR_item_t proto_2    = MIR_new_proto_arr(c, pn[5], 0, NULL,    2, v_2);
 
   MIR_var_t fn_args[1] = { {MIR_T_P, "L", 0} };
   MIR_item_t fitem = MIR_new_func_arr(c, name, 1, res_i64, 1, fn_args);
@@ -268,6 +283,97 @@ static void *compile_proto(MIR_context_t c, Proto *p, unsigned id) {
         EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_cast)));
         EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
                                ROP(vL), IOP(A), IOP(B)));
+        break;
+      }
+
+      case OP_CONCAT: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_concat)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        break;
+      }
+
+      case OP_LEN: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_len)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B)));
+        break;
+      }
+
+      /* ---- generic arithmetic (runtime-typed operands) ---- */
+      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD: {
+        void *fn = (SPT_OPCODE(inst) == OP_ADD) ? (void *)&spt_jit_do_add
+                 : (SPT_OPCODE(inst) == OP_SUB) ? (void *)&spt_jit_do_sub
+                 : (SPT_OPCODE(inst) == OP_MUL) ? (void *)&spt_jit_do_mul
+                 : (SPT_OPCODE(inst) == OP_DIV) ? (void *)&spt_jit_do_div
+                                                : (void *)&spt_jit_do_mod;
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)fn)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        break;
+      }
+
+      /* ---- globals ---- */
+      case OP_GETGLOBAL: {
+        const TValue *key = &p->k[SPT_GETBX(inst)];
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_getglobal)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP((intptr_t)key)));
+        break;
+      }
+      case OP_SETGLOBAL: {
+        const TValue *key = &p->k[SPT_GETBX(inst)];
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_setglobal)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP((intptr_t)key)));
+        break;
+      }
+
+      /* ---- upvalues ---- */
+      case OP_GETUPVAL: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_getupval)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B)));
+        break;
+      }
+      case OP_SETUPVAL: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_setupval)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B)));
+        break;
+      }
+
+      /* ---- indexing ---- */
+      case OP_GETINDEX: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_getindex)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        break;
+      }
+      case OP_SETINDEX: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_setindex)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        break;
+      }
+
+      /* ---- list / map construction ---- */
+      case OP_NEWLIST: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_newlist)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B)));
+        break;
+      }
+      case OP_LISTPUSH: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_listpush)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B)));
+        break;
+      }
+      case OP_NEWMAP: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_newmap)));
+        EMIT(MIR_new_call_insn(c, 4, MIR_new_ref_op(c, proto_2), ROP(tf),
+                               ROP(vL), IOP(A)));
         break;
       }
 

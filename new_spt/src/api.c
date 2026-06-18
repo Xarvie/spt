@@ -31,6 +31,12 @@ void spt_pushcfunction(spt_State *L, spt_CFunction fn) {
   L->top++;
 }
 
+void spt_pushvalue(spt_State *L, int idx) {
+  spt_checkstack(L, 1);
+  setobj(L->top, SLOT(L, idx));
+  L->top++;
+}
+
 /* ---- reading ---- */
 int          spt_isnull (spt_State *L, int idx) { return ttisnull(SLOT(L, idx)); }
 int          spt_isbool (spt_State *L, int idx) { return ttisbool(SLOT(L, idx)); }

@@ -74,6 +74,8 @@ void lex_next(Lexer *lx, Token *t) {
     if (kw(start, len, "else",     TK_ELSE,     t)) return;
     if (kw(start, len, "while",    TK_WHILE,    t)) return;
     if (kw(start, len, "return",   TK_RETURN,   t)) return;
+    if (kw(start, len, "break",    TK_BREAK,    t)) return;
+    if (kw(start, len, "continue", TK_CONTINUE, t)) return;
     if (kw(start, len, "true",     TK_TRUE,     t)) return;
     if (kw(start, len, "false",    TK_FALSE,    t)) return;
     if (kw(start, len, "null",     TK_NULL,     t)) return;
@@ -118,6 +120,9 @@ void lex_next(Lexer *lx, Token *t) {
     case ']': t->type = TK_RBRACKET; return;
     case ',': t->type = TK_COMMA; return;
     case ';': t->type = TK_SEMI; return;
+    case '#': t->type = TK_HASH; return;
+    case '.': if (*lx->p == '.') { lx->p++; t->type = TK_DOTDOT; return; }
+              t->type = TK_EOF; return;   /* lone '.' is not a token */
     case '=': if (*lx->p == '=') { lx->p++; t->type = TK_EQ; } else t->type = TK_ASSIGN; return;
     case '!': if (*lx->p == '=') { lx->p++; t->type = TK_NE; } else t->type = TK_NOT; return;
     case '<': if (*lx->p == '=') { lx->p++; t->type = TK_LE; } else t->type = TK_LT; return;

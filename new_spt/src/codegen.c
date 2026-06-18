@@ -57,6 +57,14 @@ typedef struct { const char *s; int len; Type ret; } FnSig;
 typedef struct { FnSig sigs[128]; int n; } CompileCtx;
 
 #define SPT_MAXUPVALS 64
+#define SPT_MAXLOOPS  16      /* nesting depth of loops                */
+#define SPT_MAXBREAKS 64      /* break jumps per loop                  */
+
+typedef struct {
+  int cont_pc;                /* pc of loop top (continue target)      */
+  int breaks[SPT_MAXBREAKS];  /* forward jump positions to patch       */
+  int nbreaks;
+} LoopFrame;
 
 typedef struct FuncState {
   spt_State *L;
@@ -72,6 +80,8 @@ typedef struct FuncState {
   int numparams;
   CompileCtx *ctx;
   struct FuncState *parent;   /* enclosing function (NULL for the chunk)  */
+  LoopFrame loops[SPT_MAXLOOPS];
+  int nloops;                  /* current loop nesting depth              */
   char  *err; size_t errsz; jmp_buf *jb;
 } FuncState;
 
@@ -241,6 +251,7 @@ static Type infer(FuncState *fs, Node *e) {
       TokenType op = e->u.bin.op;
       if (op == TK_EQ || op == TK_NE || op == TK_LT ||
           op == TK_LE || op == TK_GT || op == TK_GE) return TY_BOOL;
+      if (op == TK_DOTDOT) return TY_STRING;
       Type lt = infer(fs, e->u.bin.l), rt = infer(fs, e->u.bin.r);
       if (lt == TY_INT && rt == TY_INT) return TY_INT;
       if (lt == TY_FLOAT && rt == TY_FLOAT && op != TK_PERCENT) return TY_FLOAT;
@@ -253,6 +264,8 @@ static Type infer(FuncState *fs, Node *e) {
     case N_INDEX: return TY_DYN;
     case N_CAST:
       return e->u.cast.target;
+    case N_LEN:
+      return TY_INT;
     default:      return TY_DYN;
   }
 }
@@ -276,6 +289,7 @@ static void emit_binop(FuncState *fs, TokenType op, int a, int b, Type lt, Type 
     case TK_LE:      emit(fs, SPT_MK_ABC(OP_LE, a, a, b)); break;
     case TK_GT:      emit(fs, SPT_MK_ABC(OP_LT, a, b, a)); break;   /* a>b  == b<a  */
     case TK_GE:      emit(fs, SPT_MK_ABC(OP_LE, a, b, a)); break;   /* a>=b == b<=a */
+    case TK_DOTDOT:  emit(fs, SPT_MK_ABC(OP_CONCAT, a, a, b)); break;
     default: cg_error(fs, "internal: bad binary operator");
   }
 }
@@ -314,6 +328,11 @@ static int expr_next(FuncState *fs, Node *e) {
     case N_CAST: {
       int a = expr_next(fs, e->u.cast.e);
       emit(fs, SPT_MK_ABC(OP_CAST, a, (unsigned)e->u.cast.target, 0));
+      return a;
+    }
+    case N_LEN: {
+      int a = expr_next(fs, e->u.one.e);
+      emit(fs, SPT_MK_ABC(OP_LEN, a, a, 0));
       return a;
     }
     case N_BINOP: {
@@ -471,6 +490,12 @@ static void stmt(FuncState *fs, Node *s) {
 
     case N_WHILE: {
       int top = fs->ncode;
+      /* push a loop frame so break/continue inside the body can resolve */
+      if (fs->nloops >= SPT_MAXLOOPS) cg_error(fs, "too many nested loops");
+      LoopFrame *lf = &fs->loops[fs->nloops++];
+      lf->cont_pc = top;
+      lf->nbreaks = 0;
+
       int r = expr_next(fs, s->u.ctrl.cond);
       emit(fs, SPT_MK_ABC(OP_TEST, r, 0, 0));
       setfree(fs, fs->nactive + 1);
@@ -478,6 +503,25 @@ static void stmt(FuncState *fs, Node *s) {
       stmt(fs, s->u.ctrl.a);
       emit(fs, SPT_MK_AsBx(OP_JMP, 0, top - (fs->ncode + 1)));   /* loop back */
       patch_here(fs, j_exit);
+
+      /* patch all `break` jumps to land here (after the loop) */
+      for (int i = 0; i < lf->nbreaks; i++) patch_here(fs, lf->breaks[i]);
+      fs->nloops--;
+      break;
+    }
+
+    case N_BREAK: {
+      if (fs->nloops == 0) cg_error(fs, "'break' outside of loop");
+      LoopFrame *lf = &fs->loops[fs->nloops - 1];
+      if (lf->nbreaks >= SPT_MAXBREAKS) cg_error(fs, "too many breaks in one loop");
+      lf->breaks[lf->nbreaks++] = emit_jmp(fs);
+      break;
+    }
+
+    case N_CONTINUE: {
+      if (fs->nloops == 0) cg_error(fs, "'continue' outside of loop");
+      LoopFrame *lf = &fs->loops[fs->nloops - 1];
+      emit(fs, SPT_MK_AsBx(OP_JMP, 0, lf->cont_pc - (fs->ncode + 1)));
       break;
     }
 
@@ -584,6 +628,7 @@ static void fs_init(FuncState *fs, spt_State *L, int numparams, CompileCtx *ctx,
   fs->numparams = numparams;
   fs->ctx = ctx;
   fs->parent = NULL;
+  fs->nloops = 0;
   fs->err = err; fs->errsz = errsz; fs->jb = jb;
 }
 
