@@ -240,6 +240,39 @@ void spt_jit_do_setindex(spt_State *L, int a, int b, int c) {
   }
 }
 
+/* Typed container access for the JIT. Each helper handles exactly one
+ * container kind — no runtime List/Map dispatch — reusing the same primitives
+ * as the interpreter's typed opcodes, so behaviour (including error messages)
+ * is identical. None of these grow the value stack or trigger GC, so a caller's
+ * cached base register stays valid across the call. spt_jit_do_getlist also
+ * serves as the cold/error path for the *inlined* OP_GETLIST fast path. */
+void spt_jit_do_getlist(spt_State *L, int a, int b, int c) {
+  TValue *base = L->ci->base, *tb = &base[b], *ix = &base[c];
+  if (SPT_UNLIKELY(!ttislist(tb))) spt_runtime_error(L, "attempt to index a non-list value");
+  if (SPT_UNLIKELY(!ttisint(ix)))  spt_runtime_error(L, "list index must be an integer");
+  if (spt_list_get(tblvalue(tb), ivalue(ix), &base[a]) < 0)
+    spt_runtime_error(L, "list index %lld out of bounds (length %lld)",
+                      (long long)ivalue(ix), (long long)tblvalue(tb)->alen);
+}
+void spt_jit_do_setlist(spt_State *L, int a, int b, int c) {
+  TValue *base = L->ci->base, *tb = &base[a], *ix = &base[b];
+  if (SPT_UNLIKELY(!ttislist(tb))) spt_runtime_error(L, "attempt to index a non-list value");
+  if (SPT_UNLIKELY(!ttisint(ix)))  spt_runtime_error(L, "list index must be an integer");
+  if (spt_list_set(L, tblvalue(tb), ivalue(ix), &base[c]) < 0)
+    spt_runtime_error(L, "list index %lld out of bounds (length %lld)",
+                      (long long)ivalue(ix), (long long)tblvalue(tb)->alen);
+}
+void spt_jit_do_getmap(spt_State *L, int a, int b, int c) {
+  TValue *base = L->ci->base, *tb = &base[b];
+  if (SPT_UNLIKELY(!ttismap(tb))) spt_runtime_error(L, "attempt to index a non-map value");
+  spt_map_get(tblvalue(tb), &base[c], &base[a]);
+}
+void spt_jit_do_setmap(spt_State *L, int a, int b, int c) {
+  TValue *base = L->ci->base, *tb = &base[a];
+  if (SPT_UNLIKELY(!ttismap(tb))) spt_runtime_error(L, "attempt to index a non-map value");
+  spt_map_set(L, tblvalue(tb), &base[b], &base[c]);
+}
+
 void spt_jit_do_newlist(spt_State *L, int a, int hint) {
   Table *t = spt_list_new(L, hint);
   setgco(&L->ci->base[a], (GCObject *)t, SPT_TLIST);
@@ -773,12 +806,19 @@ vm_loop:
 /* ================================================================== */
 int spt_call(spt_State *L, int nargs, int nresults) {
   jmp_buf jb; void *save = L->errjmp; L->errjmp = &jb;
+  CallInfo *save_ci = L->ci;                              /* caller's frame    */
   ptrdiff_t funcidx = (L->top - nargs - 2) - L->stack;   /* callable,recv,args */
   int status = 0;
   if (setjmp(jb) == 0) {
     do_call(L, funcidx, nargs, nresults);
   } else {
     status = 1;            /* runtime error; L->errmsg holds the message */
+    /* The longjmp unwound every do_call frame opened by this call, but left
+     * L->ci pointing at one of them. Restore the caller's frame and unwind the
+     * value stack to just below the callable, so the state stays consistent
+     * for any subsequent call or C-API access (all of which read L->ci). */
+    L->ci  = save_ci;
+    L->top = L->stack + funcidx;
   }
   L->errjmp = save;
   return status;

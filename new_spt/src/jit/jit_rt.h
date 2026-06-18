@@ -43,6 +43,13 @@ SPT_API void spt_jit_do_len(spt_State *L, int a, int b);
 SPT_API void spt_jit_do_getindex(spt_State *L, int a, int b, int c);
 SPT_API void spt_jit_do_setindex(spt_State *L, int a, int b, int c);
 
+/* Typed container access (single-kind, no dispatch). getlist also backs the
+ * cold path of the inlined OP_GETLIST fast path in the code generator. */
+SPT_API void spt_jit_do_getlist(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_setlist(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_getmap(spt_State *L, int a, int b, int c);
+SPT_API void spt_jit_do_setmap(spt_State *L, int a, int b, int c);
+
 /* List / Map construction. */
 SPT_API void spt_jit_do_newlist(spt_State *L, int a, int hint);
 SPT_API void spt_jit_do_listpush(spt_State *L, int a, int b);

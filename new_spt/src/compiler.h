@@ -32,7 +32,8 @@ typedef enum {
   TK_GLOBAL, TK_FUNCTION, TK_IF, TK_ELSE, TK_WHILE, TK_RETURN,
   TK_BREAK, TK_CONTINUE,
   TK_TRUE, TK_FALSE, TK_NULL,
-  TK_KW_INT, TK_KW_FLOAT, TK_KW_STRING, TK_KW_BOOL, TK_CONST,   /* type system */
+  TK_KW_INT, TK_KW_FLOAT, TK_KW_STRING, TK_KW_BOOL,
+  TK_KW_LIST, TK_KW_MAP, TK_CONST,                           /* type system */
   TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT,
   TK_DOTDOT,                                                  /* .. concat       */
   TK_HASH,                                                    /* # length        */

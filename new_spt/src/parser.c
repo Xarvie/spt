@@ -62,7 +62,8 @@ static Node *node(P *p, NodeKind k) {
 }
 
 static int is_type_kw(TokenType t) {
-  return t == TK_KW_INT || t == TK_KW_FLOAT || t == TK_KW_STRING || t == TK_KW_BOOL;
+  return t == TK_KW_INT || t == TK_KW_FLOAT || t == TK_KW_STRING ||
+         t == TK_KW_BOOL || t == TK_KW_LIST || t == TK_KW_MAP;
 }
 static Type parse_type(P *p) {
   Type ty;
@@ -71,6 +72,8 @@ static Type parse_type(P *p) {
     case TK_KW_FLOAT:  ty = TY_FLOAT;  break;
     case TK_KW_STRING: ty = TY_STRING; break;
     case TK_KW_BOOL:   ty = TY_BOOL;   break;
+    case TK_KW_LIST:   ty = TY_LIST;   break;
+    case TK_KW_MAP:    ty = TY_MAP;    break;
     default: perror_at(p, "expected a type"); return TY_DYN;
   }
   advance(p);

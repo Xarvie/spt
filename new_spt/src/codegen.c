@@ -345,9 +345,16 @@ static int expr_next(FuncState *fs, Node *e) {
       return a;
     }
     case N_INDEX: {
+      /* When the container's static type is known we emit the dedicated typed
+       * access op (single-type, no runtime List/Map dispatch — and the JIT can
+       * inline the List read). Otherwise fall back to the generic indexer. */
+      Type ct = infer(fs, e->u.index.obj);
       int t = expr_next(fs, e->u.index.obj);
       int i = expr_next(fs, e->u.index.idx);
-      emit(fs, SPT_MK_ABC(OP_GETINDEX, t, t, i));
+      spt_OpCode op = (ct == TY_LIST) ? OP_GETLIST
+                    : (ct == TY_MAP)  ? OP_GETMAP
+                                      : OP_GETINDEX;
+      emit(fs, SPT_MK_ABC(op, t, t, i));
       setfree(fs, t + 1);
       return t;
     }
@@ -444,10 +451,14 @@ static void stmt(FuncState *fs, Node *s) {
           }
         }
       } else {                            /* obj[idx] = value */
+        Type ct = infer(fs, tgt->u.index.obj);
         int t = expr_next(fs, tgt->u.index.obj);
         int i = expr_next(fs, tgt->u.index.idx);
         int v = expr_next(fs, s->u.assign.value);
-        emit(fs, SPT_MK_ABC(OP_SETINDEX, t, i, v));
+        spt_OpCode op = (ct == TY_LIST) ? OP_SETLIST
+                      : (ct == TY_MAP)  ? OP_SETMAP
+                                        : OP_SETINDEX;
+        emit(fs, SPT_MK_ABC(op, t, i, v));
         setfree(fs, fs->nactive + 1);
       }
       break;

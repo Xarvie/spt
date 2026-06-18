@@ -106,6 +106,7 @@ static int op_supported(spt_OpCode op, Instr inst) {
     case OP_GETUPVAL:  case OP_SETUPVAL:
     /* indexing + data structures */
     case OP_GETINDEX: case OP_SETINDEX:
+    case OP_GETLIST:  case OP_SETLIST:  case OP_GETMAP:  case OP_SETMAP:
     case OP_NEWLIST:  case OP_LISTPUSH:  case OP_NEWMAP:
     /* calls + closures (stack-frame management + upvalue binding) */
     case OP_CLOSURE:  case OP_CALL:
@@ -354,6 +355,66 @@ static void *compile_proto(MIR_context_t c, Proto *p, unsigned id) {
       }
       case OP_SETINDEX: {
         EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_setindex)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        break;
+      }
+
+      /* ---- typed container access ----
+       * The static type checker proved the container is a List/Map, so these
+       * skip the runtime List/Map dispatch the generic indexer pays. The List
+       * *read* is the hot inner-loop operation, so it is lowered fully inline:
+       * tag-check the container and index, bounds-check, then load the element
+       * straight out of the backing array — no call. Any check that fails jumps
+       * to the helper, which reproduces the interpreter's exact error. The
+       * remaining three forms (rarer, or involving hashing / append growth) are
+       * thin helper calls; none can relocate the value stack or run the GC, so
+       * no base reload is required afterwards. */
+      case OP_GETLIST: {
+        MIR_label_t cold = MIR_new_label(c);
+        MIR_label_t done = MIR_new_label(c);
+        EMIT(INSN(MIR_MOV, ROP(t0), MEM_TT(vbase, B)));                 /* tag(R[B]) */
+        EMIT(INSN(MIR_BNE, MIR_new_label_op(c, cold), ROP(t0), IOP(SPT_TLIST)));
+        EMIT(INSN(MIR_MOV, ROP(t1), MEM_TT(vbase, Cc)));                /* tag(R[C]) */
+        EMIT(INSN(MIR_BNE, MIR_new_label_op(c, cold), ROP(t1), IOP(SPT_TINT)));
+        EMIT(INSN(MIR_MOV, ROP(pa), MEM_VAL(vbase, B)));               /* Table*    */
+        EMIT(INSN(MIR_MOV, ROP(pb), MEM_VAL(vbase, Cc)));              /* idx       */
+        /* bounds: (unsigned)idx >= alen -> cold  (alen is u32, zero-extended) */
+        EMIT(INSN(MIR_MOV, ROP(t0),
+                  MIR_new_mem_op(c, MIR_T_U32, (MIR_disp_t)offsetof(Table, alen), pa, 0, 0)));
+        EMIT(INSN(MIR_UBGE, MIR_new_label_op(c, cold), ROP(pb), ROP(t0)));
+        /* elem = array + idx*sizeof(TValue) */
+        EMIT(INSN(MIR_MOV, ROP(t1),
+                  MIR_new_mem_op(c, MIR_T_I64, (MIR_disp_t)offsetof(Table, array), pa, 0, 0)));
+        EMIT(INSN(MIR_MUL, ROP(pb), ROP(pb), IOP(TV_SZ)));
+        EMIT(INSN(MIR_ADD, ROP(t1), ROP(t1), ROP(pb)));
+        /* copy the 16-byte value (payload + tag) into R[A] */
+        EMIT(INSN(MIR_MOV, ROP(t0), MIR_new_mem_op(c, MIR_T_I64, 0, t1, 0, 0)));
+        EMIT(INSN(MIR_MOV, MEM_VAL(vbase, A), ROP(t0)));
+        EMIT(INSN(MIR_MOV, ROP(t0), MIR_new_mem_op(c, MIR_T_U8, TT_OFF, t1, 0, 0)));
+        EMIT(INSN(MIR_MOV, MEM_TT(vbase, A), ROP(t0)));
+        EMIT(INSN(MIR_JMP, MIR_new_label_op(c, done)));
+        EMIT(cold);
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_getlist)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        EMIT(done);
+        break;
+      }
+      case OP_SETLIST: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_setlist)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        break;
+      }
+      case OP_GETMAP: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_getmap)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        break;
+      }
+      case OP_SETMAP: {
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_setmap)));
         EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
                                ROP(vL), IOP(A), IOP(B), IOP(Cc)));
         break;

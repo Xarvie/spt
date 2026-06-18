@@ -140,10 +140,13 @@ round trip. The implemented subset:
   `global x = e;` writes a global. A bare name reads a local if one is in scope,
   otherwise a global.
 - **Static types (opt-in).** Annotate a declaration or parameter with `int`,
-  `float`, `string`, or `bool` and the type is checked at compile time and used
-  to emit faster code. `const` makes a binding immutable. Typing is gradual:
-  unannotated code is fully dynamic and behaves exactly as before. Literals carry
-  their own type, so even unannotated constant arithmetic is typed.
+  `float`, `string`, `bool`, `list`, or `map` and the type is checked at compile
+  time and used to emit faster code. `const` makes a binding immutable. Typing is
+  gradual: unannotated code is fully dynamic and behaves exactly as before.
+  Literals carry their own type, so even unannotated constant arithmetic is
+  typed. A `list`/`map` annotation lets the compiler emit the dedicated typed
+  container ops (no runtime List/Map dispatch); the JIT then lowers a typed list
+  read fully inline, as a bounds-checked load from the backing array.
   ```
   int n = 10;                  // typed local
   const float PI = 3.14159;    // immutable
@@ -248,19 +251,25 @@ CMakeLists.txt primary build      Makefile  quick build
    callee's `jit_entry`, recursion runs fully native once compiled; and because
    a nested call can reallocate the value stack, the generated code reloads its
    cached frame base after every call (deep native recursion that grows the
-   stack stays correct — see the `deep(400)` differential test). Threshold
-   auto-compilation is wired (`SPT_JIT_THRESHOLD`); the demos force-compile to
-   make the path explicit. Remaining: the multi-result/stack-top call form
-   (`B==0`/`C==0`, which still bails to the interpreter), and a guard/deopt path
-   so a prototype can be speculatively compiled and fall back on a cold edge.
+   stack stays correct — see the `deep(400)` differential test). As of Stage 5
+   it also lowers the **typed container ops** (`OP_GETLIST`/`OP_SETLIST`/
+   `OP_GETMAP`/`OP_SETMAP`): a `list`/`map` annotation lets the codegen skip the
+   runtime List/Map dispatch, and the JIT lowers the List read fully inline — a
+   bounds-checked load from the backing array with no helper call (the cold
+   tag-mismatch / out-of-bounds edge falls back to a helper that reproduces the
+   interpreter's exact error). Threshold auto-compilation is wired
+   (`SPT_JIT_THRESHOLD`); the demos force-compile to make the path explicit.
+   Remaining: the multi-result/stack-top call form (`B==0`/`C==0`, which still
+   bails to the interpreter), and a guard/deopt path so a prototype can be
+   speculatively compiled and fall back on a cold edge.
 2. **Generational GC.** Partition the object list into young/old generations and
    make the (already-present) write barrier record old→young edges. PUC-Lua's
    non-moving generational collector is the blueprint.
 3. **Frontend: casts and more sugar.** Lexer, parser, codegen, a gradual static
-   **type system** (`int`/`float`/`string`/`bool`, `const`, compile-time checking,
-   typed-opcode emission), and **closures** with upvalue capture are all in place.
-   Remaining: explicit casts at the dynamic/typed boundary (to move values soundly
-   between dynamic and typed code and to type `declare`d externs), Map literals,
+   **type system** (`int`/`float`/`string`/`bool`/`list`/`map`, `const`, compile-time
+   checking, typed-opcode emission), and **closures** with upvalue capture are all
+   in place. Remaining: explicit casts at the dynamic/typed boundary (to move values
+   soundly between dynamic and typed code and to type `declare`d externs), Map literals,
    `&&` / `||` short-circuit, and block-scoped locals.
 4. **Interpreter polish.** Non-recursive (soft) `OP_CALL` to remove C-stack depth
    limits on SPT recursion, Map deletion with tombstones, string indexing in the

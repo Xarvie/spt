@@ -83,6 +83,8 @@ void lex_next(Lexer *lx, Token *t) {
     if (kw(start, len, "float",    TK_KW_FLOAT,  t)) return;
     if (kw(start, len, "string",   TK_KW_STRING, t)) return;
     if (kw(start, len, "bool",     TK_KW_BOOL,   t)) return;
+    if (kw(start, len, "list",     TK_KW_LIST,   t)) return;
+    if (kw(start, len, "map",      TK_KW_MAP,    t)) return;
     if (kw(start, len, "const",    TK_CONST,     t)) return;
     t->type = TK_NAME;
     return;

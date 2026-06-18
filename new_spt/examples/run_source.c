@@ -521,6 +521,74 @@ static void demo_jit_calls(spt_State *L) {
          ok ? "compiled to native, matches oracle"
             : (all ? "MISMATCH" : "a prototype unexpectedly bailed"));
 }
+
+/* Stage 5 — typed container fast paths (OP_GETLIST / OP_SETLIST / OP_GETMAP /
+ * OP_SETMAP). With a `list`/`map` type annotation the static checker knows the
+ * container kind, so the codegen emits the dedicated typed access op instead of
+ * the generic indexer (no runtime List/Map dispatch), and the JIT lowers the
+ * List *read* fully inline — a bounds-checked load straight from the backing
+ * array, no helper call. We compile each prototype and compare native results
+ * against the interpreter; the list arguments are built here through the C API. */
+static long long call_list_arg(spt_State *L, const char *g, const long long *vals, int n) {
+  L->top = L->stack;
+  spt_getglobal(L, g); setnull(L->top); L->top++;        /* callable, receiver */
+  Table *lst = spt_list_new(L, (uint32_t)n);
+  for (int k = 0; k < n; k++) { TValue v; setint(&v, vals[k]); spt_list_push(L, lst, &v); }
+  setgco(L->top, (GCObject *)lst, SPT_TLIST); L->top++;   /* the list argument */
+  spt_call(L, 1, 1);
+  long long r = spt_toint(L, 1); L->top = L->stack; return r;
+}
+
+static void demo_jit_typed_containers(spt_State *L) {
+  const char *src =
+    "function sumL(list xs) {\n"                 /* inline GETLIST in a loop  */
+    "  s = 0; int i = 0;\n"
+    "  while (i < #xs) { s = s + xs[i]; i = i + 1; }\n"
+    "  return s;\n"
+    "}\n"
+    "function dotL(list xs) {\n"                 /* two GETLISTs per iteration */
+    "  r = 0; int i = 0;\n"
+    "  while (i < #xs) { r = r + xs[i] * xs[i]; i = i + 1; }\n"
+    "  return r;\n"
+    "}\n"
+    "function revsumL(list xs) {\n"             /* SETLIST (overwrite) + read  */
+    "  xs[0] = xs[#xs - 1]; return xs[0] + xs[1];\n"
+    "}\n";
+  if (spt_load(L, src, "jit-typed") != 0) { printf("compile error: %s\n", L->errmsg); return; }
+  setnull(L->top); L->top++;
+  spt_call(L, 0, 0);
+  L->top = L->stack;
+
+  printf("--- JIT typed containers (GETLIST/SETLIST inline) ---\n");
+
+  static const long long data[] = { 3, 1, 4, 1, 5, 9, 2, 6 };   /* sum=31      */
+  const int N = (int)(sizeof data / sizeof data[0]);
+
+  long long i_sum = call_list_arg(L, "sumL", data, N);
+  long long i_dot = call_list_arg(L, "dotL", data, N);
+  long long i_rev = call_list_arg(L, "revsumL", data, N);
+
+  spt_getglobal(L, "sumL");    Proto *p1 = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_getglobal(L, "dotL");    Proto *p2 = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_getglobal(L, "revsumL"); Proto *p3 = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_jit_try_compile(L, p1);
+  spt_jit_try_compile(L, p2);
+  spt_jit_try_compile(L, p3);
+  int all = p1->jit_entry && p2->jit_entry && p3->jit_entry;
+
+  long long n_sum = call_list_arg(L, "sumL", data, N);
+  long long n_dot = call_list_arg(L, "dotL", data, N);
+  long long n_rev = call_list_arg(L, "revsumL", data, N);
+
+  printf("  compiled: sumL=%s dotL=%s revsumL=%s\n",
+         p1->jit_entry ? "yes" : "no", p2->jit_entry ? "yes" : "no",
+         p3->jit_entry ? "yes" : "no");
+  printf("  sumL=%lld dotL=%lld revsumL=%lld  [%s]\n\n",
+         n_sum, n_dot, n_rev,
+         (all && i_sum == n_sum && i_dot == n_dot && i_rev == n_rev)
+           ? "compiled to native, results match interpreter"
+           : (all ? "MISMATCH" : "a prototype unexpectedly bailed"));
+}
 #endif
 
 int main(void) {
@@ -692,6 +760,7 @@ int main(void) {
   demo_jit_concat(L);
   demo_jit_mixed(L);
   demo_jit_calls(L);
+  demo_jit_typed_containers(L);
 #endif
 
   printf("== done ==\n");
