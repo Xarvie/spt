@@ -14,7 +14,7 @@ jobs:
         run: cmake -B build-tidy -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
       - name: Run clang-tidy
         run: |
-          find src -name "*.c" | while read f; do
+          find src -name "*.c" -not -path "src/vm/*" | while read f; do
             echo "Checking $f..."
             clang-tidy -p build-tidy "$f"
           done

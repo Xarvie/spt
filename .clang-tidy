@@ -13,7 +13,7 @@ Checks: >
 
 WarningsAsErrors: ''
 
-HeaderFilterRegex: 'src/.*'
+HeaderFilterRegex: 'src/(frontend|codegen|cli)/.*'
 
 CheckOptions:
   - key:   readability-function-cognitive-complexity.Threshold

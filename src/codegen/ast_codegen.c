@@ -2588,7 +2588,7 @@ static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
   /* If there are exported names, return an exports table */
   if (n_exported > 0) {
     int exports_reg = fs->freereg;
-    int pc = luaK_codeABC(fs, OP_NEWTABLE, exports_reg, 0, 0);
+    luaK_codeABC(fs, OP_NEWTABLE, exports_reg, 0, 0);
     luaK_code(fs, CREATE_Ax(OP_EXTRAARG, 0));
     fs->freereg++;
 
