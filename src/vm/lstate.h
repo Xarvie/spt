@@ -16,6 +16,9 @@ typedef struct CallInfo CallInfo;
 #include "ltm.h"
 #include "lzio.h"
 
+/* SPT Trace JIT state (opaque pointer; defined in src/jit/spt_jit.h) */
+typedef struct SPTJitState SPTJitState;
+
 /*
 ** Some notes about garbage-collected objects: All objects in Lua must
 ** be kept somehow accessible until being freed, so all objects always
@@ -356,6 +359,9 @@ typedef struct global_State {
   lua_WarnFunction warnf;                    /* warning function */
   void *ud_warn;                             /* auxiliary data to 'warnf' */
   LX mainth;                                 /* main thread of this state */
+
+  /* SPT Trace JIT state. NULL if JIT is disabled or not yet initialized. */
+  SPTJitState *jit_state;
 } global_State;
 
 #define G(L) (L->l_G)

@@ -26,6 +26,9 @@
 #include "ltable.h"
 #include "ltm.h"
 
+/* SPT Trace JIT */
+#include "spt_jit.h"
+
 #define fromstate(L) (cast(LX *, cast(lu_byte *, (L)) - offsetof(LX, l)))
 
 /*
@@ -256,6 +259,11 @@ lu_mem luaE_threadsize(lua_State *L) {
 
 static void close_state(lua_State *L) {
   global_State *g = G(L);
+  /* Destroy JIT state first (frees executable memory and traces). */
+  if (g->jit_state) {
+    sptjit_destroy(g->jit_state);
+    g->jit_state = NULL;
+  }
   if (!completestate(g))    /* closing a partially built state? */
     luaC_freeallobjects(L); /* just collect its objects */
   else {                    /* closing a fully built state */
@@ -384,6 +392,8 @@ LUA_API lua_State *lua_newstate(lua_Alloc f, void *ud, unsigned seed) {
   setgcparam(g, MAJORMINOR, LUAI_MAJORMINOR);
   for (i = 0; i < LUA_NUMTYPES; i++)
     g->mt[i] = NULL;
+  /* Initialize SPT Trace JIT state. */
+  g->jit_state = sptjit_create();
   if (luaD_rawrunprotected(L, f_luaopen, NULL) != LUA_OK) {
     /* memory allocation error: free partial state */
     close_state(L);

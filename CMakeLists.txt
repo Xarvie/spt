@@ -36,18 +36,20 @@ option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation (clang)" OFF)
 
 # ----------------------------------------------------------------------
-# 核心静态库：前端 + codegen + VM（供 sptscript 可执行文件和 sptxx 测试共用）
+# 核心静态库：前端 + codegen + VM + JIT（供 sptscript 可执行文件和 sptxx 测试共用）
 # ----------------------------------------------------------------------
 file(GLOB VM_SRCS       CONFIGURE_DEPENDS src/vm/*.c)
 file(GLOB FRONTEND_SRCS CONFIGURE_DEPENDS src/frontend/*.c)
 file(GLOB CODEGEN_SRCS  CONFIGURE_DEPENDS src/codegen/*.c)
+file(GLOB JIT_SRCS      CONFIGURE_DEPENDS src/jit/*.c)
 
-add_library(spt_core STATIC ${VM_SRCS} ${FRONTEND_SRCS} ${CODEGEN_SRCS})
+add_library(spt_core STATIC ${VM_SRCS} ${FRONTEND_SRCS} ${CODEGEN_SRCS} ${JIT_SRCS})
 
 target_include_directories(spt_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/frontend
     ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen
     ${CMAKE_CURRENT_SOURCE_DIR}/src/vm
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/jit
 )
 
 if(MSVC)
