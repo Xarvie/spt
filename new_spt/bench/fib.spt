@@ -1,6 +1,0 @@
-/* Naive recursive Fibonacci — call-bound (OP_CALL). Once compiled, the JIT runs
- * the recursion entirely in native code. */
-function bench(int n) {
-  if (n < 2) { return n; }
-  return bench(n - 1) + bench(n - 2);
-}
