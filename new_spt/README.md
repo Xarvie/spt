@@ -54,8 +54,10 @@ collector; a **working MIR JIT** that lowers hot prototypes to native code
 (verified to match the interpreter bit-for-bit on line 7); and a **source
 frontend** — lexer, recursive-descent parser, a gradual static type system, and
 bytecode codegen — that turns the programs above (recursion, loops, lists,
-typed code, and **closures with upvalue capture**) into runnable bytecode, with
-typed integer functions compiling through to native.
+typed code, and **closures with upvalue capture**) into runnable bytecode. The
+JIT now lowers calls and closures as well, so whole recursive functions and
+closure factories — not just straight-line typed arithmetic — compile through
+to native code.
 
 ## Architecture
 
@@ -235,14 +237,22 @@ CMakeLists.txt primary build      Makefile  quick build
 
 ## Roadmap
 
-1. **Expand JIT coverage.** The lowering currently handles moves, constant/
-   immediate loads, typed integer arithmetic, value comparisons, conditional and
-   unconditional branches, and returns — enough to compile real loops to native
-   code (see the factorial demo). Next: typed float arithmetic, List/Map access,
-   global access, in-function `OP_CALL`, and a guard/deopt path so a prototype can
-   be partially compiled and fall back to the interpreter on a cold edge. Threshold
-   auto-compilation is already wired (`SPT_JIT_THRESHOLD`); the demo force-compiles
-   to make the path explicit.
+1. **JIT coverage — essentially complete.** The lowering handles moves,
+   constant/immediate loads, typed integer *and* float arithmetic, generic
+   (dynamically typed) arithmetic, value comparisons, conditional and
+   unconditional branches, `return`, global access, upvalue get/set, List/Map
+   index access, data-structure construction, length, concatenation, casts, and
+   unary negation. As of Stage 4 it also lowers **`OP_CALL` and `OP_CLOSURE`** —
+   so a compiled function calls other functions (itself included) and builds
+   closures without leaving native code. Because `do_call` dispatches on the
+   callee's `jit_entry`, recursion runs fully native once compiled; and because
+   a nested call can reallocate the value stack, the generated code reloads its
+   cached frame base after every call (deep native recursion that grows the
+   stack stays correct — see the `deep(400)` differential test). Threshold
+   auto-compilation is wired (`SPT_JIT_THRESHOLD`); the demos force-compile to
+   make the path explicit. Remaining: the multi-result/stack-top call form
+   (`B==0`/`C==0`, which still bails to the interpreter), and a guard/deopt path
+   so a prototype can be speculatively compiled and fall back on a cold edge.
 2. **Generational GC.** Partition the object list into young/old generations and
    make the (already-present) write barrier record old→young edges. PUC-Lua's
    non-moving generational collector is the blueprint.

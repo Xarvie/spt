@@ -107,6 +107,8 @@ static int op_supported(spt_OpCode op, Instr inst) {
     /* indexing + data structures */
     case OP_GETINDEX: case OP_SETINDEX:
     case OP_NEWLIST:  case OP_LISTPUSH:  case OP_NEWMAP:
+    /* calls + closures (stack-frame management + upvalue binding) */
+    case OP_CLOSURE:  case OP_CALL:
       return 1;
     case OP_RETURN:
       return SPT_GETB(inst) != 0;   /* multret form not lowered yet */
@@ -412,6 +414,37 @@ static void *compile_proto(MIR_context_t c, Proto *p, unsigned id) {
       case OP_JMP: {
         uint32_t target = (i + 1) + (uint32_t)SPT_GETSBX(inst);
         EMIT(INSN(MIR_JMP, MIR_new_label_op(c, labels[target])));
+        break;
+      }
+
+      /* ---- closures ---- */
+      case OP_CLOSURE: {
+        /* The nested prototype is fixed at compile time, so it travels as a
+         * constant pointer (it is already GC-rooted via the parent Proto's
+         * `p[]` array). The helper allocates the closure and wires up its
+         * upvalues — capturing this frame's registers or inheriting from the
+         * running closure as each UpvalDesc dictates. */
+        Proto *np = p->p[SPT_GETBX(inst)];
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_closure)));
+        EMIT(MIR_new_call_insn(c, 5, MIR_new_ref_op(c, proto_ret), ROP(tf),
+                               ROP(vL), IOP(A), IOP((intptr_t)np)));
+        break;
+      }
+
+      /* ---- calls ---- */
+      case OP_CALL: {
+        /* spt_jit_do_call replicates the interpreter's OP_CALL (delimit args,
+         * recurse via do_call, restore the frame extent). It can relocate the
+         * value stack through a nested spt_checkstack, which invalidates every
+         * raw stack pointer the prologue cached — so we reload `base` from the
+         * (stable) CallInfo immediately afterwards. `ci` itself never moves;
+         * only its `base` field is rewritten by relocate_stack. */
+        EMIT(INSN(MIR_MOV, ROP(tf), IOP((intptr_t)&spt_jit_do_call)));
+        EMIT(MIR_new_call_insn(c, 6, MIR_new_ref_op(c, proto_cc), ROP(tf),
+                               ROP(vL), IOP(A), IOP(B), IOP(Cc)));
+        EMIT(INSN(MIR_MOV, ROP(vbase),
+                  MIR_new_mem_op(c, MIR_T_I64,
+                                 (MIR_disp_t)offsetof(CallInfo, base), vci, 0, 0)));
         break;
       }
 

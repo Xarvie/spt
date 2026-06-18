@@ -55,5 +55,12 @@ SPT_API void spt_jit_do_mul(spt_State *L, int a, int b, int c);
 SPT_API void spt_jit_do_div(spt_State *L, int a, int b, int c);
 SPT_API void spt_jit_do_mod(spt_State *L, int a, int b, int c);
 
+/* Calls and closures (Stage 4). `np` is the nested prototype, known at JIT
+ * time (a constant pointer into the parent Proto's `p[]` array). After
+ * spt_jit_do_call returns, the generated code must reload its cached base —
+ * do_call may have relocated the value stack. */
+SPT_API void spt_jit_do_closure(spt_State *L, int a, Proto *np);
+SPT_API void spt_jit_do_call(spt_State *L, int a, int b, int c);
+
 #endif /* SPT_HAS_JIT */
 #endif /* SPT_JIT_RT_H */

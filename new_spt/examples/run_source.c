@@ -7,6 +7,7 @@
  */
 #include "spt.h"
 #include <stdio.h>
+#include <string.h>            /* strcmp — result comparison in the JIT demos */
 
 /* print(x): host function. Slot-0 aware — first real argument is arg 1. */
 static int host_print(spt_State *L) {
@@ -306,10 +307,10 @@ static void demo_jit_mixed(spt_State *L) {
   L->top = L->stack;
 
   /* --- test upvalues (GETUPVAL/SETUPVAL) ---
-   * make_acc itself bails (it contains OP_CLOSURE), but the inner `add`
-   * function only uses OP_GETUPVAL/OP_SETUPVAL/OP_IADD/OP_RETURN — all
-   * JIT-supported.  We force-compile `add`'s proto and verify it runs
-   * correctly when called through the interpreter. */
+   * Since Stage 4, make_acc compiles in full (its OP_CLOSURE is lowered).
+   * Here we still isolate the inner `add` proto — which uses only
+   * OP_GETUPVAL/OP_SETUPVAL/OP_IADD/OP_RETURN — to verify that path runs
+   * correctly when reached through the interpreter's calling convention. */
   spt_getglobal(L, "make_acc");
   Proto *p_make = clvalue(L->top - 1)->p;
   Proto *p_add  = p_make->p[0];             /* the nested `add` function */
@@ -346,10 +347,10 @@ static void demo_jit_mixed(spt_State *L) {
          !add_compiled ? "not compiled (bailed)"
                        : (acc1 == acc1n && acc2 == acc2n ? "compiled, results match" : "MISMATCH"));
 
-  /* --- test build_and_sum (NEWLIST/LISTPUSH + GETINDEX/LEN + CALL) ---
-   * Note: build_and_sum calls sum_list, which uses OP_CALL. Since OP_CALL
-   * is not yet JIT-supported, build_and_sum will bail. But sum_list itself
-   * (when called directly with a list arg) can be JIT-compiled. */
+  /* --- test sum_list (NEWLIST/LISTPUSH + GETINDEX/LEN), reached via a call ---
+   * Since Stage 4, build_and_sum also compiles in full (its OP_CALL to
+   * sum_list is lowered). We isolate sum_list's proto here to confirm the
+   * list/index/len path matches whether the wrapper runs native or not. */
   spt_getglobal(L, "sum_list");
   Proto *p_sl = clvalue(L->top - 1)->p;
   L->top = L->stack;
@@ -424,6 +425,101 @@ static void demo_jit_mixed(spt_State *L) {
          g_interp, g_native,
          !g_compiled ? "not compiled (bailed)"
                      : (g_interp == g_native ? "compiled, results match" : "MISMATCH"));
+}
+
+/* Call global function `name` with a single int argument; return its int
+ * result. Resets the value stack around the call. */
+static long long call1(spt_State *L, const char *name, long long n) {
+  L->top = L->stack;
+  spt_getglobal(L, name);
+  setnull(L->top); L->top++;            /* receiver slot (slot-0 convention) */
+  spt_pushint(L, n);
+  spt_call(L, 1, 1);
+  long long r = spt_toint(L, 1);
+  L->top = L->stack;
+  return r;
+}
+
+/* Stage 4 — OP_CALL and OP_CLOSURE lowered to native code.
+ *
+ * The capstone of JIT coverage: a compiled function can now (a) call other
+ * functions — itself included — without ever leaving native code, and (b)
+ * build closures inline, binding their upvalues. Because do_call dispatches on
+ * the callee's jit_entry, once a recursive function is compiled its self-calls
+ * run native too; and because a nested call can reallocate the value stack, the
+ * generated code reloads its cached frame base after every call (so deep native
+ * recursion that grows the stack stays correct).
+ *
+ * We compile each prototype outright and check the native result against an
+ * independent C oracle. (Exhaustive bit-for-bit interpreter/JIT equivalence —
+ * typed and dynamic recursion, deep stack growth, nested-call arguments,
+ * collectable upvalues, and JIT→C calls — is exercised by the differential
+ * test suite.) */
+static void demo_jit_calls(spt_State *L) {
+  const char *src =
+    "function fact(int n) {\n"             /* typed self-recursion (OP_CALL)  */
+    "  if (n <= 1) { return 1; }\n"
+    "  return n * fact(n - 1);\n"
+    "}\n"
+    "function fib(int n) {\n"              /* double recursion                */
+    "  if (n < 2) { return n; }\n"
+    "  return fib(n - 1) + fib(n - 2);\n"
+    "}\n"
+    "function deep(int n) {\n"             /* deep recursion -> stack growth  */
+    "  if (n == 0) { return 0; }\n"
+    "  return n + deep(n - 1);\n"
+    "}\n"
+    "function make_adder(int base) {\n"    /* closure factory (OP_CLOSURE)    */
+    "  function adder(int x) { return base + x; }\n"
+    "  return adder;\n"
+    "}\n";
+  if (spt_load(L, src, "jit-calls") != 0) { printf("compile error: %s\n", L->errmsg); return; }
+  setnull(L->top); L->top++;
+  spt_call(L, 0, 0);                       /* run chunk: bind the globals     */
+  L->top = L->stack;
+
+  printf("--- JIT calls + closures (OP_CALL / OP_CLOSURE) ---\n");
+
+  /* fetch and compile each top-level prototype */
+  spt_getglobal(L, "fact");        Proto *p_fact = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_getglobal(L, "fib");         Proto *p_fib  = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_getglobal(L, "deep");        Proto *p_deep = clvalue(L->top - 1)->p; L->top = L->stack;
+  spt_getglobal(L, "make_adder");  Proto *p_mk   = clvalue(L->top - 1)->p;
+  Proto *p_adder = p_mk->p[0];                       /* the nested `adder`    */
+  L->top = L->stack;
+
+  spt_jit_try_compile(L, p_fact);
+  spt_jit_try_compile(L, p_fib);
+  spt_jit_try_compile(L, p_deep);
+  spt_jit_try_compile(L, p_mk);
+  spt_jit_try_compile(L, p_adder);
+  int all = p_fact->jit_entry && p_fib->jit_entry && p_deep->jit_entry
+            && p_mk->jit_entry && p_adder->jit_entry;
+  printf("  compiled: fact=%s fib=%s deep=%s make_adder=%s adder=%s\n",
+         p_fact->jit_entry ? "yes" : "no", p_fib->jit_entry ? "yes" : "no",
+         p_deep->jit_entry ? "yes" : "no", p_mk->jit_entry ? "yes" : "no",
+         p_adder->jit_entry ? "yes" : "no");
+
+  /* native results vs. C oracle */
+  long long r_fact = call1(L, "fact", 10);          /* 10! = 3628800         */
+  long long r_fib  = call1(L, "fib", 20);           /* fib(20) = 6765        */
+  long long r_deep = call1(L, "deep", 400);         /* 400*401/2 = 80200     */
+
+  /* make_adder(100) -> adder, then adder(23) == 123 (native factory + call) */
+  L->top = L->stack;
+  spt_getglobal(L, "make_adder"); setnull(L->top); L->top++; spt_pushint(L, 100);
+  spt_call(L, 1, 1);                                 /* stack[1] = adder      */
+  spt_pushvalue(L, 1); setnull(L->top); L->top++; spt_pushint(L, 23);
+  spt_call(L, 1, 1);                                 /* stack[2] = 123        */
+  long long r_add = spt_toint(L, 2);
+  L->top = L->stack;
+
+  int ok = all && r_fact == 3628800 && r_fib == 6765
+           && r_deep == 80200 && r_add == 123;
+  printf("  fact(10)=%lld  fib(20)=%lld  deep(400)=%lld  make_adder(100)(23)=%lld  [%s]\n\n",
+         r_fact, r_fib, r_deep, r_add,
+         ok ? "compiled to native, matches oracle"
+            : (all ? "MISMATCH" : "a prototype unexpectedly bailed"));
 }
 #endif
 
@@ -595,6 +691,7 @@ int main(void) {
   demo_jit_unary(L);
   demo_jit_concat(L);
   demo_jit_mixed(L);
+  demo_jit_calls(L);
 #endif
 
   printf("== done ==\n");

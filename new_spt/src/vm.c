@@ -149,6 +149,7 @@ static const char *concat_cstr(const TValue *v, char *buf, size_t bufsz, size_t 
 /* JIT runtime helpers (called from generated native code)             */
 /* ================================================================== */
 static void do_cast(spt_State *L, TValue *ra, Type target);  /* fwd decl */
+static void do_call(spt_State *L, ptrdiff_t funcidx, int nargs, int wantres); /* fwd decl */
 
 #ifdef SPT_HAS_JIT
 int  spt_val_eq(const TValue *a, const TValue *b)                       { return val_eq(a, b); }
@@ -260,6 +261,45 @@ void spt_jit_do_sub(spt_State *L, int a, int b, int c) { arith(L, OP_SUB, &L->ci
 void spt_jit_do_mul(spt_State *L, int a, int b, int c) { arith(L, OP_MUL, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
 void spt_jit_do_div(spt_State *L, int a, int b, int c) { arith(L, OP_DIV, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
 void spt_jit_do_mod(spt_State *L, int a, int b, int c) { arith(L, OP_MOD, &L->ci->base[a], &L->ci->base[b], &L->ci->base[c]); }
+
+/* OP_CLOSURE — instantiate the (JIT-time-known) nested prototype `np` into
+ * R[a], binding each upvalue exactly as the interpreter does: an `in_stack`
+ * upvalue captures a register of the *current* frame as an open upvalue;
+ * otherwise it is inherited from the running closure. Allocation here (the
+ * closure object and any new open upvalues) never grows the value stack, so the
+ * native caller's cached base register stays valid across this call. */
+void spt_jit_do_closure(spt_State *L, int a, Proto *np) {
+  CallInfo *ci = L->ci;
+  Closure  *cl = clvalue(ci->func);
+  Closure  *ncl = spt_closure_new(L, np);
+  TValue   *base = ci->base;
+  for (uint32_t u = 0; u < np->nups; u++) {
+    ncl->ups[u] = np->upvals[u].in_stack
+                ? find_upval(L, base + np->upvals[u].idx)
+                : cl->ups[np->upvals[u].idx];
+  }
+  setgco(&base[a], (GCObject *)ncl, SPT_TCLOSURE);
+}
+
+/* OP_CALL — call R[a] with B-1 args (or to the stack top when B==0) and keep
+ * C-1 results (multret when C==0). This mirrors the interpreter's OP_CALL byte
+ * for byte: delimit the receiver+args window, recurse through do_call (which
+ * runs the callee — interpreted or native — to its RETURN), then restore this
+ * frame's full register extent. do_call may have *relocated* the value stack
+ * (a nested call can trigger spt_checkstack), so the generated code MUST reload
+ * its cached base register immediately after this returns; see the OP_CALL
+ * lowering. A GC opportunity is taken here, matching the collection point the
+ * interpreter reaches at the instruction boundary after a call. */
+void spt_jit_do_call(spt_State *L, int a, int b, int c) {
+  CallInfo *ci   = L->ci;
+  TValue   *func = ci->base + a;
+  if (b) L->top = func + b + 1;                       /* delimit receiver+args */
+  int nargs   = b ? (b - 1) : (int)(L->top - func - 2);
+  int wantres = c ? (c - 1) : -1;
+  do_call(L, func - L->stack, nargs, wantres);
+  L->top = ci->top;                                   /* restore frame extent  */
+  spt_gc_maybe(L);
+}
 #endif
 
 /* ================================================================== */
