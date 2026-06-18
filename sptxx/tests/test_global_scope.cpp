@@ -3,9 +3,9 @@
 #include <vector>
 
 extern "C" {
-#include "../../src/Vm/lauxlib.h"
-#include "../../src/Vm/lua.h"
-#include "../../src/Vm/lualib.h"
+#include "../../src/vm/lauxlib.h"
+#include "../../src/vm/lua.h"
+#include "../../src/vm/lualib.h"
 }
 
 bool run_test(lua_State *L, const char *name, const char *code) {

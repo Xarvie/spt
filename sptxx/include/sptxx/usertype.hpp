@@ -6,8 +6,8 @@
 #pragma once
 
 extern "C" {
-#include "../../src/Vm/lua.h"
-#include "../../src/Vm/lauxlib.h"
+#include "../../src/vm/lua.h"
+#include "../../src/vm/lauxlib.h"
 }
 
 #include "error.hpp"

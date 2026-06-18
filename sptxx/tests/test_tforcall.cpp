@@ -2,9 +2,9 @@
 #include <iostream>
 
 extern "C" {
-#include "../../src/Vm/lauxlib.h"
-#include "../../src/Vm/lua.h"
-#include "../../src/Vm/lualib.h"
+#include "../../src/vm/lauxlib.h"
+#include "../../src/vm/lua.h"
+#include "../../src/vm/lualib.h"
 }
 
 int call_count = 0;

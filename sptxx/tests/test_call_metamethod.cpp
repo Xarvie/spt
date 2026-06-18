@@ -6,8 +6,8 @@
 std::vector<std::string> captured_args;
 
 extern "C" {
-#include "../../src/Vm/lauxlib.h"
-#include "../../src/Vm/lua.h"
+#include "../../src/vm/lauxlib.h"
+#include "../../src/vm/lua.h"
 }
 
 static int capture_args(lua_State *L) {
