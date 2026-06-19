@@ -2,6 +2,9 @@
 **
 ** 成员补全（Phase 1）：若接收者是命名空间导入别名（import * as m from "mod"），
 ** 列出目标模块的导出符号；否则回退到全文件类成员（现有兜底）。
+**
+** Phase 4: snippet 增强——函数符号生成参数占位符调用模板，
+** 关键字（class/declare/function/if/while/for/import）生成结构化模板。
 */
 #include "lsp_features.h"
 #include "semantic.h"
@@ -29,13 +32,101 @@ static int sym_to_cik(int kind) {
   }
 }
 
+/* ---- Phase 4: snippet 生成 ---- */
+
+/* 从函数 detail（如 "int add(int a, int b)"）提取参数名，生成调用 snippet。
+   输出如 "add(${1:a}, ${2:b})"。失败时返回 0（调用方退化为纯 label）。 */
+static int func_call_snippet(const char *name, const char *detail, char *out, size_t cap) {
+  if (!detail) return 0;
+  /* 找到 '(' */
+  const char *lp = strchr(detail, '(');
+  if (!lp) return 0;
+  /* 提取括号内参数列表 */
+  const char *rp = strrchr(lp, ')');
+  if (!rp || rp == lp + 1) {
+    /* 无参数 */
+    snprintf(out, cap, "%s()$0", name);
+    return 1;
+  }
+  /* 解析参数：按 ',' 分割，每个参数形如 "type name"，取最后的标识符为参数名 */
+  size_t pos = 0;
+  snprintf(out + pos, cap - pos, "%s(", name);
+  pos = strlen(out);
+
+  int idx = 1;
+  const char *p = lp + 1;
+  while (p < rp) {
+    /* 找下一个 ',' 或 ')' */
+    const char *comma = strchr(p, ',');
+    const char *end = comma ? comma : rp;
+    /* 跳过前导空白 */
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    /* 跳过 "..." 变参 */
+    if (end - p == 3 && strncmp(p, "...", 3) == 0) break;
+    /* 取最后的标识符部分作为参数名 */
+    const char *pname_end = end;
+    while (pname_end > p && (pname_end[-1] == ' ' || pname_end[-1] == '\t')) pname_end--;
+    const char *pname = pname_end;
+    while (pname > p && (isalnum((unsigned char)pname[-1]) || pname[-1] == '_')) pname--;
+    if (pname == pname_end || pname == p) {
+      /* 无参数名，用占位符 */
+      snprintf(out + pos, cap - pos, "%s${%d:arg%d}", idx > 1 ? ", " : "", idx, idx);
+    } else {
+      char pname_buf[128];
+      size_t pnl = (size_t)(pname_end - pname);
+      if (pnl >= sizeof pname_buf) pnl = sizeof pname_buf - 1;
+      memcpy(pname_buf, pname, pnl);
+      pname_buf[pnl] = '\0';
+      snprintf(out + pos, cap - pos, "%s${%d:%s}", idx > 1 ? ", " : "", idx, pname_buf);
+    }
+    pos = strlen(out);
+    idx++;
+    p = end + 1; /* 跳过 ',' */
+  }
+  snprintf(out + pos, cap - pos, ")$0");
+  return 1;
+}
+
+/* 关键字 snippet 模板。返回非 NULL 时该关键字有 snippet。 */
+static const char *keyword_snippet(const char *kw) {
+  if (strcmp(kw, "class") == 0)
+    return "class ${1:Name} {\n  $0\n}";
+  if (strcmp(kw, "declare") == 0)
+    return "declare from \"${1:module}\" {\n  $0\n}";
+  if (strcmp(kw, "function") == 0)
+    return "function ${1:name}(${2:params}) {\n  $0\n}";
+  if (strcmp(kw, "if") == 0)
+    return "if (${1:condition}) {\n  $0\n}";
+  if (strcmp(kw, "while") == 0)
+    return "while (${1:condition}) {\n  $0\n}";
+  if (strcmp(kw, "for") == 0)
+    return "for ${1:i} in ${2:iterable} {\n  $0\n}";
+  if (strcmp(kw, "import") == 0)
+    return "import { ${1:name} } from \"${2:module}\";$0";
+  if (strcmp(kw, "return") == 0)
+    return "return $0;";
+  if (strcmp(kw, "defer") == 0)
+    return "defer {\n  $0\n}";
+  return NULL;
+}
+
 typedef struct { cJSON *arr; } CompCtx;
 static void comp_cb(void *ctx, const char *name, int kind, const char *detail) {
   if (!name) return;
   cJSON *it = cJSON_CreateObject();
   cJSON_AddStringToObject(it, "label", name);
-  cJSON_AddNumberToObject(it, "kind", sym_to_cik(kind));
+  int cik = sym_to_cik(kind);
+  cJSON_AddNumberToObject(it, "kind", cik);
   if (detail && detail[0]) cJSON_AddStringToObject(it, "detail", detail);
+
+  /* Phase 4: 函数/方法生成调用 snippet。 */
+  if (cik == LSP_CIK_FUNCTION || cik == LSP_CIK_METHOD) {
+    char snip[512];
+    if (func_call_snippet(name, detail, snip, sizeof snip)) {
+      cJSON_AddStringToObject(it, "insertText", snip);
+      cJSON_AddNumberToObject(it, "insertTextFormat", 2); /* Snippet */
+    }
+  }
   cJSON_AddItemToArray(((CompCtx *)ctx)->arr, it);
 }
 
@@ -111,6 +202,12 @@ cJSON *feature_completion(const Document *d, LspPos pos, Workspace *ws) {
       cJSON *it = cJSON_CreateObject();
       cJSON_AddStringToObject(it, "label", KEYWORDS[i]);
       cJSON_AddNumberToObject(it, "kind", LSP_CIK_KEYWORD);
+      /* Phase 4: 关键字 snippet 模板。 */
+      const char *snip = keyword_snippet(KEYWORDS[i]);
+      if (snip) {
+        cJSON_AddStringToObject(it, "insertText", snip);
+        cJSON_AddNumberToObject(it, "insertTextFormat", 2); /* Snippet */
+      }
       cJSON_AddItemToArray(arr, it);
     }
   }

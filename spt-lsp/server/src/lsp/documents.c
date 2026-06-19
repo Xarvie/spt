@@ -154,6 +154,39 @@ Document *doc_store_change(DocStore *s, const char *uri, const char *text, size_
   return d;
 }
 
+Document *doc_store_change_range(DocStore *s, const char *uri, size_t start_off, size_t end_off,
+                                 const char *replacement, size_t repl_len, int version) {
+  Document *d = doc_store_get(s, uri);
+  if (!d)
+    return doc_store_open(s, uri, replacement, repl_len, version);
+  /* 钳制范围。 */
+  if (start_off > d->text_len) start_off = d->text_len;
+  if (end_off > d->text_len) end_off = d->text_len;
+  if (start_off > end_off) { size_t t = start_off; start_off = end_off; end_off = t; }
+
+  /* 规范化 replacement 的换行（CRLF/CR -> LF）。 */
+  char *norm_repl = (char *)malloc(repl_len + 1);
+  memcpy(norm_repl, replacement ? replacement : "", repl_len);
+  norm_repl[repl_len] = '\0';
+  size_t norm_len = normalize_newlines(norm_repl, repl_len);
+
+  /* 拼接新文本：前缀 + replacement + 后缀。 */
+  size_t new_len = start_off + norm_len + (d->text_len - end_off);
+  char *new_text = (char *)malloc(new_len + 1);
+  memcpy(new_text, d->text, start_off);
+  memcpy(new_text + start_off, norm_repl, norm_len);
+  memcpy(new_text + start_off + norm_len, d->text + end_off, d->text_len - end_off);
+  new_text[new_len] = '\0';
+  free(norm_repl);
+
+  d->version = version;
+  free(d->text);
+  d->text = new_text;
+  d->text_len = new_len;
+  build_line_index(d);
+  return d;
+}
+
 void doc_store_close(DocStore *s, const char *uri) {
   for (int i = 0; i < s->count; i++) {
     if (strcmp(s->docs[i]->uri, uri) == 0) {

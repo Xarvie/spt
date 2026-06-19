@@ -37,6 +37,11 @@ Document *doc_store_change(DocStore *s, const char *uri, const char *text, size_
                            int version);
 void doc_store_close(DocStore *s, const char *uri);
 
+/* Phase 4: 增量同步——用 replacement 替换文档中 [start_off, end_off) 字节区间。
+   replacement 会被 LF 规范化。返回文档指针。 */
+Document *doc_store_change_range(DocStore *s, const char *uri, size_t start_off, size_t end_off,
+                                 const char *replacement, size_t repl_len, int version);
+
 Document *doc_store_get(DocStore *s, const char *uri);
 
 /* ---- 位置换算 ---- */

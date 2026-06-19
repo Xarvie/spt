@@ -71,7 +71,7 @@ static cJSON *make_initialize_result(void) {
   cJSON *result = cJSON_CreateObject();
 
   cJSON *caps = cJSON_CreateObject();
-  cJSON_AddNumberToObject(caps, "textDocumentSync", 1); /* TextDocumentSyncKind.Full */
+  cJSON_AddNumberToObject(caps, "textDocumentSync", 2); /* TextDocumentSyncKind.Incremental */
   cJSON_AddBoolToObject(caps, "documentSymbolProvider", 1);
   cJSON_AddBoolToObject(caps, "hoverProvider", 1);
   cJSON_AddBoolToObject(caps, "definitionProvider", 1);
@@ -85,6 +85,8 @@ static cJSON *make_initialize_result(void) {
   cJSON *ih = cJSON_CreateObject();
   cJSON_AddItemToObject(ih, "resolveProvider", cJSON_CreateBool(0));
   cJSON_AddItemToObject(caps, "inlayHintProvider", ih);
+  /* Phase 4: codeAction */
+  cJSON_AddBoolToObject(caps, "codeActionProvider", 1);
   /* renameProvider 用对象形式以声明 prepareProvider（prepareRename） */
   cJSON *renp = cJSON_CreateObject();
   cJSON_AddBoolToObject(renp, "prepareProvider", 1);
@@ -250,6 +252,12 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
     LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
     return rpc_make_response(id, d ? feature_inlay_hints(d, r, &s->ws) : cJSON_CreateArray());
   }
+  if (strcmp(method, "textDocument/codeAction") == 0) {
+    Document *d = get_doc(s, params);
+    cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    return rpc_make_response(id, d ? feature_code_action(d, r) : cJSON_CreateArray());
+  }
 
   if (strcmp(method, "workspace/symbol") == 0) {
     cJSON *q = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "query");
@@ -290,21 +298,31 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
     cJSON *uri = td ? cJSON_GetObjectItemCaseSensitive(td, "uri") : NULL;
     cJSON *ver = td ? cJSON_GetObjectItemCaseSensitive(td, "version") : NULL;
     cJSON *changes = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "contentChanges");
-    /* Full 同步：取最后一个变更的 text 为整篇内容。 */
-    cJSON *last_text = NULL;
-    if (changes && cJSON_IsArray(changes)) {
+    /* Phase 4: 增量同步——支持 range-based 变更和 Full 变更。 */
+    if (uri && cJSON_IsString(uri) && changes && cJSON_IsArray(changes)) {
       int n = cJSON_GetArraySize(changes);
       for (int i = 0; i < n; i++) {
         cJSON *ch = cJSON_GetArrayItem(changes, i);
         cJSON *t = cJSON_GetObjectItemCaseSensitive(ch, "text");
-        if (t && cJSON_IsString(t))
-          last_text = t;
+        cJSON *rng = cJSON_GetObjectItemCaseSensitive(ch, "range");
+        if (!t || !cJSON_IsString(t)) continue;
+        int version = ver && cJSON_IsNumber(ver) ? ver->valueint : 0;
+        if (rng) {
+          /* 增量变更：用 range 定位字节区间后替换。 */
+          Document *d = doc_store_get(&s->docs, uri->valuestring);
+          if (d) {
+            LspRange r = lsp_range_from_json(rng);
+            size_t s_off = doc_offset_at(d, r.start);
+            size_t e_off = doc_offset_at(d, r.end);
+            doc_store_change_range(&s->docs, uri->valuestring, s_off, e_off,
+                                   t->valuestring, strlen(t->valuestring), version);
+          }
+        } else {
+          /* Full 变更（无 range 字段）：整篇替换。 */
+          doc_store_change(&s->docs, uri->valuestring, t->valuestring,
+                           strlen(t->valuestring), version);
+        }
       }
-    }
-    if (uri && cJSON_IsString(uri) && last_text) {
-      doc_store_change(&s->docs, uri->valuestring, last_text->valuestring,
-                       strlen(last_text->valuestring),
-                       ver && cJSON_IsNumber(ver) ? ver->valueint : 0);
       workspace_mark_dirty(&s->ws);
       publish_diagnostics(s, uri->valuestring);
     }

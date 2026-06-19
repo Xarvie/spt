@@ -54,17 +54,17 @@ src/main.c           stdio 主循环入口（Windows 下切二进制 stdio）
 **`declare` 外部符号**已集成进语义层：文档符号、成员补全、semantic_tokens、signature help
 均遍历 `NODE_DECLARE_MODULE` 成员（见 `semantic.c` 三处分支）。
 
-同步：`textDocumentSync = Full`（每次变更携带整篇文本）。
+同步：`textDocumentSync = Incremental`（didChange 支持 range 增量补丁，兼容 Full）。
 
-**质量基线**：10 个 ctest 全绿（test_rpc/server/documents/diagnostics/features/
-crash_semtok/incomplete/workspace/cross_import/type_infer）；test_workspace 已跨平台（Windows 用 GetTempPathA/
+**质量基线**：12 个 ctest 全绿（test_rpc/server/documents/diagnostics/features/
+crash_semtok/incomplete/workspace/cross_import/type_infer/phase4）；test_workspace 已跨平台（Windows 用 GetTempPathA/
 CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 
 ---
 
 ## 三、质量门槛（每次改动必须全过，否则回退）
 
-- `ctest --test-dir build -C Release --output-on-failure`：10 项单元测试
+- `ctest --test-dir build -C Release --output-on-failure`：12 项单元测试
 - `run_tests.sh`：端到端管道冒烟（gcc 快速回路，含编译+单测+冒烟）
 - ASan+UBSan（含泄漏）：内存/未定义行为回归
 - VS Code 客户端手测：开 `.spt` 文件，hover/定义/补全/诊断四项冒烟
@@ -199,10 +199,20 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 
 ### 阶段 4 — 体验打磨（低优先）
 
-- 格式化增强（缩进规范化，当前仅去行尾空白）。
-- codeAction（快速修复：补全缺失的 `global`/`export` 前缀）。
-- snippet 增强（declare 模板、class 模板）。
-- 增量同步（`textDocumentSync = 2`），减少大文件传输。
+- **格式化增强** ✅：缩进规范化——读取 `FormattingOptions.tabSize/insertSpaces`，
+  将每行前导空白按视觉列数统一为纯 tab 或纯 space，混合 tab/space 自动换算。
+  保留行尾空白清理 + 末尾单换行。
+- **codeAction** ✅：`textDocument/codeAction` 快速修复——为顶层未 `export` 的
+  函数/类/变量声明提供 "Add 'export'" quickfix，生成插入 `export ` 前缀的 TextEdit。
+- **snippet 增强** ✅：补全项支持 `insertTextFormat=2`（Snippet）。
+  函数/方法符号自动生成参数占位符调用模板（`add(${1:a}, ${2:b})$0`）；
+  关键字（class/declare/function/if/while/for/import/return/defer）生成结构化模板。
+- **增量同步** ✅：`textDocumentSync=2`（Incremental）。`didChange` 支持 range-based
+  增量补丁（`doc_store_change_range` 按 LSP range 定位字节区间后替换），
+  同时兼容 Full 变更（无 range 字段时整篇替换）。
+
+**go/no-go** ✅：新增 test_phase4（snippet 补全/格式化缩进/codeAction/增量同步），
+全量 ctest 绿（12/12），无回归。
 
 ---
 
@@ -220,7 +230,7 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
    新功能涉及位置必须走 `doc_offset_at` / `doc_pos_at`，不直接操作行列。
 6. **UTF-16 边界**：`character` 是行内 UTF-16 码元计数；多字节/星补字符的转换已有覆盖，
    新增位置相关代码不得绕过 `documents.c` 的转换。
-7. **每次改动一个独立单元**：改完立刻过完整门槛（11 ctest + ASan + 手测）再继续。
+7. **每次改动一个独立单元**：改完立刻过完整门槛（12 ctest + ASan + 手测）再继续。
 8. **能力声明诚实**：`make_initialize_result` 只声明已实际接线的能力（见 server.c 注释）。
    新功能先接线再开 capability，不预先声明未实现的。
 9. **Windows/POSIX 兼容**：跨文件路径解析用平台无关 API；`test_workspace` 已跨平台

@@ -65,4 +65,8 @@ cJSON *feature_selection_range(const Document *d, LspPos pos);
    ws 可空；非空时支持跨文件函数参数名提示。 */
 cJSON *feature_inlay_hints(const Document *d, LspRange range, Workspace *ws);
 
+/* textDocument/codeAction -> CodeAction[]
+   Phase 4: 为顶层声明补全缺失的 export 前缀。 */
+cJSON *feature_code_action(const Document *d, LspRange range);
+
 #endif /* SPT_LSP_FEATURES_H */
