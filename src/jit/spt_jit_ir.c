@@ -352,6 +352,11 @@ static void mark_used(SPTIRBuilder *b, int ref, uint8_t *used) {
   SPTIRInst *ir = &b->insts[ref];
   mark_used(b, ir->op1, used);
   mark_used(b, ir->op2, used);
+  /* GUARD_LT/GUARD_LE keep their bound (e.g. an array LEN) in aux as an IR ref,
+     not in op2. Follow it, or the bound is dead-code-eliminated and the guard
+     reads an uninitialised spill slot at run time. */
+  if (ir->op == SPTIR_GUARD_LT || ir->op == SPTIR_GUARD_LE)
+    mark_used(b, (int)ir->aux, used);
 }
 
 /* Dead code elimination. */
@@ -366,6 +371,9 @@ static void dce(SPTIRBuilder *b) {
       used[i] = 1;
       mark_used(b, ir->op1, used);
       mark_used(b, ir->op2, used);
+      /* bounds-guard bound lives in aux as a ref (see mark_used). */
+      if (ir->op == SPTIR_GUARD_LT || ir->op == SPTIR_GUARD_LE)
+        mark_used(b, (int)ir->aux, used);
     }
     switch (ir->op) {
       case SPTIR_SSTORE: case SPTIR_USTORE: case SPTIR_SETI:

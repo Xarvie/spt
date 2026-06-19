@@ -217,6 +217,15 @@ void sptasm_mov_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
   emit_mem(a, dst, base, disp);
 }
 
+/* 32-bit load: MOV r32, r/m32. In x86-64 this zero-extends into the full
+   64-bit destination, so it is the correct way to read a 4-byte field (e.g.
+   Table.loglen) without dragging in the adjacent 4 bytes. */
+void sptasm_mov_rm32(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  emit_rex_rm(a, 0, dst, base);
+  sptasm_byte(a, 0x8B);
+  emit_mem(a, dst, base, disp);
+}
+
 void sptasm_mov_mr(SPTAsm *a, SPTReg base, int32_t disp, SPTReg src) {
   emit_rex_rm(a, 1, src, base);
   sptasm_byte(a, 0x89); /* MOV r/m64, r64 */

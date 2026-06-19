@@ -160,6 +160,7 @@ void sptasm_mov_ri64(SPTAsm *a, SPTReg dst, int64_t imm);
 void sptasm_mov_ri32(SPTAsm *a, SPTReg dst, int32_t imm);
 /* MOV reg, [base + disp] */
 void sptasm_mov_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+void sptasm_mov_rm32(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
 /* MOV [base + disp], reg */
 void sptasm_mov_mr(SPTAsm *a, SPTReg base, int32_t disp, SPTReg src);
 /* MOV [base + index*scale + disp], reg */

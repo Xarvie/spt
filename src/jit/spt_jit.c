@@ -298,9 +298,10 @@ static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
   /* Read the array from its stack slot: exact for a slot holding a genuine
      array (a variable, or an explicit `row = m[i]`). A *chained* m[i][j] has
      its intermediate slot reused, so this returns ANY and the trace aborts.
-     (Compiling it produced a trace slower than the interpreter -- it didn't
-     loop internally for reasons unrelated to invariant hoisting; abort is
-     better. Revisit when that non-looping is understood.) */
+     (Re-enabling IR-recursive resolution made it loop after the DCE bound-guard
+     fix, but exposed a separate miscompile when a constant-index array-producing
+     GETI like m[0] is LICM-hoisted -- m[0][j] gave wrong results. Chained 2D
+     stays disabled until that is fixed; explicit `row = m[i]` still works.) */
   StkId base = rc->ci->func.p + 1;
   TValue *arrtv = s2v(base + areg);
   if (!ttisarray(arrtv)) return SPTT_ANY;

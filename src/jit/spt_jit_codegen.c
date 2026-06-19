@@ -626,6 +626,7 @@ static void gen_exit_stub(SPTCodeGen *cg, int snap_idx) {
 
   sptasm_place(a, cg->exit_label_for_snap[snap_idx]);
 
+
   /* Get the snapshot for this exit. */
   if (snap_idx >= ir->nsnaps) {
     /* No snapshot: just go to epilogue. */
@@ -1030,7 +1031,10 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
     case SPTIR_LEN: {
       /* Get array length: Table->loglen */
       gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_LOGLEN);
+      /* loglen is a 4-byte unsigned int; a 64-bit load would pull in the
+         low bytes of the adjacent t->array pointer and make the value depend
+         on the heap address (ASLR), breaking the signed bounds compare. */
+      sptasm_mov_rm32(a, SPT_RAX, SPT_RAX, OFF_TABLE_LOGLEN);
       gen_store(cg, idx, SPT_RAX);
       break;
     }
