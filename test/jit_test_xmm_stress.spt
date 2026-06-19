@@ -1,0 +1,19 @@
+// 3+ 浮点变量循环 — 触发 XMM6/7 分配
+float a = 0.0;
+float b = 0.0;
+float c = 0.0;
+float d = 0.0;
+for (int i = 0, 200) {
+    a = a + i * 1.0;
+    b = b + i * 2.0;
+    c = c + i * 3.0;
+    d = d + i * 4.0;
+}
+print("a=", a, " b=", b, " c=", c, " d=", d);
+// 验证: 0+1+...+200 = 20100 (SPT for is inclusive)
+// a = 20100, b = 40200, c = 60300, d = 80400
+assert(a == 20100.0, "a should be 20100.0");
+assert(b == 40200.0, "b should be 40200.0");
+assert(c == 60300.0, "c should be 60300.0");
+assert(d == 80400.0, "d should be 80400.0");
+print("JIT 4-float stress: PASS");

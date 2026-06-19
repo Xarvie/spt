@@ -10,6 +10,7 @@
 #include "spt_jit_ir.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* =====================================================================
 ** IR Builder
@@ -78,6 +79,7 @@ int sptir_emit(SPTIRBuilder *b, SPTIROp op, SPTType type, int32_t op1, int32_t o
   ir->op2 = op2;
   ir->aux = aux;
   ir->prev = SPTIR_NULL;
+  ir->snap_idx = -1;
   return ref;
 }
 
@@ -136,7 +138,8 @@ int sptir_guard(SPTIRBuilder *b, SPTIROp gop, int32_t val_ref, int64_t aux,
   int ref = sptir_emit(b, gop, SPTT_NIL, val_ref, SPTIR_NULL, aux);
   if (ref >= 0) {
     b->insts[ref].flags |= SPTIRF_GUARD;
-    sptir_snapshot(b, exit_pc);
+    int snap = sptir_snapshot(b, exit_pc);
+    b->insts[ref].snap_idx = snap;
   }
   return ref;
 }
@@ -183,6 +186,9 @@ static double ir_const_flt(const SPTIRInst *ir) {
 /* Constant folding for binary arithmetic. */
 static int try_const_fold(SPTIRBuilder *b, int idx) {
   SPTIRInst *ir = &b->insts[idx];
+  /* Never fold a guard: its side effect (the side-exit + snapshot) must be
+     preserved, and removing it would desync exit indices in codegen. */
+  if (ir->flags & SPTIRF_GUARD) return 0;
   if (ir->op1 < 0 || ir->op2 < 0) return 0;
   SPTIRInst *a = &b->insts[ir->op1];
   SPTIRInst *c = &b->insts[ir->op2];
@@ -395,6 +401,70 @@ static void dce(SPTIRBuilder *b) {
     }
   }
   free(used);
+}
+
+static const char *iropname(int op) {
+  switch (op) {
+    case SPTIR_NIL: return "NIL"; case SPTIR_FALSE: return "FALSE";
+    case SPTIR_TRUE: return "TRUE"; case SPTIR_KINT: return "KINT";
+    case SPTIR_KFLT: return "KFLT"; case SPTIR_KSTR: return "KSTR";
+    case SPTIR_KPTR: return "KPTR"; case SPTIR_KGC: return "KGC";
+    case SPTIR_SLOAD: return "SLOAD"; case SPTIR_SSTORE: return "SSTORE";
+    case SPTIR_ULOAD: return "ULOAD"; case SPTIR_USTORE: return "USTORE";
+    case SPTIR_ADD: return "ADD"; case SPTIR_SUB: return "SUB";
+    case SPTIR_MUL: return "MUL"; case SPTIR_DIV: return "DIV";
+    case SPTIR_MOD: return "MOD"; case SPTIR_IDIV: return "IDIV";
+    case SPTIR_POW: return "POW"; case SPTIR_NEG: return "NEG";
+    case SPTIR_BAND: return "BAND"; case SPTIR_BOR: return "BOR";
+    case SPTIR_BXOR: return "BXOR"; case SPTIR_BNOT: return "BNOT";
+    case SPTIR_SHL: return "SHL"; case SPTIR_SHR: return "SHR";
+    case SPTIR_EQ: return "EQ"; case SPTIR_LT: return "LT";
+    case SPTIR_LE: return "LE"; case SPTIR_GT: return "GT";
+    case SPTIR_GE: return "GE"; case SPTIR_NOT: return "NOT";
+    case SPTIR_GETI: return "GETI"; case SPTIR_SETI: return "SETI";
+    case SPTIR_GETFIELD: return "GETFIELD"; case SPTIR_SETFIELD: return "SETFIELD";
+    case SPTIR_GETTABUP: return "GETTABUP"; case SPTIR_LEN: return "LEN";
+    case SPTIR_TOFLT: return "TOFLT"; case SPTIR_TOINT: return "TOINT";
+    case SPTIR_GUARD: return "GUARD"; case SPTIR_GUARD_LT: return "GUARD_LT";
+    case SPTIR_GUARD_LE: return "GUARD_LE"; case SPTIR_GUARD_EQ: return "GUARD_EQ";
+    case SPTIR_GUARD_T: return "GUARD_T"; case SPTIR_EXIT: return "EXIT";
+    case SPTIR_LOOP: return "LOOP"; case SPTIR_PHI: return "PHI";
+    case SPTIR_CALL: return "CALL"; case SPTIR_RETURN: return "RETURN";
+    case SPTIR_NOP: return "NOP"; default: return "???";
+  }
+}
+
+static const char *irtypename(int t) {
+  switch (t) {
+    case SPTT_NIL: return "nil"; case SPTT_FALSE: return "fls";
+    case SPTT_TRUE: return "tru"; case SPTT_INT: return "int";
+    case SPTT_FLT: return "flt"; case SPTT_STR: return "str";
+    case SPTT_ARR: return "arr"; case SPTT_TAB: return "tab";
+    case SPTT_FUNC: return "fun"; case SPTT_UD: return "ud ";
+    case SPTT_ANY: return "any"; case SPTT_DEAD: return "DED";
+    default: return "?? ";
+  }
+}
+
+void sptir_dump(const SPTIRBuilder *b, const char *title) {
+  fprintf(stderr, "---- IR dump: %s (%d insts, maxslot=%d, loop_start=%d) ----\n",
+          title ? title : "", b->ninst, b->maxslot, b->loop_start);
+  for (int i = 0; i < b->ninst; i++) {
+    const SPTIRInst *ir = &b->insts[i];
+    char fl[8]; int fi = 0;
+    if (ir->flags & SPTIRF_GUARD) fl[fi++] = 'G';
+    if (ir->flags & SPTIRF_SNAP)  fl[fi++] = 'S';
+    if (ir->flags & SPTIRF_DEAD)  fl[fi++] = 'D';
+    if (ir->flags & SPTIRF_PHI)   fl[fi++] = 'P';
+    fl[fi] = 0;
+    fprintf(stderr, "  %4d  %-3s %-9s op1=%-4d op2=%-4d aux=%lld  %s\n",
+            i, irtypename(ir->type), iropname(ir->op),
+            (int)ir->op1, (int)ir->op2, (long long)ir->aux, fl);
+  }
+  fprintf(stderr, "  reg_map (slot->ref):");
+  for (int s = 0; s <= b->maxslot; s++)
+    fprintf(stderr, " [%d]=%d", s, (int)b->reg_map[s]);
+  fprintf(stderr, "\n----\n");
 }
 
 void sptir_optimize(SPTIRBuilder *b) {

@@ -83,6 +83,7 @@ typedef enum {
 
   /* Comparisons (produce boolean) */
   SPTIR_EQ,           /* op1 == op2 */
+  SPTIR_NE,           /* op1 != op2 */
   SPTIR_LT,           /* op1 < op2 */
   SPTIR_LE,           /* op1 <= op2 */
   SPTIR_GT,           /* op1 > op2 (flipped LT) */
@@ -110,6 +111,8 @@ typedef enum {
   SPTIR_GUARD_LE,     /* guard op1 <= aux */
   SPTIR_GUARD_EQ,     /* guard op1 == aux (constant) */
   SPTIR_GUARD_T,      /* guard type of op1 == aux (SPTType) */
+  SPTIR_GUARD_ULT,    /* guard (unsigned)op1 < aux (constant); used for shift
+                         counts so out-of-range counts side-exit */
 
   SPTIR_EXIT,         /* unconditional side exit (aux = exit index) */
   SPTIR_LOOP,         /* loop back-edge marker (aux = loop start IR index) */
@@ -144,7 +147,10 @@ struct SPTIRInst {
   int32_t op2;
   int64_t aux;
   int32_t prev;
-  int32_t pad;
+  int32_t snap_idx;   /* for guard instructions: index of associated snapshot;
+                         -1 for non-guards. Lets codegen pair a guard with its
+                         snapshot independent of emission order (needed for
+                         hoisting guards into a loop preheader). */
 };
 
 /* IR flags */
@@ -243,6 +249,9 @@ void sptir_loop(SPTIRBuilder *b);
 
 /* Get the type of an IR ref. */
 SPTType sptir_type(const SPTIRBuilder *b, int ref);
+
+/* Debug: print the IR to stderr. */
+void sptir_dump(const SPTIRBuilder *b, const char *title);
 
 /* Get the instruction at a ref. */
 static inline SPTIRInst *sptir_get(const SPTIRBuilder *b, int ref) {

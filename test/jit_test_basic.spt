@@ -1,0 +1,6 @@
+int sum = 0;
+for (int i = 0, 100) {
+    sum += i;
+}
+assert(sum == 5050, "sum should be 5050 (0+1+...+100)");
+print("JIT for-loop int: PASS, sum=", sum);

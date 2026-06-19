@@ -19,6 +19,7 @@
 #include "lobject.h"
 #include "lstate.h"
 #include "lopcodes.h"
+#include "lopnames.h"
 #include "ltable.h"
 #include "ltm.h"
 #include "lvm.h"
@@ -27,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdio.h>
 
 /* =====================================================================
 ** Struct offsets for JIT code generation
@@ -76,7 +78,7 @@ static uint32_t hot_hash(Proto *p, int pc_offset) {
 SPTJitState *sptjit_create(void) {
   SPTJitState *js = (SPTJitState *)calloc(1, sizeof(SPTJitState));
   if (!js) return NULL;
-  js->mode = SPT_JIT_MODE_OFF;
+  js->mode = SPT_JIT_MODE_ON;
   js->hot_size = 256; /* power of 2 */
   js->hot_table = (SPTHotEntry *)calloc(js->hot_size, sizeof(SPTHotEntry));
   js->code_buf_size = SPT_JIT_CODE_SIZE;
@@ -86,11 +88,50 @@ SPTJitState *sptjit_create(void) {
     free(js);
     return NULL;
   }
+  js->hot_threshold = SPT_JIT_HOT;
+
+  /* Environment configuration:
+     SPT_JIT=1 / on / true  -> enable JIT
+     SPT_JIT=0 / off / false -> keep disabled (default)
+     SPT_JIT_HOT=<n>        -> override hot-loop trip threshold
+     SPT_JIT_DEBUG=1        -> emit recording/compile diagnostics to stderr */
+  {
+    const char *e = getenv("SPT_JIT");
+    if (e && *e && e[0] != '0' &&
+        e[0] != 'o' /* "off" */ && e[0] != 'O' &&
+        e[0] != 'f' /* "false" */ && e[0] != 'F' &&
+        e[0] != 'n' /* "no" */ && e[0] != 'N') {
+      js->mode = SPT_JIT_MODE_ON;
+    }
+    /* "on"/"true"/"yes" explicitly enable */
+    if (e && (e[0] == 'o' || e[0] == 'O' || e[0] == 't' || e[0] == 'T' ||
+              e[0] == 'y' || e[0] == 'Y'))
+      js->mode = SPT_JIT_MODE_ON;
+
+    const char *h = getenv("SPT_JIT_HOT");
+    if (h && *h) {
+      int v = atoi(h);
+      if (v > 0) js->hot_threshold = (uint16_t)(v > 0xFFFE ? 0xFFFE : v);
+    }
+    const char *d = getenv("SPT_JIT_DEBUG");
+    js->debug = (d && *d) ? atoi(d) : 0;
+  }
   return js;
 }
 
 void sptjit_destroy(SPTJitState *js) {
   if (!js) return;
+  if (js->debug) {
+    fprintf(stderr,
+            "[JIT] stats: recorded=%llu compiled=%llu aborted=%llu "
+            "entries=%llu exits=%llu guard_fail=%llu\n",
+            (unsigned long long)js->stats.traces_recorded,
+            (unsigned long long)js->stats.traces_compiled,
+            (unsigned long long)js->stats.traces_aborted,
+            (unsigned long long)js->stats.trace_entries,
+            (unsigned long long)js->stats.trace_exits,
+            (unsigned long long)js->stats.trace_guard_fail);
+  }
   /* Free all traces */
   for (int i = 0; i < js->hot_size; i++) {
     SPTTrace *t = js->hot_table[i].trace;
@@ -250,17 +291,29 @@ static int rec_load_rkc(SPTRecCtx *rc, Instruction i) {
     return rec_load_reg(rc, GETARG_C(i));
 }
 
-/* Load RKB: either register or constant. */
-static int rec_load_rkb(SPTRecCtx *rc, Instruction i) {
-  if (TESTARG_k(i))
-    return rec_load_k(rc, GETARG_B(i));
-  else
-    return rec_load_reg(rc, GETARG_B(i));
-}
-
 /* Record an arithmetic operation. */
 static int rec_arith(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_type, SPTType b_type) {
   SPTIRBuilder *ir = rc->ir;
+
+  /* DIV ('/') and POW ('^') always produce a float in SPT/Lua, even for two
+     integer operands (only '//' and '%' stay integer when both are int). Force
+     both operands to float and type the result float, mirroring luaV_div /
+     luaV_pow. Without this, `i / 2` was recorded as integer division followed
+     by a widening, computing floor(i/2) and dropping the fractional part. */
+  if (op == SPTIR_DIV || op == SPTIR_POW) {
+    if (a_type == SPTT_INT) {
+      a_ref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, a_ref, SPTIR_NULL, 0);
+      a_type = SPTT_FLT;
+    }
+    if (b_type == SPTT_INT) {
+      b_ref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, b_ref, SPTIR_NULL, 0);
+      b_type = SPTT_FLT;
+    }
+    if (a_type == SPTT_FLT && b_type == SPTT_FLT)
+      return sptir_emit(ir, op, SPTT_FLT, a_ref, b_ref, 0);
+    rc->aborted = 1;
+    return SPTIR_NULL;
+  }
 
   /* If both are int, do integer arithmetic. */
   if (a_type == SPTT_INT && b_type == SPTT_INT) {
@@ -305,7 +358,8 @@ static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
     int ref = sptir_emit(ir, op, SPTT_TRUE, a_ref, b_ref, 0);
     /* Comparison is a guard: if it fails, take side exit. */
     ir->insts[ref].flags |= SPTIRF_GUARD;
-    sptir_snapshot(ir, rc->pc);
+    int snap = sptir_snapshot(ir, rc->pc);
+    ir->insts[ref].snap_idx = snap;
     return ref;
   }
 
@@ -314,11 +368,45 @@ static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
   return SPTIR_NULL;
 }
 
+/* Conditionally skip a trailing metamethod-fallback instruction.
+   Binary arithmetic/bitwise ops are followed by OP_MMBIN/MMBINI/MMBINK in the
+   bytecode (the slow-path metamethod call). Unary ops (UNM, BNOT, LEN) are NOT.
+   Only advance pc if the *next* instruction really is an MMBIN-family op, so a
+   unary op never accidentally swallows the following real instruction. */
+static void rec_skip_mmbin(SPTRecCtx *rc) {
+  OpCode next = GET_OPCODE(rc->pc[1]);
+  if (next == OP_MMBIN || next == OP_MMBINI || next == OP_MMBINK)
+    rc->pc++;
+}
+
+/* Emit IR for a shift by a COMPILE-TIME-KNOWN amount, matching luaV_shiftl:
+   sh > 0  => logical left shift by sh   (0 if sh >= 64)
+   sh < 0  => logical right shift by -sh  (0 if -sh >= 64)
+   sh == 0 => identity.
+   This is needed because Lua encodes 'x << k' as OP_SHRI with shift -k, so the
+   effective direction can be the opposite of the opcode mnemonic. */
+static int rec_shift_const(SPTRecCtx *rc, int val_ref, int64_t sh) {
+  SPTIRBuilder *ir = rc->ir;
+  if (sh >= 64 || sh <= -64)
+    return sptir_kint(ir, 0);
+  if (sh == 0)
+    return val_ref;
+  if (sh > 0)
+    return sptir_emit(ir, SPTIR_SHL, SPTT_INT, val_ref, sptir_kint(ir, sh), 0);
+  return sptir_emit(ir, SPTIR_SHR, SPTT_INT, val_ref, sptir_kint(ir, -sh), 0);
+}
+
 /* Record one bytecode instruction. Returns 1 to continue, 0 to stop. */
 static int rec_inst(SPTRecCtx *rc) {
   SPTIRBuilder *ir = rc->ir;
   Instruction i = *rc->pc;
   OpCode op = GET_OPCODE(i);
+
+  if (rc->js->debug >= 3) {
+    fprintf(stderr, "  [rec] pc=%d %-12s A=%d B=%d C=%d k=%d sBx=%d\n",
+            (int)(rc->pc - rc->p->code), opnames[op], GETARG_A(i), GETARG_B(i),
+            GETARG_C(i), GETARG_k(i), GETARG_sBx(i));
+  }
 
   if (rc->inst_count++ > SPT_JIT_MAX_TRACE) {
     rc->aborted = 1;
@@ -531,8 +619,7 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_map[a] = ref;
       ir->reg_type[a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
-      /* Skip MMBIN */
-      rc->pc++;
+      rec_skip_mmbin(rc); /* skip MMBIN if present */
       break;
     }
     case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
@@ -557,7 +644,7 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_map[a] = ref;
       ir->reg_type[a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++; /* skip MMBINK */
+      rec_skip_mmbin(rc);
       break;
     }
     case OP_ADDI: {
@@ -570,7 +657,7 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_map[a] = ref;
       ir->reg_type[a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++; /* skip MMBINI */
+      rec_skip_mmbin(rc);
       break;
     }
 
@@ -588,11 +675,16 @@ static int rec_inst(SPTRecCtx *rc) {
         case OP_SHR:  irop = SPTIR_SHR;  break;
         default: irop = SPTIR_BAND;
       }
+      /* x86 variable shift masks the count to 6 bits, diverging from
+         luaV_shiftl for counts outside [0,63] (Lua yields 0). Guard the count
+         in range so the common case is correct; unusual counts side-exit. */
+      if (op == OP_SHL || op == OP_SHR)
+        sptir_guard(ir, SPTIR_GUARD_ULT, cref, 64, rc->pc);
       int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
       ir->reg_map[a] = ref;
       ir->reg_type[a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++; /* skip MMBIN */
+      rec_skip_mmbin(rc);
       break;
     }
     case OP_BANDK: case OP_BORK: case OP_BXORK: {
@@ -610,29 +702,36 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_map[a] = ref;
       ir->reg_type[a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++; /* skip MMBINK */
+      rec_skip_mmbin(rc);
       break;
     }
     case OP_SHLI: {
+      /* R[A] = luaV_shiftl(sC, R[B]) = constant sC shifted left by R[B].
+         The shift AMOUNT is the dynamic register R[B]; the value is the
+         immediate sC. We specialize the common case (0 <= R[B] < 64) and
+         guard it so out-of-range counts side-exit to the interpreter. */
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
       int bref = rec_load_reg(rc, b);
+      /* Guard amount in [0, 63] (unsigned < 64). */
+      sptir_guard(ir, SPTIR_GUARD_ULT, bref, 64, rc->pc);
       int cref = sptir_kint(ir, c);
       int ref = sptir_emit(ir, SPTIR_SHL, SPTT_INT, cref, bref, 0);
       ir->reg_map[a] = ref;
       ir->reg_type[a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++;
+      rec_skip_mmbin(rc);
       break;
     }
     case OP_SHRI: {
+      /* R[A] = luaV_shiftl(R[B], -sC): R[B] shifted by the compile-time
+         amount (-sC). Direction depends on the sign of -sC. */
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
       int bref = rec_load_reg(rc, b);
-      int cref = sptir_kint(ir, c);
-      int ref = sptir_emit(ir, SPTIR_SHR, SPTT_INT, bref, cref, 0);
+      int ref = rec_shift_const(rc, bref, -(int64_t)c);
       ir->reg_map[a] = ref;
       ir->reg_type[a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++;
+      rec_skip_mmbin(rc);
       break;
     }
 
@@ -645,7 +744,7 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_map[a] = ref;
       ir->reg_type[a] = bt;
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++; /* skip MMBIN */
+      rec_skip_mmbin(rc); /* UNM has no MMBIN; no-op */
       break;
     }
     case OP_BNOT: {
@@ -655,7 +754,7 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_map[a] = ref;
       ir->reg_type[a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++;
+      rec_skip_mmbin(rc); /* BNOT has no MMBIN; no-op */
       break;
     }
     case OP_NOT: {
@@ -674,7 +773,7 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_map[a] = ref;
       ir->reg_type[a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++;
+      rec_skip_mmbin(rc); /* LEN has no MMBIN; no-op */
       break;
     }
 
@@ -684,7 +783,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      rec_compare(rc, k ? SPTIR_EQ : SPTIR_EQ, aref, bref, at, bt);
+      rec_compare(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt);
       if (rc->aborted) return 0;
       rc->pc++; /* skip JMP */
       break;
@@ -694,7 +793,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      rec_compare(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref, at, bt);
+      rec_compare(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt);
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -704,7 +803,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      rec_compare(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref, at, bt);
+      rec_compare(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt);
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -713,7 +812,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_EQ : SPTIR_EQ, aref, bref, ir->reg_type[a], SPTT_INT);
+      rec_compare(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, ir->reg_type[a], SPTT_INT);
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -722,7 +821,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref, ir->reg_type[a], SPTT_INT);
+      rec_compare(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, ir->reg_type[a], SPTT_INT);
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -731,7 +830,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref, ir->reg_type[a], SPTT_INT);
+      rec_compare(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, ir->reg_type[a], SPTT_INT);
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -740,7 +839,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, ir->reg_type[a], SPTT_INT);
+      rec_compare(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref, ir->reg_type[a], SPTT_INT);
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -749,7 +848,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, ir->reg_type[a], SPTT_INT);
+      rec_compare(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref, ir->reg_type[a], SPTT_INT);
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -758,7 +857,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_k(rc, b);
-      rec_compare(rc, k ? SPTIR_EQ : SPTIR_EQ, aref, bref, ir->reg_type[a], sptir_type(ir, bref));
+      rec_compare(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, ir->reg_type[a], sptir_type(ir, bref));
       if (rc->aborted) return 0;
       rc->pc++;
       break;
@@ -792,9 +891,14 @@ static int rec_inst(SPTRecCtx *rc) {
         sptir_loop(ir);
         return 0;
       }
-      /* Forward jump: just continue (the condition was handled by
-         the preceding comparison/test instruction). */
-      break;
+      /* Forward jump: follow it. The straight-line trace must track the actual
+         control flow taken at record time. A forward JMP is unconditional (any
+         condition was already turned into a guard by the preceding test), so we
+         jump to its target rather than falling through -- otherwise we'd record
+         BOTH arms of an if/else. Target = pc + 1 + sJ; returning 1 skips the
+         default pc++ at the end of rec_inst. */
+      rc->pc += sj + 1;
+      return 1;
     }
 
     /* ---- Numeric for loop ---- */
@@ -812,6 +916,20 @@ static int rec_inst(SPTRecCtx *rc) {
          R[A+2] = idx (incremented by step each iteration)
          if count > 0: count--; idx += step; jump back to loop body */
       int a = GETARG_A(i);
+
+      /* Nested-loop guard: this back-edge only closes the trace if it jumps
+         to OUR loop header. The VM computes the target as pc - Bx with pc
+         already advanced past the FORLOOP, i.e. (rc->pc + 1) - Bx here. A
+         FORLOOP that targets a different header belongs to an inner loop we
+         recorded through; a single linear trace can't represent that, so we
+         abort and let the interpreter drive the outer loop. The inner loop
+         keeps its own (already compiled) trace, so the hot path is preserved. */
+      const Instruction *target = rc->pc + 1 - GETARG_Bx(i);
+      if (target != rc->start_pc) {
+        rc->aborted = 1;
+        return 0;
+      }
+
       int count_ref = rec_load_reg(rc, a);       /* R[A] = count */
       int step_ref = rec_load_reg(rc, a + 1);    /* R[A+1] = step */
       int idx_ref = rec_load_reg(rc, a + 2);     /* R[A+2] = idx */
@@ -936,6 +1054,14 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
 
   if (rc.aborted) {
     js->stats.traces_aborted++;
+    if (js->debug) {
+      OpCode bad = GET_OPCODE(*rc.pc);
+      fprintf(stderr,
+              "[JIT] aborted trace: proto=%p start_pc_offset=%d at op=%d "
+              "(pc_offset=%d) after %d insts\n",
+              (void *)p, (int)(start_pc - p->code), (int)bad,
+              (int)(rc.pc - p->code), rc.inst_count);
+    }
     sptir_free(&t->ir);
     free(t);
     return NULL;
@@ -945,8 +1071,12 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   for (int i = 0; i < t->ir.nsnaps && i < SPT_JIT_MAX_SNAPSHOTS; i++)
     t->exit_pcs[i] = t->ir.exit_pcs[i];
 
+  if (js->debug >= 2) sptir_dump(&t->ir, "pre-opt");
+
   /* Optimize the IR. */
   sptir_optimize(&t->ir);
+
+  if (js->debug >= 2) sptir_dump(&t->ir, "post-opt");
 
   /* Generate native code. */
   sptjit_codegen_compile(t, js);
@@ -962,6 +1092,13 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   t->pc_offset = (int)(start_pc - p->code);
   js->stats.traces_recorded++;
   js->stats.traces_compiled++;
+
+  if (js->debug) {
+    fprintf(stderr,
+            "[JIT] compiled trace: proto=%p pc_offset=%d  ir=%d insts, "
+            "code=%zu bytes, %d exits\n",
+            (void *)p, t->pc_offset, t->ir.ninst, t->code_size, t->nexits);
+  }
 
   return t;
 }
@@ -1018,7 +1155,7 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
   e->pc_offset = pc_offset;
 
   /* Hot enough? Record a trace. */
-  if (e->counter >= SPT_JIT_HOT) {
+  if (e->counter >= js->hot_threshold) {
     e->counter = 0;
     SPTTrace *t = record_trace(js, L, ci, pc);
     if (t) {

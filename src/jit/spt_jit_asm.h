@@ -45,6 +45,32 @@ typedef enum {
   SPT_R15 = 15,
 } SPTReg;
 
+/* =====================================================================
+** Platform ABI (integer argument registers + shadow space)
+**
+** Windows x64:  args in RCX, RDX, R8, R9; 32-byte shadow space required.
+** System V x64: args in RDI, RSI, RDX, RCX; no shadow space (128B red zone).
+**
+** The JIT trace entry has signature void(lua_State *L, CallInfo *ci), so
+** only ARG0/ARG1 matter for the prologue; ARG2/ARG3 are used when the
+** trace emits a C call (luaD_call etc.).
+** ===================================================================== */
+#if defined(_WIN32)
+#  define SPT_ABI_ARG0   SPT_RCX
+#  define SPT_ABI_ARG1   SPT_RDX
+#  define SPT_ABI_ARG2   SPT_R8
+#  define SPT_ABI_ARG3   SPT_R9
+#  define SPT_ABI_SHADOW 32
+#  define SPT_ABI_WIN64  1
+#else
+#  define SPT_ABI_ARG0   SPT_RDI
+#  define SPT_ABI_ARG1   SPT_RSI
+#  define SPT_ABI_ARG2   SPT_RDX
+#  define SPT_ABI_ARG3   SPT_RCX
+#  define SPT_ABI_SHADOW 0
+#  define SPT_ABI_WIN64  0
+#endif
+
 /* XMM registers (encoded as 0-15) */
 typedef enum {
   SPT_XMM0 = 0,

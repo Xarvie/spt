@@ -1,0 +1,37 @@
+// 浮点循环
+float fsum = 0.0;
+for (int i = 0, 100) {
+    fsum = fsum + i / 2.0;
+}
+print("JIT float-loop: fsum=", fsum);
+
+// while 循环
+int wsum = 0;
+int j = 0;
+while (j < 100) {
+    wsum += j;
+    j += 1;
+}
+assert(wsum == 4950, "while sum should be 4950");
+print("JIT while-loop: PASS, wsum=", wsum);
+
+// 嵌套循环
+int nested = 0;
+for (int a = 0, 10) {
+    for (int b = 0, 10) {
+        nested += 1;
+    }
+}
+assert(nested == 121, "nested count should be 121 (11*11)");
+print("JIT nested-loop: PASS, nested=", nested);
+
+// 分支循环
+int branch = 0;
+for (int i = 0, 100) {
+    if (i % 2 == 0) {
+        branch += i;
+    } else {
+        branch -= 1;
+    }
+}
+print("JIT branch-loop: branch=", branch);

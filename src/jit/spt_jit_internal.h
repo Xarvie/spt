@@ -58,6 +58,9 @@ struct SPTJitState {
   int mode;                /* SPT_JIT_MODE_* */
   SPTJitStats stats;
 
+  uint16_t hot_threshold;  /* trips before recording (configurable) */
+  int debug;               /* emit diagnostics to stderr */
+
   /* Hot loop detection: hash table keyed by (proto, pc_offset) */
   SPTHotEntry *hot_table;
   int hot_size;            /* number of slots (power of 2) */

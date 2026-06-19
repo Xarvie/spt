@@ -267,3 +267,83 @@ src/jit/
 4. **Trace stitching** — 不规则控制流
 5. **高级优化**（LICM/逃逸分析/强度削减）
 6. **硬化与性能验证**（200+ 测试 + 差分测试 + ASan）
+
+---
+
+## 九、本轮工作：正确性修复 + 线性扫描寄存器分配器
+
+### 9.1 修复的八个 miscompilation bug（全部经差分测试验证）
+
+1. **UNM/BNOT/LEN 误吞下一条指令**：这三个一元运算后面**没有** MMBIN 回退指令
+   （回退在 lvm.c 中内联），但记录器盲目 `pc++` 跳过下一条，把真正的指令吞掉了。
+   加 `rec_skip_mmbin()`：仅当 `pc[1]` 确实是 MMBIN/MMBINI/MMBINK 时才前进。
+2. **移位语义**：Lua 把 `x<<k` 编码成 `OP_SHRI by -k`，`luaV_shiftl` 是逻辑移位，
+   `|移位量|>=64 → 0`。加 `rec_shift_const()` 正确处理常量移位；变量移位量用
+   `GUARD_ULT` 保证落在 [0,63]（x86 会把移位量按 6 位取模，与 Lua 不一致）。
+3. **比较 guard 极性反了**：记录器静态地走"跳过 JMP"（cond≠k）那条路，所以 guard
+   应当是在该路成立的关系。九个比较 opcode 全部修正。新增 `SPTIR_NE`。
+4. **常量折叠把 guard 折没了**：折叠 guard 会丢掉它的 side-exit 但快照还在 → 错位。
+   在 try_const_fold 顶部加 `if (flags & GUARD) return 0;`。
+5. **exit stub 把未触及的槽位写成 nil**：`reg_map[slot]==-1` 表示"trace 没碰过这个槽，
+   解释器栈上的值仍然有效"，**不是** "写 nil"（真正的 nil 用 SPTIR_NIL ref）。
+   改成 `continue`（保持栈上原值）。这个 bug 会破坏循环累加器。
+6. **嵌套循环陷阱**：记录外层循环时撞到内层循环的回边，把 trace 在内层回边截断，
+   生成退化 trace。FORLOOP 现在计算 `target = pc+1-Bx`，只有 `target==start_pc`
+   才闭合循环，否则 `aborted=1`（保留内层 trace，外层留给解释器）。
+7. **前向 JMP 把 if/else 两条臂都记录了**：前向 JMP 是无条件跳转（条件已被前面的
+   比较变成 guard），必须**跟随**跳转而非 fall-through。改成 `pc += sj+1; return 1;`。
+   只记录实际执行的那条臂，另一条由比较 guard 侧出。
+8. **`/`（浮点除法）被记成整数除法**：SPT/Lua 里 `/`（OP_DIV）和 `^`（OP_POW）**永远**
+   产生浮点，即使两个操作数都是整数（只有 `//` 和 `%` 在双整型时保持整数）。`rec_arith`
+   原来对双整型一律走整数运算，于是 `i / 2` 被记成 `(int)(i/2)` 再 TOFLT，丢掉小数部分
+   （3/2 算成 1.0 而非 1.5）。修复：`rec_arith` 顶部特判 DIV/POW，强制两操作数提升为
+   float、结果类型 FLT，对齐 `luaV_div`。这个 bug 是 jit_bench.sh 的新用例 `s = s + i/2`
+   才暴露的——原有 kernel 没覆盖"整数操作数的浮点除法"，提醒**基准用例要覆盖类型边界**。
+
+### 9.2 寄存器分配器（headline 性能工作）
+
+**核心思想**：把循环携带的标量变量常驻寄存器，整个循环期间不落栈。
+- **驻留判定**：凡是有整型 live-in SLOAD 的槽 → 分配一个 GPR；有浮点 SLOAD 的槽
+  → 分配一个 XMM。`ra_analyze()` 收集，超出寄存器池就整体回退到"全溢出"老路径
+  （已验证正确），保证安全。
+- **GPR 池**：`{R15,RSI,RDI,R8,R9,R10,R11}`（prologue 已保存或 leaf 不需保存）；
+  RAX/RCX/RDX 保留作 load/移位/除法/取模的 scratch。**XMM 池**：`{XMM4-7}`
+  （SysV 下全部 caller-saved，leaf trace 可自由用；XMM0-3 作 scratch）。
+- **前导块 (preheader)**：把 live-in 的 SLOAD + 类型 guard 提升到循环标签**之前**，
+  只在进入时执行一次。循环体内这些指令被跳过（`ref_hoist[]`）。类型在循环内不会变
+  （只跑整型/浮点运算），所以 guard 一次足矣。
+- **回边不再写栈**：值在寄存器里跨回边流动，LOOP 仅 `jmp loop_label`。
+- **侧出口 flush（关键正确性点）**：因为不写栈，驻留槽的栈拷贝是陈旧的。每个 exit
+  stub **先**把所有驻留寄存器刷回栈（GPR→INT tag，XMM→FLT tag），**再**应用快照
+  （覆盖多步更新的精确中间值）。寄存器在 guard 点持有的正是该槽此刻的值。
+- **guard↔快照配对**：原来靠发射顺序 `nexits++` 配对，提升 guard 到 preheader 会打乱
+  顺序。改为在 guard 指令里存 `snap_idx`（复用 `pad` 字段），exit stub 按快照索引生成。
+- **二地址合并 (two-address)**：`s = s + i` 这类 `x = x OP y`（结果寄存器==第一操作数
+  寄存器）直接 `add Rs, Ri` 一条指令搞定，而非 load/load/op/store 四条。可交换运算
+  还能吃 `x = y + x`。浮点同理 `addsd Xs, Xi`。
+- **FORLOOP guard 特化**：`GUARD_LT(0, count)` → `test count,count; jle exit`（2 条），
+  省掉常量物化和多余 cmp。
+- **死存储消除**：整型/指针常量和 nil/true/false 由 gen_load 按需重新物化，所以它们
+  的每次迭代 spill 存储是死的，仅当绑定到寄存器时才存。
+
+### 9.3 结果
+
+- **正确性**：16 个 JIT kernel 全过；228 个测试文件 JIT 开/关输出逐字节一致
+  （唯一"差异"是 b4_yield_return.spt 打印的堆地址，关 JIT 也每次不同，非 bug）；
+  230 个 ctest 全过。
+- **性能**（200M 迭代级循环，解释器 vs JIT，min-of-N）：
+  - 整型 for 循环：~14×（循环体仅 6 条指令：`add / test / jle / sub / add / jmp`）
+  - 整型 while 循环：~15×
+  - 浮点循环：~7.6×
+  - 分支循环 (if/else)：~1.2×（**已知弱点**，见下）
+
+### 9.4 已知限制 / 后续工作
+
+- **分支循环慢**：trace 只记录一条臂，另一条每次迭代侧出到解释器，进出开销主导。
+  解决需 **if-conversion**（把简单 diamond 变成 cmov 无分支）或 **side trace**
+  （为另一条臂生成挂在 exit 上的侧 trace）。两者都是较大的新机制。
+- RA 在遇到 POW（libm 调用）、表操作、upvalue、CALL、CONCAT、浮点比较时整体回退
+  （这些可能调用 C 破坏 caller-saved 寄存器，或 codegen 路径仍是整型/溢出版）。
+- XMM 池 4 个、GPR 池 7 个；超出则回退。多步更新的中间值仍溢出（仅 SLOAD 和最终
+  值绑定寄存器）。
+- Win64 移植：浮点用了 XMM4-7，Win64 下 XMM6/7 是 callee-saved，prologue 需补存。
