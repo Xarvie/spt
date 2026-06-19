@@ -1,9 +1,14 @@
-/* signature.c — textDocument/signatureHelp */
+/* signature.c — textDocument/signatureHelp
+**
+** Phase 3: 跨文件签名帮助。若本地未找到函数，检查是否为具名导入，
+** 解析目标模块并在其导出中查找函数签名。
+*/
 #include "lsp_features.h"
 #include "semantic.h"
 #include "spt_ast.h"
 #include "spt_lsp_bridge.h"
 #include "spt_token.h"
+#include "workspace.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -26,7 +31,7 @@ static void sappend(char *b, size_t cap, size_t *p, const char *fmt, ...) {
   if (*p >= cap) *p = cap - 1;
 }
 
-cJSON *feature_signature_help(const Document *d, LspPos pos) {
+cJSON *feature_signature_help(const Document *d, LspPos pos, Workspace *ws) {
   SptLspUnit *u = spt_lsp_parse(d->text, d->text_len);
   size_t off = doc_offset_at(d, pos);
   const char *txt = d->text;
@@ -64,6 +69,22 @@ cJSON *feature_signature_help(const Document *d, LspPos pos) {
       if (nl >= sizeof name) nl = sizeof name - 1;
       memcpy(name, name_tok->lexeme, nl); name[nl] = '\0';
       const AstNode *fn = sem_find_function(u, name);
+
+      /* Phase 3: 本地未找到 → 尝试跨文件具名导入。 */
+      if (!fn && ws) {
+        char mod_path[256];
+        if (sem_import_binding_path(u, name, mod_path, sizeof mod_path)) {
+          char tgt_uri[4096];
+          if (workspace_resolve_module(ws, d->uri ? d->uri : "", mod_path,
+                                       tgt_uri, sizeof tgt_uri)) {
+            char tgt_path[4096];
+            spt_uri_to_path(tgt_uri, tgt_path, sizeof tgt_path);
+            WsUnit wu = workspace_get_unit(ws, tgt_path);
+            if (wu.unit) fn = sem_find_function(wu.unit, name);
+          }
+        }
+      }
+
       if (fn) {
         char label[1024]; size_t lp = 0;
         char ret[256]; sem_type_string(fn->u.func_decl.return_type, ret, sizeof ret);

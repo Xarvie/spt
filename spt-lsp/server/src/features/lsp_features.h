@@ -30,14 +30,17 @@ cJSON *feature_references(const Document *d, LspPos pos, const char *uri, int in
    ws 可空；非空时支持命名空间导入 m. 的成员补全来自目标文件导出。 */
 cJSON *feature_completion(const Document *d, LspPos pos, Workspace *ws);
 
-/* textDocument/rename -> WorkspaceEdit | null */
-cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char *new_name);
+/* textDocument/rename -> WorkspaceEdit | null
+   ws 可空；非空时支持跨文件重命名导出符号。 */
+cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char *new_name,
+                      Workspace *ws);
 
 /* textDocument/prepareRename -> {range, placeholder} | null */
 cJSON *feature_prepare_rename(const Document *d, LspPos pos);
 
-/* textDocument/signatureHelp -> SignatureHelp | null */
-cJSON *feature_signature_help(const Document *d, LspPos pos);
+/* textDocument/signatureHelp -> SignatureHelp | null
+   ws 可空；非空时支持跨文件具名导入函数的签名帮助。 */
+cJSON *feature_signature_help(const Document *d, LspPos pos, Workspace *ws);
 
 /* textDocument/semanticTokens/full -> {data:int[]} */
 cJSON *feature_semantic_tokens_full(const Document *d);
@@ -57,5 +60,9 @@ cJSON *feature_folding_range(const Document *d);
 
 /* textDocument/selectionRange -> SelectionRange | null */
 cJSON *feature_selection_range(const Document *d, LspPos pos);
+
+/* textDocument/inlayHints -> InlayHint[]
+   ws 可空；非空时支持跨文件函数参数名提示。 */
+cJSON *feature_inlay_hints(const Document *d, LspRange range, Workspace *ws);
 
 #endif /* SPT_LSP_FEATURES_H */

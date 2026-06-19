@@ -180,13 +180,22 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 
 ### 阶段 3 — 深度语义特性（按真实负载驱动，非必做）
 
-- **跨文件签名帮助**：`sem_find_function` 扩展查目标文件导出函数（阶段 1 缓存复用）。
-- **工作区重命名**：`rename` 基于 `workspace/symbol` + 跨文件引用搜索，产出多文件 TextEdit[]。
-  需 `prepareRename` 校验 + 跨文件引用扫描（复用阶段 1 的目标文件解析）。
-- **inlayHint**：参数名提示（调用处 `f(1, 2)` → `f(a=1, b=2)`）、推断类型提示
-  （`auto x = ...` → `x: int`）。复用阶段 2 的类型推导。
-- **结构性诊断**（克制）：未定义名警告（`x` 无任何声明）、arity 明显不符
+- **跨文件签名帮助** ✅：`sem_find_function` 扩展查目标文件导出函数（阶段 1 缓存复用）。
+  `signature.c` 接受 `Workspace*`，本地未找到时经 `sem_import_binding_path` →
+  `workspace_resolve_module` → `workspace_get_unit` 跨文件解析。
+- **工作区重命名** ✅：`rename` 基于 `workspace/symbol` + 跨文件引用搜索，产出多文件 TextEdit[]。
+  支持两种场景：(A) 重命名本地导出符号 → 扫描导入者；(B) 重命名导入符号 →
+  解析目标模块在定义文件改名 + 扫描其他导入者。复用 `prepareRename` 校验。
+- **inlayHint** ✅：参数名提示（调用处 `f(1, 2)` → `f(a=1, b=2)`）。
+  `inlay_hints.c` 递归遍历 AST 找 `NODE_FUNCTION_CALL`，解析函数签名后为每个参数
+  生成 `paramName=` 标签（kind=2 Parameter）。复用阶段 2 的类型推导。
+- **结构性诊断** ✅（克制）：未定义名警告（`x` 无任何声明）、arity 明显不符
   （调用参数数 vs 声明形参数，仅当差值>1 且无 varargs 时）。**不报类型不匹配**。
+  `diagnostics.c` 在无解析错误时追加 `check_undefined_names`（跳过成员访问/import/内建）
+  与 `arity_walk_block`（递归 AST 找 `NODE_FUNCTION_CALL` 检查参数数）。
+
+**go/no-go** ✅：新增 test_phase3（跨文件签名/工作区重命名/inlayHint/结构性诊断），
+全量 ctest 绿（11/11），无回归。
 
 ### 阶段 4 — 体验打磨（低优先）
 
@@ -211,7 +220,7 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
    新功能涉及位置必须走 `doc_offset_at` / `doc_pos_at`，不直接操作行列。
 6. **UTF-16 边界**：`character` 是行内 UTF-16 码元计数；多字节/星补字符的转换已有覆盖，
    新增位置相关代码不得绕过 `documents.c` 的转换。
-7. **每次改动一个独立单元**：改完立刻过完整门槛（10 ctest + ASan + 手测）再继续。
+7. **每次改动一个独立单元**：改完立刻过完整门槛（11 ctest + ASan + 手测）再继续。
 8. **能力声明诚实**：`make_initialize_result` 只声明已实际接线的能力（见 server.c 注释）。
    新功能先接线再开 capability，不预先声明未实现的。
 9. **Windows/POSIX 兼容**：跨文件路径解析用平台无关 API；`test_workspace` 已跨平台

@@ -81,6 +81,10 @@ static cJSON *make_initialize_result(void) {
   cJSON_AddBoolToObject(caps, "documentHighlightProvider", 1);
   cJSON_AddBoolToObject(caps, "foldingRangeProvider", 1);
   cJSON_AddBoolToObject(caps, "selectionRangeProvider", 1);
+  /* Phase 3: inlayHint */
+  cJSON *ih = cJSON_CreateObject();
+  cJSON_AddItemToObject(ih, "resolveProvider", cJSON_CreateBool(0));
+  cJSON_AddItemToObject(caps, "inlayHintProvider", ih);
   /* renameProvider 用对象形式以声明 prepareProvider（prepareRename） */
   cJSON *renp = cJSON_CreateObject();
   cJSON_AddBoolToObject(renp, "prepareProvider", 1);
@@ -204,14 +208,14 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
   }
   if (strcmp(method, "textDocument/signatureHelp") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_signature_help(d, get_pos(params)) : NULL);
+    return rpc_make_response(id, d ? feature_signature_help(d, get_pos(params), &s->ws) : NULL);
   }
   if (strcmp(method, "textDocument/rename") == 0) {
     Document *d = get_doc(s, params);
     cJSON *nn = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "newName");
     const char *new_name = (nn && cJSON_IsString(nn)) ? nn->valuestring : NULL;
     return rpc_make_response(id, (d && new_name) ? feature_rename(d, get_pos(params),
-                                                                  get_uri(params), new_name)
+                                                                  get_uri(params), new_name, &s->ws)
                                                  : NULL);
   }
   if (strcmp(method, "textDocument/prepareRename") == 0) {
@@ -239,6 +243,12 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
     Document *d = get_doc(s, params);
     cJSON *opts = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "options");
     return rpc_make_response(id, d ? feature_format(d, opts) : NULL);
+  }
+  if (strcmp(method, "textDocument/inlayHint") == 0) {
+    Document *d = get_doc(s, params);
+    cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    return rpc_make_response(id, d ? feature_inlay_hints(d, r, &s->ws) : cJSON_CreateArray());
   }
 
   if (strcmp(method, "workspace/symbol") == 0) {

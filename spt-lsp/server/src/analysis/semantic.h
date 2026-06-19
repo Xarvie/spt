@@ -110,4 +110,8 @@ void sem_all_exports(const SptLspUnit *u, SemExportCb cb, void *ctx);
    用于成员补全：m. 后列出目标模块的导出符号。 */
 int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *module_path, size_t cap);
 
+/* Phase 3: 若 name 是具名导入绑定（import { name } from "mod"），返回 1 并写 module_path。
+   用于跨文件签名帮助等按名查找场景。 */
+int sem_import_binding_path(const SptLspUnit *u, const char *name, char *module_path, size_t cap);
+
 #endif /* SPT_LSP_SEMANTIC_H */

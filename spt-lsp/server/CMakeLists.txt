@@ -77,6 +77,7 @@ add_library(spt_lsp_core STATIC
   src/features/document_highlight.c
   src/features/folding_range.c
   src/features/selection_range.c
+  src/features/inlay_hints.c
 )
 target_include_directories(spt_lsp_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/rpc
@@ -101,7 +102,7 @@ target_link_libraries(sptscript-lsp PRIVATE spt_lsp_core)
 option(SPT_LSP_BUILD_TESTS "Build spt-lsp server tests" ON)
 if(SPT_LSP_BUILD_TESTS)
   enable_testing()
-  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete test_workspace test_cross_import test_type_infer)
+  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete test_workspace test_cross_import test_type_infer test_phase3)
   foreach(t ${SPT_LSP_TESTS})
     add_executable(${t} test/${t}.c)
     target_link_libraries(${t} PRIVATE spt_lsp_core)

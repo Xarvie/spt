@@ -1039,6 +1039,20 @@ int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *modul
   return 0;
 }
 
+/* Phase 3: 按名查找具名导入绑定（import { name } from "mod"）的模块路径。
+   用于跨文件签名帮助等按名查找场景。 */
+int sem_import_binding_path(const SptLspUnit *u, const char *name,
+                            char *module_path, size_t cap) {
+  if (!u || !name || !module_path || cap == 0) return 0;
+  SemImportTarget t;
+  memset(&t, 0, sizeof t);
+  if (find_import_binding(u->root, name, 0, &t)) {
+    snprintf(module_path, cap, "%s", t.module_path);
+    return 1;
+  }
+  return 0;
+}
+
 /* 在文件级 import 语句中查找与给定名字匹配的导入绑定。
    - is_recv=1：name 是成员访问的接收者（m.X 的 m），只匹配 NODE_IMPORT_NAMESPACE.alias。
    - is_recv=0：name 是普通标识符，匹配具名导入的绑定名或命名空间别名。
