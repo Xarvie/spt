@@ -32,6 +32,7 @@ void lsp_server_init(LspServer *s) {
   s->exit_code = 0;
   doc_store_init(&s->docs);
   workspace_init(&s->ws);
+  workspace_set_overlay(&s->ws, &s->docs);
   s->emit = NULL;
   s->emit_ctx = NULL;
 }
@@ -76,8 +77,14 @@ static cJSON *make_initialize_result(void) {
   cJSON_AddBoolToObject(caps, "definitionProvider", 1);
   cJSON_AddBoolToObject(caps, "referencesProvider", 1);
   cJSON_AddBoolToObject(caps, "workspaceSymbolProvider", 1);
-  cJSON_AddBoolToObject(caps, "renameProvider", 1);
   cJSON_AddBoolToObject(caps, "documentFormattingProvider", 1);
+  cJSON_AddBoolToObject(caps, "documentHighlightProvider", 1);
+  cJSON_AddBoolToObject(caps, "foldingRangeProvider", 1);
+  cJSON_AddBoolToObject(caps, "selectionRangeProvider", 1);
+  /* renameProvider 用对象形式以声明 prepareProvider（prepareRename） */
+  cJSON *renp = cJSON_CreateObject();
+  cJSON_AddBoolToObject(renp, "prepareProvider", 1);
+  cJSON_AddItemToObject(caps, "renameProvider", renp);
   /* completion */
   cJSON *comp = cJSON_CreateObject();
   cJSON *trig = cJSON_CreateArray();
@@ -176,11 +183,11 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
   }
   if (strcmp(method, "textDocument/hover") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_hover(d, get_pos(params)) : NULL);
+    return rpc_make_response(id, d ? feature_hover(d, get_pos(params), &s->ws) : NULL);
   }
   if (strcmp(method, "textDocument/definition") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_definition(d, get_pos(params), get_uri(params)) : NULL);
+    return rpc_make_response(id, d ? feature_definition(d, get_pos(params), get_uri(params), &s->ws) : NULL);
   }
   if (strcmp(method, "textDocument/references") == 0) {
     Document *d = get_doc(s, params);
@@ -193,7 +200,7 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
   }
   if (strcmp(method, "textDocument/completion") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_completion(d, get_pos(params)) : cJSON_CreateArray());
+    return rpc_make_response(id, d ? feature_completion(d, get_pos(params), &s->ws) : cJSON_CreateArray());
   }
   if (strcmp(method, "textDocument/signatureHelp") == 0) {
     Document *d = get_doc(s, params);
@@ -206,6 +213,23 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
     return rpc_make_response(id, (d && new_name) ? feature_rename(d, get_pos(params),
                                                                   get_uri(params), new_name)
                                                  : NULL);
+  }
+  if (strcmp(method, "textDocument/prepareRename") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_prepare_rename(d, get_pos(params)) : NULL);
+  }
+  if (strcmp(method, "textDocument/documentHighlight") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_document_highlight(d, get_pos(params))
+                                   : cJSON_CreateArray());
+  }
+  if (strcmp(method, "textDocument/foldingRange") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_folding_range(d) : cJSON_CreateArray());
+  }
+  if (strcmp(method, "textDocument/selectionRange") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_selection_range(d, get_pos(params)) : NULL);
   }
   if (strcmp(method, "textDocument/semanticTokens/full") == 0) {
     Document *d = get_doc(s, params);
@@ -246,6 +270,7 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
     if (uri && cJSON_IsString(uri) && text && cJSON_IsString(text)) {
       doc_store_open(&s->docs, uri->valuestring, text->valuestring,
                      strlen(text->valuestring), ver && cJSON_IsNumber(ver) ? ver->valueint : 0);
+      workspace_mark_dirty(&s->ws);
       publish_diagnostics(s, uri->valuestring);
     }
     return;
@@ -270,6 +295,7 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
       doc_store_change(&s->docs, uri->valuestring, last_text->valuestring,
                        strlen(last_text->valuestring),
                        ver && cJSON_IsNumber(ver) ? ver->valueint : 0);
+      workspace_mark_dirty(&s->ws);
       publish_diagnostics(s, uri->valuestring);
     }
     return;
@@ -279,6 +305,7 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
     cJSON *uri = td ? cJSON_GetObjectItemCaseSensitive(td, "uri") : NULL;
     if (uri && cJSON_IsString(uri)) {
       doc_store_close(&s->docs, uri->valuestring);
+      workspace_mark_dirty(&s->ws);
       /* 关闭时清空该文件的诊断（推送空数组）。 */
       cJSON *p = cJSON_CreateObject();
       cJSON_AddStringToObject(p, "uri", uri->valuestring);

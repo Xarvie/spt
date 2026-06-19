@@ -100,7 +100,7 @@ static const char *DOC =
     "}\n";                           /* 16 */
 
 int main(void) {
-  printf("=== TestFeatures: documentSymbol/hover/definition/references/completion/signature/rename/semanticTokens/format ===\n");
+  printf("=== TestFeatures: documentSymbol/hover/definition/references/completion/signature/rename/semanticTokens/format + documentHighlight/foldingRange/selectionRange/prepareRename ===\n");
   LspServer s;
   lsp_server_init(&s);
   lsp_server_set_emit(&s, sink_emit, NULL);
@@ -263,6 +263,60 @@ int main(void) {
     open_doc(&s, U4, "int x = 1;\n");
     res = call(&s, "textDocument/formatting", posp(U4, 0, 0), &resp);
     CHECK(res && cJSON_GetArraySize(res) == 0, "format clean doc -> 0 edits");
+    cJSON_Delete(resp);
+  }
+
+  /* ---- documentHighlight on add (call site) -> >=2 (decl+use) ---- */
+  printf("Testing: documentHighlight...\n");
+  res = call(&s, "textDocument/documentHighlight", posp(URI, 14, 11), &resp);
+  CHECK(res && cJSON_GetArraySize(res) >= 2, "documentHighlight >= 2 for add");
+  if (res && cJSON_GetArraySize(res) >= 1) {
+    cJSON *h0 = cJSON_GetArrayItem(res, 0);
+    cJSON *kind = cJSON_GetObjectItemCaseSensitive(h0, "kind");
+    CHECK(kind && kind->valueint == 1, "documentHighlight kind == Text(1)");
+  }
+  cJSON_Delete(resp);
+
+  /* ---- foldingRange -> function bodies + class body ---- */
+  printf("Testing: foldingRange...\n");
+  res = call(&s, "textDocument/foldingRange", posp(URI, 0, 0), &resp);
+  CHECK(res && cJSON_GetArraySize(res) >= 3, "foldingRange >= 3 (add/getX/main bodies)");
+  cJSON_Delete(resp);
+
+  /* ---- selectionRange on add -> range covering identifier ---- */
+  printf("Testing: selectionRange...\n");
+  res = call(&s, "textDocument/selectionRange", posp(URI, 14, 11), &resp);
+  CHECK(res && !cJSON_IsNull(res), "selectionRange returns object");
+  if (res) {
+    cJSON *rng = cJSON_GetObjectItemCaseSensitive(res, "range");
+    cJSON *st = rng ? cJSON_GetObjectItemCaseSensitive(rng, "start") : NULL;
+    cJSON *ln = st ? cJSON_GetObjectItemCaseSensitive(st, "line") : NULL;
+    CHECK(ln && ln->valueint == 14, "selectionRange start line == 14");
+  }
+  cJSON_Delete(resp);
+
+  /* ---- prepareRename on add -> {range, placeholder:"add"} ---- */
+  printf("Testing: prepareRename...\n");
+  res = call(&s, "textDocument/prepareRename", posp(URI, 14, 11), &resp);
+  CHECK(res && !cJSON_IsNull(res), "prepareRename returns object for add");
+  if (res) {
+    cJSON *ph = cJSON_GetObjectItemCaseSensitive(res, "placeholder");
+    CHECK(ph && strcmp(ph->valuestring, "add") == 0, "prepareRename placeholder == add");
+  }
+  cJSON_Delete(resp);
+
+  /* ---- prepareRename on declare ambient symbol -> null (rejected) ---- */
+  {
+    const char *U5 = "file:///decl.spt";
+    const char *T5 = "declare int ExtFn(int x);\nint caller() { return ExtFn(1); }\n";
+    open_doc(&s, U5, T5);
+    /* ExtFn 定义在 declare 行（line0），use 在 line1 char18 */
+    res = call(&s, "textDocument/prepareRename", posp(U5, 1, 18), &resp);
+    CHECK(res == NULL || cJSON_IsNull(res), "prepareRename rejects declare ambient symbol");
+    cJSON_Delete(resp);
+    /* 普通函数 caller 可重命名 */
+    res = call(&s, "textDocument/prepareRename", posp(U5, 1, 4), &resp);
+    CHECK(res && !cJSON_IsNull(res), "prepareRename allows normal function caller");
     cJSON_Delete(resp);
   }
 

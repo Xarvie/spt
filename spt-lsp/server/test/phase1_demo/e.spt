@@ -1,0 +1,7 @@
+// e.spt — declare-from 联动：模拟 C 绑定模块 sdl（无 .spt 源码）
+declare from "sdl" {
+    int Init(int flags);
+    const int INIT_VIDEO;
+}
+import { Init, INIT_VIDEO } from "sdl";
+int start() { return Init(INIT_VIDEO); }

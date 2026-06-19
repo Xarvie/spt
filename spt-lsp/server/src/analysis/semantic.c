@@ -341,6 +341,17 @@ static const char *def_node_name(const AstNode *n) {
   }
 }
 
+/* 定义节点是否为 declare 外部符号（is_ambient）。 */
+static int node_is_ambient(const AstNode *n) {
+  if (!n) return 0;
+  switch (n->type) {
+  case NODE_VARIABLE_DECL: return n->u.var_decl.is_ambient;
+  case NODE_FUNCTION_DECL: return n->u.func_decl.is_ambient;
+  case NODE_CLASS_DECL:    return n->u.class_decl.is_ambient;
+  default: return 0;
+  }
+}
+
 static const char *def_node_doc(const AstNode *n) {
   switch (n->type) {
   case NODE_FUNCTION_DECL: return n->u.func_decl.doc;
@@ -390,6 +401,7 @@ static void fill_def(SemRef *r, const SptLspUnit *u, const Document *d, const As
     r->has_def = 0;
   }
   r->kind = kind;
+  r->is_ambient = node_is_ambient(defn);
   def_node_detail(defn, kind, r->detail, sizeof r->detail);
   const char *doc = def_node_doc(defn);
   if (doc) snprintf(r->doc, sizeof r->doc, "%s", doc);
@@ -768,4 +780,201 @@ const AstNode *sem_find_function(const SptLspUnit *u, const char *name) {
     }
   }
   return NULL;
+}
+
+/* ===========================================================================
+** 跨文件 import 解析（Phase 1）
+** ========================================================================= */
+
+/* 收集顶层导出符号（is_exported && is_module_root）。与 collect_file_defs 类似，
+   但筛选导出且不收集 import 节点（import 不是导出）。 */
+static void collect_exports(const AstNode *root, Defs *out) {
+  if (!root || root->type != NODE_BLOCK) return;
+  const AstList *st = &root->u.block.statements;
+  for (int i = 0; i < st->count; i++) {
+    AstNode *s = st->items[i];
+    switch (s->type) {
+    case NODE_FUNCTION_DECL:
+      if (s->u.func_decl.is_exported && s->u.func_decl.is_module_root)
+        defs_push(out, s->u.func_decl.name, LSP_SK_FUNCTION, s);
+      break;
+    case NODE_CLASS_DECL:
+      if (s->u.class_decl.is_exported && s->u.class_decl.is_module_root)
+        defs_push(out, s->u.class_decl.name, LSP_SK_CLASS, s);
+      break;
+    case NODE_VARIABLE_DECL:
+      if (s->u.var_decl.is_exported && s->u.var_decl.is_module_root)
+        defs_push(out, s->u.var_decl.name, s->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE, s);
+      break;
+    case NODE_MUTI_VARIABLE_DECL:
+      /* README §14.2：多变量 export 语法合法但不生效——不收集。 */
+      break;
+    default: break;
+    }
+  }
+}
+
+int sem_resolve_export(const SptLspUnit *u, const Document *d, const char *name, SemRef *out) {
+  if (!out) return 0;
+  if (!u || !u->root || !name) return 0;
+  Defs exps = {0};
+  collect_exports(u->root, &exps);
+  int found = 0;
+  for (int i = 0; i < exps.n; i++) {
+    if (exps.a[i].name && strcmp(exps.a[i].name, name) == 0) {
+      memset(out, 0, sizeof *out);
+      out->found = 1;
+      snprintf(out->name, sizeof out->name, "%s", name);
+      fill_def(out, u, d, exps.a[i].node, exps.a[i].kind);
+      found = 1;
+      break;
+    }
+  }
+  free(exps.a);
+  return found;
+}
+
+int sem_resolve_declare_member(const SptLspUnit *u, const Document *d,
+                               const char *module_path, const char *symbol_name, SemRef *out) {
+  if (!out || !u || !u->root || !module_path || !symbol_name) return 0;
+  if (!symbol_name[0]) return 0; /* 命名空间别名本身无对应 declare 成员 */
+  if (u->root->type != NODE_BLOCK) return 0;
+  const AstList *st = &u->root->u.block.statements;
+  for (int i = 0; i < st->count; i++) {
+    AstNode *s = st->items[i];
+    if (s->type != NODE_DECLARE_MODULE) continue;
+    const char *mp = s->u.declare_module.module_path;
+    if (!mp || strcmp(mp, module_path) != 0) continue;
+    const AstList *mm = &s->u.declare_module.members;
+    for (int k = 0; k < mm->count; k++) {
+      AstNode *decl = mm->items[k];
+      const char *nm = def_node_name(decl);
+      if (!nm || strcmp(nm, symbol_name) != 0) continue;
+      int kind = LSP_SK_FUNCTION;
+      if (decl->type == NODE_VARIABLE_DECL)
+        kind = decl->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE;
+      else if (decl->type == NODE_CLASS_DECL)
+        kind = LSP_SK_CLASS;
+      memset(out, 0, sizeof *out);
+      out->found = 1;
+      snprintf(out->name, sizeof out->name, "%s", symbol_name);
+      fill_def(out, u, d, decl, kind);
+      return 1;
+    }
+  }
+  return 0;
+}
+
+void sem_all_exports(const SptLspUnit *u, SemExportCb cb, void *ctx) {
+  if (!u || !u->root || !cb) return;
+  Defs exps = {0};
+  collect_exports(u->root, &exps);
+  for (int i = 0; i < exps.n; i++) {
+    if (!exps.a[i].name) continue;
+    char detail[512];
+    def_node_detail(exps.a[i].node, exps.a[i].kind, detail, sizeof detail);
+    cb(ctx, exps.a[i].name, exps.a[i].kind, detail);
+  }
+  free(exps.a);
+}
+
+static int find_import_binding(const AstNode *root, const char *name, int is_recv,
+                               SemImportTarget *out);
+
+int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *module_path, size_t cap) {
+  if (!u || !name || !module_path || cap == 0) return 0;
+  SemImportTarget t;
+  memset(&t, 0, sizeof t);
+  if (find_import_binding(u->root, name, 1, &t)) {
+    snprintf(module_path, cap, "%s", t.module_path);
+    return 1;
+  }
+  return 0;
+}
+
+/* 在文件级 import 语句中查找与给定名字匹配的导入绑定。
+   - is_recv=1：name 是成员访问的接收者（m.X 的 m），只匹配 NODE_IMPORT_NAMESPACE.alias。
+   - is_recv=0：name 是普通标识符，匹配具名导入的绑定名或命名空间别名。
+   找到则填 module_path/symbol_name/is_namespace_self。 */
+static int find_import_binding(const AstNode *root, const char *name, int is_recv,
+                               SemImportTarget *out) {
+  if (!root || root->type != NODE_BLOCK) return 0;
+  const AstList *st = &root->u.block.statements;
+  for (int i = 0; i < st->count; i++) {
+    AstNode *s = st->items[i];
+    if (s->type == NODE_IMPORT_NAMESPACE && s->u.import_ns.alias &&
+        strcmp(s->u.import_ns.alias, name) == 0) {
+      snprintf(out->module_path, sizeof out->module_path, "%s", s->u.import_ns.module_path);
+      out->symbol_name[0] = '\0';
+      out->is_namespace_self = is_recv ? 0 : 1;
+      return 1;
+    }
+    if (!is_recv && s->type == NODE_IMPORT_NAMED) {
+      const AstList *sp = &s->u.import_named.specifiers;
+      for (int k = 0; k < sp->count; k++) {
+        AstNode *spec = sp->items[k];
+        const char *bound = spec->u.import_spec.alias ? spec->u.import_spec.alias
+                                                      : spec->u.import_spec.imported_name;
+        if (bound && strcmp(bound, name) == 0) {
+          snprintf(out->module_path, sizeof out->module_path, "%s", s->u.import_named.module_path);
+          /* 目标符号名取 imported_name（原始名），而非别名。 */
+          snprintf(out->symbol_name, sizeof out->symbol_name, "%s",
+                   spec->u.import_spec.imported_name ? spec->u.import_spec.imported_name : "");
+          out->is_namespace_self = 0;
+          return 1;
+        }
+      }
+    }
+  }
+  return 0;
+}
+
+int sem_resolve_import_target(const SptLspUnit *u, const Document *d, size_t byte_off,
+                              SemImportTarget *out) {
+  if (!out) return 0;
+  memset(out, 0, sizeof *out);
+  if (!u || !u->root) return 0;
+
+  int ti = ident_token_at(u, d, byte_off);
+  if (ti < 0) return 0;
+  const SptToken *tok = &u->tokens[ti];
+  char name[256];
+  size_t nl = (size_t)tok->length;
+  if (nl >= sizeof name) nl = sizeof name - 1;
+  memcpy(name, tok->lexeme, nl);
+  name[nl] = '\0';
+
+  /* 成员访问？前一个 token 是 '.' / ':'。 */
+  int member = 0;
+  if (ti > 0) {
+    SptTokenKind pk = u->tokens[ti - 1].kind;
+    if (pk == TOK_DOT || pk == TOK_COLON) member = 1;
+  }
+
+  if (member) {
+    /* 接收者 = ti-2（点号前的标识符）。仅处理简单 m.X 形式。 */
+    if (ti >= 2 && u->tokens[ti - 2].kind == TOK_IDENTIFIER) {
+      const SptToken *rt = &u->tokens[ti - 2];
+      char recv[256];
+      size_t rl = (size_t)rt->length;
+      if (rl >= sizeof recv) rl = sizeof recv - 1;
+      memcpy(recv, rt->lexeme, rl);
+      recv[rl] = '\0';
+      if (find_import_binding(u->root, recv, 1, out)) {
+        /* symbol_name = 点击的成员名 X */
+        snprintf(out->symbol_name, sizeof out->symbol_name, "%s", name);
+        out->is_namespace_self = 0;
+        out->found = 1;
+        return 1;
+      }
+    }
+    return 0;
+  }
+
+  /* 普通标识符：在 import 绑定中查找。 */
+  if (find_import_binding(u->root, name, 0, out)) {
+    out->found = 1;
+    return 1;
+  }
+  return 0;
 }

@@ -87,8 +87,8 @@ export function activate(context: vscode.ExtensionContext) {
         args: serverArgs,                  // 启动参数（日志模式）
         transport: TransportKind.stdio,    // 使用标准输入/输出进行通信
         options: {
-            // cwd: path.dirname(serverCommand), // (可选) 设置服务器的工作目录
-            // env: { ...process.env, MY_ENV_VAR: 'value' } // (可选) 为服务器设置环境变量
+            cwd: path.dirname(serverCommand),
+            env: { ...process.env, SPT_LSP_LOG: logPath || path.join(path.dirname(serverCommand), 'lsp-debug.log') }
         }
     };
 

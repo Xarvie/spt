@@ -26,6 +26,7 @@ typedef struct {
   size_t def_start;   /* 定义名字的起始字节偏移 */
   size_t def_end;     /* 定义名字的结束字节偏移 */
   int kind;           /* LSP SymbolKind */
+  int is_ambient;     /* 定义属于 declare 外部符号（不可重命名/不可改） */
 
   char detail[512]; /* 悬浮签名/类型 */
   char doc[1024];   /* 文档注释（若有） */
@@ -62,5 +63,46 @@ const AstNode *sem_enclosing_function(const SptLspUnit *u, const Document *d, si
 
 /* 按名查找函数（顶层/方法/declare 成员），用于 signature help。 */
 const AstNode *sem_find_function(const SptLspUnit *u, const char *name);
+
+/* ===========================================================================
+** 跨文件 import 解析（Phase 1）
+** ========================================================================= */
+
+/* import 目标解析结果：点击处标识符若由 import 引入，给出目标模块名与目标符号名。 */
+typedef struct {
+  int found;
+  char module_path[256];  /* 目标模块名（已去引号，来自 import 语句） */
+  char symbol_name[256];  /* 目标符号名（在目标文件中查找的名字）；
+                             空串表示点击的是命名空间别名 m 本身（无具体符号） */
+  int is_namespace_self;  /* 1 = 点击的是 `import * as m` 的 m 本身 */
+} SemImportTarget;
+
+/* 解析 byte_off 处标识符是否由 import 引入。
+   - 具名导入 import { X } from "mod"（点击 X 或其别名 Y）：module_path=mod, symbol_name=X(原始名)
+   - 命名空间 import * as m from "mod"（点击 m）：module_path=mod, symbol_name="", is_namespace_self=1
+   - m.X 成员访问（点击 X，接收者 m 是命名空间别名）：module_path=mod, symbol_name=X
+   找到返回 1。 */
+int sem_resolve_import_target(const SptLspUnit *u, const Document *d, size_t byte_off,
+                              SemImportTarget *out);
+
+/* 在目标文件 unit 中按名查找导出符号（is_exported && is_module_root）。
+   找到则填充 out 的定义部分（def_start/def_end/kind/is_ambient/detail/doc，基于目标文档 d），
+   并置 found=1。位置用字节偏移。返回 1=找到。 */
+int sem_resolve_export(const SptLspUnit *u, const Document *d, const char *name, SemRef *out);
+
+/* 在当前文件的 `declare from "module_path" { ... }` 块中按名查找成员。
+   用于 import { X } from "mod" 且 mod 无 .spt 源码（C 绑定模块）时，
+   跳转到同文件的 declare 声明处（README §13）。找到返回 1 并填充 out。 */
+int sem_resolve_declare_member(const SptLspUnit *u, const Document *d,
+                               const char *module_path, const char *symbol_name, SemRef *out);
+
+/* 枚举目标文件所有导出符号（用于命名空间导入 m. 的成员补全）。
+   detail 可为 ""。 */
+typedef void (*SemExportCb)(void *ctx, const char *name, int kind, const char *detail);
+void sem_all_exports(const SptLspUnit *u, SemExportCb cb, void *ctx);
+
+/* 若 name 是命名空间导入别名（import * as name from "..."），返回 1 并写 module_path。
+   用于成员补全：m. 后列出目标模块的导出符号。 */
+int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *module_path, size_t cap);
 
 #endif /* SPT_LSP_SEMANTIC_H */

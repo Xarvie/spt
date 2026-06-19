@@ -10,24 +10,31 @@
 #include "cJSON.h"
 #include "documents.h"
 #include "protocol.h"
+#include "workspace.h"
 
 /* textDocument/documentSymbol -> DocumentSymbol[] */
 cJSON *feature_document_symbols(const Document *d);
 
-/* textDocument/hover -> {contents:MarkupContent, range} | null */
-cJSON *feature_hover(const Document *d, LspPos pos);
+/* textDocument/hover -> {contents:MarkupContent, range} | null
+   ws 可空；非空时支持跨文件 import 目标 hover。 */
+cJSON *feature_hover(const Document *d, LspPos pos, Workspace *ws);
 
-/* textDocument/definition -> Location | null */
-cJSON *feature_definition(const Document *d, LspPos pos, const char *uri);
+/* textDocument/definition -> Location | null
+   ws 可空；非空时支持跨文件 import 跳转。 */
+cJSON *feature_definition(const Document *d, LspPos pos, const char *uri, Workspace *ws);
 
 /* textDocument/references -> Location[] */
 cJSON *feature_references(const Document *d, LspPos pos, const char *uri, int include_decl);
 
-/* textDocument/completion -> CompletionItem[] */
-cJSON *feature_completion(const Document *d, LspPos pos);
+/* textDocument/completion -> CompletionItem[]
+   ws 可空；非空时支持命名空间导入 m. 的成员补全来自目标文件导出。 */
+cJSON *feature_completion(const Document *d, LspPos pos, Workspace *ws);
 
 /* textDocument/rename -> WorkspaceEdit | null */
 cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char *new_name);
+
+/* textDocument/prepareRename -> {range, placeholder} | null */
+cJSON *feature_prepare_rename(const Document *d, LspPos pos);
 
 /* textDocument/signatureHelp -> SignatureHelp | null */
 cJSON *feature_signature_help(const Document *d, LspPos pos);
@@ -41,5 +48,14 @@ extern const int SPT_TOKEN_TYPES_COUNT;
 
 /* textDocument/formatting -> TextEdit[] | null */
 cJSON *feature_format(const Document *d, const cJSON *options);
+
+/* textDocument/documentHighlight -> DocumentHighlight[] */
+cJSON *feature_document_highlight(const Document *d, LspPos pos);
+
+/* textDocument/foldingRange -> FoldingRange[] */
+cJSON *feature_folding_range(const Document *d);
+
+/* textDocument/selectionRange -> SelectionRange | null */
+cJSON *feature_selection_range(const Document *d, LspPos pos);
 
 #endif /* SPT_LSP_FEATURES_H */

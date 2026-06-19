@@ -11,7 +11,7 @@
 #
 # 分层：
 #   third_party/cjson   vendored cJSON 1.7.19 (MIT)
-#   ../../src/frontend  复用的前端（词法/语法/AST/arena/诊断 + LSP 桥）
+#   ../../spt-lang/src/frontend  复用的前端（词法/语法/AST/arena/诊断 + LSP 桥）
 #   src/rpc             Content-Length 分帧 + JSON-RPC 2.0
 #   src/lsp             生命周期 + 分派 + 文档存储 + 主循环
 #   src/analysis        语义模型（符号/解析/引用）+ 工作区索引
@@ -28,7 +28,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin)
 
-set(FRONTEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../src/frontend)
+set(FRONTEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../spt-lang/src/frontend)
 
 # ---- vendored cJSON ----
 add_library(spt_cjson STATIC third_party/cjson/cJSON.c)
@@ -62,6 +62,7 @@ add_library(spt_lsp_core STATIC
   src/lsp/documents.c
   src/analysis/semantic.c
   src/analysis/workspace.c
+  src/analysis/module_resolve.c
   src/features/diagnostics.c
   src/features/symbols.c
   src/features/semantic_tokens.c
@@ -70,8 +71,12 @@ add_library(spt_lsp_core STATIC
   src/features/completion.c
   src/features/references.c
   src/features/rename.c
+  src/features/prepare_rename.c
   src/features/signature.c
   src/features/format.c
+  src/features/document_highlight.c
+  src/features/folding_range.c
+  src/features/selection_range.c
 )
 target_include_directories(spt_lsp_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/rpc
@@ -96,11 +101,7 @@ target_link_libraries(sptscript-lsp PRIVATE spt_lsp_core)
 option(SPT_LSP_BUILD_TESTS "Build spt-lsp server tests" ON)
 if(SPT_LSP_BUILD_TESTS)
   enable_testing()
-  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete)
-  # test_workspace 用到 POSIX mkdtemp/mkdir（MSVC/MinGW 无），仅在非 Windows 构建。
-  if(NOT WIN32)
-    list(APPEND SPT_LSP_TESTS test_workspace)
-  endif()
+  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete test_workspace test_cross_import)
   foreach(t ${SPT_LSP_TESTS})
     add_executable(${t} test/${t}.c)
     target_link_libraries(${t} PRIVATE spt_lsp_core)

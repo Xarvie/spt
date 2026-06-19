@@ -1,0 +1,4 @@
+// b.spt — 被导入的目标模块（导出 add/SECRET，私有 helper 不导出）
+export int add(int a, int b) { return a + b; }
+export int SECRET = 42;
+int private_helper() { return 0; }

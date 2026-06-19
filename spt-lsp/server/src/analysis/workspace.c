@@ -4,6 +4,7 @@
 #include "workspace.h"
 
 #include "documents.h"
+#include "module_resolve.h"
 #include "semantic.h"
 #include "spt_lsp_bridge.h"
 
@@ -79,10 +80,32 @@ static void free_syms(Workspace *ws) {
   ws->sym_count = ws->sym_cap = 0;
 }
 
+/* 释放单个独立 Document（非 DocStore 管理）。 */
+static void doc_free_one(Document *d) {
+  if (!d) return;
+  free(d->uri);
+  free(d->text);
+  free(d->line_starts);
+  free(d);
+}
+
+/* 释放目标文件解析缓存。 */
+static void free_units(Workspace *ws) {
+  for (int i = 0; i < ws->unit_count; i++) {
+    free(ws->units[i].path);
+    spt_lsp_unit_free(ws->units[i].unit);
+    doc_free_one(ws->units[i].temp_doc);
+  }
+  free(ws->units);
+  ws->units = NULL;
+  ws->unit_count = ws->unit_cap = 0;
+}
+
 void workspace_free(Workspace *ws) {
   for (int i = 0; i < ws->root_count; i++) free(ws->roots[i]);
   free(ws->roots);
   free_syms(ws);
+  free_units(ws);
   memset(ws, 0, sizeof *ws);
 }
 
@@ -104,6 +127,15 @@ void workspace_add_root_uri(Workspace *ws, const char *root_uri) {
   char path[4096];
   spt_uri_to_path(root_uri, path, sizeof path);
   workspace_add_root_path(ws, path);
+}
+
+void workspace_set_overlay(Workspace *ws, const DocStore *overlay) { ws->overlay = overlay; }
+
+void workspace_mark_dirty(Workspace *ws) {
+  if (ws->indexed) ws->dirty = 1;
+  /* 打开文档变更 -> 目标文件缓存可能过期（overlay 文本变了；磁盘文件一般不变但
+     保守起见整体失效，重建成本低且 v1 跨文件解析由用户点击触发，频次低）。 */
+  free_units(ws);
 }
 
 /* ---- 符号收集 ---- */
@@ -148,30 +180,46 @@ static void flatten(Workspace *ws, const char *uri, cJSON *arr, const char *cont
 }
 
 static void index_file(Workspace *ws, const char *path) {
-  FILE *f = fopen(path, "rb");
-  if (!f) return;
-  fseek(f, 0, SEEK_END);
-  long sz = ftell(f);
-  if (sz < 0) { fclose(f); return; }
-  fseek(f, 0, SEEK_SET);
-  char *buf = (char *)malloc((size_t)sz + 1);
-  size_t rd = fread(buf, 1, (size_t)sz, f);
-  fclose(f);
-  buf[rd] = '\0';
-
   char uri[4096];
   spt_path_to_uri(path, uri, sizeof uri);
 
+  /* 覆盖层：若该文件正打开（未保存改动），用打开文档的文本而非磁盘内容。 */
+  const Document *od = ws->overlay ? doc_store_get((DocStore *)ws->overlay, uri) : NULL;
+  SptLspUnit *u = NULL;
   DocStore tmp;
-  doc_store_init(&tmp);
-  Document *d = doc_store_open(&tmp, uri, buf, rd, 1);
-  SptLspUnit *u = spt_lsp_parse(d->text, d->text_len);
-  cJSON *syms = sem_document_symbols(u, d);
-  flatten(ws, uri, syms, NULL);
-  cJSON_Delete(syms);
+  int tmp_inited = 0;
+  const Document *d = NULL;
+  if (od) {
+    u = spt_lsp_parse(od->text, od->text_len);
+    d = od;
+  } else {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return; }
+    fseek(f, 0, SEEK_SET);
+    char *buf = (char *)malloc((size_t)sz + 1);
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[rd] = '\0';
+    doc_store_init(&tmp);
+    tmp_inited = 1;
+    Document *td = doc_store_open(&tmp, uri, buf, rd, 1);
+    if (td) {
+      u = spt_lsp_parse(td->text, td->text_len);
+      d = td;
+    }
+    free(buf);
+  }
+
+  if (u && d) {
+    cJSON *syms = sem_document_symbols(u, d);
+    flatten(ws, uri, syms, NULL);
+    cJSON_Delete(syms);
+  }
   spt_lsp_unit_free(u);
-  doc_store_free(&tmp);
-  free(buf);
+  if (tmp_inited) doc_store_free(&tmp);
 }
 
 static int has_spt_ext(const char *name) {
@@ -225,6 +273,7 @@ void workspace_index(Workspace *ws) {
   free_syms(ws);
   for (int i = 0; i < ws->root_count; i++) walk_dir(ws, ws->roots[i], 0);
   ws->indexed = 1;
+  ws->dirty = 0;
 }
 
 /* ---- 查询 ---- */
@@ -241,7 +290,7 @@ static int ci_contains(const char *hay, const char *needle) {
 }
 
 cJSON *workspace_symbols(Workspace *ws, const char *query) {
-  if (!ws->indexed) workspace_index(ws);
+  if (!ws->indexed || ws->dirty) workspace_index(ws);
   cJSON *arr = cJSON_CreateArray();
   for (int i = 0; i < ws->sym_count; i++) {
     WsSymbol *s = &ws->syms[i];
@@ -257,4 +306,95 @@ cJSON *workspace_symbols(Workspace *ws, const char *query) {
     cJSON_AddItemToArray(arr, si);
   }
   return arr;
+}
+
+/* ---- 跨文件 import 解析 ---- */
+
+int workspace_resolve_module(Workspace *ws, const char *from_uri, const char *module_name,
+                             char *out_uri, size_t cap) {
+  (void)ws;
+  if (!from_uri || !module_name) return 0;
+  char from_path[4096];
+  spt_uri_to_path(from_uri, from_path, sizeof from_path);
+  char tgt_path[4096];
+  if (!resolve_module_path(from_path, module_name, tgt_path, sizeof tgt_path)) return 0;
+  spt_path_to_uri(tgt_path, out_uri, cap);
+  return 1;
+}
+
+/* 读磁盘文件全文到 malloc 缓冲（NUL 结尾），返回长度，失败 -1。 */
+static long read_file_all(const char *path, char **out_buf) {
+  FILE *f = fopen(path, "rb");
+  if (!f) return -1;
+  fseek(f, 0, SEEK_END);
+  long sz = ftell(f);
+  if (sz < 0) { fclose(f); return -1; }
+  fseek(f, 0, SEEK_SET);
+  char *buf = (char *)malloc((size_t)sz + 1);
+  if (!buf) { fclose(f); return -1; }
+  size_t rd = fread(buf, 1, (size_t)sz, f);
+  fclose(f);
+  buf[rd] = '\0';
+  *out_buf = buf;
+  return (long)rd;
+}
+
+WsUnit workspace_get_unit(Workspace *ws, const char *path) {
+  WsUnit r = { NULL, NULL };
+  if (!path) return r;
+
+  /* 该路径是否在 overlay 中打开？决定文本来源与 doc 归属。 */
+  char uri[4096];
+  spt_path_to_uri(path, uri, sizeof uri);
+  Document *od = ws->overlay ? doc_store_get((DocStore *)ws->overlay, uri) : NULL;
+
+  /* 查缓存（overlay 与 disk 共用 path 键）。 */
+  for (int i = 0; i < ws->unit_count; i++) {
+    if (strcmp(ws->units[i].path, path) == 0) {
+      if (ws->units[i].parsing) return r; /* 防环 */
+      r.unit = ws->units[i].unit;
+      r.doc = od ? od : ws->units[i].temp_doc;
+      return r;
+    }
+  }
+
+  /* 未缓存：取文本（overlay 优先，否则磁盘）。 */
+  const char *text = NULL;
+  size_t text_len = 0;
+  char *buf = NULL;
+  Document *owned = NULL;
+  if (od) {
+    text = od->text;
+    text_len = od->text_len;
+  } else {
+    long sz = read_file_all(path, &buf);
+    if (sz < 0) return r;
+    /* 构造独立 Document（LF 规范化 + 行索引）。 */
+    DocStore tmp;
+    doc_store_init(&tmp);
+    Document *td = doc_store_open(&tmp, uri, buf, (size_t)sz, 0);
+    free(buf);
+    if (!td) return r;
+    owned = td;
+    free(tmp.docs); /* 释放 Document* 数组壳，保留 td 本体 */
+    doc_store_init(&tmp);
+    text = owned->text;
+    text_len = owned->text_len;
+  }
+
+  /* 扩容缓存数组。 */
+  if (ws->unit_count >= ws->unit_cap) {
+    ws->unit_cap = ws->unit_cap ? ws->unit_cap * 2 : 8;
+    ws->units = (void *)realloc(ws->units, sizeof(ws->units[0]) * (size_t)ws->unit_cap);
+  }
+  int idx = ws->unit_count++;
+  ws->units[idx].path = dupz(path);
+  ws->units[idx].parsing = 1;
+  ws->units[idx].temp_doc = owned; /* disk 文件才拥有；overlay 时为 NULL */
+  ws->units[idx].unit = spt_lsp_parse(text, text_len);
+  ws->units[idx].parsing = 0;
+
+  r.unit = ws->units[idx].unit;
+  r.doc = od ? od : owned;
+  return r;
 }

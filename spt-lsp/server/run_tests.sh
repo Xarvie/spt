@@ -4,7 +4,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-FRONTEND_DIR="../../src/frontend"
+FRONTEND_DIR="../../spt-lang/src/frontend"
 INC="-Ithird_party/cjson -Isrc/rpc -Isrc/lsp -Isrc/analysis -Isrc/features -I$FRONTEND_DIR"
 CFLAGS="-std=c11 -g -O0 -Wall -Wextra"
 OBJ=/tmp/lspobj
@@ -13,10 +13,12 @@ fail=0
 
 FRONTEND_SRCS="spt_arena.c spt_ast.c spt_diag.c spt_lexer.c spt_parser.c spt_lsp_bridge.c"
 CORE_SRCS="src/rpc/spt_rpc.c src/lsp/server.c src/lsp/trace.c src/lsp/protocol.c src/lsp/documents.c \
-           src/analysis/semantic.c src/analysis/workspace.c \
+           src/analysis/semantic.c src/analysis/workspace.c src/analysis/module_resolve.c \
            src/features/diagnostics.c src/features/symbols.c src/features/semantic_tokens.c \
            src/features/hover.c src/features/definition.c src/features/completion.c \
-           src/features/references.c src/features/rename.c src/features/signature.c src/features/format.c"
+           src/features/references.c src/features/rename.c src/features/prepare_rename.c \
+           src/features/signature.c src/features/format.c src/features/document_highlight.c \
+           src/features/folding_range.c src/features/selection_range.c"
 
 compile() {
   local src="$1" o

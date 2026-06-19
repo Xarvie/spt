@@ -1,0 +1,4 @@
+// a.spt — 导入方：具名导入 add + 命名空间导入 m
+import { add } from "b";
+import * as m from "b";
+int caller() { return add(1, 2) + m.SECRET; }
