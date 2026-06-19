@@ -50,6 +50,17 @@ struct SPTTrace {
      `inline_fn_proto`. -1 = no inlined call (no entry check needed). */
   int inline_fn_slot;
   Proto *inline_fn_proto;
+
+  /* Compact live-in type-check list, precomputed at record time from the IR's
+     GUARD_T-on-SLOAD instructions (deduped by slot). The entry check in
+     sptjit_trace_enter iterates THIS instead of scanning the full IR on every
+     entry -- on a hot loop that is re-entered millions of times (e.g. a branch
+     trace that exits each iteration) the full O(ninst) scan is a real cost.
+     `livein_type[k]` holds the SPTType the slot was pinned to. n_livein == -1
+     means the list overflowed SPT_JIT_MAX_LIVEIN -> fall back to a full scan. */
+  int n_livein;
+  uint8_t livein_slot[SPT_JIT_MAX_LIVEIN];
+  uint8_t livein_type[SPT_JIT_MAX_LIVEIN];
 };
 
 /* =====================================================================

@@ -62,6 +62,11 @@ typedef l_uint32 Instruction;
 /* Maximum side exits per trace. */
 #define SPT_JIT_MAX_EXITS 128
 
+/* Maximum distinct live-in slots tracked for the per-entry type recheck.
+   Loops rarely carry more than a handful of typed live-ins; a trace exceeding
+   this falls back to a full-IR scan at entry (correct, just slower). */
+#define SPT_JIT_MAX_LIVEIN 32
+
 /* Maximum upvalues referenced by a trace. */
 #define SPT_JIT_MAX_UPVALS 32
 

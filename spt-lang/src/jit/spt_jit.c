@@ -1585,6 +1585,30 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
 
   if (js->debug >= 2) sptir_dump(&t->ir, "post-opt");
 
+  /* Precompute the compact live-in type-check list from the final IR: each
+     GUARD_T whose operand is an SLOAD pins a stack slot to an SPTType. Dedupe by
+     slot (a slot may be guarded more than once). The entry-time recheck in
+     sptjit_trace_enter iterates this short list instead of rescanning the whole
+     IR on every entry. Overflow -> n_livein = -1 (entry does a full scan). */
+  t->n_livein = 0;
+  for (int k = 0; k < t->ir.ninst; k++) {
+    SPTIRInst *gi = &t->ir.insts[k];
+    if (gi->op != SPTIR_GUARD_T) continue;
+    int sref = gi->op1;
+    if (sref < 0 || sref >= t->ir.ninst) continue;
+    if (t->ir.insts[sref].op != SPTIR_SLOAD) continue;
+    int slot = (int)t->ir.insts[sref].aux;
+    if (slot < 0 || slot > 255) continue;
+    int dup = 0;
+    for (int j = 0; j < t->n_livein; j++)
+      if (t->livein_slot[j] == (uint8_t)slot) { dup = 1; break; }
+    if (dup) continue;
+    if (t->n_livein >= SPT_JIT_MAX_LIVEIN) { t->n_livein = -1; break; }
+    t->livein_slot[t->n_livein] = (uint8_t)slot;
+    t->livein_type[t->n_livein] = (uint8_t)(SPTType)gi->aux;
+    t->n_livein++;
+  }
+
   /* Generate native code. */
   sptjit_codegen_compile(t, js);
 
@@ -1646,18 +1670,32 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
      persists, and the trace's hoisted entry guard would then fail on *every*
      subsequent entry. Re-validating in C and declining on a mismatch lets the
      interpreter run (and advance) the loop instead of livelocking on a guard
-     that never lets the trace make progress. */
+     that never lets the trace make progress.
+
+     The check iterates the compact (slot,type) list precomputed at record time
+     rather than rescanning the whole IR each entry; this matters on hot loops
+     re-entered millions of times. n_livein == -1 means the list overflowed, so
+     fall back to a full IR scan (rare). */
   {
-    SPTIRBuilder *tir = &e->trace->ir;
-    for (int k = 0; k < tir->ninst; k++) {
-      SPTIRInst *gi = &tir->insts[k];
-      if (gi->op != SPTIR_GUARD_T) continue;
-      int sref = gi->op1;
-      if (sref < 0 || sref >= tir->ninst) continue;
-      if (tir->insts[sref].op != SPTIR_SLOAD) continue;
-      int slot = (int)tir->insts[sref].aux;
-      if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)gi->aux)
-        return 0;
+    SPTTrace *t = e->trace;
+    if (t->n_livein >= 0) {
+      for (int k = 0; k < t->n_livein; k++) {
+        int slot = t->livein_slot[k];
+        if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)t->livein_type[k])
+          return 0;
+      }
+    } else {
+      SPTIRBuilder *tir = &t->ir;
+      for (int k = 0; k < tir->ninst; k++) {
+        SPTIRInst *gi = &tir->insts[k];
+        if (gi->op != SPTIR_GUARD_T) continue;
+        int sref = gi->op1;
+        if (sref < 0 || sref >= tir->ninst) continue;
+        if (tir->insts[sref].op != SPTIR_SLOAD) continue;
+        int slot = (int)tir->insts[sref].aux;
+        if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)gi->aux)
+          return 0;
+      }
     }
   }
 
