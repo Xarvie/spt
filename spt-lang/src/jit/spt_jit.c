@@ -1016,6 +1016,14 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_reg(rc, c);
+      /* Bitwise ops require integer operands. A float operand is converted to an
+         integer by the VM (erroring if it has a fractional part) -- we don't
+         replicate that, and emitting the op on a float reinterprets its raw IEEE
+         bits, so abort and let the interpreter handle non-int operands. */
+      if (ir->reg_type[rc->frame_base + b] != SPTT_INT ||
+          ir->reg_type[rc->frame_base + c] != SPTT_INT) {
+        rc->aborted = 1; return 0;
+      }
       SPTIROp irop;
       switch (op) {
         case OP_BAND: irop = SPTIR_BAND; break;
@@ -1041,6 +1049,10 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_k(rc, c);
+      if (ir->reg_type[rc->frame_base + b] != SPTT_INT ||
+          sptir_type(ir, cref) != SPTT_INT) {
+        rc->aborted = 1; return 0;  /* see OP_BAND: non-int needs the interpreter */
+      }
       SPTIROp irop;
       switch (op) {
         case OP_BANDK: irop = SPTIR_BAND; break;
@@ -1062,6 +1074,9 @@ static int rec_inst(SPTRecCtx *rc) {
          guard it so out-of-range counts side-exit to the interpreter. */
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
       int bref = rec_load_reg(rc, b);
+      if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
+        rc->aborted = 1; return 0;  /* non-int shift amount -> interpreter */
+      }
       /* Guard amount in [0, 63] (unsigned < 64). */
       sptir_guard(ir, SPTIR_GUARD_ULT, bref, 64, rc->pc);
       int cref = sptir_kint(ir, c);
@@ -1077,6 +1092,9 @@ static int rec_inst(SPTRecCtx *rc) {
          amount (-sC). Direction depends on the sign of -sC. */
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
       int bref = rec_load_reg(rc, b);
+      if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
+        rc->aborted = 1; return 0;  /* non-int shifted value -> interpreter */
+      }
       int ref = rec_shift_const(rc, bref, -(int64_t)c);
       ir->reg_map[rc->frame_base + a] = ref;
       ir->reg_type[rc->frame_base + a] = SPTT_INT;
@@ -1584,6 +1602,27 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
     TValue *fv = s2v(ci->func.p + 1 + e->trace->inline_fn_slot);
     if (!ttisLclosure(fv) || clLvalue(fv)->p != e->trace->inline_fn_proto)
       return 0;
+  }
+
+  /* Loop-carried live-in type guard. A trace pins the type of each live-in it
+     reads (a GUARD_T on the SLOAD). When a value's type changes mid-loop -- e.g.
+     an integer accumulator that becomes a float on a side branch -- that change
+     persists, and the trace's hoisted entry guard would then fail on *every*
+     subsequent entry. Re-validating in C and declining on a mismatch lets the
+     interpreter run (and advance) the loop instead of livelocking on a guard
+     that never lets the trace make progress. */
+  {
+    SPTIRBuilder *tir = &e->trace->ir;
+    for (int k = 0; k < tir->ninst; k++) {
+      SPTIRInst *gi = &tir->insts[k];
+      if (gi->op != SPTIR_GUARD_T) continue;
+      int sref = gi->op1;
+      if (sref < 0 || sref >= tir->ninst) continue;
+      if (tir->insts[sref].op != SPTIR_SLOAD) continue;
+      int slot = (int)tir->insts[sref].aux;
+      if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)gi->aux)
+        return 0;
+    }
   }
 
   /* Enter the trace. */

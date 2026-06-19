@@ -262,13 +262,50 @@ def gen_const_fold(r):
             f"for (int i = 0, {n}) {{ int x = {a}; s = s + (x {op} {b}); }}\n"
             f"print(s);\n")
 
+def gen_float_bitwise(r):
+    """Bitwise &|^<<>> with at least one FLOAT operand. SPT converts floats to
+    int (erroring on a fractional part); the JIT must ABORT these rather than
+    operate on the raw IEEE bits. Uses integer-valued floats so the interpreter
+    succeeds and the JIT (falling back to it) yields a comparable result.
+    Deterministic."""
+    n = r.choice([200000, 1000000])
+    op = r.choice(["&", "|", "^", "<<", ">>"])
+    fv = r.choice([2.0, 5.0, 6.0, 12.0, 255.0])
+    iv = r.choice([1, 2, 3, 10, 255])
+    if op in ("<<", ">>"):
+        sh = r.choice([1.0, 2.0, 3.0, 4.0])
+        if r.random() < 0.5:  # float value
+            return (f"int s = 0;\nfor (int i = 0, {n}) {{ float v = {fv}; "
+                    f"int x = v {op} {iv % 8}; s = s + x; }}\nprint(s);\n")
+        return (f"int s = 0;\nfor (int i = 0, {n}) {{ float sh = {sh}; "
+                f"int x = {iv} {op} sh; s = s + x; }}\nprint(s);\n")
+    return (f"int s = 0;\nfor (int i = 0, {n}) {{ float b = {fv}; "
+            f"int x = b {op} {iv}; s = s + x; }}\nprint(s);\n")
+
+def gen_type_transition(r):
+    """A loop-carried accumulator that changes int<->float mid-loop via a rare
+    branch. The trace records and pins one type; once the value permanently
+    changes type, the entry-time live-in guard must DECLINE (interpreter
+    continues, advancing the loop) rather than livelock on a guard that never
+    passes. Verifies no hang + byte-identical output. Deterministic."""
+    n = r.choice([100000, 800000])
+    sw = n // 2
+    forms = [
+        f"auto acc = 0;\nfor (int i = 0, {n}) {{ if (i == {sw}) {{ acc = acc + 0.5; }} acc = acc + 1; }}\nprint(acc);\n",
+        f"auto acc = 1;\nfor (int i = 0, {n}) {{ if (i == {sw}) {{ acc = acc * 1.5; }} acc = acc + 2; }}\nprint(acc);\n",
+        f"auto a = 0;\nfor (int i = 0, {n}) {{ if (i % 7 == 0) {{ a = a + 0.25; }} a = a + 1; }}\nprint(a);\n",
+        f"auto x = 0;\nint s = 0;\nfor (int i = 0, {n}) {{ if (i == {sw}) {{ x = x + 0.5; }} s = s + 1; }}\nprint(s);\n",
+        f"float s = 0.0;\nfor (int i = 0, {n}) {{ auto x = i; if (i % 2 == 0) {{ x = i * 1.5; }} s = s + x; }}\nprint(s);\n",
+    ]
+    return r.choice(forms)
+
 GENS = [gen_scalar,
         lambda r: gen_array_reduce(r, "int"),
         lambda r: gen_array_reduce(r, "float"),
         gen_cse_self, gen_two_array, gen_write_read, gen_chained2d, gen_branch,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
-        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold]
+        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:

@@ -852,3 +852,60 @@ const_idiv_mod_neg）+ 280 差分（0 失配）+ 新增 gen_const_fold 后 10 se
 valgrind 0。**教训**：常量折叠器必须逐个运算符匹配 VM 语义——逻辑 vs 算术移位、floored vs 截断
 整除取模、移位量饱和都是 SPT/Lua 与 C 原生运算符的差异点；折叠器比源码编译器更激进（会折叠
 循环不变的 LOADI 常量），所以这些差异在 JIT 里更容易暴露。
+
+### 10.17 修复：浮点操作数的位运算（录制器漏查类型，对 IEEE 位模式做整数运算）
+
+按路图 §四点五继续探浮点边界，发现 `^`（SPT 里是按位 XOR，不是幂）等位运算在浮点操作数下出错。
+`float b = 2.0; (b ^ 10.0)`：解释器把浮点转成整数再 XOR（`2 XOR 10 = 8`，非整数浮点如 `1.001^2.0`
+直接报错 exit=255），但 JIT 对两个 double 的**原始 64 位 IEEE 位模式**做整数 XOR
+（`0x4000... ^ 0x4024... = 0x0024...`≈1.013e16，累加成 1.013e22）。
+
+**根因**：位运算处理器（OP_BAND/BOR/BXOR/SHL/SHR 及 K/SHLI/SHRI 变体）加载操作数后直接以
+`SPTT_INT` 发 IR，**从不检查操作数真实类型**。浮点操作数的 ref 指向浮点值，位运算 codegen 按整数
+处理其寄存器内容（即位模式）→ 垃圾。（注：之前 float MOD/IDIV 已加了 both-int 检查并 abort，但位
+运算这几个处理器是另一条独立路径，漏了同样的检查。）
+
+**修复**：在全部四个位运算处理器里加 both-int 检查——任一操作数非 SPTT_INT 就 `aborted=1` 回退
+解释器（解释器正确处理浮点→整数转换含报错语义，JIT 不复刻）。整数位运算不受影响（reg_type 为
+SPTT_INT，照常编译）。
+
+**验证**：float `^`/`&`/`|`/`<<`/`>>`（值或移位量为浮点、两侧皆浮点、混在表达式里）全部 abort
+且 interp==jit；整数位运算仍 compiled=1 且匹配（无误杀）；285 ctest + 71 kernel + 282 差分（0 失配）
++ 新增 gen_float_bitwise 后 10 seed×250=2500 模糊例 0 失配 + valgrind 0。**教训**：同一语义检查
+（操作数类型、floored 校正等）散落在多个 opcode 处理器里时，**每条路径都要单独加**——位运算和
+算术（rec_arith）是两条路径，别只改一条。SPT 的 `^` 是 XOR 不是幂（OP_BXOR，非 OP_POW），位运算
+要求整数操作数、浮点会转整数（含报错）。
+
+### 10.18 修复：循环内变量类型突变导致挂起（提升到 preheader 的类型守卫假设类型跨重入不变）
+
+探类型稳定性时发现 **JIT 挂起**：`auto acc = 0; for(...){ if(i==N){ acc=acc+0.5; } acc=acc+1; }`——
+int 累加器经罕见分支永久变成 float。解释器正确（如 1000001.5），JIT 挂死。
+
+**隔离**：需要(1)每轮都参与的循环携带累加器,(2)经分支**永久**从 int 变 float。关键非对称：
+`float→int` 不挂(`acc=acc+1.0` 又把 acc 变回 float,下一轮守卫照过)；`int→float` 挂
+(`acc=acc+0.5` 后 `acc=acc+1` 保持 float,int trace 的守卫此后**每次重入都失败**)。
+
+**根因**：RA 把循环携带的 int 累加器常驻 GPR,其 GUARD_T(读栈上类型 tag)被提升到 preheader
+(§10.13/codegen 注释"the value stays int thereafter"——此假设只在单次 trace 执行内成立)。acc
+永久变 float 后,每次从解释器重入 trace,preheader 的 GUARD_T 立刻失败退出,**但该退出没有推进
+循环**(i 不前进)→ 活锁/挂起。
+
+**修复**:在 `sptjit_trace_enter`(C,进入 trace 前,类比已有的内联调用 proto 检查)加**入口期
+live-in 类型重校验**:遍历 trace->ir 的 GUARD_T,对其守卫的 SLOAD 取槽位,若当前栈值
+`rec_value_type(s2v(ci->func.p+1+slot))` 与 GUARD_T 记录的类型不符,**拒绝进入**(return 0),让
+解释器跑这一轮(从而推进循环)。类型稳定的 trace 照常进入,无影响。
+
+**致命细节(踩了一次)**:GUARD_T 的 aux 存的是 **SPTType 枚举**(`(int64_t)t`, t=rec_value_type(v)),
+**不是 Lua 类型 tag**。第一版误用 `ttypetag()` 比较,只有 int 因 `SPTT_INT==LUA_VNUMINT==3` 巧合
+通过,其余(数组 SPTT_ARR=6 vs LUA_VARRAY=9、float 等)全被**静默拒绝**→ 编译了却 entries=0,数组
+循环掉到 0.5×(比解释器还慢),但因为"拒绝=回退解释器=结果仍对"所以差分仍 MATCH,极隐蔽。改用
+`rec_value_type(...) != (SPTType)gi->aux` 后修复:数组恢复 5×、标量 14×、float 正常编译。
+
+**性能**:入口扫描 O(ninst)/次。绝大多数循环 entries=1(trace 内部自循环),扫描仅一次,可忽略;
+即便嵌套循环内层 trace entries=5001,仍保持 9.8×——扫描被实际循环工作完全淹没,无需预计算。
+
+**验证**:挂起 repro 全族 MATCH(int→float、float→int→float、多次突变、周期性翻转、其他槽变型);
+286 ctest + 72 kernel(新增 type_transition_acc,编译且匹配,no-jit=0)+ 283 差分 + 新增
+gen_type_transition 后 10 seed×250=2500 模糊例 0 失配 + valgrind 0。**教训**:提升到 preheader 的
+类型守卫隐含"值类型跨重入不变"的假设,被循环中段永久类型突变打破→活锁;入口期 C 重校验拒绝失配
+trace 是正解。**GUARD_T aux 是 SPTType 不是 Lua tag**,跨枚举比较会静默退化成"永不命中"的性能悬崖。
