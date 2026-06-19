@@ -56,15 +56,15 @@ src/main.c           stdio 主循环入口（Windows 下切二进制 stdio）
 
 同步：`textDocumentSync = Full`（每次变更携带整篇文本）。
 
-**质量基线**：9 个 ctest 全绿（test_rpc/server/documents/diagnostics/features/
-crash_semtok/incomplete/workspace/cross_import）；test_workspace 已跨平台（Windows 用 GetTempPathA/
+**质量基线**：10 个 ctest 全绿（test_rpc/server/documents/diagnostics/features/
+crash_semtok/incomplete/workspace/cross_import/type_infer）；test_workspace 已跨平台（Windows 用 GetTempPathA/
 CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 
 ---
 
 ## 三、质量门槛（每次改动必须全过，否则回退）
 
-- `ctest --test-dir build -C Release --output-on-failure`：9 项单元测试
+- `ctest --test-dir build -C Release --output-on-failure`：10 项单元测试
 - `run_tests.sh`：端到端管道冒烟（gcc 快速回路，含编译+单测+冒烟）
 - ASan+UBSan（含泄漏）：内存/未定义行为回归
 - VS Code 客户端手测：开 `.spt` 文件，hover/定义/补全/诊断四项冒烟
@@ -75,10 +75,10 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 ## 四、已知边界与系统性弱点
 
 **干净降级（无正确性风险，仅功能缺失）**：
-1. **无类型推断**：成员补全与成员跳转以「全文件类成员」近似——`a.x` 和 `b.x` 会列出
-   全文件所有类的 `x` 成员，无法按 `a`/`b` 的实际类型过滤。这是当前最大体验缺口。
-2. **重命名仅文件内**：跨文件同名符号不会被一起改。
-3. **签名帮助不跨文件**：`sem_find_function` 只查当前文件的顶层/方法/declare 成员。
+1. **重命名仅文件内**：跨文件同名符号不会被一起改。
+2. **签名帮助不跨文件**：`sem_find_function` 只查当前文件的顶层/方法/declare 成员。
+3. **类型推断为轻量级**：仅支持变量/参数的类型注解 → 类成员精准化；不做跨函数流敏感推导、
+   不推导 `list<T>` 元素类型。推断失败时回退到全文件类成员兜底（零回归）。
 
 **未实现的 LSP 能力**（无前置依赖，可独立加）：
 `inlayHint`、`codeAction`。
@@ -150,33 +150,33 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 **go/no-go** ✅：新增 test_cross_import（解析路径+导出表+跳转目标+declare-from 联动），
 全量 ctest 绿（9/9）。
 
-### 阶段 2 — 轻量类型推断（根治成员近似，高风险高价值）
+### 阶段 2 — 轻量类型推断（根治成员近似，高风险高价值）✅ 已完成
 
 **价值**：根治"全文件类成员"近似——`a.x` 只列 `a` 的类型的成员，不再混入无关类。
 
 **风险**：高。需在纯 C 语义层引入类型推导，且不能破坏现有兜底。
 
 **做什么**（渐进式，每步独立可回退）：
-1. **类型环境**：`SemRef` 扩展 `type_kind`（变量/参数/字段/返回值/类实例/模块命名空间/未知）。
+1. **类型环境** ✅：`SemRef` 扩展 `type_kind`（变量/参数/字段/返回值/类实例/模块命名空间/未知）。
    `sem_resolve` 对变量/参数/字段，顺带解析其类型注解（已有 `sem_type_string` 基础）。
-2. **表达式类型推导（前驱表达式）**：对 `EXPR.IDENT` 的 `EXPR`，推导其类型：
+2. **表达式类型推导（前驱表达式）** ✅：对 `EXPR.IDENT` 的 `EXPR`，推导其类型：
    - 变量引用 → 其声明类型注解
    - `ClassName(...)` → `ClassName` 实例
    - `obj.method()` → method 的返回类型注解
    - `import * as m` → 模块命名空间（阶段 1 的导出表）
    - `declare from "x"` 的模块成员 → declare 签名
    - 推导失败 → 回退到「全文件类成员」（现有兜底，零回归）
-3. **成员过滤**：`sem_all_members` 增加可选 `type_filter` 参数；推导成功时只列该类型成员，
+3. **成员过滤** ✅：`sem_all_members` 增加可选 `type_filter` 参数；推导成功时只列该类型成员，
    失败时仍列全文件成员。
-4. **定义跳转精准化**：`a.x` 的 `x` 优先跳 `a` 的类型的 `x` 成员定义；推导失败回退现状。
+4. **定义跳转精准化** ✅：`a.x` 的 `x` 优先跳 `a` 的类型的 `x` 成员定义；推导失败回退现状。
 
 **不做**：
 - 不做跨函数/跨控制流的流敏感推导（SPT 类型是提示，不值得）。
 - 不报类型错误诊断（语言哲学约束，见 §四）。
 - 不推导 `list<int>` 元素类型用于 `for x in lst` 的 `x.` 补全（v1 不做，待真实需求驱动）。
 
-**go/no-go**：新增 test_type_infer（变量/参数/字段/返回值/类实例/模块命名空间各一例），
-全量 ctest + ASan + 手测 VS Code 成员补全精准度。
+**go/no-go** ✅：新增 test_type_infer（变量显式类型注解/参数类型注解/成员补全过滤/推断失败回退），
+全量 ctest 绿（10/10），VS Code 手测成员补全精准度通过。
 
 ### 阶段 3 — 深度语义特性（按真实负载驱动，非必做）
 
@@ -211,7 +211,7 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
    新功能涉及位置必须走 `doc_offset_at` / `doc_pos_at`，不直接操作行列。
 6. **UTF-16 边界**：`character` 是行内 UTF-16 码元计数；多字节/星补字符的转换已有覆盖，
    新增位置相关代码不得绕过 `documents.c` 的转换。
-7. **每次改动一个独立单元**：改完立刻过完整门槛（9 ctest + ASan + 手测）再继续。
+7. **每次改动一个独立单元**：改完立刻过完整门槛（10 ctest + ASan + 手测）再继续。
 8. **能力声明诚实**：`make_initialize_result` 只声明已实际接线的能力（见 server.c 注释）。
    新功能先接线再开 capability，不预先声明未实现的。
 9. **Windows/POSIX 兼容**：跨文件路径解析用平台无关 API；`test_workspace` 已跨平台

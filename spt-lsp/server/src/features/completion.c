@@ -97,6 +97,12 @@ cJSON *feature_completion(const Document *d, LspPos pos, Workspace *ws) {
         }
       }
     }
+    /* Phase 2: 接收者类型推断 → 只列该类成员。 */
+    if (!handled && u) {
+      char rn[256];
+      if (recv_name(d->text, dot_pos, rn, sizeof rn))
+        handled = sem_members_of_receiver(u, d, rn, dot_pos, comp_cb, &c);
+    }
     /* 兜底：全文件类成员 + declare 模块成员。 */
     if (!handled) sem_all_members(u, comp_cb, &c);
   } else {

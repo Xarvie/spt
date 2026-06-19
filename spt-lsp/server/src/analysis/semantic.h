@@ -58,6 +58,11 @@ void sem_visible_symbols(const SptLspUnit *u, const Document *d, size_t off, Sem
 /* 枚举全文件可作为成员补全的名字（类成员 + declare 模块成员）。 */
 void sem_all_members(const SptLspUnit *u, SemSymCb cb, void *ctx);
 
+/* Phase 2: 推断接收者类型，列出该类型的成员。成功返回 1（已通过 cb 输出），失败返回 0。
+   recv_name 为接收者标识符名，dot_off 为点号字节位置。 */
+int sem_members_of_receiver(const SptLspUnit *u, const Document *d,
+                            const char *recv_name, size_t dot_off, SemSymCb cb, void *ctx);
+
 /* 包含 off 的最内层函数声明（NODE_FUNCTION_DECL），无则 NULL。 */
 const AstNode *sem_enclosing_function(const SptLspUnit *u, const Document *d, size_t off);
 

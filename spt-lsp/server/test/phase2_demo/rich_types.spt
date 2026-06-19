@@ -1,0 +1,75 @@
+// rich_types.spt — Phase 2 丰富类型推断手测
+//
+// LSP 手测要点（在 VS Code 中打开本文件，按 Ctrl+点击 / 输入 . 触发补全）：
+//   1. Ctrl+点击 p.x  → 跳到 Point.x，不是 Line.x 或 Circle.x
+//   2. Ctrl+点击 line.length → 跳到 Line.length
+//   3. Ctrl+点击 c.radius    → 跳到 Circle.radius
+//   4. 在 "p." 后补全  → 只列 Point 成员（x/y/getX），不含 length/radius
+//   5. 在 "line." 后补全 → 只列 Line 成员（x/length），不含 y/radius
+//   6. 在 "c." 后补全   → 只列 Circle 成员（radius/area），不含 x/y
+//
+// 运行时验证（sptscript rich_types.spt）：
+//   应输出 "rich_types runtime OK"
+
+class Point {
+  int x;
+  int y;
+  void __init(int x, int y) {
+    this.x = x;
+    this.y = y;
+  }
+  int getX() {
+    return this.x;
+  }
+}
+
+class Line {
+  int x;
+  int length;
+  void __init(int x, int len) {
+    this.x = x;
+    this.length = len;
+  }
+}
+
+class Circle {
+  int radius;
+  void __init(int r) {
+    this.radius = r;
+  }
+  int area() {
+    return this.radius * this.radius * 3;
+  }
+}
+
+// LSP 手测函数（不调用，仅用于编辑器内跳转/补全测试）
+int test_all() {
+  Point p;
+  Line line;
+  Circle c;
+  p.x = 1;
+  p.y = 2;
+  line.length = 10;
+  c.radius = 5;
+  return p.x + line.length + c.radius;
+}
+
+int test_param(Point p, Line line, Circle c) {
+  p.x = 1;
+  line.length = 2;
+  c.radius = 3;
+  return 0;
+}
+
+// 运行时验证
+Point p = Point(3, 4);
+Line line = Line(0, 10);
+Circle c = Circle(5);
+assert(p.x == 3, "p.x should be 3");
+assert(p.y == 4, "p.y should be 4");
+assert(p.getX() == 3, "p.getX() should be 3");
+assert(line.length == 10, "line.length should be 10");
+assert(c.radius == 5, "c.radius should be 5");
+assert(c.area() == 75, "c.area() should be 75");
+
+print("rich_types runtime OK");

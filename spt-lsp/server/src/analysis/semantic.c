@@ -328,6 +328,127 @@ static const AstNode *find_member_anywhere(const AstNode *root, const char *name
   return NULL;
 }
 
+/* ===========================================================================
+** Phase 2: 轻量类型推断
+** ========================================================================= */
+
+/* 按类名查找 class_decl 节点（顶层 + declare 模块内）。 */
+static const AstNode *find_class_by_name(const AstNode *root, const char *name) {
+  if (!root || root->type != NODE_BLOCK || !name) return NULL;
+  const AstList *st = &root->u.block.statements;
+  for (int i = 0; i < st->count; i++) {
+    AstNode *s = st->items[i];
+    if (s->type == NODE_CLASS_DECL && s->u.class_decl.name &&
+        strcmp(s->u.class_decl.name, name) == 0)
+      return s;
+    if (s->type == NODE_DECLARE_MODULE) {
+      const AstList *mm = &s->u.declare_module.members;
+      for (int k = 0; k < mm->count; k++) {
+        AstNode *m = mm->items[k];
+        if (m->type == NODE_CLASS_DECL && m->u.class_decl.name &&
+            strcmp(m->u.class_decl.name, name) == 0)
+          return m;
+      }
+    }
+  }
+  return NULL;
+}
+
+/* 从表达式推断其类型对应的 class_decl（仅用户类型）。基本类型返回 NULL。 */
+static const AstNode *infer_class_from_expr(const AstNode *root, const AstNode *expr) {
+  if (!expr) return NULL;
+  switch (expr->type) {
+  case NODE_FUNCTION_CALL: {
+    /* ClassName(...) → ClassName 实例 */
+    const AstNode *callee = expr->u.call.func;
+    if (callee && callee->type == NODE_IDENTIFIER && callee->u.ident.name)
+      return find_class_by_name(root, callee->u.ident.name);
+    return NULL;
+  }
+  default:
+    return NULL;
+  }
+}
+
+/* 从定义节点（变量/参数）推断其类型对应的 class_decl。 */
+static const AstNode *infer_class_from_def(const AstNode *root, const AstNode *def) {
+  if (!def || !root) return NULL;
+  const AstNode *type_ann = NULL;
+  const AstNode *init = NULL;
+  switch (def->type) {
+  case NODE_VARIABLE_DECL:
+    type_ann = def->u.var_decl.type_annotation;
+    init = def->u.var_decl.initializer;
+    break;
+  case NODE_PARAMETER_DECL:
+    type_ann = def->u.param.type_annotation;
+    break;
+  default:
+    return NULL;
+  }
+  /* 优先用显式类型注解。 */
+  if (type_ann && type_ann->type == NODE_TYPE_USER) {
+    const char *name = NULL;
+    if (type_ann->u.type_user.count > 0)
+      name = type_ann->u.type_user.parts[type_ann->u.type_user.count - 1];
+    if (name) return find_class_by_name(root, name);
+  }
+  /* 从初始化表达式推断。 */
+  if (init) return infer_class_from_expr(root, init);
+  return NULL;
+}
+
+/* 按名查找标识符的定义节点（参数→局部→文件级）。byte_off 用于确定 enclosing function。 */
+static const AstNode *find_def_by_name(const SptLspUnit *u, const Document *d,
+                                        const char *name, size_t byte_off) {
+  if (!u || !u->root || !name) return NULL;
+  const AstNode *fn = NULL;
+  size_t best = (size_t)-1;
+  find_enclosing_fn(u->root, d, byte_off, &fn, &best);
+  if (fn) {
+    const AstList *ps = &fn->u.func_decl.params;
+    for (int i = 0; i < ps->count; i++) {
+      if (ps->items[i]->u.param.name && strcmp(ps->items[i]->u.param.name, name) == 0)
+        return ps->items[i];
+    }
+    Defs locs = {0};
+    collect_locals(fn->u.func_decl.body, &locs);
+    for (int i = 0; i < locs.n; i++) {
+      if (locs.a[i].name && strcmp(locs.a[i].name, name) == 0) {
+        const AstNode *r = locs.a[i].node;
+        free(locs.a);
+        return r;
+      }
+    }
+    free(locs.a);
+  }
+  Defs files = {0};
+  collect_file_defs(u->root, &files);
+  for (int i = 0; i < files.n; i++) {
+    if (files.a[i].name && strcmp(files.a[i].name, name) == 0) {
+      const AstNode *r = files.a[i].node;
+      free(files.a);
+      return r;
+    }
+  }
+  free(files.a);
+  return NULL;
+}
+
+/* 从 token index 处标识符查找定义节点。 */
+static const AstNode *resolve_ident_def(const SptLspUnit *u, const Document *d, int ti) {
+  if (!u || ti < 0 || ti >= u->token_count) return NULL;
+  const SptToken *tok = &u->tokens[ti];
+  if (tok->kind != TOK_IDENTIFIER) return NULL;
+  char name[256];
+  size_t nl = (size_t)tok->length;
+  if (nl >= sizeof name) nl = sizeof name - 1;
+  memcpy(name, tok->lexeme, nl);
+  name[nl] = '\0';
+  size_t byte_off = off_of(d, tok->line, tok->column);
+  return find_def_by_name(u, d, name, byte_off);
+}
+
 /* 取定义节点的名字、detail、doc。 */
 static const char *def_node_name(const AstNode *n) {
   switch (n->type) {
@@ -433,6 +554,19 @@ SemRef sem_resolve(const SptLspUnit *u, const Document *d, size_t byte_off) {
   r.is_member = member;
 
   if (member) {
+    /* Phase 2: 尝试推断接收者类型，在该类型内查找成员。 */
+    if (ti >= 2) {
+      const AstNode *recv_def = resolve_ident_def(u, d, ti - 2);
+      if (recv_def) {
+        const AstNode *cls = infer_class_from_def(u->root, recv_def);
+        if (cls) {
+          int kind = LSP_SK_FIELD;
+          const AstNode *defn = find_member_in_class(cls, r.name, &kind);
+          if (defn) { fill_def(&r, u, d, defn, kind); return r; }
+        }
+      }
+    }
+    /* 兜底：全文件类成员。 */
     int kind = LSP_SK_FIELD;
     const AstNode *defn = find_member_anywhere(u->root, r.name, &kind);
     if (defn) fill_def(&r, u, d, defn, kind);
@@ -740,6 +874,19 @@ void sem_all_members(const SptLspUnit *u, SemSymCb cb, void *ctx) {
       }
     }
   }
+}
+
+/* Phase 2: 推断接收者类型，列出该类型的成员。成功返回 1，失败返回 0。
+   recv_name 为接收者标识符名，dot_off 为点号字节位置（用于确定 enclosing function）。 */
+int sem_members_of_receiver(const SptLspUnit *u, const Document *d,
+                            const char *recv_name, size_t dot_off, SemSymCb cb, void *ctx) {
+  if (!u || !u->root || !d || !recv_name) return 0;
+  const AstNode *recv_def = find_def_by_name(u, d, recv_name, dot_off);
+  if (!recv_def) return 0;
+  const AstNode *cls = infer_class_from_def(u->root, recv_def);
+  if (!cls) return 0;
+  emit_class_members(cls, cb, ctx);
+  return 1;
 }
 
 /* 找包含 off 的最内层函数声明（供 signature/补全外部用）。返回节点或 NULL。 */

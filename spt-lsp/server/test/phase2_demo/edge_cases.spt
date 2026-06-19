@@ -1,0 +1,59 @@
+// edge_cases.spt — Phase 2 边界情况手测
+//
+// LSP 手测要点：
+//   1. any 类型变量 → 无法推断类型，成员补全回退到全文件兜底（列出所有类成员，不崩溃）
+//   2. 在类方法内部访问 val（隐式 this）→ 回退到全文件兜底
+//   3. 无类型注解的变量 → 同上回退
+//
+// 运行时验证（sptscript edge_cases.spt）：
+//   应输出 "edge_cases runtime OK"
+
+class Box {
+  int val;
+  void __init(int v) {
+    this.val = v;
+  }
+  int get() {
+    return this.val;
+  }
+}
+
+class Pair {
+  int first;
+  int second;
+  void __init(int a, int b) {
+    this.first = a;
+    this.second = b;
+  }
+}
+
+// LSP 手测函数（不调用，仅用于编辑器内跳转/补全测试）
+int test_any_type() {
+  any a;
+  a.val = 1;
+  return 0;
+}
+
+int test_box() {
+  Box b;
+  b.val = 42;
+  return b.get();
+}
+
+int test_pair() {
+  Pair pr;
+  pr.first = 1;
+  pr.second = 2;
+  return pr.first + pr.second;
+}
+
+// 运行时验证
+Box b = Box(42);
+assert(b.val == 42, "b.val should be 42");
+assert(b.get() == 42, "b.get() should be 42");
+
+Pair pr = Pair(1, 2);
+assert(pr.first == 1, "pr.first should be 1");
+assert(pr.second == 2, "pr.second should be 2");
+
+print("edge_cases runtime OK");

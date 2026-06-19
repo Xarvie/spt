@@ -1,0 +1,47 @@
+// type_infer.spt — Phase 2 手测：成员跳转精准化 + 补全过滤
+//
+// LSP 手测要点：
+//   1. 在 test_explicit 内，Ctrl+点击 p.x → 跳到 Point.x，不是 Line.x
+//   2. 在 test_param 内，Ctrl+点击 p.x → 跳到 Point.x
+//   3. 在 p. 后触发补全 → 只列 Point 成员（x/y/getX），不含 Line.length
+//   4. 在 getX 内点击 x（无显式接收者）→ 回退到全文件兜底，不崩溃
+//
+// 运行时验证（sptscript type_infer.spt）：
+//   应输出 "type_infer runtime OK"
+
+class Point {
+  int x;
+  int y;
+  void __init(int x, int y) {
+    this.x = x;
+    this.y = y;
+  }
+  int getX() {
+    return this.x;
+  }
+}
+
+class Line {
+  int x;
+  int length;
+}
+
+// LSP 手测函数（不调用，仅用于编辑器内跳转/补全测试）
+int test_explicit() {
+  Point p;
+  p.x = 1;
+  return 0;
+}
+
+int test_param(Point p) {
+  p.x = 3;
+  return 0;
+}
+
+// 运行时验证
+Point pt = Point(10, 20);
+assert(pt.x == 10, "pt.x should be 10");
+assert(pt.y == 20, "pt.y should be 20");
+assert(pt.getX() == 10, "pt.getX() should be 10");
+
+print("type_infer runtime OK");
