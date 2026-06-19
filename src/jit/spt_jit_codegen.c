@@ -203,6 +203,19 @@ static int ra_op_is_safe(int op) {
    This is intentionally conservative: if the trace uses any non-scalar op, or
    needs more resident slots than we have registers, we leave use_ra = 0 and the
    existing spill-everything path runs unchanged (and correctly). */
+/* Chase NOP aliases (produced by algebraic simplification x*1 / x+0 / x-0 or by
+   CSE) to the instruction that actually computes the value. A NOP emits no code,
+   so a register must be bound to the real computing instruction; binding it to
+   the NOP leaves the register never written (the computed value lands elsewhere
+   or stays the stale live-in). Bounded against malformed chains. */
+static int ra_canon_ref(SPTIRBuilder *ir, int ref) {
+  int guard = 0;
+  while (ref >= 0 && ref < ir->ninst &&
+         ir->insts[ref].op == SPTIR_NOP && guard++ < 256)
+    ref = ir->insts[ref].op1;
+  return ref;
+}
+
 static void ra_analyze(SPTCodeGen *cg) {
   SPTIRBuilder *ir = &cg->trace->ir;
   cg->use_ra = 0;
@@ -278,7 +291,7 @@ static void ra_analyze(SPTCodeGen *cg) {
     int sload = isload[k];
     cg->ref_reg[sload] = (int8_t)reg;
     cg->ref_hoist[sload] = 1;
-    int final_ref = ir->reg_map[slot];
+    int final_ref = ra_canon_ref(ir, ir->reg_map[slot]);
     if (final_ref >= 0 && final_ref != sload && final_ref < ir->ninst)
       cg->ref_reg[final_ref] = (int8_t)reg;
   }
@@ -290,7 +303,7 @@ static void ra_analyze(SPTCodeGen *cg) {
     int sload = fsload[k];
     cg->ref_xmm[sload] = (int8_t)reg;
     cg->ref_hoist[sload] = 1;
-    int final_ref = ir->reg_map[slot];
+    int final_ref = ra_canon_ref(ir, ir->reg_map[slot]);
     if (final_ref >= 0 && final_ref != sload && final_ref < ir->ninst)
       cg->ref_xmm[final_ref] = (int8_t)reg;
   }
@@ -323,6 +336,15 @@ static void ra_hoist_invariants(SPTCodeGen *cg) {
   uint8_t *inv = (uint8_t *)calloc(ir->ninst > 0 ? ir->ninst : 1, 1);
   if (!inv) return;
 
+  /* If the loop writes any array element, an invariant-looking array LOAD may
+     be aliased by that write, so we must not hoist array loads. (Bounds guards
+     and LEN stay safe: an in-bounds SETI never changes a length.) */
+  int has_seti = 0;
+  for (int i = 0; i < ir->ninst; i++) {
+    if ((ir->insts[i].flags & SPTIRF_DEAD)) continue;
+    if (ir->insts[i].op == SPTIR_SETI) { has_seti = 1; break; }
+  }
+
   for (int i = 0; i < ir->ninst; i++) {
     SPTIRInst *in = &ir->insts[i];
     if (in->flags & SPTIRF_DEAD) continue;
@@ -344,13 +366,35 @@ static void ra_hoist_invariants(SPTCodeGen *cg) {
       case SPTIR_LEN:
       case SPTIR_TOFLT: case SPTIR_TOINT:
         is_inv = o1ok; break;
+      case SPTIR_GUARD_LT: {
+        /* Hoist a bounds guard only for a *constant* compared value with an
+           invariant bound -- i.e. the `c < LEN` guard of a constant-index GETI.
+           This excludes the FORLOOP count guard (bound = live counter, not
+           invariant) and variable-index guards (op1 not constant), both of
+           which break internal looping if hoisted. */
+        SPTIRInst *v = sptir_get(ir, o1);
+        int bnd = (int)in->aux;
+        int bndok = (bnd < 0) || inv[bnd];
+        is_inv = o1ok && bndok && v && v->op == SPTIR_KINT;
+        break;
+      }
+      case SPTIR_GETI: {
+        /* Loop-invariant array element load with a CONSTANT index (e.g.
+           base[0]). Constant index only: a hoisted variable-index load made the
+           trace stop looping internally (entries became per-iteration), a net
+           slowdown -- so we keep those in the loop. Also requires no aliasing
+           array write in the loop. */
+        SPTIRInst *ix = sptir_get(ir, o2);
+        is_inv = !has_seti && o1ok && o2ok && ix && ix->op == SPTIR_KINT;
+        break;
+      }
       case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL:
       case SPTIR_BAND: case SPTIR_BOR: case SPTIR_BXOR:
       case SPTIR_SHL: case SPTIR_SHR:
         is_inv = o1ok && o2ok; break;
       case SPTIR_NEG:
         is_inv = o1ok; break;
-      default: is_inv = 0; break;    /* GETI/SETI/LOOP/cmp/bounds guards: no */
+      default: is_inv = 0; break;    /* SETI/LOOP/cmp guards: no */
     }
     inv[i] = (uint8_t)is_inv;
     /* Hoist only if not register-resident (don't disturb RA's bindings). */

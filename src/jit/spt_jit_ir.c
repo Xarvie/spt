@@ -331,10 +331,13 @@ static int try_cse(SPTIRBuilder *b, int idx) {
     if (o->op == ir->op && o->type == ir->type &&
         o->op1 == ir->op1 && o->op2 == ir->op2 &&
         !(o->flags & SPTIRF_DEAD)) {
-      /* Found identical: replace this with a copy (NOP). */
+      /* Found identical: turn this into a NOP-alias whose op1 points at the
+         earlier identical instruction (the CSE result). op1 must be reset to i
+         -- keeping the original first operand would alias to an operand value
+         (e.g. `a` of `a*b`) instead of the computed result. */
       ir->op = SPTIR_NOP;
+      ir->op1 = i;
       ir->op2 = SPTIR_NULL;
-      /* Keep op1 as the reference to the CSE result. */
       return 1;
     }
   }
@@ -467,6 +470,38 @@ void sptir_dump(const SPTIRBuilder *b, const char *title) {
   fprintf(stderr, "\n----\n");
 }
 
+/* Chase a NOP-alias chain (from algebraic simplification or CSE) to the
+   instruction that actually computes the value. */
+static int canon_nop(SPTIRBuilder *b, int ref) {
+  int guard = 0;
+  while (ref >= 0 && ref < b->ninst &&
+         b->insts[ref].op == SPTIR_NOP && guard++ < 256)
+    ref = b->insts[ref].op1;
+  return ref;
+}
+
+/* Rewrite every reference to a NOP-alias so it points at the canonical
+   computing instruction: instruction operands, guard bounds (the aux ref of
+   GUARD_LT/GUARD_LE), and the live slot map. After this, NOPs are unreferenced
+   (DCE drops them) and codegen/RA never bind a register to a value-less NOP --
+   which would otherwise leave that register holding a stale live-in (the cause
+   of x*1 / x+0 and CSE miscompiles under register residency). Snapshots, taken
+   during recording before optimization, are handled separately by gen_load's
+   own NOP forwarding. */
+static void forward_nops(SPTIRBuilder *b) {
+  for (int i = 0; i < b->ninst; i++) {
+    SPTIRInst *in = &b->insts[i];
+    if (in->op == SPTIR_NOP) continue;          /* leave the alias itself */
+    if (in->op1 >= 0) in->op1 = canon_nop(b, in->op1);
+    if (in->op2 >= 0) in->op2 = canon_nop(b, in->op2);
+    if ((in->op == SPTIR_GUARD_LT || in->op == SPTIR_GUARD_LE) &&
+        in->aux >= 0 && in->aux < b->ninst)
+      in->aux = canon_nop(b, (int)in->aux);
+  }
+  for (int s = 0; s <= b->maxslot && s < 256; s++)
+    if (b->reg_map[s] >= 0) b->reg_map[s] = canon_nop(b, b->reg_map[s]);
+}
+
 void sptir_optimize(SPTIRBuilder *b) {
   /* Pass 1: constant folding + algebraic simplification. */
   for (int i = 0; i < b->ninst; i++) {
@@ -480,6 +515,9 @@ void sptir_optimize(SPTIRBuilder *b) {
     if (b->insts[i].flags & SPTIRF_DEAD) continue;
     try_cse(b, i);
   }
+
+  /* Pass 2.5: forward NOP-aliases so no live reference points at a NOP. */
+  forward_nops(b);
 
   /* Pass 3: Dead code elimination. */
   dce(b);

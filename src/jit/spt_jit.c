@@ -295,6 +295,12 @@ static int rec_load_rkc(SPTRecCtx *rc, Instruction i) {
    be typed and a type guard emitted. Returns SPTT_ANY if the slot isn't an
    array, the index is out of range, or the element isn't a type we trace. */
 static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
+  /* Read the array from its stack slot: exact for a slot holding a genuine
+     array (a variable, or an explicit `row = m[i]`). A *chained* m[i][j] has
+     its intermediate slot reused, so this returns ANY and the trace aborts.
+     (Compiling it produced a trace slower than the interpreter -- it didn't
+     loop internally for reasons unrelated to invariant hoisting; abort is
+     better. Revisit when that non-looping is understood.) */
   StkId base = rc->ci->func.p + 1;
   TValue *arrtv = s2v(base + areg);
   if (!ttisarray(arrtv)) return SPTT_ANY;
@@ -318,11 +324,51 @@ static double rec_num_as_double(const TValue *v) {
   return 0.0;
 }
 
-/* Evaluate a numeric comparison at record time to learn which way the branch
-   actually went, so the trace records the taken path (not the static
-   fall-through). */
-static int rec_eval_num_cmp(SPTIROp op, const TValue *x, const TValue *y) {
-  double a = rec_num_as_double(x), b = rec_num_as_double(y);
+/* Recover a record-time numeric value to PREDICT a branch direction. The
+   prediction only needs to be a good heuristic -- correctness is enforced by
+   the guard regardless of which arm we record. Rules:
+     - KINT/KFLT  -> the IR constant (reused-slot-safe: a slot that held a
+                     LOADK constant may have since been reassigned on the stack,
+                     so we must NOT read the stack for it).
+     - otherwise  -> the operand's stack slot 'reg' (an SLOAD reads the current
+                     value; a value computed last iteration is a fine predictor).
+   'reg' < 0 means the operand has no stack slot (a pure immediate/constant). */
+static int rec_pred_num(SPTRecCtx *rc, int ref, int reg, double *out) {
+  SPTIRInst *in = sptir_get(rc->ir, ref);
+  if (in && in->op == SPTIR_KINT) { *out = (double)(int64_t)in->aux; return 1; }
+  if (in && in->op == SPTIR_KFLT) { double d; memcpy(&d, &in->aux, sizeof d); *out = d; return 1; }
+  if (reg >= 0) {
+    TValue *v = s2v((rc->ci->func.p + 1) + reg);
+    if (ttisinteger(v)) { *out = (double)ivalue(v); return 1; }
+    if (ttisfloat(v))   { *out = fltvalue(v); return 1; }
+  }
+  return 0;
+}
+
+/* Record-time truthiness behind an IR ref (for OP_TEST/TESTSET). Boolean and
+   nil constants and an SLOAD's tag determine it; a value whose IR type already
+   pins truthiness (everything except SPTT_ANY) is decidable too. */
+static int rec_ref_truthy(SPTRecCtx *rc, int ref, int *out) {
+  SPTIRInst *in = sptir_get(rc->ir, ref);
+  if (!in) return 0;
+  switch (in->op) {
+    case SPTIR_NIL: case SPTIR_FALSE: *out = 0; return 1;
+    case SPTIR_TRUE: *out = 1; return 1;
+    case SPTIR_SLOAD: {
+      TValue *v = s2v((rc->ci->func.p + 1) + (int)in->aux);
+      *out = !l_isfalse(v); return 1;
+    }
+    default: break;
+  }
+  switch ((SPTType)in->type) {
+    case SPTT_NIL: case SPTT_FALSE: *out = 0; return 1;
+    case SPTT_ANY: return 0;
+    default:       *out = 1; return 1; /* int/flt/str/arr/tab/func/ud/true */
+  }
+}
+
+/* Evaluate a numeric comparison at record time. */
+static int rec_eval_num_cmp(SPTIROp op, double a, double b) {
   switch (op) {
     case SPTIR_LT: return a < b;
     case SPTIR_LE: return a <= b;
@@ -349,27 +395,64 @@ static SPTIROp rec_negate_cmp(SPTIROp op) {
 
 /* Record a comparison + its trailing conditional JMP, following the branch the
    program actually takes at record time. 'fop' is the condition under which the
-   bytecode falls through to the next instruction (the THEN block). If at record
-   time that condition holds we keep the fall-through and guard 'fop'; otherwise
-   the JMP is taken, so we guard the negation and continue at the JMP target.
-   This makes biased branches stay on their hot path instead of side-exiting
-   every iteration. Returns 1 to continue recording, 0 to abort. */
+   bytecode falls through to the next instruction (the THEN block). We evaluate
+   it on the operands' record-time values (from the IR, not the stack): if it
+   holds we keep the fall-through and guard 'fop'; otherwise the JMP is taken, so
+   we guard the negation and continue at the JMP target. If the values can't be
+   known (an operand computed mid-trace), we keep the static fall-through, which
+   is always correct (just possibly cold). Returns 1 to continue, 0 to abort. */
 static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
-                           SPTType at, SPTType bt,
-                           const TValue *x, const TValue *y) {
+                           SPTType at, SPTType bt, int a_reg, int b_reg) {
   if (!sptt_isnum(at) || !sptt_isnum(bt)) { rc->aborted = 1; return 0; }
   const Instruction *jmp = rc->pc + 1; /* the JMP following the comparison */
-  if (rec_eval_num_cmp(fop, x, y)) {
-    /* Fall-through path taken: guard the fall-through condition. */
+  double xv, yv;
+  int fall_through = 1; /* default: static fall-through (correct, maybe cold) */
+  if (rec_pred_num(rc, aref, a_reg, &xv) && rec_pred_num(rc, bref, b_reg, &yv))
+    fall_through = rec_eval_num_cmp(fop, xv, yv);
+  if (fall_through) {
     rec_compare(rc, fop, aref, bref, at, bt);
     if (rc->aborted) return 0;
-    rc->pc = jmp + 1;                  /* skip comparison + JMP */
+    rc->pc = jmp + 1;                   /* skip comparison + JMP */
   } else {
-    /* Branch (JMP) taken: guard the negation, continue at the JMP target. */
     rec_compare(rc, rec_negate_cmp(fop), aref, bref, at, bt);
     if (rc->aborted) return 0;
     rc->pc = jmp + 1 + GETARG_sJ(*jmp); /* follow the JMP */
   }
+  return 1;
+}
+
+/* The record-time TString behind an IR ref: a KSTR constant, or the string in
+   the operand's stack slot. NULL if not a string. */
+static TString *rec_str_at(SPTRecCtx *rc, int ref, int reg) {
+  SPTIRInst *in = sptir_get(rc->ir, ref);
+  if (in && in->op == SPTIR_KSTR) return (TString *)(uintptr_t)in->aux;
+  if (reg >= 0) {
+    TValue *v = s2v((rc->ci->func.p + 1) + reg);
+    if (ttisstring(v)) return tsvalue(v);
+  }
+  return NULL;
+}
+
+/* Like rec_cond_branch but for string EQ/NE (e.g. `if s == "literal"`). The
+   guard is a pointer comparison, valid because the constant operand is a short
+   interned string (the OP_EQK handler checks this). The taken branch is
+   predicted by comparing the record-time string pointers. */
+static int rec_str_cond_branch(SPTRecCtx *rc, int k, int aref, int bref,
+                               int a_reg, int b_reg) {
+  SPTIROp fop = k ? SPTIR_NE : SPTIR_EQ; /* fall-through condition */
+  TString *sa = rec_str_at(rc, aref, a_reg);
+  TString *sb = rec_str_at(rc, bref, b_reg);
+  int fall_through = 1;
+  if (sa && sb) {
+    int eq = (sa == sb);
+    fall_through = (fop == SPTIR_EQ) ? eq : !eq;
+  }
+  const Instruction *jmp = rc->pc + 1;
+  SPTIROp gop = fall_through ? fop : rec_negate_cmp(fop);
+  rec_compare(rc, gop, aref, bref, SPTT_STR, SPTT_STR);
+  if (rc->aborted) return 0;
+  if (fall_through) rc->pc = jmp + 1;
+  else rc->pc = jmp + 1 + GETARG_sJ(*jmp);
   return 1;
 }
 
@@ -439,6 +522,19 @@ static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
     }
     int ref = sptir_emit(ir, op, SPTT_TRUE, a_ref, b_ref, 0);
     /* Comparison is a guard: if it fails, take side exit. */
+    ir->insts[ref].flags |= SPTIRF_GUARD;
+    int snap = sptir_snapshot(ir, rc->pc);
+    ir->insts[ref].snap_idx = snap;
+    return ref;
+  }
+
+  /* String equality/inequality via pointer comparison. The caller guarantees a
+     short interned constant operand, so pointer equality is exact: equal short
+     strings share one interned object, and a long string can never equal a
+     short constant. Only EQ/NE (ordering would need content comparison). */
+  if (a_type == SPTT_STR && b_type == SPTT_STR &&
+      (op == SPTIR_EQ || op == SPTIR_NE)) {
+    int ref = sptir_emit(ir, op, SPTT_TRUE, a_ref, b_ref, 0);
     ir->insts[ref].flags |= SPTIRF_GUARD;
     int snap = sptir_snapshot(ir, rc->pc);
     ir->insts[ref].snap_idx = snap;
@@ -604,9 +700,11 @@ static int rec_inst(SPTRecCtx *rc) {
       int bref = rec_load_reg(rc, b);
       SPTType bt = ir->reg_type[b];
       if (bt != SPTT_ARR) { rc->aborted = 1; return 0; }
-      /* Element type from the live array; only trace numeric elements. */
+      /* Element type from the live array. Numeric elements and (short or long)
+         strings are loadable: the GETI codegen tag-guards then loads the 8-byte
+         value (the TString* for a string), and exits restore any type. */
       SPTType et = rec_array_elem_type(rc, b, c);
-      if (et != SPTT_INT && et != SPTT_FLT) { rc->aborted = 1; return 0; }
+      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR) { rc->aborted = 1; return 0; }
       /* Bounds guard: 0 <= c < loglen (c is a constant here). */
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
       sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, c), (int64_t)lenref, rc->pc);
@@ -637,7 +735,7 @@ static int rec_inst(SPTRecCtx *rc) {
       TValue *idxtv = s2v(base + c);
       if (!ttisinteger(idxtv)) { rc->aborted = 1; return 0; }
       SPTType et = rec_array_elem_type(rc, b, ivalue(idxtv));
-      if (et != SPTT_INT && et != SPTT_FLT) { rc->aborted = 1; return 0; }
+      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR) { rc->aborted = 1; return 0; }
       /* Bounds guard: 0 <= idx < loglen. */
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
       sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)cref, rc->pc);
@@ -877,101 +975,108 @@ static int rec_inst(SPTRecCtx *rc) {
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      StkId base = rc->ci->func.p + 1;
-      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt,
-                             s2v(base + a), s2v(base + b));
+      /* Two string *variables*: either could be a long (non-interned) string,
+         so pointer comparison is unsafe. Abort. */
+      if (at == SPTT_STR || bt == SPTT_STR) { rc->aborted = 1; return 0; }
+      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt, a, b);
     }
     case OP_LT: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      StkId base = rc->ci->func.p + 1;
-      return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt,
-                             s2v(base + a), s2v(base + b));
+      return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt, a, b);
     }
     case OP_LE: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      StkId base = rc->ci->func.p + 1;
-      return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt,
-                             s2v(base + a), s2v(base + b));
+      return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt, a, b);
     }
     case OP_EQI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      StkId base = rc->ci->func.p + 1;
-      TValue bv; setivalue(&bv, b);
       return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
-                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
+                             ir->reg_type[a], SPTT_INT, a, -1);
     }
     case OP_LTI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      StkId base = rc->ci->func.p + 1;
-      TValue bv; setivalue(&bv, b);
       return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref,
-                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
+                             ir->reg_type[a], SPTT_INT, a, -1);
     }
     case OP_LEI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      StkId base = rc->ci->func.p + 1;
-      TValue bv; setivalue(&bv, b);
       return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref,
-                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
+                             ir->reg_type[a], SPTT_INT, a, -1);
     }
     case OP_GTI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      StkId base = rc->ci->func.p + 1;
-      TValue bv; setivalue(&bv, b);
       return rec_cond_branch(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref,
-                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
+                             ir->reg_type[a], SPTT_INT, a, -1);
     }
     case OP_GEI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      StkId base = rc->ci->func.p + 1;
-      TValue bv; setivalue(&bv, b);
       return rec_cond_branch(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref,
-                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
+                             ir->reg_type[a], SPTT_INT, a, -1);
     }
     case OP_EQK: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_k(rc, b);
-      StkId base = rc->ci->func.p + 1;
+      SPTType at = ir->reg_type[a], bt = sptir_type(ir, bref);
+      if (at == SPTT_STR && bt == SPTT_STR) {
+        /* `s == "literal"`: only safe when the constant is a short interned
+           string -- then pointer equality is exact. */
+        if (!ttisshrstring(&rc->k[b])) { rc->aborted = 1; return 0; }
+        return rec_str_cond_branch(rc, k, aref, bref, a, b);
+      }
       return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
-                             ir->reg_type[a], sptir_type(ir, bref),
-                             s2v(base + a), &rc->k[b]);
+                             at, bt, a, -1);
     }
 
     /* ---- Tests ---- */
     case OP_TEST: {
       int a = GETARG_A(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      /* Guard: R[A] is truthy/falsy. */
-      sptir_guard(ir, SPTIR_GUARD, aref, k, rc->pc);
-      rc->pc++; /* skip JMP */
-      break;
+      int aref = rec_load_reg(rc, a); /* emits GUARD_T pinning R[A]'s exact tag */
+      int cond;
+      /* The tag guard fixes truthiness (true/false/nil are distinct tags); read
+         it from the IR ref (a reused slot's stack value would be stale). */
+      if (!rec_ref_truthy(rc, aref, &cond)) { rc->aborted = 1; return 0; }
+      const Instruction *jmp = rc->pc + 1;
+      if (cond != k)
+        rc->pc = jmp + 1;                            /* fall-through */
+      else
+        rc->pc = jmp + 1 + GETARG_sJ(*jmp);          /* take the JMP */
+      return 1;
     }
     case OP_TESTSET: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
-      int bref = rec_load_reg(rc, b);
-      sptir_guard(ir, SPTIR_GUARD, bref, k, rc->pc);
-      ir->reg_map[a] = bref;
-      ir->reg_type[a] = ir->reg_type[b];
-      if (a > ir->maxslot) ir->maxslot = a;
-      rc->pc++; /* skip JMP */
-      break;
+      int bref = rec_load_reg(rc, b); /* GUARD_T pins R[B]'s tag/truthiness */
+      int cond;
+      if (!rec_ref_truthy(rc, bref, &cond)) { rc->aborted = 1; return 0; }
+      int isfalse = !cond;
+      const Instruction *jmp = rc->pc + 1;
+      if (isfalse == k) {
+        /* Fall-through: R[A] is NOT assigned. */
+        rc->pc = jmp + 1;
+      } else {
+        /* Branch: R[A] := R[B], then take the JMP. */
+        ir->reg_map[a] = bref;
+        ir->reg_type[a] = ir->reg_type[b];
+        if (a > ir->maxslot) ir->maxslot = a;
+        rc->pc = jmp + 1 + GETARG_sJ(*jmp);
+      }
+      return 1;
     }
 
     /* ---- Jumps ---- */
