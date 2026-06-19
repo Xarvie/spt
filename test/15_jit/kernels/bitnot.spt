@@ -1,0 +1,3 @@
+int x = 0;
+for (int i = 0, 2000) { x = x + (~i & 255); }
+print(x);

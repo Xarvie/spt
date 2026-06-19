@@ -47,6 +47,7 @@ typedef struct {
   Proto *proto;
   int pc_offset;
   uint16_t counter;
+  uint16_t aborts;  /* times recording aborted here; blacklist once it's high */
   SPTTrace *trace;  /* compiled trace, if any */
 } SPTHotEntry;
 

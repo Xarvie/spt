@@ -45,6 +45,11 @@ typedef l_uint32 Instruction;
 /* Hot loop detection: number of iterations before recording a trace. */
 #define SPT_JIT_HOT 60
 
+/* Abort backlist: after this many failed recording attempts at one location,
+   stop trying to trace it. Prevents the JIT from repeatedly recording and
+   discarding an un-traceable loop (which is slower than just interpreting). */
+#define SPT_JIT_MAX_ABORTS 8
+
 /* Maximum trace length (instructions). Longer traces are aborted. */
 #define SPT_JIT_MAX_TRACE 4096
 

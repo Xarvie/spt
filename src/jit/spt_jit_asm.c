@@ -486,32 +486,42 @@ static void emit_rex_xmm_xmm(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) {
 }
 
 void sptasm_movsd_rm(SPTAsm *a, SPTXmmReg dst, SPTReg base, int32_t disp) {
-  emit_rex_xmm(a, 0, dst, base);
   sptasm_byte(a, 0xF2);
+  emit_rex_xmm(a, 0, dst, base);
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0x10); /* MOVSD xmm, m64 */
   emit_mem(a, (SPTReg)dst, base, disp);
 }
 
 void sptasm_movsd_mr(SPTAsm *a, SPTReg base, int32_t disp, SPTXmmReg src) {
-  emit_rex_xmm(a, 0, src, base);
   sptasm_byte(a, 0xF2);
+  emit_rex_xmm(a, 0, src, base);
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0x11); /* MOVSD m64, xmm */
   emit_mem(a, (SPTReg)src, base, disp);
 }
 
 void sptasm_movsd_rr(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) {
-  emit_rex_xmm_xmm(a, dst, src);
   sptasm_byte(a, 0xF2);
+  emit_rex_xmm_xmm(a, dst, src);
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0x10); /* MOVSD xmm, xmm */
   emit_modrm(a, 3, dst, src);
 }
 
+/* Move the low 64 bits of an XMM register into a GPR (movq r64, xmm).
+   66 REX.W 0F 7E /r, with the XMM in the reg field and the GPR in r/m. */
+void sptasm_movq_xmm_to_gpr(SPTAsm *a, SPTReg dst, SPTXmmReg src) {
+  sptasm_byte(a, 0x66);
+  emit_rex_xmm(a, 1, src, dst);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0x7E); /* MOVQ r/m64, xmm */
+  emit_modrm(a, 3, src, dst);
+}
+
 static void sse2_op_rr(SPTAsm *a, uint8_t opcode, SPTXmmReg dst, SPTXmmReg src) {
-  emit_rex_xmm_xmm(a, dst, src);
   sptasm_byte(a, 0xF2);
+  emit_rex_xmm_xmm(a, dst, src);
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, opcode);
   emit_modrm(a, 3, dst, src);
@@ -525,29 +535,29 @@ void sptasm_divsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op_rr(a, 0x5E,
 void sptasm_xorps(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) {
   emit_rex_xmm_xmm(a, dst, src);
   sptasm_byte(a, 0x0F);
-  sptasm_byte(a, 0x57); /* XORPS */
+  sptasm_byte(a, 0x57); /* XORPS (no mandatory prefix) */
   emit_modrm(a, 3, dst, src);
 }
 
 void sptasm_ucomisd(SPTAsm *a, SPTXmmReg r1, SPTXmmReg r2) {
-  emit_rex_xmm_xmm(a, r1, r2);
   sptasm_byte(a, 0x66);
+  emit_rex_xmm_xmm(a, r1, r2);
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0x2E); /* UCOMISD */
   emit_modrm(a, 3, r1, r2);
 }
 
 void sptasm_cvtsi2sd(SPTAsm *a, SPTXmmReg dst, SPTReg src) {
-  emit_rex_xmm(a, 1, dst, src);
   sptasm_byte(a, 0xF2);
+  emit_rex_xmm(a, 1, dst, src);
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0x2A); /* CVTSI2SD xmm, r/m64 */
   emit_modrm(a, 3, dst, src);
 }
 
 void sptasm_cvtsd2si(SPTAsm *a, SPTReg dst, SPTXmmReg src) {
-  emit_rex_xmm(a, 1, src, dst);
   sptasm_byte(a, 0xF2);
+  emit_rex_xmm(a, 1, src, dst);
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0x2D); /* CVTSD2SI r64, xmm */
   emit_modrm(a, 3, dst, src);

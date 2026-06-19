@@ -192,10 +192,18 @@ print(sum);  // 55 → 确认 inclusive 语义
 
 在 `lvm.c` 的 **FORLOOP / TFORLOOP** 后向跳转处检测：
 ```c
-if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) vmbreak;
+if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) { vmbreak; }
 ```
 
 `vmbreak` 表示 JIT 接管了执行，解释器直接跳出当前 dispatch。
+
+> **大括号是必须的，不能省。** 本仓库 `vmbreak` 定义为 `break`（switch dispatch），
+> 即使写成 `if (cond) vmbreak;` 也能编译。但上游 Lua 的 computed-goto dispatch 把
+> `vmbreak` 定义成**多语句**宏（`vmfetch(); vmdispatch(GET_OPCODE(i));`）。那种情况下
+> 不加大括号，`if (cond) vmbreak;` 会展开成
+> `if (cond) vmfetch(); vmdispatch(...);` —— 只有 `vmfetch()` 受条件控制，
+> `vmdispatch` **无条件**执行，JIT 进入逻辑会被悄悄破坏。所以四个检测点
+> （pc+sj 的 JMP、FORLOOP×2、TFORLOOP）一律用 `{ vmbreak; }`。
 
 ### 4. 可执行内存管理
 
@@ -306,9 +314,13 @@ src/jit/
 - **驻留判定**：凡是有整型 live-in SLOAD 的槽 → 分配一个 GPR；有浮点 SLOAD 的槽
   → 分配一个 XMM。`ra_analyze()` 收集，超出寄存器池就整体回退到"全溢出"老路径
   （已验证正确），保证安全。
-- **GPR 池**：`{R15,RSI,RDI,R8,R9,R10,R11}`（prologue 已保存或 leaf 不需保存）；
-  RAX/RCX/RDX 保留作 load/移位/除法/取模的 scratch。**XMM 池**：`{XMM4-7}`
-  （SysV 下全部 caller-saved，leaf trace 可自由用；XMM0-3 作 scratch）。
+- **GPR 池**：`{R15,RSI,RDI,R8,R9,R10,R11}`（prologue 已保存或 leaf 不需保存；
+  注意 RSI/RDI/R15 在 Win64 是 callee-saved，prologue 确实 push 了它们，所以两 ABI 都安全）；
+  RAX/RCX/RDX 保留作 load/移位/除法/取模的 scratch。**XMM 池**：SysV 用 `{XMM4-7}`
+  （全部 caller-saved，leaf trace 可自由用），**Win64 只用 `{XMM4,XMM5}`**——因为
+  XMM6-15 在 Win64 是 callee-saved 而 prologue 没保存它们，用了就违反调用约定
+  （潜伏 bug：只有当编译器恰好把活跃浮点值放在 XMM6/7 跨越 trace 调用时才显形）。
+  见 `XMM_POOL` 的 `#if defined(_WIN32)`。XMM0-3 作 scratch。
 - **前导块 (preheader)**：把 live-in 的 SLOAD + 类型 guard 提升到循环标签**之前**，
   只在进入时执行一次。循环体内这些指令被跳过（`ref_hoist[]`）。类型在循环内不会变
   （只跑整型/浮点运算），所以 guard 一次足矣。
@@ -346,4 +358,82 @@ src/jit/
   （这些可能调用 C 破坏 caller-saved 寄存器，或 codegen 路径仍是整型/溢出版）。
 - XMM 池 4 个、GPR 池 7 个；超出则回退。多步更新的中间值仍溢出（仅 SLOAD 和最终
   值绑定寄存器）。
-- Win64 移植：浮点用了 XMM4-7，Win64 下 XMM6/7 是 callee-saved，prologue 需补存。
+- Win64 ABI：XMM6-15 是 callee-saved 而 prologue 没保存，所以 **Win64 下 XMM 池已收窄为
+  `{XMM4,XMM5}`**（见 `XMM_POOL` 的 `#if`），消除了 ABI 违规。代价：Win64 上 3+ 个浮点
+  变量的循环拿不到浮点寄存器驻留（回退到溢出路径，仍正确）。若要在 Win64 恢复 4 个浮点
+  寄存器，需在 prologue/epilogue 里 save/restore XMM6/7——本仓库未做，因为无法在 SysV
+  主机上验证那段栈帧改动。
+
+## 十、中止黑名单（abort blacklist）与数组循环现状
+
+### 10.1 中止黑名单（已实现）
+**问题**：含不可 trace 操作的循环（CALL、泛型 for、数组访问目前也是）每次变热都重新录制、
+中止、丢弃。`SPTHotEntry.counter` 中止后清零，循环再次变热又重试，无限 churn。实测一个数组
+求和循环 **JIT 开比关慢 2.8×**（0.70s vs 0.25s）——JIT 反而拖慢了。
+**修复**：`SPTHotEntry` 加 `aborts` 计数；`record_trace` 返回 NULL 时 `e->aborts++`；
+`sptjit_trace_hot` 里若 `e->aborts >= SPT_JIT_MAX_ABORTS`（=8）直接 return，不再计数不再录制。
+实测中止数从 50000 降到 16，数组循环回到 0.91×（与解释器持平，churn 消除）。标量循环不受影响
+（它们能编译，永远不进黑名单），仍 14×+。
+
+### 10.2 数组循环 JIT —— 读写均已实现（本轮完成）
+数组迭代是真实代码里最常见的热循环。之前整条路从未真正跑过（`OP_GETTABLE/GETI` 把结果记成
+`SPTT_ANY`，下游算术中止）。本轮做完了**读和写**：
+
+**读 (`GETI`)**：
+- 录制器读运行时元素类型给结果定型（`rec_array_elem_type`），下游算术不再中止。
+- 补数组类型 guard（`rec_load_reg` 自带）+ 越界 guard（`0 ≤ idx < loglen`，用 LEN + GUARD_LE/LT）。
+- `GETI` 变成"带 guard 的 load"：codegen 先 load 元素 tag、和期望类型比较、不匹配则侧出
+  （新增 `movzx`/`[base+index]` 手工编码），再按 `[array-(k+1)*8]` load 值。
+- `GETI`/`LEN` 标为 RA-safe（纯内联，只用 RAX/RCX/RDX scratch）；`ra_analyze` 改为
+  **跳过只读的非数值 live-in**（数组指针留在栈上每轮读），数值计数器/累加器照常驻留寄存器。
+  → 数组读循环 **2.5–3×**（含双数组点积 `a[i]*b[i]`）。
+
+**写 (`SETI`)**：
+- 录制器补越界 guard（只 JIT 越界内的写；追加/扩容则侧出到解释器）。
+- **修了一个潜伏 bug**：原 SETI codegen 的 tag store REX 写错（`0x44` 少了 REX.B），
+  `mov byte [R9], R10b` 实际编码成 `mov byte [RCX], R10b`——往索引值当地址乱写，会损坏内存。
+  从未跑过所以没暴露。
+- **重写为 RA-safe**：原版用 R8 当 scratch（R8 在 RA 池里），所以含 SETI 的 trace 只能关 RA。
+  改成只用 RAX/RCX/RDX + SIB 寻址：tag store `mov byte [RAX+RCX*1+4], imm`
+  (`C6 44 08 04 tag`)、value store `mov [RAX+RCX*1-8], RDX`（先 `imul RCX,8; neg RCX`，
+  再 `48 89 54 08 F8`）。SIB=0x08(scale1,index=RCX,base=RAX)，逐字节用反汇编核对过。
+  标为 RA-safe 后写循环拿到寄存器驻留 → **2.0–2.3×**（之前无 RA 是 1.3–1.8×）。
+
+### 10.3 SSE2 前缀/REX 顺序 bug —— 已修（本轮发现）
+反汇编浮点循环发现 `cvtsi2sd xmm0, eax`——是 **eax(32 位)不是 rax(64 位)**！原因：所有 SSE2
+helper（`sse2_op_rr`/`cvtsi2sd`/`cvtsd2si`/`movsd*`/`ucomisd`）把 REX 字节发在强制前缀
+(F2/66) **之前**。按 x86 规则，REX 必须紧贴 opcode、在 legacy 前缀之后，否则 REX 被忽略。
+于是 `cvtsi2sd` 的 REX.W 被吞掉 → 整数→浮点转换被截断成 32 位。
+
+之所以一直没炸：转换源永远是 RAX（低寄存器，不需要 REX.B），且测试里的整数都 < 2³¹。
+对 > ±2³¹ 的整数（如 50 亿）就会错。修法：把前缀字节发在 REX 之前。对低寄存器/W=0 的算术
+（addsd 等）是 no-op（那些情况本来就不发 REX），对 cvt 则正确启用 REX.W。已用 50 亿整数→浮点
+测试验证修复，全差分回归通过。
+
+### 10.4 分支录制走静态直落 → 改为跟随运行时实际分支（本轮，重大修复）
+反汇编一个 1% 偏置分支 `if(i>99990){稀有}else{常见}` 发现 JIT 比解释器还慢（**0.6×**），
+`entries=30M`（每次迭代都进出 trace）。根因：`record_trace` 从循环头**静态走字节码**，比较
+指令（OP_LT/LE/EQ/EQI/LTI/LEI/GTI/GEI/EQK）后一律 `rc->pc++` 跳过 JMP，录的是**直落（THEN）块**，
+guard 用静态 k flag。于是偏向 ELSE 的循环录成了稀有的 THEN 路径，guard 几乎每轮都失败 → 每轮侧出。
+
+修法：新增 `rec_cond_branch`——录制时用栈上运行时值算出比较结果，决定到底是直落还是跳转：
+- 直落成立 → guard 直落条件 `fop`，`pc = jmp+1`（跳过比较+JMP）。
+- 跳转成立 → guard 取反 `negate(fop)`，`pc = jmp+1+sJ`（跟随 JMP 到目标块）。
+9 个比较 handler 全改成调用它。效果（全部结果正确）：
+
+| 形态 | 修前 | 修后 |
+|---|---|---|
+| 偏置分支(then 稀有) | 0.6× | **13.3×** |
+| 偏置分支(then 常见) | — | **15.8×** |
+| 数组 max `if(v[i]>m)m=v[i]` | — | **2.4×** |
+| 50/50 分支 | 1.5× | ~1.3×（本质如此） |
+| always-taken | 13.8× | 13.5× |
+
+50/50 分支没法靠这个修（两条路真各占一半，无论录哪条都有一半侧出）——需要 side-trace 链接
+（LuaJIT 的做法）才能根治，属于后续大件。验证：9 种分支形态（eq/neq/float/le/ge/双变量/
+min/clamp/嵌套 if）差分全过，全量差分 227/228 + 16 kernel + 230 ctest 全绿。
+
+**已知局限**：`OP_TEST`/`OP_TESTSET`（布尔真值分支 `if flag`）仍有同样的静态直落问题
+（偏置布尔分支约 0.5×），但其真值 guard 测的是 value 字段、与 `docondjump` 的 `cond==k` 极性
+纠缠，改动易把"正确但慢"变成"错误"，故保持原样（结果正确，只是慢）。需要重做基于 tag 的
+真值 guard 才能安全修复——列为后续。

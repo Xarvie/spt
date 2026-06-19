@@ -1,0 +1,3 @@
+int x = 0;
+for (int i = 0, 3000) { x = (x ^ i) & 65535; x = x | (i << 1); x = x >> 1; }
+print(x);

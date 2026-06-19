@@ -1,0 +1,6 @@
+// Simple int sum benchmark (baseline)
+int sum = 0;
+for (int i = 1, 49999999) {
+    sum += i * 3 - 1;
+}
+assert(sum > 0, "int sum positive");

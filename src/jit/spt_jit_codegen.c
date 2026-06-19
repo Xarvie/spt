@@ -183,11 +183,12 @@ static int ra_op_is_safe(int op) {
     case SPTIR_TOFLT: case SPTIR_TOINT:
     case SPTIR_GUARD: case SPTIR_GUARD_LT: case SPTIR_GUARD_LE:
     case SPTIR_GUARD_EQ: case SPTIR_GUARD_T: case SPTIR_GUARD_ULT:
+    case SPTIR_GETI: case SPTIR_LEN: case SPTIR_SETI:
     case SPTIR_LOOP: case SPTIR_PHI: case SPTIR_NOP:
       return 1;
     default:
-      /* POW (libm), ULOAD/USTORE, GETI/SETI, GETFIELD/SETFIELD, GETTABUP,
-         LEN, CALL, RETURN, EXIT: not safe / not handled here. */
+      /* POW (libm), ULOAD/USTORE, GETFIELD/SETFIELD, GETTABUP,
+         CALL, RETURN, EXIT: not safe / not handled here. */
       return 0;
   }
 }
@@ -258,7 +259,13 @@ static void ra_analyze(SPTCodeGen *cg) {
       if (nflt >= XMM_POOL_N) return;
       fslots[nflt] = slot; fsload[nflt] = i; nflt++;
     } else {
-      return; /* other live-in types: bail */
+      /* Non-numeric live-in (e.g. an array reference for GETI). Leave it
+         spilled and read from the stack each iteration -- safe only if it is
+         read-only across the loop. A modified one would need the writeback we
+         omit under residency, so bail in that case. */
+      int slot = (int)in->aux;
+      if (ir->reg_map[slot] != i) return; /* modified -> bail */
+      continue;                           /* read-only -> skip (stays on stack) */
     }
   }
   if (nint == 0 && nflt == 0) return; /* nothing to gain */
@@ -300,6 +307,59 @@ static void ra_analyze(SPTCodeGen *cg) {
   }
 
   cg->use_ra = 1;
+}
+
+/* Loop-invariant code motion (targeted). Once residency is decided, hoist
+   instructions whose value is the same every iteration into the preheader so
+   they run once: read-only-slot SLOADs (e.g. an array reference), their type
+   guards, LEN of an invariant array, and pure arithmetic over invariant
+   operands. This removes the per-iteration array-pointer load, array type
+   guard, and length load from array loops. Invariant comparisons/bounds guards
+   and GETI are intentionally not hoisted (they depend on the loop counter).
+   Only values not bound to a register are hoisted, so RA is left untouched. */
+static void ra_hoist_invariants(SPTCodeGen *cg) {
+  SPTIRBuilder *ir = &cg->trace->ir;
+  if (!cg->use_ra) return;
+  uint8_t *inv = (uint8_t *)calloc(ir->ninst > 0 ? ir->ninst : 1, 1);
+  if (!inv) return;
+
+  for (int i = 0; i < ir->ninst; i++) {
+    SPTIRInst *in = &ir->insts[i];
+    if (in->flags & SPTIRF_DEAD) continue;
+    int is_inv = 0;
+    int o1 = in->op1, o2 = in->op2;
+    int o1ok = (o1 < 0) || inv[o1];
+    int o2ok = (o2 < 0) || inv[o2];
+    switch (in->op) {
+      case SPTIR_KINT: case SPTIR_KFLT: case SPTIR_KSTR:
+      case SPTIR_KPTR: case SPTIR_KGC: case SPTIR_NIL:
+      case SPTIR_TRUE: case SPTIR_FALSE:
+        is_inv = 1; break;
+      case SPTIR_SLOAD: {
+        int slot = (int)in->aux;     /* read-only slot: never modified in loop */
+        is_inv = (ir->reg_map[slot] == i);
+        break;
+      }
+      case SPTIR_GUARD_T:            /* guards an invariant value -> invariant */
+      case SPTIR_LEN:
+      case SPTIR_TOFLT: case SPTIR_TOINT:
+        is_inv = o1ok; break;
+      case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL:
+      case SPTIR_BAND: case SPTIR_BOR: case SPTIR_BXOR:
+      case SPTIR_SHL: case SPTIR_SHR:
+        is_inv = o1ok && o2ok; break;
+      case SPTIR_NEG:
+        is_inv = o1ok; break;
+      default: is_inv = 0; break;    /* GETI/SETI/LOOP/cmp/bounds guards: no */
+    }
+    inv[i] = (uint8_t)is_inv;
+    /* Hoist only if not register-resident (don't disturb RA's bindings). */
+    if (is_inv && i < SPT_JIT_MAX_TRACE &&
+        cg->ref_reg[i] < 0 && cg->ref_xmm[i] < 0) {
+      cg->ref_hoist[i] = 1;
+    }
+  }
+  free(inv);
 }
 
 /* =====================================================================
@@ -380,6 +440,12 @@ static void gen_load(SPTCodeGen *cg, SPTReg dst, int ref, SPTType type) {
   if (cg->use_ra && ref >= 0 && ref < ir->ninst && cg->ref_reg[ref] >= 0) {
     SPTReg src = (SPTReg)cg->ref_reg[ref];
     if (dst != src) sptasm_mov_rr(a, dst, src);
+    return;
+  }
+  /* Resident in an XMM register (e.g. a float used as an array store value):
+     move its 64 raw bits into the GPR rather than reading a stale spill. */
+  if (cg->use_ra && ref >= 0 && ref < ir->ninst && cg->ref_xmm[ref] >= 0) {
+    sptasm_movq_xmm_to_gpr(a, dst, (SPTXmmReg)cg->ref_xmm[ref]);
     return;
   }
 
@@ -1046,75 +1112,63 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
 
     /* ---- Array access ---- */
     case SPTIR_GETI: {
-      /* R[A] = R[B][C] for arrays.
-         op1 = array ref, op2 = index ref.
-         The array is a Table* (pointer). The value is at:
-           tag = getArrTag(t, idx) = (lu_byte*)t->array + sizeof(unsigned) + idx
-           val = getArrVal(t, idx) = t->array - 1 - idx
-         So:
-           tag_addr = (uint8_t*)t->array + 4 + idx
-           val_addr = (Value*)t->array - 1 - idx = &t->array[-(idx+1)]
-         In memory: t->array points between values and tags.
-           Values: t->array[-1] = Value 0, t->array[-2] = Value 1, ...
-           Tags:   ((lu_byte*)t->array)[4] = tag 0, [5] = tag 1, ...
-         So Value k is at t->array[-(k+1)] = t->array - (k+1) * 8
-         And tag k is at ((lu_byte*)t->array)[4 + k]
-      */
+      /* R[A] = R[B][C] for arrays.  op1 = array ref, op2 = index ref.
+         Memory layout (see ltable.h): t->array points between values and tags.
+           value k = t->array[-(k+1)]            = [array - (k+1)*8]
+           tag   k = ((uint8_t*)t->array)[4 + k] = [array + 4 + k]
+         This is a guarded load: check the element's tag against the recorded
+         type (inst->type) and side-exit on mismatch, then load the value. */
       gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);  /* RAX = Table* */
       gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);  /* RCX = index */
-      /* RAX = t->array */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY);
-      /* Value = t->array[-(idx+1)] = [RAX + RCX*8 + 8] ... wait.
-         t->array[-(idx+1)] means address = t->array - (idx+1) * sizeof(Value)
-         = t->array - (idx+1) * 8
-         = [RAX - (RCX+1)*8]
-         = [RAX - RCX*8 - 8]
-         = [RAX + RCX*(-8) - 8]
-         We can use: LEA RDX, [RAX - RCX*8 - 8] then MOV RAX, [RDX]
-         Or: MOV RAX, [RAX + RCX*8 - 8] with negative scale... but x86
-         doesn't support negative scale directly.
-         Use: SUB RAX, RCX*8+8, then MOV RAX, [RAX].
-         Or: NEG RCX; LEA RDX, [RAX + RCX*8]; MOV RAX, [RDX - 8].
-      */
-      sptasm_neg_r(a, SPT_RCX);           /* RCX = -idx */
-      /* LEA RDX, [RAX + RCX*8 - 8] */
-      /* We don't have LEA with scale, so compute manually. */
-      sptasm_lea(a, SPT_RDX, SPT_RAX, -8);  /* RDX = RAX - 8 */
-      /* RDX = RDX + RCX * 8: use IMUL + ADD */
-      sptasm_imul_rri(a, SPT_RCX, SPT_RCX, 8);
-      sptasm_add_rr(a, SPT_RDX, SPT_RCX);
-      /* Load value. */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, 0);
+      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
+
+      /* --- type guard: load tag at [array + 4 + index], compare, exit --- */
+      sptasm_lea(a, SPT_RDX, SPT_RAX, 4);   /* RDX = array + 4 */
+      sptasm_add_rr(a, SPT_RDX, SPT_RCX);   /* RDX = array + 4 + index */
+      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6); sptasm_byte(a, 0x12); /* movzx edx,byte[rdx] */
+      sptasm_cmp_ri(a, SPT_RDX, spt_type_to_tag(inst->type));
+      {
+        int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+        sptasm_jcc(a, SPT_CC_NE, exlbl);
+      }
+
+      /* --- load value at [array - (index+1)*8] (RAX=array, RCX=index) --- */
+      sptasm_neg_r(a, SPT_RCX);             /* RCX = -index */
+      sptasm_lea(a, SPT_RDX, SPT_RAX, -8);  /* RDX = array - 8 */
+      sptasm_imul_rri(a, SPT_RCX, SPT_RCX, 8); /* RCX = -index*8 */
+      sptasm_add_rr(a, SPT_RDX, SPT_RCX);   /* RDX = array - 8 - index*8 */
+      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, 0); /* RAX = value */
       gen_store(cg, idx, SPT_RAX);
       break;
     }
 
     case SPTIR_SETI: {
-      /* R[A][B] = val (aux = val ref). */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);  /* RAX = Table* */
-      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);  /* RCX = index */
-      gen_load(cg, SPT_RDX, (int)inst->aux, SPTT_ANY); /* RDX = value */
-      sptasm_mov_rm(a, SPT_R8, SPT_RAX, OFF_TABLE_ARRAY); /* R8 = t->array */
-      sptasm_neg_r(a, SPT_RCX);
-      sptasm_lea(a, SPT_R9, SPT_R8, -8);
-      sptasm_imul_rri(a, SPT_RCX, SPT_RCX, 8);
-      sptasm_add_rr(a, SPT_R9, SPT_RCX);
-      /* Store value. */
-      sptasm_mov_mr(a, SPT_R9, 0, SPT_RDX);
-      /* Store tag. */
-      SPTType val_type = sptir_type(ir, (int)inst->aux);
-      uint8_t tag = spt_type_to_tag(val_type);
-      sptasm_mov_ri32(a, SPT_R10, tag);
-      /* Tag address = (uint8_t*)t->array + 4 + idx = R8 + 4 + idx */
-      /* But we negated RCX. Let's recompute. */
-      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);  /* RCX = index (original) */
-      sptasm_lea(a, SPT_R9, SPT_R8, 4);  /* R9 = t->array + 4 */
-      /* R9 = R9 + RCX */
-      sptasm_add_rr(a, SPT_R9, SPT_RCX);
-      /* MOV byte [R9], R10B */
-      sptasm_byte(a, 0x44); /* REX for R10 */
-      sptasm_byte(a, 0x88);
-      sptasm_byte(a, 0x11); /* mod=00, reg=R10, rm=R9 */
+      /* R[A][B] = val.  op1 = array ref, op2 = index ref, aux = value ref.
+         Layout (ltable.h): value k at [array-(k+1)*8], tag k at [array+4+k].
+         Bounds are guarded by the recorder. Uses only RAX/RCX/RDX scratch via
+         SIB addressing, so this op is RA-safe (write loops keep residency). */
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);      /* RAX = Table* */
+      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);      /* RCX = index */
+      gen_load(cg, SPT_RDX, (int)inst->aux, SPTT_ANY); /* RDX = value bits */
+      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
+
+      /* tag store: mov byte [RAX + RCX*1 + 4], tag  (uses index, before scaling) */
+      {
+        uint8_t tag = spt_type_to_tag(sptir_type(ir, (int)inst->aux));
+        sptasm_byte(a, 0xC6);   /* MOV r/m8, imm8 */
+        sptasm_byte(a, 0x44);   /* mod=01 reg=000 rm=100(SIB) */
+        sptasm_byte(a, 0x08);   /* SIB: scale=1 index=RCX base=RAX */
+        sptasm_byte(a, 0x04);   /* disp8 = +4 */
+        sptasm_byte(a, tag);
+      }
+      /* value store: mov [RAX + RCX*1 - 8], RDX, with RCX = -index*8 */
+      sptasm_imul_rri(a, SPT_RCX, SPT_RCX, 8);  /* RCX = index*8 */
+      sptasm_neg_r(a, SPT_RCX);                 /* RCX = -index*8 */
+      sptasm_byte(a, 0x48);   /* REX.W */
+      sptasm_byte(a, 0x89);   /* MOV r/m64, r64 */
+      sptasm_byte(a, 0x54);   /* mod=01 reg=RDX rm=100(SIB) */
+      sptasm_byte(a, 0x08);   /* SIB: scale=1 index=RCX base=RAX */
+      sptasm_byte(a, 0xF8);   /* disp8 = -8 */
       break;
     }
 
@@ -1187,6 +1241,9 @@ void sptjit_codegen_compile(SPTTrace *t, SPTJitState *js) {
 
   /* Plan register allocation (sets cg.use_ra and the residency maps). */
   ra_analyze(&cg);
+  /* Hoist loop-invariant work (e.g. array pointer/length/type guard) once RA
+     bindings are fixed. */
+  ra_hoist_invariants(&cg);
 
   /* Create labels. */
   cg.loop_label = sptasm_newlabel(&cg.asm_);

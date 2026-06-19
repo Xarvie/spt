@@ -1,0 +1,7 @@
+int a = 0;
+int b = 1;
+int c = 2;
+for (int i = 0, 3000) { a = a + i; b = b + a; c = c + b; }
+print(a);
+print(b % 1000003);
+print(c % 1000003);

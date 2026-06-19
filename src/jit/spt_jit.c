@@ -78,7 +78,7 @@ static uint32_t hot_hash(Proto *p, int pc_offset) {
 SPTJitState *sptjit_create(void) {
   SPTJitState *js = (SPTJitState *)calloc(1, sizeof(SPTJitState));
   if (!js) return NULL;
-  js->mode = SPT_JIT_MODE_ON;
+  js->mode = SPT_JIT_MODE_OFF;
   js->hot_size = 256; /* power of 2 */
   js->hot_table = (SPTHotEntry *)calloc(js->hot_size, sizeof(SPTHotEntry));
   js->code_buf_size = SPT_JIT_CODE_SIZE;
@@ -289,6 +289,88 @@ static int rec_load_rkc(SPTRecCtx *rc, Instruction i) {
     return rec_load_k(rc, GETARG_C(i));
   else
     return rec_load_reg(rc, GETARG_C(i));
+}
+
+/* Read the runtime type of array[idx] during recording, so the loaded value can
+   be typed and a type guard emitted. Returns SPTT_ANY if the slot isn't an
+   array, the index is out of range, or the element isn't a type we trace. */
+static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
+  StkId base = rc->ci->func.p + 1;
+  TValue *arrtv = s2v(base + areg);
+  if (!ttisarray(arrtv)) return SPTT_ANY;
+  Table *t = avalue(arrtv);
+  if (idx < 0 || (lua_Unsigned)idx >= t->loglen) return SPTT_ANY;
+  lu_byte tag = *getArrTag(t, (lua_Unsigned)idx);
+  TValue tmp;
+  tmp.tt_ = tag;
+  tmp.value_ = *getArrVal(t, (lua_Unsigned)idx);
+  return rec_value_type(&tmp);
+}
+
+/* Forward declaration: the branch helpers below emit comparison guards. */
+static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
+                       SPTType a_type, SPTType b_type);
+
+/* Numeric value of a TValue as double, for record-time branch evaluation. */
+static double rec_num_as_double(const TValue *v) {
+  if (ttisinteger(v)) return (double)ivalue(v);
+  if (ttisfloat(v)) return fltvalue(v);
+  return 0.0;
+}
+
+/* Evaluate a numeric comparison at record time to learn which way the branch
+   actually went, so the trace records the taken path (not the static
+   fall-through). */
+static int rec_eval_num_cmp(SPTIROp op, const TValue *x, const TValue *y) {
+  double a = rec_num_as_double(x), b = rec_num_as_double(y);
+  switch (op) {
+    case SPTIR_LT: return a < b;
+    case SPTIR_LE: return a <= b;
+    case SPTIR_GT: return a > b;
+    case SPTIR_GE: return a >= b;
+    case SPTIR_EQ: return a == b;
+    case SPTIR_NE: return a != b;
+    default:       return 0;
+  }
+}
+
+/* The opposite comparison (used when the branch, not the fall-through, runs). */
+static SPTIROp rec_negate_cmp(SPTIROp op) {
+  switch (op) {
+    case SPTIR_LT: return SPTIR_GE;
+    case SPTIR_GE: return SPTIR_LT;
+    case SPTIR_LE: return SPTIR_GT;
+    case SPTIR_GT: return SPTIR_LE;
+    case SPTIR_EQ: return SPTIR_NE;
+    case SPTIR_NE: return SPTIR_EQ;
+    default:       return op;
+  }
+}
+
+/* Record a comparison + its trailing conditional JMP, following the branch the
+   program actually takes at record time. 'fop' is the condition under which the
+   bytecode falls through to the next instruction (the THEN block). If at record
+   time that condition holds we keep the fall-through and guard 'fop'; otherwise
+   the JMP is taken, so we guard the negation and continue at the JMP target.
+   This makes biased branches stay on their hot path instead of side-exiting
+   every iteration. Returns 1 to continue recording, 0 to abort. */
+static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
+                           SPTType at, SPTType bt,
+                           const TValue *x, const TValue *y) {
+  if (!sptt_isnum(at) || !sptt_isnum(bt)) { rc->aborted = 1; return 0; }
+  const Instruction *jmp = rc->pc + 1; /* the JMP following the comparison */
+  if (rec_eval_num_cmp(fop, x, y)) {
+    /* Fall-through path taken: guard the fall-through condition. */
+    rec_compare(rc, fop, aref, bref, at, bt);
+    if (rc->aborted) return 0;
+    rc->pc = jmp + 1;                  /* skip comparison + JMP */
+  } else {
+    /* Branch (JMP) taken: guard the negation, continue at the JMP target. */
+    rec_compare(rc, rec_negate_cmp(fop), aref, bref, at, bt);
+    if (rc->aborted) return 0;
+    rc->pc = jmp + 1 + GETARG_sJ(*jmp); /* follow the JMP */
+  }
+  return 1;
 }
 
 /* Record an arithmetic operation. */
@@ -520,80 +602,92 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_GETI: {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
-      /* For arrays (List), index is 0-based integer.
-         Guard that R[B] is an array and C is in bounds. */
       SPTType bt = ir->reg_type[b];
-      if (bt == SPTT_ARR) {
-        /* Guard bounds: c >= 0 && c < loglen */
-        int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
-        sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, c), (int64_t)lenref, rc->pc);
-        int ref = sptir_emit(ir, SPTIR_GETI, SPTT_ANY, bref, sptir_kint(ir, c), 0);
-        ir->reg_map[a] = ref;
-        ir->reg_type[a] = SPTT_ANY;
-      } else {
-        /* Non-array: abort for now. */
-        rc->aborted = 1;
-        return 0;
-      }
+      if (bt != SPTT_ARR) { rc->aborted = 1; return 0; }
+      /* Element type from the live array; only trace numeric elements. */
+      SPTType et = rec_array_elem_type(rc, b, c);
+      if (et != SPTT_INT && et != SPTT_FLT) { rc->aborted = 1; return 0; }
+      /* Bounds guard: 0 <= c < loglen (c is a constant here). */
+      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
+      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, c), (int64_t)lenref, rc->pc);
+      /* Type-guarded load. */
+      int ref = sptir_emit(ir, SPTIR_GETI, et, bref, sptir_kint(ir, c), 0);
+      int snap = sptir_snapshot(ir, rc->pc);
+      ir->insts[ref].snap_idx = snap;
+      ir->insts[ref].flags |= SPTIRF_GUARD;
+      ir->reg_map[a] = ref;
+      ir->reg_type[a] = et;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_GETFIELD: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int bref = rec_load_reg(rc, b);
-      int ref = sptir_emit(ir, SPTIR_GETFIELD, SPTT_ANY, bref, SPTIR_NULL,
-                           (int64_t)tsvalue(&rc->k[GETARG_C(i)]));
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_ANY;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
+      /* Map field reads: separate (unverified) path; abort for now. */
+      rc->aborted = 1;
+      return 0;
     }
     case OP_GETTABLE: {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_reg(rc, c);
+      SPTType bt = ir->reg_type[b];
       SPTType ct = ir->reg_type[c];
-      if (ct == SPTT_INT) {
-        int ref = sptir_emit(ir, SPTIR_GETI, SPTT_ANY, bref, cref, 0);
-        ir->reg_map[a] = ref;
-        ir->reg_type[a] = SPTT_ANY;
-      } else {
-        rc->aborted = 1;
-        return 0;
-      }
+      if (bt != SPTT_ARR || ct != SPTT_INT) { rc->aborted = 1; return 0; }
+      /* Live index value -> element type; only trace numeric elements. */
+      StkId base = rc->ci->func.p + 1;
+      TValue *idxtv = s2v(base + c);
+      if (!ttisinteger(idxtv)) { rc->aborted = 1; return 0; }
+      SPTType et = rec_array_elem_type(rc, b, ivalue(idxtv));
+      if (et != SPTT_INT && et != SPTT_FLT) { rc->aborted = 1; return 0; }
+      /* Bounds guard: 0 <= idx < loglen. */
+      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
+      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)cref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LT, cref, (int64_t)lenref, rc->pc);
+      /* Type-guarded load. */
+      int ref = sptir_emit(ir, SPTIR_GETI, et, bref, cref, 0);
+      int snap = sptir_snapshot(ir, rc->pc);
+      ir->insts[ref].snap_idx = snap;
+      ir->insts[ref].flags |= SPTIRF_GUARD;
+      ir->reg_map[a] = ref;
+      ir->reg_type[a] = et;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_SETI: {
+      /* R[A][B] = RK(C), B is a constant index. */
       int a = GETARG_A(i), b = GETARG_B(i);
-      int cref = rec_load_rkc(rc, i);
       int aref = rec_load_reg(rc, a);
-      SPTType at = ir->reg_type[a];
-      if (at == SPTT_ARR) {
-        int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
-        sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, b), (int64_t)lenref, rc->pc);
-        sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, sptir_kint(ir, b), (int64_t)cref);
-      } else {
-        rc->aborted = 1;
-        return 0;
-      }
-      break;
-    }
-    case OP_SETFIELD: {
-      int a = GETARG_A(i);
+      if (ir->reg_type[a] != SPTT_ARR) { rc->aborted = 1; return 0; }
       int cref = rec_load_rkc(rc, i);
-      int aref = rec_load_reg(rc, a);
-      sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref,
-                 (int64_t)tsvalue(&rc->k[GETARG_B(i)]));
+      SPTType vt = sptir_type(ir, cref);
+      if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }
+      /* Bounds guard: 0 <= b < loglen (in-bounds write only; growth -> exit). */
+      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
+      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, b), (int64_t)lenref, rc->pc);
+      sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, sptir_kint(ir, b), (int64_t)cref);
       break;
     }
     case OP_SETTABLE: {
+      /* R[A][R[B]] = RK(C), variable index. */
       int a = GETARG_A(i), b = GETARG_B(i);
-      int bref = rec_load_reg(rc, b);
-      int cref = rec_load_rkc(rc, i);
       int aref = rec_load_reg(rc, a);
+      int bref = rec_load_reg(rc, b);
+      if (ir->reg_type[a] != SPTT_ARR || ir->reg_type[b] != SPTT_INT) {
+        rc->aborted = 1; return 0;
+      }
+      int cref = rec_load_rkc(rc, i);
+      SPTType vt = sptir_type(ir, cref);
+      if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }
+      /* Bounds guard: 0 <= idx < loglen. */
+      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
+      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)bref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LT, bref, (int64_t)lenref, rc->pc);
       sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, bref, (int64_t)cref);
       break;
+    }
+    case OP_SETFIELD: {
+      /* Map field writes: separate (unverified) path; abort for now. */
+      rc->aborted = 1;
+      return 0;
     }
 
     /* ---- Arithmetic ---- */
@@ -783,84 +877,81 @@ static int rec_inst(SPTRecCtx *rc) {
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      rec_compare(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt);
-      if (rc->aborted) return 0;
-      rc->pc++; /* skip JMP */
-      break;
+      StkId base = rc->ci->func.p + 1;
+      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt,
+                             s2v(base + a), s2v(base + b));
     }
     case OP_LT: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      rec_compare(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt);
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt,
+                             s2v(base + a), s2v(base + b));
     }
     case OP_LE: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
       SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
-      rec_compare(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt);
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt,
+                             s2v(base + a), s2v(base + b));
     }
     case OP_EQI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, ir->reg_type[a], SPTT_INT);
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      TValue bv; setivalue(&bv, b);
+      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
+                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
     }
     case OP_LTI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, ir->reg_type[a], SPTT_INT);
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      TValue bv; setivalue(&bv, b);
+      return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref,
+                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
     }
     case OP_LEI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, ir->reg_type[a], SPTT_INT);
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      TValue bv; setivalue(&bv, b);
+      return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref,
+                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
     }
     case OP_GTI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref, ir->reg_type[a], SPTT_INT);
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      TValue bv; setivalue(&bv, b);
+      return rec_cond_branch(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref,
+                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
     }
     case OP_GEI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
-      rec_compare(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref, ir->reg_type[a], SPTT_INT);
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      TValue bv; setivalue(&bv, b);
+      return rec_cond_branch(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref,
+                             ir->reg_type[a], SPTT_INT, s2v(base + a), &bv);
     }
     case OP_EQK: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_k(rc, b);
-      rec_compare(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, ir->reg_type[a], sptir_type(ir, bref));
-      if (rc->aborted) return 0;
-      rc->pc++;
-      break;
+      StkId base = rc->ci->func.p + 1;
+      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
+                             ir->reg_type[a], sptir_type(ir, bref),
+                             s2v(base + a), &rc->k[b]);
     }
 
     /* ---- Tests ---- */
@@ -1148,6 +1239,12 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
     return sptjit_trace_enter(L, ci, pc);
   }
 
+  /* Blacklisted: this PC has aborted recording too many times (e.g. a loop
+     containing a call, generic-for, or other un-traceable op). Stop trying --
+     repeatedly recording and discarding makes the JIT slower than the plain
+     interpreter. */
+  if (e->aborts >= SPT_JIT_MAX_ABORTS) return 0;
+
   /* Increment counter. */
   if (e->counter < 0xFFFF)
     e->counter++;
@@ -1163,6 +1260,8 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
       /* Enter the trace immediately. */
       return sptjit_trace_enter(L, ci, pc);
     }
+    /* Recording aborted: penalize this PC so we eventually stop retrying. */
+    if (e->aborts < 0xFFFF) e->aborts++;
   }
 
   return 0;

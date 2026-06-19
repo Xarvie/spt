@@ -271,6 +271,7 @@ void sptasm_ucomisd(SPTAsm *a, SPTXmmReg r1, SPTXmmReg r2);
 void sptasm_cvtsi2sd(SPTAsm *a, SPTXmmReg dst, SPTReg src);
 /* CVTSD2SI reg, xmm (float to int, truncation) */
 void sptasm_cvtsd2si(SPTAsm *a, SPTReg dst, SPTXmmReg src);
+void sptasm_movq_xmm_to_gpr(SPTAsm *a, SPTReg dst, SPTXmmReg src);
 /* CVTSS2SD / CVTSD2SS not needed; we use double everywhere */
 
 /* ---- Memory management for executable code ---- */

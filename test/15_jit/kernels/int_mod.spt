@@ -1,0 +1,3 @@
+int acc = 0;
+for (int i = 0, 3000) { acc = acc + (i % 7); }
+print(acc);
