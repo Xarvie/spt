@@ -401,7 +401,17 @@ static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
      already uses. */
   Table *t = rec_eval_array(rc, rc->ir->reg_map[rc->frame_base + areg]);
   if (!t) return SPTT_ANY;
-  if (idx < 0 || (lua_Unsigned)idx >= t->loglen) return SPTT_ANY;
+  /* The index is predicted from the index slot's stack value, but one-pass
+     recording reads it at the back-edge (end of iteration). If the compiler
+     reused the index register for another value (e.g. the loop accumulator),
+     that value is stale and may be out of range. Fall back to element 0 for the
+     TYPE prediction; the actual index is bounds-guarded and the GETI load is
+     type-guarded, so correctness holds regardless of which element is loaded
+     (a misprediction merely side-exits). Empty arrays still can't predict. */
+  if (idx < 0 || (lua_Unsigned)idx >= t->loglen) {
+    if (t->loglen == 0) return SPTT_ANY;
+    idx = 0;
+  }
   lu_byte tag = *getArrTag(t, (lua_Unsigned)idx);
   TValue tmp;
   tmp.tt_ = tag;
@@ -888,11 +898,16 @@ static int rec_inst(SPTRecCtx *rc) {
       SPTType bt = ir->reg_type[rc->frame_base + b];
       SPTType ct = ir->reg_type[rc->frame_base + c];
       if (bt != SPTT_ARR || ct != SPTT_INT) { rc->aborted = 1; return 0; }
-      /* Live index value -> element type; only trace numeric elements. */
+      /* Predict the element type from the index's stack value. One-pass
+         recording reads it at the back-edge, so a reused index register may
+         show a stale, non-integer, or out-of-range value; the IR already knows
+         the index is an integer (ct == SPTT_INT) and the load is bounds- and
+         type-guarded, so fall back to element 0 when the predictor is unusable
+         (correctness is enforced by those guards, not by this prediction). */
       StkId base = rc->ci->func.p + 1;
       TValue *idxtv = s2v(base + c);
-      if (!ttisinteger(idxtv)) { rc->aborted = 1; return 0; }
-      SPTType et = rec_array_elem_type(rc, b, ivalue(idxtv));
+      lua_Integer pidx = ttisinteger(idxtv) ? ivalue(idxtv) : 0;
+      SPTType et = rec_array_elem_type(rc, b, pidx);
       if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR) { rc->aborted = 1; return 0; }
       /* Bounds guard: 0 <= idx < loglen. */
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
@@ -1108,6 +1123,12 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
       SPTType bt = ir->reg_type[rc->frame_base + b];
+      /* Negation is numeric-only; SPTIR_NEG negates an int or float register.
+         A string/array/etc. operand would be negated as an integer (garbage),
+         and the VM errors on it anyway, so abort for non-numeric operands. */
+      if (bt != SPTT_INT && bt != SPTT_FLT) {
+        rc->aborted = 1; return 0;
+      }
       int ref = sptir_emit(ir, SPTIR_NEG, bt, bref, SPTIR_NULL, 0);
       ir->reg_map[rc->frame_base + a] = ref;
       ir->reg_type[rc->frame_base + a] = bt;
@@ -1118,6 +1139,13 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_BNOT: {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
+      /* '~' is integer-only; a float operand is converted to an integer by the
+         VM (erroring on a fractional part). Emitting an integer complement on a
+         float reinterprets its raw bits, so abort and let the interpreter run a
+         non-int operand (same as the other bitwise ops). */
+      if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
+        rc->aborted = 1; return 0;
+      }
       int ref = sptir_emit(ir, SPTIR_BNOT, SPTT_INT, bref, SPTIR_NULL, 0);
       ir->reg_map[rc->frame_base + a] = ref;
       ir->reg_type[rc->frame_base + a] = SPTT_INT;
@@ -1137,6 +1165,14 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_LEN: {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
+      /* SPTIR_LEN reads an array's length field (Table->loglen). For a string,
+         a map, or anything else, '#' has different semantics (e.g. byte length,
+         stored in a different field that varies between short and long strings),
+         so reading the array field yields garbage. Only arrays are handled here;
+         everything else aborts to the interpreter, which is correct. */
+      if (ir->reg_type[rc->frame_base + b] != SPTT_ARR) {
+        rc->aborted = 1; return 0;
+      }
       int ref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
       ir->reg_map[rc->frame_base + a] = ref;
       ir->reg_type[rc->frame_base + a] = SPTT_INT;

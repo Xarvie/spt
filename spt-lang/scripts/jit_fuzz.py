@@ -269,9 +269,12 @@ def gen_float_bitwise(r):
     succeeds and the JIT (falling back to it) yields a comparable result.
     Deterministic."""
     n = r.choice([200000, 1000000])
-    op = r.choice(["&", "|", "^", "<<", ">>"])
+    op = r.choice(["&", "|", "^", "<<", ">>", "~"])
     fv = r.choice([2.0, 5.0, 6.0, 12.0, 255.0])
     iv = r.choice([1, 2, 3, 10, 255])
+    if op == "~":  # unary BNOT on a float operand -> must abort to interpreter
+        return (f"int s = 0;\nfor (int i = 0, {n}) {{ float f = {fv}; "
+                f"int x = ~f; s = s + x; }}\nprint(s);\n")
     if op in ("<<", ">>"):
         sh = r.choice([1.0, 2.0, 3.0, 4.0])
         if r.random() < 0.5:  # float value
@@ -299,13 +302,61 @@ def gen_type_transition(r):
     ]
     return r.choice(forms)
 
+def gen_string(r):
+    """String ops in a hot loop: length (#s), compare (==), concat (..). The JIT
+    aborts these (string LEN reads an array length field, so it must not compile;
+    compare/concat are interpreter-only), so the JIT falls back and interp == jit.
+    Guards the string-LEN-reads-garbage class. Deterministic."""
+    n = r.choice([100000, 1000000])
+    strs = ['"hello"', '"hi"', '"abcdef"', '"x"', '"test123"', '"ab"']
+    s = r.choice(strs)
+    op = r.choice(["len", "compare", "concat", "len_elem"])
+    if op == "len":
+        return f'string s = {s};\nint t = 0;\nfor (int i = 0, {n}) {{ t = t + #s; }}\nprint(t);\n'
+    if op == "compare":
+        s2 = r.choice(strs)
+        return (f'string s = {s};\nint c = 0;\nfor (int i = 0, {n}) '
+                f'{{ if (s == {s2}) {{ c = c + 1; }} else {{ c = c + 2; }} }}\nprint(c);\n')
+    if op == "concat":
+        ln = len(s) - 1  # chars without quotes, plus 1 for the appended "z"
+        return (f'int c = 0;\nfor (int i = 0, {n}) {{ string a = {s}; string b = a .. "z"; '
+                f'if (#b == {ln}) {{ c = c + 1; }} }}\nprint(c);\n')
+    return (f'list<string> w = [{s}, "qq", "r"];\nint t = 0;\n'
+            f'for (int i = 0, {n}) {{ t = t + #w[i % 3]; }}\nprint(t);\n')
+
+def gen_array_len_mix(r):
+    """Array element access combined with #v used as a VALUE in the same loop.
+    This makes the compiler reuse the index register for the accumulator, so the
+    element-type predictor sees a stale index slot at the back-edge -- it must
+    fall back to element 0 and rely on the runtime bounds/type guards rather than
+    aborting or mispredicting. Mixes int/float elements and read/write.
+    Deterministic."""
+    n = r.choice([200000, 1000000])
+    sz = r.choice([3, 5, 8])
+    if r.random() < 0.4:
+        elems = ", ".join(f"{r.randint(1,9)}.5" for _ in range(sz))
+        body = r.choice([
+            f"s = s + v[i % {sz}] + (#v * 1.0);",
+            f"v[i % {sz}] = i * 1.0; s = s + v[i % {sz}] + (#v * 1.0);",
+        ])
+        return (f"list<float> v = [{elems}];\nfloat s = 0.0;\n"
+                f"for (int i = 0, {n}) {{ {body} }}\nprint(s);\n")
+    elems = ", ".join(str(r.randint(1,9)) for _ in range(sz))
+    body = r.choice([
+        f"s = s + v[i % {sz}] + #v;",
+        f"int m = #v; s = s + v[i % m] + m;",
+        f"v[i % {sz}] = i; s = s + v[i % {sz}] + #v;",
+    ])
+    return (f"list<int> v = [{elems}];\nint s = 0;\n"
+            f"for (int i = 0, {n}) {{ {body} }}\nprint(s);\n")
+
 GENS = [gen_scalar,
         lambda r: gen_array_reduce(r, "int"),
         lambda r: gen_array_reduce(r, "float"),
         gen_cse_self, gen_two_array, gen_write_read, gen_chained2d, gen_branch,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
-        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition]
+        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:
