@@ -183,6 +183,39 @@ static double ir_const_flt(const SPTIRInst *ir) {
   return d;
 }
 
+/* Logical shift matching the VM's luaV_shiftl exactly: zero-fill (not
+   sign-extending), saturate to 0 when |amount| >= 64, and treat a negative
+   amount as a shift in the opposite direction. The VM defines
+   luaV_shiftr(x,y) == luaV_shiftl(x,-y), so SHR folds as shiftl(x,-y). All
+   arithmetic is done unsigned to avoid signed-shift UB and the -y overflow at
+   INT64_MIN. */
+static int64_t spt_ir_shiftl(int64_t x, int64_t y) {
+  if (y < 0) {                              /* effective right shift */
+    if (y <= -64) return 0;
+    return (int64_t)((uint64_t)x >> (uint64_t)(-y));
+  }
+  if (y >= 64) return 0;                     /* left shift, saturated */
+  return (int64_t)((uint64_t)x << (uint64_t)y);
+}
+
+/* Floored integer division and modulo matching the VM's luaV_idiv / luaV_mod:
+   the quotient rounds toward negative infinity and the remainder takes the sign
+   of the divisor, unlike C's truncating / and %. Callers must ensure n != 0.
+   n == -1 is special-cased to avoid the INT64_MIN/-1 (and INT64_MIN%-1)
+   overflow, exactly as the VM does. */
+static int64_t spt_ir_idiv(int64_t m, int64_t n) {
+  if (n == -1) return (int64_t)(0ULL - (uint64_t)m);
+  int64_t q = m / n;
+  if ((m ^ n) < 0 && m % n != 0) q -= 1;
+  return q;
+}
+static int64_t spt_ir_mod(int64_t m, int64_t n) {
+  if (n == -1) return 0;
+  int64_t r = m % n;
+  if (r != 0 && (r ^ n) < 0) r += n;
+  return r;
+}
+
 /* Constant folding for binary arithmetic. */
 static int try_const_fold(SPTIRBuilder *b, int idx) {
   SPTIRInst *ir = &b->insts[idx];
@@ -198,16 +231,16 @@ static int try_const_fold(SPTIRBuilder *b, int idx) {
     int64_t x = a->aux, y = c->aux, r = 0;
     int ok = 1;
     switch (ir->op) {
-      case SPTIR_ADD:  r = x + y; break;
-      case SPTIR_SUB:  r = x - y; break;
-      case SPTIR_MUL:  r = x * y; break;
-      case SPTIR_IDIV: if (y == 0) ok = 0; else r = x / y; break;
-      case SPTIR_MOD:  if (y == 0) ok = 0; else r = x % y; break;
+      case SPTIR_ADD:  r = (int64_t)((uint64_t)x + (uint64_t)y); break;
+      case SPTIR_SUB:  r = (int64_t)((uint64_t)x - (uint64_t)y); break;
+      case SPTIR_MUL:  r = (int64_t)((uint64_t)x * (uint64_t)y); break;
+      case SPTIR_IDIV: if (y == 0) ok = 0; else r = spt_ir_idiv(x, y); break;
+      case SPTIR_MOD:  if (y == 0) ok = 0; else r = spt_ir_mod(x, y); break;
       case SPTIR_BAND: r = x & y; break;
       case SPTIR_BOR:  r = x | y; break;
       case SPTIR_BXOR: r = x ^ y; break;
-      case SPTIR_SHL:  r = x << (y & 63); break;
-      case SPTIR_SHR:  r = x >> (y & 63); break;
+      case SPTIR_SHL:  r = spt_ir_shiftl(x, y); break;
+      case SPTIR_SHR:  r = spt_ir_shiftl(x, (int64_t)(0ULL - (uint64_t)y)); break;
       case SPTIR_EQ:   ir->op = (x == y) ? SPTIR_TRUE : SPTIR_FALSE; ir->type = SPTT_TRUE; ir->op1 = ir->op2 = SPTIR_NULL; return 1;
       case SPTIR_LT:   ir->op = (x < y) ? SPTIR_TRUE : SPTIR_FALSE; ir->type = SPTT_TRUE; ir->op1 = ir->op2 = SPTIR_NULL; return 1;
       case SPTIR_LE:   ir->op = (x <= y) ? SPTIR_TRUE : SPTIR_FALSE; ir->type = SPTT_TRUE; ir->op1 = ir->op2 = SPTIR_NULL; return 1;

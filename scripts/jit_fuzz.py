@@ -245,13 +245,30 @@ def gen_for_while(r):
             f"  while (lo < hi) {{ int x = v[lo]; v[hi] = x; total = total + x; lo = lo + 1; hi = hi - 1; }}\n"
             f"}}\nprint(total);\n")
 
+def gen_const_fold(r):
+    """Ops on a loop-invariant integer constant assigned INSIDE the loop, which
+    the recorder sees as KINT and constant-folds. Exercises the folder's logical
+    >> / << (zero-fill + >=64 saturation + negative-count direction) and floored
+    ~/ and % (sign-of-divisor), where C's signed operators diverge from SPT.
+    Deterministic."""
+    n = r.choice([200000, 1000000])
+    a = r.choice([-100, -17, -8, -1, 0, 7, 13, 100, 1000, -9223372036854775807])
+    op = r.choice([">>", "<<", "~/", "%"])
+    if op in (">>", "<<"):
+        b = r.choice([0, 1, 2, 3, 4, 31, 63, 64, 70, -2, -4])
+    else:
+        b = r.choice([-5, -4, -2, -1, 2, 3, 5, 7])
+    return (f"int s = 0;\n"
+            f"for (int i = 0, {n}) {{ int x = {a}; s = s + (x {op} {b}); }}\n"
+            f"print(s);\n")
+
 GENS = [gen_scalar,
         lambda r: gen_array_reduce(r, "int"),
         lambda r: gen_array_reduce(r, "float"),
         gen_cse_self, gen_two_array, gen_write_read, gen_chained2d, gen_branch,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
-        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while]
+        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:

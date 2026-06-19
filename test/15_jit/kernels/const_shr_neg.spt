@@ -1,0 +1,3 @@
+int s = 0;
+for (int i = 0, 1000000) { int x = -8; s = s + (x >> 1); }
+print(s);
