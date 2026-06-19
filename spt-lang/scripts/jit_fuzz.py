@@ -382,11 +382,17 @@ def main():
     fails = []
     for i in range(args.count):
         src = r.choice(GENS)(r)
+        # Vary the hot threshold per case. The old branch-recording coin-flip
+        # (§10.22/§10.23) produced different traces at different thresholds, so
+        # sweeping HOT here exercises that the majority-direction recording is
+        # deterministic: the JIT result must equal the interpreter for *every*
+        # threshold. Derived from the seeded RNG so runs stay reproducible.
+        hot = str(r.randint(16, 40))
         off, rc0 = run(args.bin, src, {"SPT_JIT": "0"})
-        on, rc1 = run(args.bin, src, {"SPT_JIT": "on", "SPT_JIT_HOT": args.hot})
+        on, rc1 = run(args.bin, src, {"SPT_JIT": "on", "SPT_JIT_HOT": hot})
         if off != on or rc0 != rc1:
             fails.append((i, src, off, on))
-            print(f"--- MISMATCH #{i} (rc {rc0} vs {rc1}) ---")
+            print(f"--- MISMATCH #{i} (HOT={hot}, rc {rc0} vs {rc1}) ---")
             print(src)
             print(f"  off=[{off}]\n  on =[{on}]")
     print("=" * 60)

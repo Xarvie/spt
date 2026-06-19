@@ -31,6 +31,51 @@
 #include <stdio.h>
 
 /* =====================================================================
+** Branch-direction profiling (see spt_jit.h). Global fast gate + tally.
+** ===================================================================== */
+
+int sptjit_profiling_active = 0;
+
+/* The loop currently being profiled and a small per-branch tally keyed by the
+** comparison instruction's PC offset. Only one loop profiles at a time. */
+#define SPT_PROF_MAX_BRANCH 32
+#define SPT_PROF_ITERS 64      /* branch-direction samples before recording */
+#define SPT_PROF_BUDGET 512    /* abandon a stalled profile after this many hot ticks */
+static struct {
+  Proto *proto;
+  int pc_start, pc_end;        /* loop body PC-offset range [start, end) */
+  int iters;                   /* samples gathered on the profiled loop */
+  int budget;                  /* remaining hot ticks before abandoning */
+  int n;
+  int br_pc[SPT_PROF_MAX_BRANCH];   /* comparison PC offset */
+  uint32_t ft[SPT_PROF_MAX_BRANCH]; /* fall-through count */
+  uint32_t tk[SPT_PROF_MAX_BRANCH]; /* take-JMP count */
+} g_prof;
+
+void sptjit_profile_cond(lua_State *L, const Instruction *pc, int fall_through) {
+  CallInfo *ci = L->ci;
+  if (!ci) return;
+  LClosure *cl = clLvalue(s2v(ci->func.p));
+  if (!cl || cl->p != g_prof.proto) return;        /* not the profiled proto */
+  /* `pc` points at the JMP that follows the comparison; the comparison is the
+     instruction before it. */
+  int cmp_off = (int)((pc - 1) - g_prof.proto->code);
+  if (cmp_off < g_prof.pc_start || cmp_off >= g_prof.pc_end) return;
+  for (int k = 0; k < g_prof.n; k++) {
+    if (g_prof.br_pc[k] == cmp_off) {
+      if (fall_through) g_prof.ft[k]++; else g_prof.tk[k]++;
+      return;
+    }
+  }
+  if (g_prof.n < SPT_PROF_MAX_BRANCH) {
+    g_prof.br_pc[g_prof.n] = cmp_off;
+    g_prof.ft[g_prof.n] = fall_through ? 1 : 0;
+    g_prof.tk[g_prof.n] = fall_through ? 0 : 1;
+    g_prof.n++;
+  }
+}
+
+/* =====================================================================
 ** Struct offsets for JIT code generation
 ** ===================================================================== */
 
@@ -515,6 +560,24 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   int fall_through = 1; /* default: static fall-through (correct, maybe cold) */
   if (rec_pred_num(rc, aref, a_reg, &xv) && rec_pred_num(rc, bref, b_reg, &yv))
     fall_through = rec_eval_num_cmp(fop, xv, yv);
+  /* Override the single recording iteration's direction with the profiled
+     majority for this branch, when we have samples. Which way the one recording
+     iteration went is a coin-flip; the majority is what the loop does most of
+     the time, so recording it keeps the trace's hot path on the common side and
+     lets it stay internally looping instead of side-exiting every iteration.
+     Correctness-safe: the IR is built symbolically via reg_map (not the live
+     stack), and the emitted comparison is still a runtime guard, so a wrong
+     majority only yields a suboptimal trace -- never an incorrect result. */
+  if (g_prof.proto == rc->p && g_prof.n > 0) {
+    int cmp_off = (int)(rc->pc - rc->p->code);
+    for (int k = 0; k < g_prof.n; k++) {
+      if (g_prof.br_pc[k] == cmp_off) {
+        if (g_prof.ft[k] + g_prof.tk[k] > 0)
+          fall_through = (g_prof.ft[k] >= g_prof.tk[k]);
+        break;
+      }
+    }
+  }
   if (fall_through) {
     rec_compare(rc, fop, aref, bref, at, bt);
     if (rc->aborted) return 0;
@@ -1730,32 +1793,56 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
      interpreter. */
   if (e->aborts >= SPT_JIT_MAX_ABORTS) return 0;
 
+  /* Branch-direction profiling phase. Once a loop is hot we don't record
+     immediately; we first sample which way each conditional branch goes for a
+     short window, so the recorder can take the *majority* direction rather than
+     whatever the single recording iteration happened to do. Recording the
+     minority side of a biased branch makes the trace exit on the common path
+     every iteration -- slower than the interpreter and dependent on which
+     iteration tripped the threshold (a coin-flip). See §10.23. */
+  if (sptjit_profiling_active) {
+    int is_profiled = (g_prof.proto == p && g_prof.pc_start == pc_offset);
+    if (g_prof.budget > 0) g_prof.budget--;
+    if (is_profiled && ++g_prof.iters >= SPT_PROF_ITERS) {
+      /* Enough samples: stop profiling and record using the majority tally. */
+      sptjit_profiling_active = 0;
+      e->counter = 0;
+      SPTTrace *t = record_trace(js, L, ci, pc);
+      if (t) { e->trace = t; return sptjit_trace_enter(L, ci, pc); }
+      if (e->aborts < 0xFFFF) e->aborts++;
+      e->counter = e->aborts;
+      return 0;
+    }
+    if (g_prof.budget <= 0) {
+      /* The profiled loop stalled (it stopped iterating before we gathered
+         enough samples, e.g. it exited). Abandon so other loops aren't starved;
+         fall through and handle the current loop normally. */
+      sptjit_profiling_active = 0;
+    } else {
+      return 0;  /* keep sampling (this loop or let the profiled one finish) */
+    }
+  }
+
   /* Increment counter. */
   if (e->counter < 0xFFFF)
     e->counter++;
   e->proto = p;
   e->pc_offset = pc_offset;
 
-  /* Hot enough? Record a trace. */
+  /* Hot enough? Begin profiling this loop's branches (we record after the
+     sampling window completes, above). */
   if (e->counter >= js->hot_threshold) {
-    e->counter = 0;
-    SPTTrace *t = record_trace(js, L, ci, pc);
-    if (t) {
-      e->trace = t;
-      /* Enter the trace immediately. */
-      return sptjit_trace_enter(L, ci, pc);
+    if (!sptjit_profiling_active) {
+      sptjit_profiling_active = 1;
+      g_prof.proto = p;
+      g_prof.pc_start = pc_offset;
+      g_prof.pc_end = p->sizecode;
+      g_prof.iters = 0;
+      g_prof.budget = SPT_PROF_BUDGET;
+      g_prof.n = 0;
     }
-    /* Recording aborted: penalize this PC so we eventually stop retrying. */
-    if (e->aborts < 0xFFFF) e->aborts++;
-    /* Shift the retry phase. A nested loop (e.g. a `while` inside a `for`) can
-       trigger recording on its *exiting* iteration, where the recorder captures
-       the loop-exit path instead of the body and aborts. If the threshold is a
-       multiple of the inner loop's trip count, every retry re-lands on that same
-       exiting iteration and the loop never compiles. Re-seeding the counter with
-       the abort count makes each retry fire a little earlier, sampling different
-       iterations until one captures the body. Only one iteration per trip is the
-       exiting one, so this converges within a couple of retries. */
-    e->counter = e->aborts;
+    /* else: another loop is mid-profile; this one waits and re-trips shortly. */
+    return 0;
   }
 
   return 0;

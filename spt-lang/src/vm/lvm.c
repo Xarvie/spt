@@ -1149,6 +1149,8 @@ void luaV_finishOp(lua_State *L) {
 ** be a jump.
 */
 #define docondjump()                                                                               \
+  if (l_unlikely(sptjit_profiling_active))                                                         \
+    sptjit_profile_cond(L, pc, (cond != GETARG_k(i)));                                             \
   if (cond != GETARG_k(i))                                                                         \
     pc++;                                                                                          \
   else                                                                                             \

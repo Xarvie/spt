@@ -135,6 +135,19 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc);
 */
 int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc);
 
+/*
+** Branch-direction profiling. Before recording a loop, the JIT briefly profiles
+** which way each conditional branch goes so it records the *majority* direction
+** (instead of whichever way the one recording iteration happened to go -- a
+** non-deterministic coin-flip that can produce traces slower than the
+** interpreter). `sptjit_profiling_active` is a process-global fast gate: it is
+** non-zero only during the short profiling window, so the per-comparison hook
+** is a single predicted-not-taken branch the rest of the time. `fall_through`
+** is (cond != k): true means the comparison fell through (skipped the JMP).
+*/
+extern int sptjit_profiling_active;
+void sptjit_profile_cond(lua_State *L, const Instruction *pc, int fall_through);
+
 /* Invalidate all traces for a given Proto (e.g., on proto GC). */
 void sptjit_invalidate_proto(SPTJitState *js, Proto *p);
 
