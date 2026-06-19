@@ -122,6 +122,15 @@ SPTJitState *sptjit_create(void) {
 void sptjit_destroy(SPTJitState *js) {
   if (!js) return;
   if (js->debug) {
+    /* Aggregate per-trace exit counters into the global total (traces live in
+       the hot table until shutdown, so this captures every exit taken). */
+    js->stats.trace_exits = 0;
+    for (int i = 0; i < js->hot_size; i++) {
+      SPTTrace *t = js->hot_table[i].trace;
+      if (!t) continue;
+      for (int s = 0; s < t->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++)
+        js->stats.trace_exits += t->exit_count[s];
+    }
     fprintf(stderr,
             "[JIT] stats: recorded=%llu compiled=%llu aborted=%llu "
             "entries=%llu exits=%llu guard_fail=%llu\n",
@@ -131,6 +140,29 @@ void sptjit_destroy(SPTJitState *js) {
             (unsigned long long)js->stats.trace_entries,
             (unsigned long long)js->stats.trace_exits,
             (unsigned long long)js->stats.trace_guard_fail);
+    /* Per-exit breakdown: which exit points are hot. A trace that loops well
+       concentrates its exits on the loop-end snapshot; a hot *side* exit marks
+       a spot a side-trace would pay off. */
+    if (js->debug >= 2) {
+      for (int i = 0; i < js->hot_size; i++) {
+        SPTTrace *t = js->hot_table[i].trace;
+        if (!t) continue;
+        int any = 0;
+        for (int s = 0; s < t->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++)
+          if (t->exit_count[s]) { any = 1; break; }
+        if (!any) continue;
+        fprintf(stderr, "[JIT] trace proto=%p pc@%d exits:",
+                (void *)t->proto, t->pc_offset);
+        for (int s = 0; s < t->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++) {
+          if (!t->exit_count[s]) continue;
+          int epc = (t->exit_pcs[s] && t->proto)
+                        ? (int)(t->exit_pcs[s] - t->proto->code) : -1;
+          fprintf(stderr, " [snap%d->pc%d:%llu]", s, epc,
+                  (unsigned long long)t->exit_count[s]);
+        }
+        fprintf(stderr, "\n");
+      }
+    }
   }
   /* Free all traces */
   for (int i = 0; i < js->hot_size; i++) {
@@ -220,6 +252,25 @@ typedef struct {
   int inst_count;         /* instructions recorded */
   int aborted;            /* recording aborted */
   const Instruction *abort_pc; /* PC where abort happened */
+  /* Call inlining: absolute base of the frame currently being recorded.
+     0 for the root function; when a pure straight-line leaf call is inlined,
+     reg_map/reg_type are indexed by (frame_base + reg) so the callee's
+     registers occupy absolute slots above the caller's, and the callee's
+     argument slots coincide with the caller's argument registers already in
+     reg_map (Lua slot-0-receiver: callee slot 0 = caller A+1). */
+  int frame_base;
+  /* Single inlined-call entry check, set on the first inlined CALL. The trace
+     may only be entered when this stack slot still holds this exact proto;
+     all inlined calls in one trace must share the same (slot, proto). */
+  int inline_fn_slot;       /* -1 = no inlined call yet */
+  Proto *inline_fn_proto;
+  /* Saved caller state while recording an inlined callee (depth-1 only). */
+  Proto *save_p;
+  const TValue *save_k;
+  LClosure *save_cl;
+  const Instruction *save_pc;   /* caller PC just after the CALL */
+  int save_frame_base;
+  int call_result_slot;     /* absolute reg_map slot receiving the return value */
 } SPTRecCtx;
 
 /* Get current type of a register from the actual stack value. */
@@ -245,8 +296,18 @@ static SPTType rec_value_type(const TValue *v) {
 /* Load a register's value into IR, with type guard if needed. */
 static int rec_load_reg(SPTRecCtx *rc, int reg) {
   SPTIRBuilder *ir = rc->ir;
-  if (ir->reg_map[reg] >= 0)
-    return ir->reg_map[reg];
+  if (ir->reg_map[rc->frame_base + reg] >= 0)
+    return ir->reg_map[rc->frame_base + reg];
+
+  /* Inside an inlined callee (frame_base != 0) every slot read must already be
+     resident in reg_map -- it is either an argument the caller placed there or
+     a value the callee just computed. A miss would mean reading the wrong
+     (root) stack slot, so abort and let the interpreter run the call. */
+  if (rc->frame_base != 0) {
+    rc->aborted = 1;
+    rc->abort_pc = rc->pc;
+    return SPTIR_NULL;
+  }
 
   /* Load from stack: emit SLOAD with type from actual value. */
   StkId base = rc->ci->func.p + 1;
@@ -255,8 +316,8 @@ static int rec_load_reg(SPTRecCtx *rc, int reg) {
 
   /* Emit a stack load. */
   int ref = sptir_emit(ir, SPTIR_SLOAD, t, SPTIR_NULL, SPTIR_NULL, reg);
-  ir->reg_map[reg] = ref;
-  ir->reg_type[reg] = t;
+  ir->reg_map[rc->frame_base + reg] = ref;
+  ir->reg_type[rc->frame_base + reg] = t;
 
   /* Emit type guard: the loaded value must have the expected type. */
   if (t != SPTT_ANY) {
@@ -338,7 +399,7 @@ static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
      (see ra_hoist_invariants: SPTT_ARR/SPTT_TAB excluded), so it is recomputed
      each inner iteration -- the same correct path the variable-index m[i][j]
      already uses. */
-  Table *t = rec_eval_array(rc, rc->ir->reg_map[areg]);
+  Table *t = rec_eval_array(rc, rc->ir->reg_map[rc->frame_base + areg]);
   if (!t) return SPTT_ANY;
   if (idx < 0 || (lua_Unsigned)idx >= t->loglen) return SPTT_ANY;
   lu_byte tag = *getArrTag(t, (lua_Unsigned)idx);
@@ -515,6 +576,17 @@ static int rec_arith(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_
     return SPTIR_NULL;
   }
 
+  /* MOD ('%') and IDIV ('~/') stay integer-only here. Float mod/idiv need a
+     libm fmod/floor plus Lua's sign correction and are not handled in codegen
+     (emitting them as a float op produced garbage), so abort and let the
+     interpreter -- which is correct -- run them. Integer mod/idiv fall through
+     to the both-int path below, where codegen applies the floored correction. */
+  if ((op == SPTIR_MOD || op == SPTIR_IDIV) &&
+      !(a_type == SPTT_INT && b_type == SPTT_INT)) {
+    rc->aborted = 1;
+    return SPTIR_NULL;
+  }
+
   /* If both are int, do integer arithmetic. */
   if (a_type == SPTT_INT && b_type == SPTT_INT) {
     return sptir_emit(ir, op, SPTT_INT, a_ref, b_ref, 0);
@@ -610,6 +682,57 @@ static int rec_shift_const(SPTRecCtx *rc, int val_ref, int64_t sh) {
 }
 
 /* Record one bytecode instruction. Returns 1 to continue, 0 to stop. */
+/* Decide whether `p` is a pure straight-line leaf function we can inline:
+   fixed arity (no varargs), no nested protos (no closures), body consists only
+   of register moves, constant loads, and scalar arithmetic/bitwise ops, and is
+   terminated by exactly one RETURN1. No control flow (jumps/comparisons/loops),
+   no calls, no table/list/upvalue/global access. Such a callee emits no guards
+   when recorded (operand types are already known from the caller), so there are
+   no mid-callee snapshots or exits to reconstruct, and its temporaries are dead
+   after the return. On success returns 1 and writes the register holding the
+   returned value to *ret_reg. */
+static int proto_is_inlinable(Proto *p, int *ret_reg) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;          /* has nested protos => may close over */
+  int n = p->sizecode;
+  if (n < 1 || n > 48) return 0;        /* keep inlined bodies small */
+  int saw_return = 0;
+  for (int i = 0; i < n; i++) {
+    Instruction ins = p->code[i];
+    OpCode o = GET_OPCODE(ins);
+    switch (o) {
+      /* value-producing, side-effect-free, straight-line ops */
+      case OP_MOVE:
+      case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
+      case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
+      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+      case OP_MOD: case OP_IDIV: case OP_POW:
+      case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
+      case OP_MODK: case OP_IDIVK: case OP_POWK:
+      case OP_ADDI:
+      case OP_BAND: case OP_BOR: case OP_BXOR:
+      case OP_BANDK: case OP_BORK: case OP_BXORK:
+      case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
+      case OP_BNOT: case OP_UNM: case OP_NOT:
+      case OP_MMBIN: case OP_MMBINI: case OP_MMBINK: /* metamethod markers; skipped */
+      case OP_EXTRAARG:
+      /* A trailing RETURN0/RETURN after the RETURN1 is dead compiler boilerplate
+         and is never recorded (RETURN1 redirects recording back to the caller),
+         so accepting it here is safe; it does not set a return register. */
+      case OP_RETURN0: case OP_RETURN:
+        break;
+      case OP_RETURN1:
+        if (saw_return) return 0;       /* only a single return point */
+        *ret_reg = GETARG_A(ins);
+        saw_return = 1;
+        break;
+      default:
+        return 0;                       /* anything else: not inlinable */
+    }
+  }
+  return saw_return;
+}
+
 static int rec_inst(SPTRecCtx *rc) {
   SPTIRBuilder *ir = rc->ir;
   Instruction i = *rc->pc;
@@ -631,32 +754,32 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_MOVE: {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
-      ir->reg_map[a] = bref;
-      ir->reg_type[a] = ir->reg_type[b];
+      ir->reg_map[rc->frame_base + a] = bref;
+      ir->reg_type[rc->frame_base + a] = ir->reg_type[rc->frame_base + b];
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_LOADI: {
       int a = GETARG_A(i);
       int ref = sptir_kint(ir, GETARG_sBx(i));
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_LOADF: {
       int a = GETARG_A(i);
       int ref = sptir_kflt(ir, (double)GETARG_sBx(i));
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_FLT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_FLT;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_LOADK: {
       int a = GETARG_A(i);
       int ref = rec_load_k(rc, GETARG_Bx(i));
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = sptir_type(ir, ref);
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
@@ -664,29 +787,29 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i);
       rc->pc++; /* skip EXTRAARG */
       int ref = rec_load_k(rc, GETARG_Ax(*rc->pc));
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = sptir_type(ir, ref);
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_LOADFALSE: {
       int a = GETARG_A(i);
-      ir->reg_map[a] = sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
-      ir->reg_type[a] = SPTT_FALSE;
+      ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
+      ir->reg_type[rc->frame_base + a] = SPTT_FALSE;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_LOADTRUE: {
       int a = GETARG_A(i);
-      ir->reg_map[a] = sptir_emit(ir, SPTIR_TRUE, SPTT_TRUE, SPTIR_NULL, SPTIR_NULL, 0);
-      ir->reg_type[a] = SPTT_TRUE;
+      ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_TRUE, SPTT_TRUE, SPTIR_NULL, SPTIR_NULL, 0);
+      ir->reg_type[rc->frame_base + a] = SPTT_TRUE;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_LFALSESKIP: {
       int a = GETARG_A(i);
-      ir->reg_map[a] = sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
-      ir->reg_type[a] = SPTT_FALSE;
+      ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
+      ir->reg_type[rc->frame_base + a] = SPTT_FALSE;
       rc->pc++; /* skip next */
       if (a > ir->maxslot) ir->maxslot = a;
       break;
@@ -694,8 +817,8 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_LOADNIL: {
       int a = GETARG_A(i), b = GETARG_B(i);
       do {
-        ir->reg_map[a] = sptir_emit(ir, SPTIR_NIL, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
-        ir->reg_type[a] = SPTT_NIL;
+        ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_NIL, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
+        ir->reg_type[rc->frame_base + a] = SPTT_NIL;
         if (a > ir->maxslot) ir->maxslot = a;
         a++;
       } while (b--);
@@ -706,8 +829,8 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_GETUPVAL: {
       int a = GETARG_A(i), b = GETARG_B(i);
       int ref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_ANY;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_ANY;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
@@ -725,15 +848,15 @@ static int rec_inst(SPTRecCtx *rc) {
       int upref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
       int ref = sptir_emit(ir, SPTIR_GETTABUP, SPTT_ANY, upref, SPTIR_NULL,
                            (int64_t)tsvalue(&rc->k[GETARG_C(i)]));
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_ANY;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_ANY;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
     case OP_GETI: {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
-      SPTType bt = ir->reg_type[b];
+      SPTType bt = ir->reg_type[rc->frame_base + b];
       if (bt != SPTT_ARR) { rc->aborted = 1; return 0; }
       /* Element type from the live array. Numeric elements and (short or long)
          strings are loadable: the GETI codegen tag-guards then loads the 8-byte
@@ -748,8 +871,8 @@ static int rec_inst(SPTRecCtx *rc) {
       int snap = sptir_snapshot(ir, rc->pc);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = et;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = et;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
@@ -762,8 +885,8 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_reg(rc, c);
-      SPTType bt = ir->reg_type[b];
-      SPTType ct = ir->reg_type[c];
+      SPTType bt = ir->reg_type[rc->frame_base + b];
+      SPTType ct = ir->reg_type[rc->frame_base + c];
       if (bt != SPTT_ARR || ct != SPTT_INT) { rc->aborted = 1; return 0; }
       /* Live index value -> element type; only trace numeric elements. */
       StkId base = rc->ci->func.p + 1;
@@ -780,8 +903,8 @@ static int rec_inst(SPTRecCtx *rc) {
       int snap = sptir_snapshot(ir, rc->pc);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = et;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = et;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
@@ -789,7 +912,7 @@ static int rec_inst(SPTRecCtx *rc) {
       /* R[A][B] = RK(C), B is a constant index. */
       int a = GETARG_A(i), b = GETARG_B(i);
       int aref = rec_load_reg(rc, a);
-      if (ir->reg_type[a] != SPTT_ARR) { rc->aborted = 1; return 0; }
+      if (ir->reg_type[rc->frame_base + a] != SPTT_ARR) { rc->aborted = 1; return 0; }
       int cref = rec_load_rkc(rc, i);
       SPTType vt = sptir_type(ir, cref);
       if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }
@@ -804,7 +927,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
-      if (ir->reg_type[a] != SPTT_ARR || ir->reg_type[b] != SPTT_INT) {
+      if (ir->reg_type[rc->frame_base + a] != SPTT_ARR || ir->reg_type[rc->frame_base + b] != SPTT_INT) {
         rc->aborted = 1; return 0;
       }
       int cref = rec_load_rkc(rc, i);
@@ -829,7 +952,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_reg(rc, c);
-      SPTType bt = ir->reg_type[b], ct = ir->reg_type[c];
+      SPTType bt = ir->reg_type[rc->frame_base + b], ct = ir->reg_type[rc->frame_base + c];
       SPTIROp irop;
       switch (op) {
         case OP_ADD:  irop = SPTIR_ADD;  break;
@@ -843,8 +966,8 @@ static int rec_inst(SPTRecCtx *rc) {
       }
       int ref = rec_arith(rc, irop, bref, cref, bt, ct);
       if (rc->aborted) return 0;
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = sptir_type(ir, ref);
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc); /* skip MMBIN if present */
       break;
@@ -854,7 +977,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_k(rc, c);
-      SPTType bt = ir->reg_type[b], ct = sptir_type(ir, cref);
+      SPTType bt = ir->reg_type[rc->frame_base + b], ct = sptir_type(ir, cref);
       SPTIROp irop;
       switch (op) {
         case OP_ADDK:  irop = SPTIR_ADD;  break;
@@ -868,8 +991,8 @@ static int rec_inst(SPTRecCtx *rc) {
       }
       int ref = rec_arith(rc, irop, bref, cref, bt, ct);
       if (rc->aborted) return 0;
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = sptir_type(ir, ref);
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc);
       break;
@@ -878,11 +1001,11 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
       int bref = rec_load_reg(rc, b);
       int cref = sptir_kint(ir, c);
-      SPTType bt = ir->reg_type[b];
+      SPTType bt = ir->reg_type[rc->frame_base + b];
       int ref = rec_arith(rc, SPTIR_ADD, bref, cref, bt, SPTT_INT);
       if (rc->aborted) return 0;
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = sptir_type(ir, ref);
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc);
       break;
@@ -908,8 +1031,8 @@ static int rec_inst(SPTRecCtx *rc) {
       if (op == OP_SHL || op == OP_SHR)
         sptir_guard(ir, SPTIR_GUARD_ULT, cref, 64, rc->pc);
       int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc);
       break;
@@ -926,8 +1049,8 @@ static int rec_inst(SPTRecCtx *rc) {
         default: irop = SPTIR_BAND;
       }
       int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc);
       break;
@@ -943,8 +1066,8 @@ static int rec_inst(SPTRecCtx *rc) {
       sptir_guard(ir, SPTIR_GUARD_ULT, bref, 64, rc->pc);
       int cref = sptir_kint(ir, c);
       int ref = sptir_emit(ir, SPTIR_SHL, SPTT_INT, cref, bref, 0);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc);
       break;
@@ -955,8 +1078,8 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
       int bref = rec_load_reg(rc, b);
       int ref = rec_shift_const(rc, bref, -(int64_t)c);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc);
       break;
@@ -966,10 +1089,10 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_UNM: {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
-      SPTType bt = ir->reg_type[b];
+      SPTType bt = ir->reg_type[rc->frame_base + b];
       int ref = sptir_emit(ir, SPTIR_NEG, bt, bref, SPTIR_NULL, 0);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = bt;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = bt;
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc); /* UNM has no MMBIN; no-op */
       break;
@@ -978,8 +1101,8 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
       int ref = sptir_emit(ir, SPTIR_BNOT, SPTT_INT, bref, SPTIR_NULL, 0);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc); /* BNOT has no MMBIN; no-op */
       break;
@@ -988,8 +1111,8 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
       int ref = sptir_emit(ir, SPTIR_NOT, SPTT_TRUE, bref, SPTIR_NULL, 0);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_TRUE;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_TRUE;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
@@ -997,8 +1120,8 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i);
       int bref = rec_load_reg(rc, b);
       int ref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
-      ir->reg_map[a] = ref;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
       if (a > ir->maxslot) ir->maxslot = a;
       rec_skip_mmbin(rc); /* LEN has no MMBIN; no-op */
       break;
@@ -1009,7 +1132,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
-      SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
+      SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
       /* Two string *variables*: either could be a long (non-interned) string,
          so pointer comparison is unsafe. Abort. */
       if (at == SPTT_STR || bt == SPTT_STR) { rc->aborted = 1; return 0; }
@@ -1019,14 +1142,14 @@ static int rec_inst(SPTRecCtx *rc) {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
-      SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
+      SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
       return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt, a, b);
     }
     case OP_LE: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_reg(rc, b);
-      SPTType at = ir->reg_type[a], bt = ir->reg_type[b];
+      SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
       return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt, a, b);
     }
     case OP_EQI: {
@@ -1034,41 +1157,41 @@ static int rec_inst(SPTRecCtx *rc) {
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
       return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
-                             ir->reg_type[a], SPTT_INT, a, -1);
+                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
     }
     case OP_LTI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
       return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref,
-                             ir->reg_type[a], SPTT_INT, a, -1);
+                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
     }
     case OP_LEI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
       return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref,
-                             ir->reg_type[a], SPTT_INT, a, -1);
+                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
     }
     case OP_GTI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
       return rec_cond_branch(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref,
-                             ir->reg_type[a], SPTT_INT, a, -1);
+                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
     }
     case OP_GEI: {
       int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = sptir_kint(ir, b);
       return rec_cond_branch(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref,
-                             ir->reg_type[a], SPTT_INT, a, -1);
+                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
     }
     case OP_EQK: {
       int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
       int aref = rec_load_reg(rc, a);
       int bref = rec_load_k(rc, b);
-      SPTType at = ir->reg_type[a], bt = sptir_type(ir, bref);
+      SPTType at = ir->reg_type[rc->frame_base + a], bt = sptir_type(ir, bref);
       if (at == SPTT_STR && bt == SPTT_STR) {
         /* `s == "literal"`: only safe when the constant is a short interned
            string -- then pointer equality is exact. */
@@ -1106,8 +1229,8 @@ static int rec_inst(SPTRecCtx *rc) {
         rc->pc = jmp + 1;
       } else {
         /* Branch: R[A] := R[B], then take the JMP. */
-        ir->reg_map[a] = bref;
-        ir->reg_type[a] = ir->reg_type[b];
+        ir->reg_map[rc->frame_base + a] = bref;
+        ir->reg_type[rc->frame_base + a] = ir->reg_type[rc->frame_base + b];
         if (a > ir->maxslot) ir->maxslot = a;
         rc->pc = jmp + 1 + GETARG_sJ(*jmp);
       }
@@ -1118,8 +1241,21 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_JMP: {
       int sj = GETARG_sJ(i);
       if (sj < 0) {
-        /* Backward jump: loop back-edge. This is where we stop. */
-        sptir_loop(ir);
+        /* Backward jump. Only our own loop header (start_pc) closes the trace.
+           A backward jump to any OTHER target is an INNER loop's back-edge --
+           e.g. a `while` nested inside the `for` we are tracing. We cannot
+           represent a nested loop in a single linear trace; closing here would
+           fold the inner loop's pre-header (its init) into the body and produce
+           a non-terminating trace (constant exit guard). So abort instead and
+           let the interpreter run this loop; the inner loop still gets its own
+           correct trace from its own header. */
+        const Instruction *target = rc->pc + 1 + sj;
+        if (target == rc->start_pc) {
+          sptir_loop(ir);
+          return 0;
+        }
+        rc->aborted = 1;
+        rc->abort_pc = rc->pc;
         return 0;
       }
       /* Forward jump: follow it. The straight-line trace must track the actual
@@ -1172,13 +1308,13 @@ static int rec_inst(SPTRecCtx *rc) {
       /* new_count = count - 1 */
       int one_ref = sptir_kint(ir, 1);
       int new_count = sptir_emit(ir, SPTIR_SUB, SPTT_INT, count_ref, one_ref, 0);
-      ir->reg_map[a] = new_count;
-      ir->reg_type[a] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a] = new_count;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
 
       /* new_idx = idx + step */
       int new_idx = sptir_emit(ir, SPTIR_ADD, SPTT_INT, idx_ref, step_ref, 0);
-      ir->reg_map[a + 2] = new_idx;
-      ir->reg_type[a + 2] = SPTT_INT;
+      ir->reg_map[rc->frame_base + a + 2] = new_idx;
+      ir->reg_type[rc->frame_base + a + 2] = SPTT_INT;
 
       if (a > ir->maxslot) ir->maxslot = a;
       if (a + 2 > ir->maxslot) ir->maxslot = a + 2;
@@ -1190,29 +1326,108 @@ static int rec_inst(SPTRecCtx *rc) {
 
     /* ---- Returns ---- */
     case OP_RETURN0: {
+      if (rc->frame_base != 0) { rc->aborted = 1; return 0; } /* inlined callee must RETURN1 */
       sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
       return 0;
     }
     case OP_RETURN1: {
       int a = GETARG_A(i);
+      if (rc->frame_base != 0) {
+        /* Returning from an inlined callee: bind the caller's result register to
+           the returned value's IR ref, restore the caller's recording context,
+           and keep recording the caller after the CALL. */
+        int aref = rec_load_reg(rc, a);
+        if (rc->aborted) return 0;
+        SPTType rt = ir->reg_type[rc->frame_base + a];
+        rc->p = rc->save_p;
+        rc->k = rc->save_k;
+        rc->cl = rc->save_cl;
+        rc->frame_base = rc->save_frame_base;
+        rc->pc = rc->save_pc;
+        ir->reg_map[rc->call_result_slot] = aref;
+        ir->reg_type[rc->call_result_slot] = rt;
+        if (rc->call_result_slot > ir->maxslot) ir->maxslot = rc->call_result_slot;
+        return 1;
+      }
       int aref = rec_load_reg(rc, a);
-      sptir_emit(ir, SPTIR_RETURN, ir->reg_type[a], aref, SPTIR_NULL, 0);
+      sptir_emit(ir, SPTIR_RETURN, ir->reg_type[rc->frame_base + a], aref, SPTIR_NULL, 0);
       return 0;
     }
     case OP_RETURN: {
       int a = GETARG_A(i), b = GETARG_B(i);
+      if (rc->frame_base != 0) { rc->aborted = 1; return 0; } /* inlined callee must RETURN1 */
       if (b == 1) {
         sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
       } else {
         int aref = rec_load_reg(rc, a);
-        sptir_emit(ir, SPTIR_RETURN, ir->reg_type[a], aref, SPTIR_NULL, 0);
+        sptir_emit(ir, SPTIR_RETURN, ir->reg_type[rc->frame_base + a], aref, SPTIR_NULL, 0);
       }
       return 0;
     }
 
-    /* ---- Unsupported: abort trace ---- */
-    case OP_CALL:
-    case OP_TAILCALL:
+    /* ---- Call inlining (pure straight-line leaf functions) ---- */
+    case OP_CALL: {
+      /* CALL A B C : R[A](R[A+1..A+B-1]) -> R[A..A+C-2].
+         SPT uses a slot-0 receiver, so R[A+1] is the (nil) receiver and
+         R[A+2..] are the actual arguments. */
+      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+
+      /* Restrict to: a single fixed result (C==2), a fixed, known argument
+         count (B!=0), and depth-1 (not already inside an inlined callee). */
+      if (c != 2 || b < 1 || rc->frame_base != 0) { rc->aborted = 1; return 0; }
+
+      /* The function value must be a plain SLOAD from a stable stack slot, i.e.
+         a loop-invariant function. That tells us which proto to inline and lets
+         us guard the function once at trace entry instead of every iteration. */
+      int fref = ir->reg_map[rc->frame_base + a];
+      if (fref < 0) { rc->aborted = 1; return 0; }
+      SPTIRInst *fi = sptir_get(ir, fref);
+      if (!fi || fi->op != SPTIR_SLOAD) { rc->aborted = 1; return 0; }
+      int fslot = (int)fi->aux;
+      TValue *fv = s2v(rc->ci->func.p + 1 + fslot);
+      if (!ttisLclosure(fv)) { rc->aborted = 1; return 0; }
+      LClosure *callee_cl = clLvalue(fv);
+      Proto *callee_p = callee_cl->p;
+
+      /* Argument count must match: B-1 passed values = receiver + numparams. */
+      if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
+
+      /* Callee must be a pure straight-line leaf (no guards/exits/side effects). */
+      int ret_reg = -1;
+      if (!proto_is_inlinable(callee_p, &ret_reg)) { rc->aborted = 1; return 0; }
+
+      /* New frame base = A+1 (the slot after the function). Keep the callee's
+         whole frame inside the fixed-size backing reg_map array. */
+      int new_fb = rc->frame_base + a + 1;
+      if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
+
+      /* One entry check per trace: every inlined call must share (slot, proto). */
+      if (rc->inline_fn_slot < 0) {
+        rc->inline_fn_slot = fslot;
+        rc->inline_fn_proto = callee_p;
+      } else if (rc->inline_fn_slot != fslot || rc->inline_fn_proto != callee_p) {
+        rc->aborted = 1; return 0;
+      }
+
+      /* Save caller state and switch the recorder into the callee. The callee's
+         argument slots already coincide with the caller's argument registers in
+         reg_map (callee slot k == caller slot A+1+k), so nothing is copied. */
+      rc->save_p = rc->p;
+      rc->save_k = rc->k;
+      rc->save_cl = rc->cl;
+      rc->save_pc = rc->pc + 1;                  /* caller resumes after the CALL */
+      rc->save_frame_base = rc->frame_base;
+      rc->call_result_slot = rc->frame_base + a; /* caller R[A] takes the result */
+
+      rc->p = callee_p;
+      rc->k = callee_p->k;
+      rc->cl = callee_cl;
+      rc->frame_base = new_fb;
+      rc->pc = callee_p->code;
+      return 1;                                  /* keep recording in the callee */
+    }
+
+
     case OP_TFORPREP:
     case OP_TFORCALL:
     case OP_TFORLOOP:
@@ -1272,6 +1487,9 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.start_pc = start_pc;
   rc.pc = start_pc;
   rc.ir = &t->ir;
+  rc.frame_base = 0;
+  rc.inline_fn_slot = -1;
+  rc.inline_fn_proto = NULL;
 
   /* Mark loop start in IR. */
   t->ir.loop_start = t->ir.ninst;
@@ -1301,6 +1519,10 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   /* Copy exit PCs from IR builder to trace (used by codegen for exit stubs). */
   for (int i = 0; i < t->ir.nsnaps && i < SPT_JIT_MAX_SNAPSHOTS; i++)
     t->exit_pcs[i] = t->ir.exit_pcs[i];
+
+  /* Carry the inlined-call entry check (if any) onto the trace. */
+  t->inline_fn_slot = rc.inline_fn_slot;
+  t->inline_fn_proto = rc.inline_fn_proto;
 
   if (js->debug >= 2) sptir_dump(&t->ir, "pre-opt");
 
@@ -1354,6 +1576,16 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
   SPTHotEntry *e = hot_lookup(js, p, pc_offset);
   if (!e || !e->trace || !e->trace->code) return 0;
 
+  /* Inlined-call entry guard: a trace that inlined a pure leaf call may only be
+     entered while the function slot still holds a closure of the inlined proto.
+     If something else is there now, the inlined body would be wrong, so decline
+     and let the interpreter run the loop (and the call) normally. */
+  if (e->trace->inline_fn_slot >= 0) {
+    TValue *fv = s2v(ci->func.p + 1 + e->trace->inline_fn_slot);
+    if (!ttisLclosure(fv) || clLvalue(fv)->p != e->trace->inline_fn_proto)
+      return 0;
+  }
+
   /* Enter the trace. */
   js->stats.trace_entries++;
   SPTTraceEntry entry = (SPTTraceEntry)e->trace->code;
@@ -1402,6 +1634,15 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
     }
     /* Recording aborted: penalize this PC so we eventually stop retrying. */
     if (e->aborts < 0xFFFF) e->aborts++;
+    /* Shift the retry phase. A nested loop (e.g. a `while` inside a `for`) can
+       trigger recording on its *exiting* iteration, where the recorder captures
+       the loop-exit path instead of the body and aborts. If the threshold is a
+       multiple of the inner loop's trip count, every retry re-lands on that same
+       exiting iteration and the loop never compiles. Re-seeding the counter with
+       the abort count makes each retry fire a little earlier, sampling different
+       iterations until one captures the body. Only one iteration per trip is the
+       exiting one, so this converges within a couple of retries. */
+    e->counter = e->aborts;
   }
 
   return 0;

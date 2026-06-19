@@ -1,0 +1,5 @@
+list<int> a = [10, 12, 14, 16, 18, 20];
+int m = 15;
+int s = 0;
+for (int r = 0, 50000) { for (int j = 0, 5) { s = s + (a[j] - m) * (a[j] - m); } }
+print(s);

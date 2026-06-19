@@ -1,0 +1,8 @@
+int total = 0;
+for (int i = 0, 500000) {
+  int lo = 0;
+  int hi = 20;
+  while (lo < hi) { lo = lo + 1; hi = hi - 1; }
+  total = total + lo;
+}
+print(total);

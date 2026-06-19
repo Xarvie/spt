@@ -32,11 +32,24 @@ struct SPTTrace {
   /* Exit PC for each snapshot (where to resume in interpreter) */
   const Instruction *exit_pcs[SPT_JIT_MAX_SNAPSHOTS];
 
+  /* Per-snapshot exit counter: how many times each exit (snapshot) was taken
+     back to the interpreter. Incremented by the exit stub. Zeroed at alloc
+     (calloc). Aggregated into stats.trace_exits at dump time. The "loop-end"
+     count guard's snapshot dominates for a well-behaved looping trace; a hot
+     *side* exit (type/bounds guard) is the signal for side-trace chaining. */
+  uint64_t exit_count[SPT_JIT_MAX_SNAPSHOTS];
+
   /* Link info: which trace does each exit link to? -1 = no link */
   int exit_links[SPT_JIT_MAX_EXITS];
 
   /* Next trace in hash chain */
   SPTTrace *next;
+
+  /* Call inlining: if this trace inlined a pure leaf call, it may only be
+     entered when stack slot `inline_fn_slot` holds a closure of
+     `inline_fn_proto`. -1 = no inlined call (no entry check needed). */
+  int inline_fn_slot;
+  Proto *inline_fn_proto;
 };
 
 /* =====================================================================

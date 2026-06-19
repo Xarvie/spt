@@ -1,0 +1,5 @@
+list<int> a = [0, 0, 0, 0, 0, 0, 0, 0];
+for (int r = 0, 50000) { for (int j = 0, 7) { a[j] = j * j; } }
+int s = 0;
+for (int j = 0, 7) { s = s + a[j]; }
+print(s);

@@ -1,0 +1,6 @@
+list<int> a = [3, 7, 2, 9, 4, 8, 1, 6, 5];
+int mx = 0;
+for (int r = 0, 50000) { for (int j = 0, 8) { if (a[j] > mx) { mx = a[j]; } } mx = 0; }
+int last = 0;
+for (int j = 0, 8) { if (a[j] > last) { last = a[j]; } }
+print(last);

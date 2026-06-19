@@ -1,0 +1,49 @@
+// === state_machine: 4-state machine in a loop ===
+int state = 0; int count0 = 0; int count1 = 0; int count2 = 0; int count3 = 0;
+for (int i = 0, 1000000) {
+  if (state == 0) { count0 = count0 + 1; state = 1; }
+  else if (state == 1) { count1 = count1 + 1; state = 2; }
+  else if (state == 2) { count2 = count2 + 1; state = 3; }
+  else { count3 = count3 + 1; state = 0; }
+}
+print(count0 % 1000003); print(count1 % 1000003); print(count2 % 1000003); print(count3 % 1000003);
+
+// === branch_minmax: min/max via branches ===
+int mn = 999999; int mx = 0;
+for (int i = 0, 1000000) { if (i < mn) { mn = i; } if (i > mx) { mx = i; } }
+print(mn); print(mx);
+
+// === branch_count: count divisible by 3 or 5 ===
+int cnt = 0;
+for (int i = 0, 1000000) { if (i % 3 == 0) { cnt = cnt + 1; } else if (i % 5 == 0) { cnt = cnt + 1; } }
+print(cnt % 1000003);
+
+// === branch_swap: conditional swap in loop ===
+int sa = 5; int sb = 3;
+for (int i = 0, 999999) { if (sa > sb) { int t = sa; sa = sb; sb = t; } }
+print(sa); print(sb);
+
+// === nested_if: nested if-else with accumulation ===
+int na = 0; int nb = 0; int nc = 0;
+for (int i = 0, 1000000) {
+  if (i % 2 == 0) { if (i % 4 == 0) { na = na + 1; } else { nb = nb + 1; } }
+  else { if (i % 3 == 0) { nc = nc + 1; } }
+}
+print(na % 1000003); print(nb % 1000003); print(nc % 1000003);
+
+// === while_cond_update: while with complex condition ===
+int wc = 0; int wp = 0;
+while (wc < 1000000 && wp < 2000000) { wc = wc + 1; if (wc % 2 == 0) { wp = wp + 2; } else { wp = wp + 1; } }
+print(wc); print(wp % 1000003);
+
+// === ternary_chain: multiple conditions selecting different ops ===
+int tc = 0;
+for (int i = 0, 1000000) {
+  if (i % 6 == 0) { tc = tc + 1; }
+  else if (i % 6 == 1) { tc = tc - 1; }
+  else if (i % 6 == 2) { tc = tc * 2; }
+  else if (i % 6 == 3) { tc = tc + 3; }
+  else if (i % 6 == 4) { tc = tc - 2; }
+  else { tc = tc + i % 7; }
+}
+print(tc % 1000003);

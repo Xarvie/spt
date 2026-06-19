@@ -283,7 +283,35 @@ static void ra_analyze(SPTCodeGen *cg) {
   }
   if (nint == 0 && nflt == 0) return; /* nothing to gain */
 
-  /* Assign a GPR to each integer-resident slot. */
+  /* Bail if any slot's loop-end value is a *stale alias*: it is the live-in
+     SLOAD of a DIFFERENT slot whose value is mutated in the loop. Under
+     residency that source SLOAD lives in a register that is updated in place,
+     so materializing this slot at a side exit (or carrying it across the
+     back-edge) would read the source's *final* value, not the value it had when
+     this slot copied it mid-iteration. Example: `b = a; a = a + 1` -- b must
+     keep the old a, but a's register has already been incremented. (When the
+     source is read-only its register is never overwritten, so that is safe and
+     not flagged.) The spill-everything path re-reads every slot per iteration
+     and writes them back, so it handles this correctly. */
+  for (int slot = 0; slot <= ir->maxslot; slot++) {
+    int fref = ra_canon_ref(ir, ir->reg_map[slot]);
+    if (fref < 0 || fref >= ir->ninst) continue;
+    if (ir->insts[fref].op != SPTIR_SLOAD) continue;
+    int src = (int)ir->insts[fref].aux;
+    if (src == slot) continue;                 /* own read-only live-in: fine */
+    if (ra_canon_ref(ir, ir->reg_map[src]) != fref) return; /* src mutated -> bail */
+  }
+
+  /* Assign a GPR to each integer-resident slot.
+
+     Two passes so we can detect loop-carried *permutations*. The residency path
+     emits no back-edge moves: each slot's loop-end value must be computed into
+     that slot's own register and simply flow to the next iteration. That breaks
+     when one slot's loop-end value is another slot's value -- e.g. `a=b; b=t`,
+     where a's new value is b's live-in. Such a swap needs a parallel copy at the
+     back-edge that this path cannot express, so when we detect that a value is
+     wanted in two different registers we bail to the (correct) spill-everything
+     path, which re-reads every slot from the stack each iteration. */
   for (int k = 0; k < nint; k++) {
     SPTReg reg = RA_POOL[k];
     int slot = islots[k];
@@ -291,11 +319,16 @@ static void ra_analyze(SPTCodeGen *cg) {
     int sload = isload[k];
     cg->ref_reg[sload] = (int8_t)reg;
     cg->ref_hoist[sload] = 1;
-    int final_ref = ra_canon_ref(ir, ir->reg_map[slot]);
-    if (final_ref >= 0 && final_ref != sload && final_ref < ir->ninst)
-      cg->ref_reg[final_ref] = (int8_t)reg;
   }
-  /* Assign an XMM to each float-resident slot. */
+  for (int k = 0; k < nint; k++) {
+    int final_ref = ra_canon_ref(ir, ir->reg_map[islots[k]]);
+    if (final_ref < 0 || final_ref >= ir->ninst || final_ref == isload[k])
+      continue;
+    if (cg->ref_reg[final_ref] >= 0 && cg->ref_reg[final_ref] != (int8_t)RA_POOL[k])
+      return;  /* loop-carried permutation/aliasing -> bail to spill path */
+    cg->ref_reg[final_ref] = (int8_t)RA_POOL[k];
+  }
+  /* Assign an XMM to each float-resident slot (same two-pass conflict check). */
   for (int k = 0; k < nflt; k++) {
     SPTXmmReg reg = XMM_POOL[k];
     int slot = fslots[k];
@@ -303,9 +336,14 @@ static void ra_analyze(SPTCodeGen *cg) {
     int sload = fsload[k];
     cg->ref_xmm[sload] = (int8_t)reg;
     cg->ref_hoist[sload] = 1;
-    int final_ref = ra_canon_ref(ir, ir->reg_map[slot]);
-    if (final_ref >= 0 && final_ref != sload && final_ref < ir->ninst)
-      cg->ref_xmm[final_ref] = (int8_t)reg;
+  }
+  for (int k = 0; k < nflt; k++) {
+    int final_ref = ra_canon_ref(ir, ir->reg_map[fslots[k]]);
+    if (final_ref < 0 || final_ref >= ir->ninst || final_ref == fsload[k])
+      continue;
+    if (cg->ref_xmm[final_ref] >= 0 && cg->ref_xmm[final_ref] != (int8_t)XMM_POOL[k])
+      return;  /* loop-carried permutation/aliasing -> bail to spill path */
+    cg->ref_xmm[final_ref] = (int8_t)XMM_POOL[k];
   }
 
   /* Hoist the type guards that check these live-ins (they read the stack tag,
@@ -639,6 +677,16 @@ static void gen_exit_stub(SPTCodeGen *cg, int snap_idx) {
 
   SPTSnapshot *snap = ir->snaps[snap_idx];
 
+  /* Count this exit. RAX/RCX are dead scratch at a guard-failure landing (the
+     guard's temporaries are no longer needed; live values are in resident
+     registers / RBX-relative slots), so clobbering them here is safe -- this
+     runs before any flush. Cold path (once per exit), so 4 insts is free.
+     exit_count is summed into stats.trace_exits at dump time. */
+  sptasm_mov_ri64(a, SPT_RCX, (int64_t)&t->exit_count[snap_idx]);
+  sptasm_mov_rm(a, SPT_RAX, SPT_RCX, 0);
+  sptasm_add_ri(a, SPT_RAX, 1);
+  sptasm_mov_mr(a, SPT_RCX, 0, SPT_RAX);
+
   /* With register residency there is no per-iteration stack writeback, so a
      resident slot's stack copy is stale. Flush every resident slot's current
      register value to the stack first (always INT-typed). The snapshot loop
@@ -961,8 +1009,19 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
         gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
         sptasm_cqo(a);
         sptasm_idiv_r(a, SPT_RCX);
-        /* Remainder is in RDX. */
-        sptasm_mov_rr(a, SPT_RAX, SPT_RDX);
+        /* x86 idiv gives a TRUNCATED remainder (sign of the dividend); Lua's %
+           is FLOORED (sign of the divisor). Correct it:
+              r = m % n; if (r != 0 && (r ^ n) < 0) r += n;
+           (when r != 0, sign(r)==sign(m), so (r^n)<0 == (m^n)<0). */
+        sptasm_mov_rr(a, SPT_RAX, SPT_RDX);   /* rax = r (C remainder) */
+        int32_t done = sptasm_newlabel(a);
+        sptasm_test_rr(a, SPT_RAX, SPT_RAX);
+        sptasm_jcc(a, SPT_CC_E, done);        /* r == 0 -> no fixup */
+        sptasm_mov_rr(a, SPT_RDX, SPT_RAX);
+        sptasm_xor_rr(a, SPT_RDX, SPT_RCX);   /* rdx = r ^ n (sets SF) */
+        sptasm_jcc(a, SPT_CC_NS, done);       /* signs same -> no fixup */
+        sptasm_add_rr(a, SPT_RAX, SPT_RCX);   /* r += n */
+        sptasm_place(a, done);
         gen_store(cg, idx, SPT_RAX);
       }
       break;
@@ -974,6 +1033,16 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
         gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
         sptasm_cqo(a);
         sptasm_idiv_r(a, SPT_RCX);
+        /* idiv gives a TRUNCATED quotient; Lua's // (here ~/) is FLOORED:
+              q = m / n; if (r != 0 && (r ^ n) < 0) q -= 1;
+           r is in RDX after idiv; same sign reasoning as MOD above. */
+        int32_t done = sptasm_newlabel(a);
+        sptasm_test_rr(a, SPT_RDX, SPT_RDX);
+        sptasm_jcc(a, SPT_CC_E, done);        /* r == 0 -> exact, no fixup */
+        sptasm_xor_rr(a, SPT_RDX, SPT_RCX);   /* rdx = r ^ n (sets SF) */
+        sptasm_jcc(a, SPT_CC_NS, done);       /* signs same -> no fixup */
+        sptasm_sub_ri(a, SPT_RAX, 1);         /* q -= 1 */
+        sptasm_place(a, done);
         gen_store(cg, idx, SPT_RAX);
       }
       break;

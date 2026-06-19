@@ -312,36 +312,82 @@ static int try_algebraic(SPTIRBuilder *b, int idx) {
   return 0;
 }
 
-/* CSE: find identical instruction earlier in the IR. */
-static int try_cse(SPTIRBuilder *b, int idx) {
+/* CSE: find identical instruction earlier in the IR. has_table_write disables
+   GETI CSE (a later array write could alias the load). */
+static int try_cse(SPTIRBuilder *b, int idx, int has_table_write) {
   SPTIRInst *ir = &b->insts[idx];
-  /* Only CSE pure arithmetic on constants/loads. */
+  /* Only CSE pure operations. */
   switch (ir->op) {
     case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL:
     case SPTIR_BAND: case SPTIR_BOR: case SPTIR_BXOR:
     case SPTIR_SHL: case SPTIR_SHR:
       break;
+    case SPTIR_KINT:
+      /* Integer constants: dedup so reused literals (e.g. the `0` bound of two
+         lower-bounds guards) share one ref, exposing the guards as duplicates.
+         Value lives in aux, matched below. */
+      break;
+    case SPTIR_LEN:
+      /* Array length is constant within a trace -- appends (NEWLIST/SETLIST/
+         append) abort the trace, and in-bounds SETI never changes loglen. */
+      break;
+    case SPTIR_GETI:
+      /* Pure element load. CSE only when no array/table write in the trace
+         could alias it (conservative: any table write disables it). */
+      if (has_table_write) return 0;
+      break;
     default:
       return 0;
   }
-  /* Search backwards for identical instruction (limited window). */
+  /* Search backwards for identical instruction (limited window). aux is part of
+     the identity (the constant value for KINT; 0 for the other pure ops). */
   int start = idx > 64 ? idx - 64 : 0;
   for (int i = idx - 1; i >= start; i--) {
     SPTIRInst *o = &b->insts[i];
     if (o->op == ir->op && o->type == ir->type &&
-        o->op1 == ir->op1 && o->op2 == ir->op2 &&
+        o->op1 == ir->op1 && o->op2 == ir->op2 && o->aux == ir->aux &&
         !(o->flags & SPTIRF_DEAD)) {
       /* Found identical: turn this into a NOP-alias whose op1 points at the
          earlier identical instruction (the CSE result). op1 must be reset to i
          -- keeping the original first operand would alias to an operand value
-         (e.g. `a` of `a*b`) instead of the computed result. */
+         (e.g. `a` of `a*b`) instead of the computed result. A GETI carries a
+         type guard + snapshot (GS); the earlier GETI already guarantees the
+         type, so drop them from the alias. */
       ir->op = SPTIR_NOP;
       ir->op1 = i;
       ir->op2 = SPTIR_NULL;
+      ir->flags &= ~(SPTIRF_GUARD | SPTIRF_SNAP);
       return 1;
     }
   }
   return 0;
+}
+
+/* Remove a guard subsumed by an earlier identical guard. After forward_nops all
+   operand/bound refs are canonical, so two guards with the same (op, op1, op2,
+   aux) check the same immutable SSA values -- the later one always passes and is
+   redundant. Mark it DEAD (gen_inst skips it; no exit stub is emitted for a
+   non-emitted guard, so there is no snapshot/exit desync). */
+static void guard_dedup(SPTIRBuilder *b) {
+  for (int i = 0; i < b->ninst; i++) {
+    SPTIRInst *ir = &b->insts[i];
+    if (ir->flags & SPTIRF_DEAD) continue;
+    switch (ir->op) {
+      case SPTIR_GUARD_T: case SPTIR_GUARD_LE: case SPTIR_GUARD_LT:
+      case SPTIR_GUARD_EQ: case SPTIR_GUARD_ULT:
+        break;
+      default: continue;
+    }
+    int start = i > 128 ? i - 128 : 0;
+    for (int j = i - 1; j >= start; j--) {
+      SPTIRInst *o = &b->insts[j];
+      if (o->op == ir->op && o->op1 == ir->op1 && o->op2 == ir->op2 &&
+          o->aux == ir->aux && !(o->flags & SPTIRF_DEAD)) {
+        ir->flags = (ir->flags & ~(SPTIRF_GUARD | SPTIRF_SNAP)) | SPTIRF_DEAD;
+        break;
+      }
+    }
+  }
 }
 
 /* Mark instruction as used (for DCE). */
@@ -518,14 +564,28 @@ void sptir_optimize(SPTIRBuilder *b) {
     try_algebraic(b, i);
   }
 
-  /* Pass 2: CSE. */
+  /* Pass 2: CSE. GETI CSE needs to know whether any array/table write exists
+     in the trace (a write could alias a load), so scan once up front. */
+  int has_table_write = 0;
+  for (int i = 0; i < b->ninst; i++) {
+    switch (b->insts[i].op) {
+      case SPTIR_SETI: case SPTIR_SETFIELD:
+        has_table_write = 1; break;
+      default: break;
+    }
+    if (has_table_write) break;
+  }
   for (int i = 0; i < b->ninst; i++) {
     if (b->insts[i].flags & SPTIRF_DEAD) continue;
-    try_cse(b, i);
+    try_cse(b, i, has_table_write);
   }
 
   /* Pass 2.5: forward NOP-aliases so no live reference points at a NOP. */
   forward_nops(b);
+
+  /* Pass 2.7: remove guards subsumed by an earlier identical guard (now that
+     all bound/operand refs are canonical). */
+  guard_dedup(b);
 
   /* Pass 3: Dead code elimination. */
   dce(b);

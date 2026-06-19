@@ -1,0 +1,7 @@
+int s = 0;
+bool on = true;
+for (int i = 0, 500000) {
+  if (on) { s = s + 1; } else { s = s - 1; }
+  if (i % 3 == 0) { on = false; } else { on = true; }
+}
+print(s);

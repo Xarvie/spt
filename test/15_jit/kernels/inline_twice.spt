@@ -1,0 +1,4 @@
+function lin(int x) { return x * 3 + 7; }
+int s = 0;
+for (int i = 0, 1000000) { s = s + lin(i) + lin(i % 100); }
+print(s);

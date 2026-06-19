@@ -1,0 +1,4 @@
+list<int> a = [10, 20, 30, 40];
+int s = 0;
+for (int i = 0, 200000) { s = s + a[0] + a[3]; }
+print(s);

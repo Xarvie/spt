@@ -1,0 +1,49 @@
+// === int_overflow: integer overflow in loop ===
+int ov = 1;
+for (int i = 0, 62) { ov = ov * 2; }
+print(ov);
+
+// === mixed_int_float: int and float in same loop ===
+int iv = 0; float fv = 0.0;
+for (int i = 0, 1000000) { iv = iv + 1; fv = fv + 1.5; }
+print(iv % 1000003); print(fv);
+
+// === float_accum: float accumulation ===
+float fa = 0.0;
+for (int i = 0, 10000000) { fa = fa + 0.1; }
+print(fa);
+
+// === float_int_div: mixed division ===
+float fid = 0.0;
+for (int i = 1, 1000000) { fid = fid + i / 3.0; }
+print(fid);
+
+// === mod_chain: chained modulo ===
+int mc = 1;
+for (int i = 1, 1000000) { mc = (mc * 7 + 13) % 1000000007; }
+print(mc);
+
+// === neg_numbers: negative number arithmetic in loop ===
+int neg = -500000;
+for (int i = 0, 1000000) { neg = neg + 1; }
+print(neg);
+
+// === bit_ops: bitwise operations in loop ===
+int bv = 0;
+for (int i = 0, 1000000) { bv = (bv ^ i) & 0xFFFF; }
+print(bv);
+
+// === shift_loop: shift operations ===
+int sv = 1;
+for (int i = 0, 30) { sv = sv << 1; }
+print(sv);
+
+// === idiv_mod: integer division and modulo together ===
+int q = 0; int r = 0;
+for (int i = 1, 1000000) { q = i / 7; r = i % 7; }
+print(q % 1000003); print(r);
+
+// === float_mul: float multiplication accumulation ===
+float fmul = 1.0;
+for (int i = 0, 100) { fmul = fmul * 1.01; }
+print(fmul);

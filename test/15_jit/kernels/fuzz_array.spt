@@ -1,0 +1,45 @@
+// === array_scan: scan and accumulate from array ===
+list<int> arr = [10,20,30,40,50,60,70,80,90,100];
+int sum = 0;
+for (int i = 0, 999999) { sum = sum + arr[i % 10]; }
+print(sum % 1000003);
+
+// === array_write_read: write then read in same loop ===
+list<int> buf = [0,0,0,0,0,0,0,0];
+for (int i = 0, 999999) { buf[i % 8] = i; }
+print(buf[0]); print(buf[7]);
+
+// === array_reverse_inplace: reverse array using two pointers ===
+list<int> rev = [1,2,3,4,5,6,7,8,9,10];
+int lo = 0; int hi = 9;
+for (int rep = 0, 999999) {
+  lo = 0; hi = 9;
+  while (lo < hi) { int t = rev[lo]; rev[lo] = rev[hi]; rev[hi] = t; lo = lo + 1; hi = hi - 1; }
+}
+print(rev[0]); print(rev[9]);
+
+// === array_max: find max in array repeatedly ===
+list<int> data = [3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3];
+int mx = 0;
+for (int rep = 0, 999999) { mx = data[0]; for (int i = 1, 15) { if (data[i] > mx) { mx = data[i]; } } }
+print(mx);
+
+// === histogram: count occurrences ===
+list<int> bins = [0,0,0,0,0];
+for (int i = 0, 1000000) { bins[i % 5] = bins[i % 5] + 1; }
+print(bins[0] % 1000003); print(bins[4] % 1000003);
+
+// === prefix_sum: in-place prefix sum ===
+list<int> ps = [1,2,3,4,5,6,7,8,9,10];
+for (int rep = 0, 99999) {
+  for (int i = 1, 9) { ps[i] = ps[i] + ps[i-1]; }
+  // reset for next iteration
+  ps = [1,2,3,4,5,6,7,8,9,10];
+}
+print(ps[9]);
+
+// === 2d_diag: diagonal sum of 2D array ===
+list<list<int>> sq = [[1,2,3],[4,5,6],[7,8,9]];
+int diag = 0;
+for (int rep = 0, 999999) { diag = 0; for (int i = 0, 2) { diag = diag + sq[i][i]; } }
+print(diag);

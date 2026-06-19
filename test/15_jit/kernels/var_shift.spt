@@ -1,0 +1,3 @@
+int s = 0;
+for (int i = 0, 1000000) { int sh = i % 70; s = s + (1 << sh) + (1024 >> sh); }
+print(s);

@@ -1,0 +1,4 @@
+list<int> a = [1, 2, 3, 4, 5];
+int s = 0;
+for (int r = 0, 50000) { for (int j = 0, 4) { s = s + a[j] * a[j] + a[j]; } }
+print(s);
