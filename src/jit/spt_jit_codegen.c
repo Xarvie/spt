@@ -383,9 +383,12 @@ static void ra_hoist_invariants(SPTCodeGen *cg) {
            base[0]). Constant index only: a hoisted variable-index load made the
            trace stop looping internally (entries became per-iteration), a net
            slowdown -- so we keep those in the loop. Also requires no aliasing
-           array write in the loop. */
+           array write in the loop. ARR/TAB element types are excluded: hoisting
+           an array-producing GETI (the inner m[0] of a chained m[0][j]) gave
+           wrong results -- recompute it in the loop body like m[i][j] does. */
         SPTIRInst *ix = sptir_get(ir, o2);
-        is_inv = !has_seti && o1ok && o2ok && ix && ix->op == SPTIR_KINT;
+        is_inv = !has_seti && o1ok && o2ok && ix && ix->op == SPTIR_KINT &&
+                 in->type != SPTT_ARR && in->type != SPTT_TAB;
         break;
       }
       case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL:

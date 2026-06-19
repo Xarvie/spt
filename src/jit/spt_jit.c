@@ -294,18 +294,52 @@ static int rec_load_rkc(SPTRecCtx *rc, Instruction i) {
 /* Read the runtime type of array[idx] during recording, so the loaded value can
    be typed and a type guard emitted. Returns SPTT_ANY if the slot isn't an
    array, the index is out of range, or the element isn't a type we trace. */
+/* Recover the record-time integer behind an IR ref (constant or stack load). */
+static int rec_eval_int(SPTRecCtx *rc, int ref, lua_Integer *out) {
+  SPTIRInst *in = sptir_get(rc->ir, ref);
+  if (!in) return 0;
+  if (in->op == SPTIR_KINT) { *out = (lua_Integer)in->aux; return 1; }
+  if (in->op == SPTIR_SLOAD) {
+    TValue *v = s2v((rc->ci->func.p + 1) + (int)in->aux);
+    if (ttisinteger(v)) { *out = ivalue(v); return 1; }
+  }
+  return 0;
+}
+
+/* Recover the record-time array (Table*) behind an IR ref: an SLOAD reads the
+   stack slot; a nested GETI evaluates array[index] recursively (for chained
+   access m[i][j], whose intermediate array's slot may be reused). NULL if
+   undeterminable. */
+static Table *rec_eval_array(SPTRecCtx *rc, int ref) {
+  SPTIRInst *in = sptir_get(rc->ir, ref);
+  if (!in) return NULL;
+  if (in->op == SPTIR_SLOAD) {
+    TValue *v = s2v((rc->ci->func.p + 1) + (int)in->aux);
+    return ttisarray(v) ? avalue(v) : NULL;
+  }
+  if (in->op == SPTIR_GETI) {
+    Table *arr = rec_eval_array(rc, in->op1);
+    lua_Integer idx;
+    if (!arr || !rec_eval_int(rc, in->op2, &idx)) return NULL;
+    if (idx < 0 || (lua_Unsigned)idx >= arr->loglen) return NULL;
+    lu_byte tag = *getArrTag(arr, (lua_Unsigned)idx);
+    TValue tmp;
+    tmp.tt_ = tag;
+    tmp.value_ = *getArrVal(arr, (lua_Unsigned)idx);
+    return ttisarray(&tmp) ? avalue(&tmp) : NULL;
+  }
+  return NULL;
+}
+
 static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
-  /* Read the array from its stack slot: exact for a slot holding a genuine
-     array (a variable, or an explicit `row = m[i]`). A *chained* m[i][j] has
-     its intermediate slot reused, so this returns ANY and the trace aborts.
-     (Re-enabling IR-recursive resolution made it loop after the DCE bound-guard
-     fix, but exposed a separate miscompile when a constant-index array-producing
-     GETI like m[0] is LICM-hoisted -- m[0][j] gave wrong results. Chained 2D
-     stays disabled until that is fixed; explicit `row = m[i]` still works.) */
-  StkId base = rc->ci->func.p + 1;
-  TValue *arrtv = s2v(base + areg);
-  if (!ttisarray(arrtv)) return SPTT_ANY;
-  Table *t = avalue(arrtv);
+  /* Resolve the array through the IR ref so chained m[i][j] works: the
+     intermediate array isn't on the stack (its slot is reused), but it is in
+     the IR. The inner array-producing GETI is deliberately NOT LICM-hoisted
+     (see ra_hoist_invariants: SPTT_ARR/SPTT_TAB excluded), so it is recomputed
+     each inner iteration -- the same correct path the variable-index m[i][j]
+     already uses. */
+  Table *t = rec_eval_array(rc, rc->ir->reg_map[areg]);
+  if (!t) return SPTT_ANY;
   if (idx < 0 || (lua_Unsigned)idx >= t->loglen) return SPTT_ANY;
   lu_byte tag = *getArrTag(t, (lua_Unsigned)idx);
   TValue tmp;
