@@ -76,7 +76,7 @@ static uint32_t hot_hash(Proto *p, int pc_offset) {
 SPTJitState *sptjit_create(void) {
   SPTJitState *js = (SPTJitState *)calloc(1, sizeof(SPTJitState));
   if (!js) return NULL;
-  js->mode = SPT_JIT_MODE_ON;
+  js->mode = SPT_JIT_MODE_OFF;
   js->hot_size = 256; /* power of 2 */
   js->hot_table = (SPTHotEntry *)calloc(js->hot_size, sizeof(SPTHotEntry));
   js->code_buf_size = SPT_JIT_CODE_SIZE;

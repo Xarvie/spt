@@ -1199,14 +1199,8 @@ void luaV_finishOp(lua_State *L) {
     luai_threadyield(L);                                                                           \
   }
 
-/*
-** SPT Trace JIT: hot loop detection at backward jumps.
-** Evaluates to 1 (true) if the JIT took over execution (caller must reload
-** state and skip the backward jump), 0 (false) otherwise.
-** 'target_pc' is the loop header (target of the backward jump).
-*/
-#define sptjit_hot_check(ci, target_pc)                                                           \
-  (savepc(ci), sptjit_trace_hot(L, ci, (target_pc)) &&                                            \
+#define sptjit_hot_check(ci, target_pc) \
+  (savepc(ci), sptjit_trace_hot(L, ci, (target_pc)) && \
    (pc = ci->u.l.savedpc, updatebase(ci), updatetrap(ci), 1))
 
 /* fetch an instruction and prepare its execution */
@@ -1766,7 +1760,7 @@ returning: /* trap already set */
         int sj = GETARG_sJ(i);
         if (sj < 0) {
           /* Backward jump: loop back-edge. Check for hot loop. */
-          if (sptjit_hot_check(ci, pc + sj)) vmbreak;
+          if (sptjit_hot_check(ci, pc + sj)) { vmbreak; }
         }
         dojump(ci, i, 0);
         vmbreak;
@@ -1966,12 +1960,12 @@ returning: /* trap already set */
             idx = intop(+, idx, step);
             chgivalue(s2v(ra + 2), idx);
             /* Backward jump: check for hot loop. */
-            if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) vmbreak;
+            if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) { vmbreak; }
             pc -= GETARG_Bx(i);
           }
         } else if (floatforloop(ra)) {
           /* Backward jump: check for hot loop. */
-          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) vmbreak;
+          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) { vmbreak; }
           pc -= GETARG_Bx(i);
         }
         updatetrap(ci);
@@ -2024,7 +2018,7 @@ returning: /* trap already set */
         StkId ra = RA(i);
         if (!ttisnil(s2v(ra + 3))) {
           /* Backward jump: check for hot loop. */
-          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) vmbreak;
+          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) { vmbreak; }
           pc -= GETARG_Bx(i);
         }
         vmbreak;
