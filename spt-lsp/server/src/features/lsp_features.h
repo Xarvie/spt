@@ -70,4 +70,31 @@ cJSON *feature_inlay_hints(const Document *d, LspRange range, Workspace *ws);
    Phase 4: 为顶层声明补全缺失的 export 前缀。 */
 cJSON *feature_code_action(const Document *d, LspRange range);
 
+/* ---- Phase 6: 导航能力扩展 ---- */
+
+/* textDocument/typeDefinition -> Location | null */
+cJSON *feature_type_definition(const Document *d, LspPos pos);
+
+/* textDocument/declaration -> Location | null
+   declare 块成员跳声明处；普通符号回退 definition。 */
+cJSON *feature_declaration(const Document *d, LspPos pos, const char *uri, Workspace *ws);
+
+/* textDocument/documentLink -> DocumentLink[] */
+cJSON *feature_document_link(const Document *d, const char *uri, Workspace *ws);
+
+/* textDocument/prepareCallHierarchy -> CallHierarchyItem[] */
+cJSON *feature_prepare_call_hierarchy(const Document *d, LspPos pos, const char *uri);
+
+/* callHierarchy/incomingCalls -> CallHierarchyIncomingCall[] */
+cJSON *feature_call_hierarchy_incoming(Workspace *ws, const char *fn_name);
+
+/* callHierarchy/outgoingCalls -> CallHierarchyOutgoingCall[] */
+cJSON *feature_call_hierarchy_outgoing(const Document *d, const char *fn_name, Workspace *ws);
+
+/* textDocument/rangeFormatting -> TextEdit[] */
+cJSON *feature_range_formatting(const Document *d, LspRange range, const cJSON *options);
+
+/* textDocument/semanticTokens/range -> {data:int[]} */
+cJSON *feature_semantic_tokens_range(const Document *d, LspRange range);
+
 #endif /* SPT_LSP_FEATURES_H */

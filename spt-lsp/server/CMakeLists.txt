@@ -80,6 +80,11 @@ add_library(spt_lsp_core STATIC
   src/features/selection_range.c
   src/features/inlay_hints.c
   src/features/code_action.c
+  src/features/type_definition.c
+  src/features/declaration.c
+  src/features/document_link.c
+  src/features/call_hierarchy.c
+  src/features/range_formatting.c
 )
 target_include_directories(spt_lsp_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/rpc
@@ -104,7 +109,7 @@ target_link_libraries(sptscript-lsp PRIVATE spt_lsp_core)
 option(SPT_LSP_BUILD_TESTS "Build spt-lsp server tests" ON)
 if(SPT_LSP_BUILD_TESTS)
   enable_testing()
-  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete test_workspace test_cross_import test_type_infer test_phase3 test_phase4 test_phase5 test_manual_def test_format)
+  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete test_workspace test_cross_import test_type_infer test_phase3 test_phase4 test_phase5 test_manual_def test_format test_phase6)
   foreach(t ${SPT_LSP_TESTS})
     add_executable(${t} test/${t}.c)
     target_link_libraries(${t} PRIVATE spt_lsp_core)

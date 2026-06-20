@@ -58,15 +58,16 @@ src/main.c           stdio 主循环入口（Windows 下切二进制 stdio）
 
 同步：`textDocumentSync = Incremental`（didChange 支持 range 增量补丁，兼容 Full）。
 
-**质量基线**：12 个 ctest 全绿（test_rpc/server/documents/diagnostics/features/
-crash_semtok/incomplete/workspace/cross_import/type_infer/phase4）；test_workspace 已跨平台（Windows 用 GetTempPathA/
+**质量基线**：16 个 ctest 全绿（test_rpc/server/documents/diagnostics/features/
+crash_semtok/incomplete/workspace/cross_import/type_infer/phase3/phase4/phase5/phase6/
+manual_def/format）；test_workspace 已跨平台（Windows 用 GetTempPathA/
 CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 
 ---
 
 ## 三、质量门槛（每次改动必须全过，否则回退）
 
-- `ctest --test-dir build -C Release --output-on-failure`：12 项单元测试
+- `ctest --test-dir build -C Release --output-on-failure`：16 项单元测试
 - `run_tests.sh`：端到端管道冒烟（gcc 快速回路，含编译+单测+冒烟）
 - ASan+UBSan（含泄漏）：内存/未定义行为回归
 - VS Code 客户端手测：开 `.spt` 文件，hover/定义/补全/诊断四项冒烟
@@ -289,8 +290,8 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
 - `semanticTokens/range`：复用 `feature_semantic_tokens`，限定 range。
 - 大文件编辑时只请求可见区域，降低延迟。
 
-**go/no-go**：新增 test_phase6（typeDefinition 跳类型/declaration 跳 declare/documentLink 链接/
-callHierarchy 出入边/rangeFormatting 局部格式化），全量 ctest 绿，无回归。
+**go/no-go**：✅ test_phase6 通过（typeDefinition 跳类型/declaration 跳 declare/documentLink 链接/
+callHierarchy 出入边/rangeFormatting 局部格式化），全量 16/16 ctest 绿，无回归。
 
 ### 阶段 7 — 语言特性深度支持（按真实负载驱动，非必做）
 

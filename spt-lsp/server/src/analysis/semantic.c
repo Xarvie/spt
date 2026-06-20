@@ -1184,3 +1184,125 @@ int sem_resolve_import_target(const SptLspUnit *u, const Document *d, size_t byt
   }
   return 0;
 }
+
+/* ===========================================================================
+** Phase 6: 导航能力扩展
+** ========================================================================= */
+
+/* Phase 6a: 跳转到变量/参数类型注解对应的 class_decl。 */
+int sem_type_definition(const SptLspUnit *u, const Document *d, size_t byte_off, SemRef *out) {
+  if (!out || !u || !u->root) return 0;
+  memset(out, 0, sizeof *out);
+
+  SemRef r = sem_resolve(u, d, byte_off);
+  if (!r.found || !r.has_def) return 0;
+
+  /* r.kind 是定义的 SymbolKind；需要找到定义节点来推断类型。
+     sem_resolve 内部已解析到定义节点，但 SemRef 不暴露节点指针。
+     这里用 find_def_by_name 重新定位定义节点。 */
+  const AstNode *def = find_def_by_name(u, d, r.name, byte_off);
+  if (!def) return 0;
+
+  const AstNode *cls = infer_class_from_def(u, def);
+  if (!cls) return 0;
+
+  fill_def(out, u, d, cls, LSP_SK_CLASS);
+  return out->has_def ? 1 : 0;
+}
+
+/* Phase 6d: 枚举函数体内的所有函数调用（outgoing calls）。 */
+static void outgoing_walk_expr(const AstNode *expr, CallEdgeCb cb, void *ctx) {
+  if (!expr) return;
+  switch (expr->type) {
+  case NODE_FUNCTION_CALL: {
+    const AstNode *callee = expr->u.call.func;
+    if (callee && callee->type == NODE_IDENTIFIER && callee->u.ident.name) {
+      /* 调用位置：callee 标识符的位置。 */
+      size_t off = 0; /* 由调用方通过 Document 换算；这里传行/列 */
+      (void)off;
+      cb(ctx, callee->u.ident.name, 0, 0);
+    }
+    for (int i = 0; i < expr->u.call.args.count; i++)
+      outgoing_walk_expr(expr->u.call.args.items[i], cb, ctx);
+    break;
+  }
+  case NODE_BINARY_OP:
+    outgoing_walk_expr(expr->u.binary.left, cb, ctx);
+    outgoing_walk_expr(expr->u.binary.right, cb, ctx);
+    break;
+  case NODE_UNARY_OP:
+    outgoing_walk_expr(expr->u.unary.operand, cb, ctx);
+    break;
+  case NODE_MEMBER_ACCESS:
+    outgoing_walk_expr(expr->u.member.object, cb, ctx);
+    break;
+  case NODE_INDEX_ACCESS:
+    outgoing_walk_expr(expr->u.index.array, cb, ctx);
+    outgoing_walk_expr(expr->u.index.index, cb, ctx);
+    break;
+  default:
+    break;
+  }
+}
+
+static void outgoing_walk_stmt(const AstNode *stmt, CallEdgeCb cb, void *ctx) {
+  if (!stmt) return;
+  switch (stmt->type) {
+  case NODE_BLOCK: {
+    const AstList *st = &stmt->u.block.statements;
+    for (int i = 0; i < st->count; i++) outgoing_walk_stmt(st->items[i], cb, ctx);
+    break;
+  }
+  case NODE_EXPRESSION_STATEMENT:
+    outgoing_walk_expr(stmt->u.expr_stmt.expr, cb, ctx);
+    break;
+  case NODE_ASSIGNMENT:
+    for (int i = 0; i < stmt->u.assign.lvalues.count; i++)
+      outgoing_walk_expr(stmt->u.assign.lvalues.items[i], cb, ctx);
+    for (int i = 0; i < stmt->u.assign.rvalues.count; i++)
+      outgoing_walk_expr(stmt->u.assign.rvalues.items[i], cb, ctx);
+    break;
+  case NODE_IF_STATEMENT:
+    outgoing_walk_expr(stmt->u.if_stmt.condition, cb, ctx);
+    outgoing_walk_stmt(stmt->u.if_stmt.then_block, cb, ctx);
+    for (int i = 0; i < stmt->u.if_stmt.else_if_clauses.count; i++) {
+      AstNode *cl = stmt->u.if_stmt.else_if_clauses.items[i];
+      outgoing_walk_expr(cl->u.if_clause.condition, cb, ctx);
+      outgoing_walk_stmt(cl->u.if_clause.body, cb, ctx);
+    }
+    outgoing_walk_stmt(stmt->u.if_stmt.else_block, cb, ctx);
+    break;
+  case NODE_WHILE_STATEMENT:
+    outgoing_walk_expr(stmt->u.while_stmt.condition, cb, ctx);
+    outgoing_walk_stmt(stmt->u.while_stmt.body, cb, ctx);
+    break;
+  case NODE_FOR_NUMERIC_STATEMENT:
+    outgoing_walk_expr(stmt->u.for_num.start, cb, ctx);
+    outgoing_walk_expr(stmt->u.for_num.end, cb, ctx);
+    outgoing_walk_expr(stmt->u.for_num.step, cb, ctx);
+    outgoing_walk_stmt(stmt->u.for_num.body, cb, ctx);
+    break;
+  case NODE_FOR_EACH_STATEMENT:
+    for (int i = 0; i < stmt->u.for_each.iterable_exprs.count; i++)
+      outgoing_walk_expr(stmt->u.for_each.iterable_exprs.items[i], cb, ctx);
+    outgoing_walk_stmt(stmt->u.for_each.body, cb, ctx);
+    break;
+  case NODE_RETURN_STATEMENT:
+    for (int i = 0; i < stmt->u.return_stmt.values.count; i++)
+      outgoing_walk_expr(stmt->u.return_stmt.values.items[i], cb, ctx);
+    break;
+  case NODE_VARIABLE_DECL:
+    outgoing_walk_expr(stmt->u.var_decl.initializer, cb, ctx);
+    break;
+  case NODE_FUNCTION_DECL:
+    outgoing_walk_stmt(stmt->u.func_decl.body, cb, ctx);
+    break;
+  default:
+    break;
+  }
+}
+
+void sem_outgoing_calls(const SptLspUnit *u, const AstNode *fn, CallEdgeCb cb, void *ctx) {
+  if (!u || !fn || fn->type != NODE_FUNCTION_DECL || !fn->u.func_decl.body) return;
+  outgoing_walk_stmt(fn->u.func_decl.body, cb, ctx);
+}

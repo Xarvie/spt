@@ -114,4 +114,17 @@ int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *modul
    用于跨文件签名帮助等按名查找场景。 */
 int sem_import_binding_path(const SptLspUnit *u, const char *name, char *module_path, size_t cap);
 
+/* ===========================================================================
+** Phase 6: 导航能力扩展
+** ========================================================================= */
+
+/* Phase 6a: 解析 byte_off 处标识符的类型定义（跳转到变量/参数类型注解对应的 class_decl）。
+   找到则填充 out 的定义部分并返回 1；推导失败（无类型注解/内建类型）返回 0。 */
+int sem_type_definition(const SptLspUnit *u, const Document *d, size_t byte_off, SemRef *out);
+
+/* Phase 6d: 枚举函数体内的所有函数调用（用于 callHierarchy outgoing）。
+   fn 为函数声明节点。回调 (callee_name, offset, length)。 */
+typedef void (*CallEdgeCb)(void *ctx, const char *callee, size_t offset, int length);
+void sem_outgoing_calls(const SptLspUnit *u, const AstNode *fn, CallEdgeCb cb, void *ctx);
+
 #endif /* SPT_LSP_SEMANTIC_H */

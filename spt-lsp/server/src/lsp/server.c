@@ -114,7 +114,16 @@ static cJSON *make_initialize_result(void) {
   cJSON_AddItemToObject(legend, "tokenModifiers", cJSON_CreateArray());
   cJSON_AddItemToObject(sem, "legend", legend);
   cJSON_AddBoolToObject(sem, "full", 1);
+  cJSON_AddBoolToObject(sem, "range", 1); /* Phase 6e */
   cJSON_AddItemToObject(caps, "semanticTokensProvider", sem);
+
+  /* Phase 6: 导航能力扩展 */
+  cJSON_AddBoolToObject(caps, "typeDefinitionProvider", 1);
+  cJSON_AddBoolToObject(caps, "declarationProvider", 1);
+  cJSON_AddBoolToObject(caps, "documentLinkProvider", 1);
+  cJSON *ch = cJSON_CreateObject();
+  cJSON_AddItemToObject(caps, "callHierarchyProvider", ch);
+  cJSON_AddBoolToObject(caps, "documentRangeFormattingProvider", 1);
 
   cJSON_AddItemToObject(result, "capabilities", caps);
 
@@ -258,6 +267,54 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
     cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
     LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
     return rpc_make_response(id, d ? feature_code_action(d, r) : cJSON_CreateArray());
+  }
+
+  /* ---- Phase 6: 导航能力扩展 ---- */
+  if (strcmp(method, "textDocument/typeDefinition") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_type_definition(d, get_pos(params)) : NULL);
+  }
+  if (strcmp(method, "textDocument/declaration") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_declaration(d, get_pos(params), get_uri(params), &s->ws) : NULL);
+  }
+  if (strcmp(method, "textDocument/documentLink") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_document_link(d, get_uri(params), &s->ws) : cJSON_CreateArray());
+  }
+  if (strcmp(method, "textDocument/prepareCallHierarchy") == 0) {
+    Document *d = get_doc(s, params);
+    return rpc_make_response(id, d ? feature_prepare_call_hierarchy(d, get_pos(params), get_uri(params)) : cJSON_CreateArray());
+  }
+  if (strcmp(method, "callHierarchy/incomingCalls") == 0) {
+    cJSON *item = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "item");
+    cJSON *name = item ? cJSON_GetObjectItemCaseSensitive(item, "name") : NULL;
+    const char *fn_name = (name && cJSON_IsString(name)) ? name->valuestring : NULL;
+    return rpc_make_response(id, fn_name ? feature_call_hierarchy_incoming(&s->ws, fn_name) : cJSON_CreateArray());
+  }
+  if (strcmp(method, "callHierarchy/outgoingCalls") == 0) {
+    cJSON *item = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "item");
+    cJSON *name = item ? cJSON_GetObjectItemCaseSensitive(item, "name") : NULL;
+    const char *fn_name = (name && cJSON_IsString(name)) ? name->valuestring : NULL;
+    /* outgoingCalls 参数无 textDocument，从 item.uri 取文档。 */
+    cJSON *item_uri = item ? cJSON_GetObjectItemCaseSensitive(item, "uri") : NULL;
+    Document *d = (item_uri && cJSON_IsString(item_uri))
+                      ? doc_store_get(&s->docs, item_uri->valuestring)
+                      : NULL;
+    return rpc_make_response(id, (d && fn_name) ? feature_call_hierarchy_outgoing(d, fn_name, &s->ws) : cJSON_CreateArray());
+  }
+  if (strcmp(method, "textDocument/rangeFormatting") == 0) {
+    Document *d = get_doc(s, params);
+    cJSON *opts = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "options");
+    cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    return rpc_make_response(id, d ? feature_range_formatting(d, r, opts) : NULL);
+  }
+  if (strcmp(method, "textDocument/semanticTokens/range") == 0) {
+    Document *d = get_doc(s, params);
+    cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    return rpc_make_response(id, d ? feature_semantic_tokens_range(d, r) : NULL);
   }
 
   if (strcmp(method, "workspace/symbol") == 0) {

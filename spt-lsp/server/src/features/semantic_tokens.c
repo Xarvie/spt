@@ -141,3 +141,56 @@ cJSON *feature_semantic_tokens_full(const Document *d) {
   if (dbg) { fprintf(dbg, "semtok: done\n"); fflush(dbg); fclose(dbg); }
   return res;
 }
+
+/* Phase 6e: semanticTokens/range — 只返回 range 内的 token。 */
+cJSON *feature_semantic_tokens_range(const Document *d, LspRange range) {
+  SptLspUnit *u = spt_lsp_parse(d->text, d->text_len);
+  cJSON *data = cJSON_CreateArray();
+  if (u && u->root) {
+    NameSet funcs = {0}, classes = {0};
+    gather(u->root, &funcs, &classes);
+
+    int prev_line = 0, prev_char = 0;
+    for (int i = 0; i < u->token_count; i++) {
+      const SptToken *t = &u->tokens[i];
+      if (t->kind != TOK_IDENTIFIER) continue;
+      int member = (i > 0 && (u->tokens[i - 1].kind == TOK_DOT || u->tokens[i - 1].kind == TOK_COLON));
+      int type;
+      if (member) type = TT_PROPERTY;
+      else if (ns_has(&funcs, t->lexeme, (size_t)t->length)) type = TT_FUNCTION;
+      else if (ns_has(&classes, t->lexeme, (size_t)t->length)) type = TT_CLASS;
+      else type = TT_VARIABLE;
+
+      int l = t->line - 1;
+      if (l < 0) l = 0;
+      size_t base = (l < d->line_count) ? d->line_starts[l] : d->text_len;
+      size_t s = base + (size_t)(t->column > 0 ? t->column - 1 : 0);
+      if (s > d->text_len) s = d->text_len;
+      size_t e = s + (size_t)t->length;
+      if (e > d->text_len) e = d->text_len;
+      LspPos ps = doc_pos_at(d, s), pe = doc_pos_at(d, e);
+      int line = ps.line, ch = ps.character, len = pe.character - ps.character;
+      if (len <= 0) len = t->length;
+
+      /* range 过滤：跳过 range 外的 token。 */
+      if (line < range.start.line || line > range.end.line) continue;
+      if (line == range.start.line && ch < range.start.character) continue;
+      if (line == range.end.line && ch >= range.end.character) continue;
+
+      int dl = line - prev_line;
+      int dc = (dl == 0) ? ch - prev_char : ch;
+      prev_line = line; prev_char = ch;
+
+      cJSON_AddItemToArray(data, cJSON_CreateNumber(dl));
+      cJSON_AddItemToArray(data, cJSON_CreateNumber(dc));
+      cJSON_AddItemToArray(data, cJSON_CreateNumber(len));
+      cJSON_AddItemToArray(data, cJSON_CreateNumber(type));
+      cJSON_AddItemToArray(data, cJSON_CreateNumber(0));
+    }
+    free(funcs.a); free(classes.a);
+  }
+  spt_lsp_unit_free(u);
+  cJSON *res = cJSON_CreateObject();
+  cJSON_AddItemToObject(res, "data", data);
+  return res;
+}
