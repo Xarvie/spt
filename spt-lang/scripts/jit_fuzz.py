@@ -472,6 +472,49 @@ def gen_condreturn(r):
             f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md}); }}\n"
             f"print(s % 1000000000);\n")
 
+def gen_condassign(r):
+    """A conditional-assignment-then-return helper `if(c){slot=A} return slot`
+    called in a hot loop -- the JIT inlines it and if-converts the assignment in
+    the callee frame, then binds the trailing return to the caller's result.
+    Mixes one/two args, the operator, simple vs computed assignments, an optional
+    post-merge computation, and -- crucially -- the `0-x` form whose intra-arm
+    dependency makes the assignment non-if-convertible, which MUST abort cleanly
+    (fall back to the interpreter) rather than emit a broken mid-callee branch."""
+    n = r.choice([200000, 1000000])
+    md = r.choice([15, 21, 50, 100, 200])
+    op = r.choice([">", "<", ">=", "<="])
+    thr = r.randint(0, md - 1)
+    form = r.randint(0, 6)
+    if form == 0:  # clamp-low
+        return (f"function f(int x) {{ if (x < 0) {{ x = 0; }} return x; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md} - {md//3}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 1:  # ceil-high
+        return (f"function f(int x) {{ if (x > {md//2}) {{ x = {md//2}; }} return x; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 2:  # assign computed (x - const), single-op arm, if-convertible
+        k = r.randint(1, 9)
+        return (f"function f(int x) {{ if (x {op} {thr}) {{ x = x - {k}; }} return x; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 3:  # post-merge computation then return
+        return (f"function f(int x) {{ if (x < 0) {{ x = 0; }} int y = x * 2 + 1; return y; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md} - {md//2}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 4:  # two-arg max-into-a
+        return (f"function f(int a, int b) {{ if (a < b) {{ a = b; }} return a; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md}, i % {max(2,md//2)}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 5:  # 0-x intra-arm dep -> MUST abort cleanly (correctness probe)
+        return (f"function f(int x) {{ if (x < 0) {{ x = 0 - x; }} return x; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md} - {md//2}); }}\n"
+                f"print(s % 1000000000);\n")
+    # form 6: two-statement intra-dep arm -> MUST abort cleanly
+    return (f"function f(int x) {{ if (x < 0) {{ int t = 0 - x; x = t + 1; }} return x; }}\n"
+            f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md} - {md//2}); }}\n"
+            f"print(s % 1000000000);\n")
+
 GENS = [gen_scalar,
         lambda r: gen_array_reduce(r, "int"),
         lambda r: gen_array_reduce(r, "float"),
@@ -479,7 +522,7 @@ GENS = [gen_scalar,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
         gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix,
-        gen_running_minmax, gen_ifconv, gen_condreturn]
+        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:

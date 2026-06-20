@@ -626,6 +626,10 @@ static int ifconv_reg_is_int(SPTRecCtx *rc, int reg) {
   SPTIRBuilder *ir = rc->ir;
   if (ir->reg_map[rc->frame_base + reg] >= 0)
     return ir->reg_type[rc->frame_base + reg] == SPTT_INT;
+  /* Not materialized. Inside an inlined callee (frame_base != 0) the live stack
+     slot is NOT at (ci->func+1)+reg -- that addresses the root frame -- so we
+     cannot determine the type and must bail (the caller falls back cleanly). */
+  if (rc->frame_base != 0) return 0;
   return ttisinteger(s2v((rc->ci->func.p + 1) + reg));
 }
 
@@ -657,9 +661,9 @@ static int ifconv_arm_int_result(SPTRecCtx *rc, const Instruction *op_pc) {
    applicable (caller falls back to the guarded branch, leaving state untouched). */
 static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
                           SPTType at, SPTType bt) {
-  if (rc->frame_base != 0) return 0;              /* root frame only */
   if (at != SPTT_INT || bt != SPTT_INT) return 0; /* integer compare only */
   SPTIRBuilder *ir = rc->ir;
+  int fb = rc->frame_base;                         /* 0 at root; nonzero in an inlined callee */
   const Instruction *cmp_pc = rc->pc;
   const Instruction *jmp = cmp_pc + 1;
   if (GET_OPCODE(*jmp) != OP_JMP) return 0;
@@ -684,7 +688,9 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   if (is_ifelse && !parse_ifconv_arm(rc, else_start, merge, wslots, &nw)) return 0;
 
   /* Every written slot must currently hold an integer: an if-only arm leaves the
-     other branch as the slot's old value, and arms may read the slot (s=s+1). */
+     other branch as the slot's old value, and arms may read the slot (s=s+1).
+     Inside a callee an unmaterialized slot bails here (ifconv_reg_is_int returns
+     0), so the rec_load_reg below never hits its callee-frame abort path. */
   for (int k = 0; k < nw; k++)
     if (!ifconv_reg_is_int(rc, wslots[k])) return 0;
 
@@ -700,11 +706,11 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   while (rc->pc < then_end) { if (!rec_inst(rc)) return 1; }
   if (rc->pc != then_end) { rc->aborted = 1; return 1; }
   for (int k = 0; k < nw; k++) {
-    if (ir->reg_type[wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
-    then_ref[k] = ir->reg_map[wslots[k]];
+    if (ir->reg_type[fb + wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
+    then_ref[k] = ir->reg_map[fb + wslots[k]];
   }
   for (int k = 0; k < nw; k++) {
-    ir->reg_map[wslots[k]] = old_ref[k]; ir->reg_type[wslots[k]] = SPTT_INT;
+    ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = SPTT_INT;
   }
 
   if (is_ifelse) {                                  /* record the else-arm */
@@ -712,11 +718,11 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
     while (rc->pc < merge) { if (!rec_inst(rc)) return 1; }
     if (rc->pc != merge) { rc->aborted = 1; return 1; }
     for (int k = 0; k < nw; k++) {
-      if (ir->reg_type[wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
-      else_ref[k] = ir->reg_map[wslots[k]];
+      if (ir->reg_type[fb + wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
+      else_ref[k] = ir->reg_map[fb + wslots[k]];
     }
     for (int k = 0; k < nw; k++) {
-      ir->reg_map[wslots[k]] = old_ref[k]; ir->reg_type[wslots[k]] = SPTT_INT;
+      ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = SPTT_INT;
     }
   } else {
     for (int k = 0; k < nw; k++) else_ref[k] = old_ref[k];
@@ -728,9 +734,9 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
     int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref[k], else_ref[k], 0);
     int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
     int res  = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref[k], prod, 0);
-    ir->reg_map[wslots[k]] = res;
-    ir->reg_type[wslots[k]] = SPTT_INT;
-    if (wslots[k] > ir->maxslot) ir->maxslot = wslots[k];
+    ir->reg_map[fb + wslots[k]] = res;
+    ir->reg_type[fb + wslots[k]] = SPTT_INT;
+    if (fb + wslots[k] > ir->maxslot) ir->maxslot = fb + wslots[k];
   }
   rc->pc = merge;
   return 1;
@@ -827,6 +833,11 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
      to the guarded branch (below) when the shape isn't convertible. */
   if (rec_try_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   if (rec_try_condreturn_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
+  /* A comparison inside an inlined callee that couldn't be if-converted would need
+     a guarded branch, i.e. a mid-callee control-flow split with a snapshot that
+     restores the synthetic callee frame -- which a single-entry trace cannot
+     represent. Abort instead (the call simply isn't inlined; never incorrect). */
+  if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
   const Instruction *jmp = rc->pc + 1; /* the JMP following the comparison */
   double xv, yv;
   int fall_through = 1; /* default: static fall-through (correct, maybe cold) */
@@ -1124,6 +1135,54 @@ static int proto_is_condreturn_inlinable(Proto *p) {
   }
   if (e < 0) return 0;
   for (int i = e + 1; i < n; i++) {              /* only dead boilerplate after */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o != OP_RETURN0 && o != OP_RETURN) return 0;
+  }
+  return 1;
+}
+
+/* Decide whether `p` is an inlinable conditional-assignment-then-return leaf of
+   the shape `if (c) { <assigns> } <straight-line> return slot` (if-only): a
+   straight-line prefix that computes the compare operands, a single comparison +
+   forward JMP, a then-arm of straight-line integer assignments (NO return), then
+   post-merge straight-line code ending in exactly one RETURN1, then only dead
+   boilerplate. Every non-control op must be a non-trapping integer if-conversion
+   op; opcode_is_ifconv_safe excludes RETURN1/JMP/comparisons, so the arm and
+   post-merge scans reject a second branch, a nested return, a call, or a loop.
+   When inlined, the conditional assignment if-converts (rec_try_ifconv now fires
+   in callee frames) to slot = select(c, A, old), and the trailing RETURN1 binds
+   that to the caller's result -- branchless, no side exit. */
+static int proto_is_condassign_inlinable(Proto *p) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 4 || n > 48) return 0;
+  int ci = -1;
+  for (int i = 0; i < n; i++)
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
+  if (ci < 0) return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);    /* JMP target = merge (if-only) */
+  if (t1 <= ci + 2 || t1 >= n) return 0;         /* forward, leaving room for the return */
+  for (int i = 0; i < ci; i++) {                 /* prefix */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  for (int i = ci + 2; i < t1; i++) {            /* then-arm: assignments only, no return */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  int ret_idx = -1;
+  for (int i = t1; i < n; i++) {                 /* post-merge: compute then RETURN1 */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_RETURN1) { ret_idx = i; break; }
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  if (ret_idx < 0) return 0;
+  for (int i = ret_idx + 1; i < n; i++) {        /* only dead boilerplate after */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o != OP_RETURN0 && o != OP_RETURN) return 0;
   }
@@ -1834,11 +1893,13 @@ static int rec_inst(SPTRecCtx *rc) {
       /* Argument count must match: B-1 passed values = receiver + numparams. */
       if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
 
-      /* Callee must be a pure straight-line leaf, or a conditional-return leaf
-         `if(c){return A}return B` (whose return is if-converted to a select). */
+      /* Callee must be a pure straight-line leaf, a conditional-return leaf
+         `if(c){return A}return B`, or a conditional-assignment-then-return leaf
+         `if(c){slot=A}return slot` (the latter two get their branch if-converted). */
       int ret_reg = -1;
       int straight = proto_is_inlinable(callee_p, &ret_reg);
-      if (!straight && !proto_is_condreturn_inlinable(callee_p)) { rc->aborted = 1; return 0; }
+      if (!straight && !proto_is_condreturn_inlinable(callee_p) &&
+          !proto_is_condassign_inlinable(callee_p)) { rc->aborted = 1; return 0; }
 
       /* New frame base = A+1 (the slot after the function). Keep the callee's
          whole frame inside the fixed-size backing reg_map array. */
