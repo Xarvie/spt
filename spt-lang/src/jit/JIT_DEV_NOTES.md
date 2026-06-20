@@ -1089,3 +1089,170 @@ entries"。唯一差别是**每次进入的内循环迭代数**(好 ~10,坏 ~1.1
 不要非确定"的硬要求。核心方法论:把"录哪个方向"这个一次性随机决策,换成对真实运行分布的短期剖析后取
 多数——零运行时开销(快门平时不触发)、零正确性风险(符号化 IR + 运行时守卫)。剩余的 50/50 是侧 trace
 的领域,不是录制方向能解决的。
+
+### 10.24 修复(主动探测发现):running-max/min 算错值——循环携带值同时作为分支操作数且被重赋为无关值
+
+§10.23 发布后,用"贴近真实"的模式主动探测,发现 `int m=0; for(...){ int v=i%100; if(v>m){m=v;} } print(m);`
+**算错**:interp=99,jit=0(或 N=150 时给 50)。JIT 算成了 **m=最后一个 v**,而不是 max(v)。
+
+**根因(先前就存在的 codegen bug,被多数录制可靠暴露)**:寄存器驻留冲突。槽 0(m)是循环携带值,被分到
+一个 GPR R0;但它的循环末值 `ref4`(=v=i%100,在循环体顶部算出的 MOD)**也**被分到 R0——于是 v 在守卫
+`LT(ref5=旧 m, ref4=v)` 读旧 m **之前**就把 R0 覆盖成了 v,守卫变成 `v<v`/读到 v,几乎恒真,m=v 几乎每次都执行。
+ra_analyze 此前没有检测到"一个槽的旧值(它的 SLOAD)在它的新值被物化之后还被读取"。
+
+**为什么只有这个模式触发**(精确刻画,已用 7 个变体隔离):仅当 (1) 槽是比较/分支操作数,(2) 被重赋为一个
+**不依赖其旧值**的、在体内更早算出的值时才出错。`s=s+1`、`m=m*2`(新值由旧值导出,产生新值的那条指令本身就是
+旧值的最后一次读取)、`m=50`(常量在守卫之后才物化)都安全。
+
+**修复(ra_analyze 新增 bail,spt_jit_codegen.c)**:对每个驻留槽,令 fr=该槽循环末值的位置;扫描 fr 之后的
+指令,若有非 DEAD 指令读取该槽的 SLOAD(经 ra_canon_ref 规范化,**跳过 SPTIR_LOOP——其 op1 是位置标记不是
+值读取**)→ bail。一开始忘了排除 LOOP,导致 LOOP.op1=loop_start 恰好等于循环变量 SLOAD 的 ref,把标量
+循环误判触发、退化到 spill(12.7×→1.5×);加 `if(op==SPTIR_LOOP) continue;` 后标量恢复 13×。
+
+**再加 abort(而非 spill)**:bail 默认走 spill 路径(正确但对 running-max 是 0.47×,因为暖机后 m=99,守卫
+`v>99` 每次都失败→每迭代侧退出,是侧 trace 的领域)。按"比解释器慢就 abort"的要求,给这个**新 bail**(不影响
+置换/别名那些 spill case)加了 `cg->ra_conflict_abort` 标志:置位后 codegen 不发码、留 t->code=NULL,录制器
+当作 abort 处理。
+
+**意外之喜**:abort 触发了已有的 phase-shift 重试(e->counter=e->aborts),重试落在**更晚的迭代**(此时 m 已
+很大、v>m 多半为假),于是录制器抓到了**跳过路径**(m 不变)——这条 trace 没有循环携带冲突、内部闭合、很快。
+于是 running-max 从"算错"直接变成**正确且 3.62×**,running-min 3.42×。(暖机很长的 running-max 则会在冲突相
+退完重试后被 blacklist→解释器 ~0.85×,也比 0.47× spill 好,且正确。)
+
+**效果**:min/max 由 DIFF(算错)→ 正确且 3.62×;running-min 3.42×。标量 13.11× 不变,偏置分支 2.84× 不变,
+break 16.21×,嵌套 9.36×。唯一仍偏慢的是 50/50(0.88×,无多数、侧 trace 领域)。
+
+**验证**:running-max/min 参数扫描 120 配置(4 模式×6 个 N×5 个 HOT)0 失配;287 ctest + 73 kernel + 284 差分
++ HOT 扫描模糊 seeds 1-12(4200 例)0 失配 + valgrind 0 问题。
+
+**方法论**:"差分 MATCH ≠ JIT 正确"——这个 bug 是主动用真实模式探测 + 看实际数值才暴露的(不是模糊器随机
+撞到的)。ra_analyze 的寄存器驻留:循环携带槽被复用为分支操作数、又被重赋为一个更早算出的无关值 → 旧值在其
+守卫读取前就被覆盖 → 算错。SPTIR_LOOP.op1 是位置标记不是值,任何"值使用"扫描都必须排除它。
+
+### 10.25 if-conversion(分支转无分支 select)——消除简单整数 if-else/if-only 的侧退出
+
+**问题**:~50/50 的分支(`if(i%2==0){s=s+1}else{s=s+2}`)在线性 trace 里只录一条臂、另一条臂每次侧退出。
+即便用多数录制(§10.23)选常见方向,50/50 没有"常见方向",暖机后仍每隔一次就退出→重入,开销 ~15%,实测 **0.88×(比解释器慢)**。abs/clamp(`if(v<0){v=-v}`、`if(v>100){v=100}`)同理偏慢(1.1×)。这类是线性 trace 的固有短板,正常需要侧 trace。
+
+**方案**:if-conversion。把 `if(c){slot=A}else{slot=B}` 编译成无分支的 `slot = B + (A-B)*c`,其中 c 是比较
+materialize 出的 0/1 整数。两条臂都无条件求值、用普通整数算术选择,trace 内部闭合、**零侧退出**。
+
+**为什么正确且安全**:
+- 整数 add/sub/mul/bitwise 无论"分支执行"还是"两条都算再选"都按相同方式回绕(wrap),结果逐位相同——没有溢出分歧。
+- **两条臂都会求值**,所以会 trap 的运算(DIV/IDIV/MOD/POW)绝不能 if-convert(未取的那条臂不能 fault)——
+  `opcode_is_ifconv_safe` 把它们排除,只允许 MOVE/LOADI/ADD/SUB/MUL/ADDI/+K/BAND/BOR/BXOR/+K/SHL/SHR/BNOT/UNM。
+- 结构识别保守:不符合标准 Lua if-else/if-only 形状(比较+JMP、单值产出 op±可选 MMBIN 的臂、两臂写同一槽)
+  就回退到带守卫的分支(§10.23 多数录制),**回退路径已被充分验证**。
+- 浮点/混合类型臂在录制前用 `ifconv_arm_int_result` 预判(读 reg_type,未加载的槽则读活栈值,不发 IR),
+  非整数结果→干净回退到守卫分支(不是 abort)。
+
+**实现**:
+1. 新增 IR op `SPTIR_CMPSET`(op1/op2=比较操作数,aux=比较 SPTIROp)→ codegen 发 cmp+setcc+movzx 得 0/1。
+   加入 `ra_op_is_safe`(否则用了 CMPSET 的 trace 退化到 spill)。
+2. recorder 在 `rec_cond_branch` 开头先试 `rec_try_ifconv`:解析标准 if-else(比较@pc、JMP1@+1 跳过 then、
+   then 臂末尾的 JMP2 跳过 else→else 在 JMP1 目标、merge 在 JMP2 目标)/if-only(JMP1 直接跳到 merge);
+   每条臂限单个值产出 op(+可选 MMBIN);用 `rec_inst` 在 fork 的 reg_map[slot] 上分别录两臂,捕获 then_ref/else_ref;
+   建 `cref=CMPSET(a,b,fop); diff=SUB(then,else); prod=MUL(diff,cref); res=ADD(else,prod)`;设 reg_map[slot]=res、pc=merge。
+3. **关键坑(一开始没 fire)**:50/50 的累加器 s 在比较 `i%2==0` 处尚未加载(它只在臂里 `s=s+1` 才首次被读),
+   `reg_map[s]<0` 导致 bail。修复:不 bail,改用 `rec_load_reg(rc,slot)` 强制把循环携带值加载为 live-in
+   (rec_load_reg 发 SLOAD+类型守卫;两臂内部的 rec_load_reg 命中已加载的 ref 复用之);if-only 的 `else_ref=old_ref`
+   因此有效。类型预判也改读"活栈类型 or reg_type"以便未加载的槽也能分类。
+
+**polarity**:fop 是"落入 then(fall-through)的条件",CMPSET(fop)=1 → then 臂;`else+(then-else)*1=then`。一致。
+
+**效果(全部正确)**:50/50 **0.88×→3.80×**,clamp 4.5×,abs 4.9×,if-else-mul 3.9×,select-const 4.3×。
+偏置分支也走 if-conversion(`if(a<9){s=s+1}` 的隐式 else 是 s 不变)→ 3.2×(比 §10.23 的 2.84× 还好)。
+running-max `if(v>m){m=v}` 也被 if-convert(单 MOVE)→ 无分支 2.91×(§10.24 的 abort+phase-shift 仍保留,
+保护不可转换的多槽形如 `if(v>m){m=v;mi=i}`)。非分支模式(标量 13×/数组/嵌套/break/内联)完全不变。
+
+**验证**:287 ctest + 73 kernel + 284 差分 + HOT 扫描模糊 seeds 1-44 两轮(12,720 例)+ 16 个棘手手工探测
+(条件交换/双携带/max+index/嵌套分支/clamp/翻转/continue/break/混合算术/三分支)+ valgrind 全部 0 失配/0 问题。
+新增 `gen_ifconv` 模糊生成器(if-else/if-only 的 clamp/abs/select-const/累加/running-max/浮点回退六种形态)锁定覆盖。
+
+**边界/未覆盖**:仅整数槽、单值产出 op 的臂(`v=0-v` 若编译成 LOADI+SUB 共 3 指令则不转、回退;写成 `v=-v`/UNM 则转);
+多槽臂(max+index)不转;浮点 if-else 不转(回退守卫,1.3-1.4×)。这些都安全回退,可后续推广到多 op 臂/浮点 select。
+
+### 10.26 if-conversion 推广到多槽 / 多 op 臂——消除条件式多变量更新的负优化
+
+**问题**:§10.25 只处理单槽单 op 臂。survey 出的最差残留负优化全是**条件式多变量更新**——
+`if(v>m){m=v;mi=i}`(最大值+下标)实测 **0.55×**、`if(x<y){x=x+2;y=y-1}`(两个携带变量反向走)**0.30×**、
+`if(...){a=..;b=..}else{a=..;b=..}` 1.21×。它们都回退到带守卫的分支,而该分支频繁侧退出→重入→比解释器还慢。
+
+**方案**:把 if-conversion 推广到"两条臂各写若干槽"。对**两条臂写入槽的并集**逐槽生成一个
+`slot = else + (then-else)*c` 的 select,**共用同一个 CMPSET**(c 只算一次)。某条臂没写某个槽时,
+它在那个槽的 select 输入就是该槽的旧值(if-only 的 else 分支天然如此),所以并集 + 逐槽 select 自动正确。
+
+**实现要点**:
+1. `parse_ifconv_arm` 重写成扫描整条臂体:每个 op 必须是 `opcode_is_ifconv_safe` 的非陷阱整数 op
+   (可跟 MMBIN),结果须为整数(`ifconv_arm_int_result`,操作数类型读 reg_type 或活栈),把目标槽并入 wslots
+   (≤ `IFCONV_MAX_SLOTS`=4)。**关键约束:拒绝"读到本臂更早写过的槽"的 op(臂内依赖)**——因为录制前的
+   类型预判此时不可靠(那个槽的类型会在臂内改变)。这把 swap(`t=a;a=b;b=t` 里 `b=t` 读了刚写的 t)排除掉、
+   干净回退到守卫分支;而 max+index、两携带、双臂累加这些**无臂内依赖**的常见形态都能转。
+2. 多 op 臂的录制:`while(rc->pc < arm_end) rec_inst(rc)`。`rec_inst` 自己推进 rc->pc(末尾 `rc->pc++`;
+   算术 op 经 `rec_skip_mmbin` 吞掉尾随 MMBIN 再 +1),所以循环自然走完整条臂、停在 arm_end;
+   循环后断言 `rc->pc==arm_end`,否则 abort(防越界)。
+3. fork/select 用数组:先 `rec_load_reg` 把所有 wslot 变 resident(循环携带的下标 mi 等作为 live-in 加载+守卫);
+   录 then 臂→存 then_ref[k]、还原 reg_map;录 else 臂→存 else_ref[k]、还原(if-only 则 else_ref[k]=old_ref[k]);
+   再逐槽 `CMPSET→SUB→MUL→ADD`(CMPSET 只发一次,被所有槽共用)。
+
+**为什么正确**:与 §10.25 同理——两条臂都无条件求值、纯整数回绕算术逐位一致、陷阱 op 被白名单排除;
+多槽只是把"一个 select"变成"每槽一个 select",fork 对每个写入槽独立 save/restore。temp 槽(若被并入)
+对应的 select 是死代码、被 DCE 清掉,不影响正确性。
+
+**效果(全部正确)**:max+index **0.55×→1.96×**、两携带 **0.30×→1.93×**、双臂累加 1.21×→2.10×;
+单槽回归不变(50/50 2.21×、running-max 2.25×、clamp 2.40×);swap 因臂内依赖正确回退(0.85×,仍正确)。
+
+**验证**:287 ctest + 73 kernel + 284 差分 + HOT 扫描模糊 seeds 1-40 两轮(11,560 例)+ valgrind(多槽用例,exit=0,
+0 问题)+ 10 个多槽手工探测(max/min+index、两携带、双臂累加、3 槽、swap 回退、不同写集、交错、混合 1/2 槽、嵌套)
+全部 0 失配。`gen_ifconv` 模糊生成器扩出 4 种多槽形态(max+index、两携带、双臂累加、3 槽更新)锁定覆盖。
+
+**边界**:仍仅整数;并集 ≤4 槽、每臂 ≤16 op;有臂内依赖的臂(swap)回退;浮点 if-else 回退。
+
+### 10.27 条件返回函数内联——把 `if(c){return A}return B` 内联并 if-convert 成无分支 select
+
+**问题**:最后一类负优化是**带条件返回的 helper 函数**——`clamp`/`abs`/`max`/`min` 这类
+`function f(int x){ if(c){return A;} return B; }` 在热循环里被调用,实测 **0.89-0.92×(比解释器慢)**。
+原因:`proto_is_inlinable` 只接受纯直线叶函数(单 RETURN1、无控制流),这种带分支+两个返回的函数不被内联,
+recorder 在 CALL 处 abort→拉黑→残留机器开销让整体比纯解释还慢。这类 helper 在真实数值代码里很常见。
+
+**方案**:把**内联**和**if-conversion**结合。识别 `if(c){return A} return B` 的精确形状,内联它并把条件返回
+if-convert 成 `caller_result = B + (A-B)*c`(c 是比较 materialize 的 0/1),像 OP_RETURN1 一样绑定到调用者的
+结果槽并恢复调用者上下文,**但没有侧退出**。
+
+**实现**:
+1. **静态门** `proto_is_condreturn_inlinable(p)`(放在 `proto_is_inlinable` 旁):精确匹配
+   `[直线前缀][比较][JMP][then 直线+RETURN1][else 直线+RETURN1][死 boilerplate]`。每个非控制 op(前缀+两臂)
+   必须是 `opcode_is_ifconv_safe` 的非陷阱整数 op——这**同时**保证两个返回值是整数(select 算术逐位精确)、
+   且禁止第二个分支/调用/循环/副作用(它们不在白名单里,扫描即拒)。所以 3 分支的 sign、含循环的 helper 都被拒、
+   干净回退到不内联。
+2. **OP_CALL** 扩展:`proto_is_inlinable` 失败时再试 `proto_is_condreturn_inlinable`,两者任一通过就用**同样的**
+   方式切入被调用者(切 frame_base、pc=callee code)。直线函数在 RETURN1 处绑定结果;条件返回函数在比较处被
+   `rec_try_condreturn_ifconv` 接管。
+3. **`rec_try_condreturn_ifconv`**(放在 `rec_try_ifconv` 旁,挂在 `rec_cond_branch` 开头、仅 frame_base≠0 时触发):
+   解析结构(比较@pc、JMP→T1=else 起点;then 臂 [pc+2,T1) 末尾必须 RETURN1;else 臂 [T1,callee_end) 第一个
+   RETURN1);对**被调用者帧**做 save/restore 的 fork,分别录 then 臂的值计算([pc+2, then_ret))和 else 臂的
+   ([T1, else_ret)),各自捕获返回操作数的 ref(`reg_map[fb+then_reg]` / `[fb+else_reg]`,录后检查类型为 INT);
+   建一个共用 CMPSET + `SUB→MUL→ADD` 的 select,写进 `reg_map[call_result_slot]`,再恢复调用者上下文(p/k/cl/
+   frame_base/pc=save_pc),等价于一个无分支的 RETURN1。
+
+**关键设计点**:
+- 返回值的类型**不能在录制前预判**(then 的返回值往往是臂内才算出的 temp,此时 reg_map[fb+reg]<0,而
+  `ifconv_reg_is_int` 的活栈兜底对被调用者帧是错的——那是根帧的栈地址)。所以靠"静态门保证整数 body" +
+  "录制后检查 reg_type==INT"两道闸,不依赖活栈兜底。
+- 极性同 §10.25:fop 是落入 then(fall-through)的条件,then 块在条件**真**时执行(JMP 在假时跳过),
+  CMPSET(fop)=1→then→A,`B+(A-B)*1=A`。一致。
+- 若 `rec_try_condreturn_ifconv` 返回 0(不适用),`rec_cond_branch` 回退到带守卫的分支——在被调用者内部录单条
+  返回路径、守卫条件,**也是正确的**(只是会侧退出)。所以即便静态门偶尔放进一个 if-conversion 处理不了的形状,
+  也不会错,只是不够快。
+
+**效果(全部正确)**:clamp **0.91×→3.70×**,abs 0.91×→3.44×,max 0.92×→2.86×,min 0.90×→2.91×,
+带分支返回的非叶函数 0.92×→3.85×;纯叶内联(4.16×)、§10.25/§10.26 的 if-conversion(50/50 2.20×、
+max+index 1.94×)回归完全不变。
+
+**验证**:287 ctest + 73 kernel + 284 差分 + HOT 扫描模糊 seeds 1-42 两轮(17,520 例)+ valgrind(条件返回用例,
+exit=0,0 问题)+ 15 个边界探测(computed return、prefix 条件、各比较算子、嵌套两 helper、结果入表达式、
+helper 后接分支;以及 float 参数 / 非热循环 / 3 分支 sign / 含循环 helper 这些回退场景)全部 0 失配。
+`gen_condreturn` 模糊生成器(clamp/abs/max/min/computed/二分支回退/含循环回退 七形态)锁定覆盖。
+
+**边界**:仅整数返回;被调用者必须是恰好一个条件返回的叶函数(无第二分支、无调用、无循环);深度 1;
+其余形状(多分支 sign、条件赋值后返回 `if(c){x=..}return x`、浮点返回)回退到不内联或守卫分支。

@@ -120,6 +120,11 @@ typedef enum {
   SPTIR_CALL,         /* C function call: aux = function ptr, op1 = args ref */
   SPTIR_RETURN,       /* return from trace: op1 = value ref (or -1 for void) */
 
+  SPTIR_CMPSET,       /* (op1 cmp op2) -> 0/1 integer; aux = comparison SPTIROp.
+                         Like a comparison but materializes a 0/1 value instead of
+                         guarding. Used by if-conversion to build branchless
+                         select = else + (then-else)*cond. Integer operands only. */
+
   SPTIR_NOP,          /* no-op (placeholder) */
   SPTIR_MAX
 } SPTIROp;

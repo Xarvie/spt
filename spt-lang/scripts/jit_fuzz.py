@@ -350,13 +350,136 @@ def gen_array_len_mix(r):
     return (f"list<int> v = [{elems}];\nint s = 0;\n"
             f"for (int i = 0, {n}) {{ {body} }}\nprint(s);\n")
 
+def gen_running_minmax(r):
+    """Running max/min and kin: a loop-carried scalar that is BOTH a comparison
+    operand AND conditionally reassigned to the other (unrelated) operand --
+    `if (v > m) m = v;`. This exposed a register-residency bug (§10.24): m's
+    register held its old value for the guard but was also assigned m's new value
+    (v, computed earlier in the body), clobbering the old value before the guard
+    read it. The branch distribution also flips after warmup, exercising the
+    abort/phase-shift -> skip-path recording. Varies operator, init, modulus,
+    int/float, and adds a second accumulator sometimes. Deterministic."""
+    n = r.choice([200000, 1000000])
+    md = r.choice([50, 100, 256])
+    if r.random() < 0.35:
+        op = r.choice([">", "<", ">=", "<="])
+        init = r.choice(["0.0", "999999.0"])
+        extra = r.choice(["", " s = s + v;"])
+        return (f"float m = {init};\nfloat s = 0.0;\n"
+                f"for (int i = 0, {n}) {{ float v = (i % {md}) * 1.0; "
+                f"if (v {op} m) {{ m = v; }}{extra} }}\nprint(m + s);\n")
+    op = r.choice([">", "<", ">=", "<="])
+    init = r.choice(["0", "999999", str(r.randint(1, 99))])
+    extra = r.choice(["", " s = s + v;", " s = s + 1;"])
+    return (f"int m = {init};\nint s = 0;\n"
+            f"for (int i = 0, {n}) {{ int v = i % {md}; "
+            f"if (v {op} m) {{ m = v; }}{extra} }}\nprint(m * 100000 + s);\n")
+
+def gen_ifconv(r):
+    """Simple integer if-else / if-only conditional assignments -- the shape the
+    JIT if-converts into a branchless select (B + (A-B)*cond). Exercises both
+    arms evaluated unconditionally, the 0/1 comparison materialization, and the
+    fallback when an arm is non-convertible. Mixes: if-else vs if-only, the
+    comparison operator, clamp/abs/select-const/accumulate forms, and an
+    occasional float arm (must fall back to the guarded branch). Deterministic."""
+    n = r.choice([200000, 1000000])
+    md = r.choice([7, 10, 21, 100, 200])
+    op = r.choice([">", "<", ">=", "<=", "==", "!="])
+    thr = r.randint(0, md - 1)
+    form = r.randint(0, 9)
+    if form == 6:  # max/min + index (two-slot if-only)
+        big = r.choice([">", ">="]) if r.random() < 0.5 else r.choice(["<", "<="])
+        init = "0" if big[0] == ">" else "999999999"
+        return (f"int m = {init};\nint mi = 0;\nfor (int i = 0, {n}) {{ int v = i % {md}; "
+                f"if (v {big} m) {{ m = v; mi = i; }} }}\nprint(m * 1000000 + mi % 1000000);\n")
+    if form == 7:  # two carried, opposite directions (two-slot if-only)
+        return (f"int x = 0;\nint y = 999999999;\nfor (int i = 0, {n}) {{ "
+                f"if (x < y) {{ x = x + {r.randint(1,3)}; y = y - {r.randint(1,3)}; }} }}\n"
+                f"print(x % 1000000 * 1000 + y % 1000);\n")
+    if form == 8:  # two-slot accumulate in both arms (if-else)
+        return (f"int a = 0;\nint b = 0;\nfor (int i = 0, {n}) {{ if (i % {md} {op} {thr}) "
+                f"{{ a = a + {r.randint(1,4)}; b = b + {r.randint(1,4)}; }} else "
+                f"{{ a = a + {r.randint(1,4)}; b = b + {r.randint(1,4)}; }} }}\n"
+                f"print(a % 1000000 * 1000 + b % 1000);\n")
+    if form == 9:  # three-slot update (if-only)
+        return (f"int a = 0;\nint b = 0;\nint c = 0;\nfor (int i = 0, {n}) {{ int v = i % {md}; "
+                f"if (v {op} {thr}) {{ a = a + 1; b = b + v; c = c + (i % 4); }} }}\n"
+                f"print(a % 1000 * 1000000 + b % 1000 * 1000 + c % 1000);\n")
+    if form == 0:  # if-else accumulate (50/50-style)
+        a, b = r.randint(1, 5), r.randint(1, 5)
+        return (f"int s = 0;\nfor (int i = 0, {n}) {{ if (i % {md} {op} {thr}) "
+                f"{{ s = s + {a}; }} else {{ s = s + {b}; }} }}\nprint(s);\n")
+    if form == 1:  # clamp (two if-only)
+        lo, hi = r.randint(0, 20), r.randint(50, 150)
+        return (f"int s = 0;\nfor (int i = 0, {n}) {{ int v = i % {md} - {md // 3}; "
+                f"if (v < 0) {{ v = 0; }} if (v > {hi}) {{ v = {hi}; }} s = s + v; }}\nprint(s);\n")
+    if form == 2:  # abs via unary minus (if-only)
+        return (f"int s = 0;\nfor (int i = 0, {n}) {{ int v = i % {md} - {md // 2}; "
+                f"if (v < 0) {{ v = -v; }} s = s + v; }}\nprint(s % 1000000000);\n")
+    if form == 3:  # select constant (if-else)
+        a, b = r.randint(1, 999), r.randint(1, 999)
+        return (f"int s = 0;\nfor (int i = 0, {n}) {{ int v = i % {md}; "
+                f"if (v {op} {thr}) {{ v = {a}; }} else {{ v = {b}; }} s = s + v; }}\nprint(s % 1000000000);\n")
+    if form == 4:  # running max/min via move (if-only)
+        init = r.choice(["0", "999999"])
+        return (f"int m = {init};\nfor (int i = 0, {n}) {{ int v = i % {md}; "
+                f"if (v {op} m) {{ m = v; }} }}\nprint(m);\n")
+    # form 5: float arm -> must fall back to the guarded branch, still correct
+    return (f"int s = 0;\nfor (int i = 0, {n}) {{ float t = (i % {md}) * 1.0; "
+            f"if (i % {md} {op} {thr}) {{ s = s + 1; }} t = t + 1.0; }}\nprint(s);\n")
+
+def gen_condreturn(r):
+    """A conditional-return helper `if(c){return A} return B` called in a hot loop
+    -- the shape the JIT inlines and if-converts to a branchless select. Exercises
+    inlining + return if-conversion together: the callee frame fork, the shared
+    CMPSET, binding the select to the caller's result slot. Mixes one/two args,
+    the comparison operator, simple vs computed return values, an optional prefix
+    computation in the condition, and occasionally a non-inlinable shape (a second
+    branch, or a loop in the callee) that must cleanly fall back. Deterministic."""
+    n = r.choice([200000, 1000000])
+    md = r.choice([7, 10, 21, 50, 200])
+    form = r.randint(0, 6)
+    op = r.choice([">", "<", ">=", "<=", "==", "!="])
+    thr = r.randint(0, md - 1)
+    if form == 0:  # clamp-low
+        return (f"function clamp(int x) {{ if (x < 0) {{ return 0; }} return x; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + clamp(i % {md} - {md//3}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 1:  # abs via 0-x
+        return (f"function ab(int x) {{ if (x < 0) {{ return 0 - x; }} return x; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + ab(i % {md} - {md//2}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 2:  # max(a,b)
+        return (f"function mx(int a, int b) {{ if (a > b) {{ return a; }} return b; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + mx(i % {md}, i % {max(2,md//2)}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 3:  # min(a,b)
+        return (f"function mn(int a, int b) {{ if (a < b) {{ return a; }} return b; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + mn(i % {md}, i % {max(2,md//2)}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 4:  # computed return values, parameterized operator
+        a, b = r.randint(1, 5), r.randint(1, 5)
+        return (f"function f(int x) {{ if (x {op} {thr}) {{ return x * {a}; }} return x + {b}; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md}); }}\n"
+                f"print(s % 1000000000);\n")
+    if form == 5:  # second branch -> must fall back (not a single conditional return)
+        return (f"function sg(int x) {{ if (x > 0) {{ return 1; }} if (x < 0) {{ return 0 - 1; }} return 0; }}\n"
+                f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + sg(i % {md} - {md//2}); }}\n"
+                f"print(s % 1000000000);\n")
+    # form 6: loop in callee -> must fall back
+    return (f"function f(int x) {{ int t = 0; for (int j = 0, 3) {{ t = t + j; }} "
+            f"if (x {op} {thr}) {{ return t + x; }} return t; }}\n"
+            f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md}); }}\n"
+            f"print(s % 1000000000);\n")
+
 GENS = [gen_scalar,
         lambda r: gen_array_reduce(r, "int"),
         lambda r: gen_array_reduce(r, "float"),
         gen_cse_self, gen_two_array, gen_write_read, gen_chained2d, gen_branch,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
-        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix]
+        gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix,
+        gen_running_minmax, gen_ifconv, gen_condreturn]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:

@@ -1,0 +1,230 @@
+// 综合基准测试：多个真实计算任务，对比解释器与 JIT 性能
+// 不针对 JIT 做任何特殊优化，按正常写法编写
+// 注意：SPT 的 for (int i = 0, N) 是包含 N 的（0..N，共 N+1 次）
+
+// ============================ 任务 1: 埃拉托色尼筛法 ============================
+int sieve(int limit, list<int> flags) {
+    for (int i = 0, limit - 1) { flags[i] = 1; }
+    flags[0] = 0;
+    flags[1] = 0;
+    int count = 0;
+    int i = 2;
+    while (i * i < limit) {
+        if (flags[i] == 1) {
+            int j = i * i;
+            while (j < limit) { flags[j] = 0; j = j + i; }
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    for (int k = i, limit - 1) { if (flags[k] == 1) { count = count + 1; } }
+    return count;
+}
+
+// ============================ 任务 2: 矩阵乘法 ============================
+void mat_mul(int n, list<int> a, list<int> b, list<int> c) {
+    for (int i = 0, n - 1) {
+        for (int j = 0, n - 1) {
+            int sum = 0;
+            for (int k = 0, n - 1) { sum = sum + a[i * n + k] * b[k * n + j]; }
+            c[i * n + j] = sum;
+        }
+    }
+}
+
+// ============================ 任务 3: 冒泡排序 ============================
+int bubble_sort(int n, list<int> arr) {
+    int swaps = 0;
+    for (int i = 0, n - 2) {
+        for (int j = 0, n - 2 - i) {
+            if (arr[j] > arr[j + 1]) {
+                int tmp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = tmp;
+                swaps = swaps + 1;
+            }
+        }
+    }
+    return swaps;
+}
+
+// ============================ 任务 4: 斐波那契（迭代）============================
+int fib_iter(int n) {
+    if (n < 2) { return n; }
+    int a = 0;
+    int b = 1;
+    for (int i = 2, n) { int t = a + b; a = b; b = t; }
+    return b;
+}
+
+// ============================ 任务 5: 简单哈希表 ============================
+int hash_test(int n, list<int> keys, list<int> table) {
+    int size = #table;
+    int collisions = 0;
+    for (int i = 0, n - 1) {
+        int key = keys[i];
+        int idx = key % size;
+        if (idx < 0) { idx = idx + size; }
+        int probes = 0;
+        while (probes < size) {
+            if (table[idx] == -1) { table[idx] = key; break; }
+            if (table[idx] == key) { break; }
+            idx = idx + 1;
+            if (idx >= size) { idx = 0; }
+            collisions = collisions + 1;
+            probes = probes + 1;
+        }
+    }
+    return collisions;
+}
+
+// ============================ 任务 6: N-body 简化模拟 ============================
+float nbody(int n, int steps, list<float> px, list<float> py, list<float> vx, list<float> vy) {
+    float dt = 0.01;
+    float total_energy = 0.0;
+    for (int s = 0, steps - 1) {
+        for (int i = 0, n - 1) {
+            for (int j = 0, n - 1) {
+                if (i != j) {
+                    float dx = px[j] - px[i];
+                    float dy = py[j] - py[i];
+                    float dist2 = dx * dx + dy * dy + 0.001;
+                    float inv = 1.0 / dist2;
+                    float f = inv * 0.5;
+                    vx[i] = vx[i] + dx * f * dt;
+                    vy[i] = vy[i] + dy * f * dt;
+                }
+            }
+        }
+        for (int i = 0, n - 1) {
+            px[i] = px[i] + vx[i] * dt;
+            py[i] = py[i] + vy[i] * dt;
+        }
+    }
+    for (int i = 0, n - 1) { total_energy = total_energy + vx[i] * vx[i] + vy[i] * vy[i]; }
+    return total_energy;
+}
+
+// ============================ 任务 7: 统计计算 ============================
+int stats(int n, list<int> data) {
+    int sum = 0;
+    int mn = data[0];
+    int mx = data[0];
+    for (int i = 0, n - 1) {
+        int v = data[i];
+        sum = sum + v;
+        if (v < mn) { mn = v; }
+        if (v > mx) { mx = v; }
+    }
+    int mean = sum / n;
+    int var2 = 0;
+    for (int i = 0, n - 1) { int d = data[i] - mean; var2 = var2 + d * d; }
+    int variance = var2 / n;
+    return mean * 1000 + variance + mn * 100 + mx;
+}
+
+// ============================ 任务 8: GCD 连续计算 ============================
+int gcd(int a, int b) {
+    while (b != 0) { int t = a % b; a = b; b = t; }
+    return a;
+}
+
+int gcd_chain(int n) {
+    int g = 0;
+    for (int i = 1, n) { g = g + gcd(i * 7 + 3, i * 13 + 5); }
+    return g;
+}
+
+// ============================ 主程序 ============================
+int main() {
+    print("=== SPT 综合基准测试 ===");
+    float t0 = os.clock();
+
+    // --- 任务 1: 筛法 (500K) ---
+    list<int> flags = [];
+    for (int i = 0, 499999) { table.push(flags, 0); }
+    float t1 = os.clock();
+    int prime_count = sieve(500000, flags);
+    float t2 = os.clock();
+    print("Task1 Sieve: primes=" .. tostring(prime_count) .. " init=" .. tostring(t1 - t0) .. "s calc=" .. tostring(t2 - t1) .. "s");
+
+    // --- 任务 2: 矩阵乘法 (100x100) ---
+    int mn = 100;
+    list<int> matA = [];
+    list<int> matB = [];
+    list<int> matC = [];
+    for (int i = 0, mn * mn - 1) {
+        table.push(matA, i % 17);
+        table.push(matB, (i * 3 + 1) % 13);
+        table.push(matC, 0);
+    }
+    float t3 = os.clock();
+    mat_mul(mn, matA, matB, matC);
+    int mat_checksum = 0;
+    for (int i = 0, mn - 1) { mat_checksum = mat_checksum + matC[i * mn + i]; }
+    float t4 = os.clock();
+    print("Task2 MatMul: trace=" .. tostring(mat_checksum) .. " init=" .. tostring(t3 - t2) .. "s calc=" .. tostring(t4 - t3) .. "s");
+
+    // --- 任务 3: 冒泡排序 (3000) ---
+    list<int> sort_arr = [];
+    for (int i = 0, 2999) { table.push(sort_arr, (i * 37 + 11) % 3000); }
+    float t5 = os.clock();
+    int swaps = bubble_sort(3000, sort_arr);
+    int sort_check = sort_arr[0] + sort_arr[1499] + sort_arr[2999];
+    float t6 = os.clock();
+    print("Task3 BubbleSort: swaps=" .. tostring(swaps) .. " check=" .. tostring(sort_check) .. " init=" .. tostring(t5 - t4) .. "s calc=" .. tostring(t6 - t5) .. "s");
+
+    // --- 任务 4: 斐波那契 (500K 次) ---
+    float t7 = os.clock();
+    int fib_sum = 0;
+    for (int i = 0, 499999) { fib_sum = fib_sum + fib_iter(i % 90); }
+    float t8 = os.clock();
+    print("Task4 FibIter: sum=" .. tostring(fib_sum) .. " calc=" .. tostring(t8 - t7) .. "s");
+
+    // --- 任务 5: 哈希表 (50K keys) ---
+    list<int> hkeys = [];
+    for (int i = 0, 49999) { table.push(hkeys, i * 31 + 7); }
+    list<int> htable = [];
+    for (int i = 0, 65535) { table.push(htable, -1); }
+    float t9 = os.clock();
+    int collisions = hash_test(50000, hkeys, htable);
+    float t10 = os.clock();
+    print("Task5 HashTable: collisions=" .. tostring(collisions) .. " init=" .. tostring(t9 - t8) .. "s calc=" .. tostring(t10 - t9) .. "s");
+
+    // --- 任务 6: N-body (40 bodies, 500 steps) ---
+    int nb = 40;
+    int nsteps = 500;
+    list<float> npx = [];
+    list<float> npy = [];
+    list<float> nvx = [];
+    list<float> nvy = [];
+    for (int i = 0, nb - 1) {
+        table.push(npx, i * 1.5);
+        table.push(npy, i * 2.3 + 0.5);
+        table.push(nvx, 0.1);
+        table.push(nvy, 0.0);
+    }
+    float t11 = os.clock();
+    float energy = nbody(nb, nsteps, npx, npy, nvx, nvy);
+    float t12 = os.clock();
+    print("Task6 NBody: energy=" .. tostring(energy) .. " init=" .. tostring(t11 - t10) .. "s calc=" .. tostring(t12 - t11) .. "s");
+
+    // --- 任务 7: 统计 (500K data) ---
+    list<int> sdata = [];
+    for (int i = 0, 499999) { table.push(sdata, (i * i * 7 + i * 3 + 1) % 10000); }
+    float t13 = os.clock();
+    int stat_result = stats(500000, sdata);
+    float t14 = os.clock();
+    print("Task7 Stats: result=" .. tostring(stat_result) .. " init=" .. tostring(t13 - t12) .. "s calc=" .. tostring(t14 - t13) .. "s");
+
+    // --- 任务 8: GCD 链 (1M) ---
+    float t15 = os.clock();
+    int gcd_total = gcd_chain(1000000);
+    float t16 = os.clock();
+    print("Task8 GCD: total=" .. tostring(gcd_total) .. " calc=" .. tostring(t16 - t15) .. "s");
+
+    print("=== 全部完成 total=" .. tostring(t16 - t0) .. "s ===");
+    return 0;
+}
+
+main();

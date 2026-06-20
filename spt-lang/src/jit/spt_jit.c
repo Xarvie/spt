@@ -544,6 +544,272 @@ static SPTIROp rec_negate_cmp(SPTIROp op) {
   }
 }
 
+static int rec_inst(SPTRecCtx *rc); /* fwd decl: if-conversion records arm ops */
+
+/* ---- If-conversion (branchless select) ----------------------------------
+   A simple integer `if (c) {slot = A} [else {slot = B}]` can be compiled
+   without a side exit by materializing the condition as a 0/1 integer and
+   computing  slot = B + (A - B)*c  with ordinary integer arithmetic. Both arms
+   are evaluated unconditionally, so this is only valid when each arm is a single
+   NON-TRAPPING integer value-producing op (no div/mod/pow: the untaken arm must
+   not be able to fault) writing the same slot. Integer add/sub/mul/bitwise wrap
+   identically whether branched or computed, so the result is bit-identical to
+   the branch. Anything outside this shape falls back to the guarded branch. */
+
+/* Is this opcode a single, non-trapping, value-producing op we can if-convert?
+   Excludes DIV/IDIV/MOD/POW (can trap), all control flow, calls, and memory. */
+static int opcode_is_ifconv_safe(OpCode o) {
+  switch (o) {
+    case OP_MOVE:
+    case OP_LOADI:
+    case OP_ADD: case OP_SUB: case OP_MUL:
+    case OP_ADDI:
+    case OP_ADDK: case OP_SUBK: case OP_MULK:
+    case OP_BAND: case OP_BOR: case OP_BXOR:
+    case OP_BANDK: case OP_BORK: case OP_BXORK:
+    case OP_SHL: case OP_SHR:
+    case OP_BNOT: case OP_UNM:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+#define IFCONV_MAX_SLOTS 4
+
+static int ifconv_reg_is_int(SPTRecCtx *rc, int reg);
+static int ifconv_arm_int_result(SPTRecCtx *rc, const Instruction *op_pc);
+
+/* Parse an if-conversion arm body [start,end): a straight-line run of
+   non-trapping integer value-producing ops, each optionally followed by its
+   MMBIN marker, and nothing else. Unions the distinct destination slots into
+   wslots (which already holds *nw entries from a previously parsed arm).
+   Rejects: a non-convertible op, a float-producing op, an operand that was
+   written earlier in THIS arm (an intra-arm dependency would make the
+   pre-recording type check unreliable), and more than IFCONV_MAX_SLOTS slots.
+   Returns 1 on success (and only if the arm writes at least one slot). */
+static int parse_ifconv_arm(SPTRecCtx *rc, const Instruction *start,
+                            const Instruction *end, int *wslots, int *nw) {
+  int local[16], nlocal = 0;          /* slots written so far within this arm */
+  int wrote = 0, nops = 0;
+  for (const Instruction *pc = start; pc < end; pc++) {
+    OpCode o = GET_OPCODE(*pc);
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (++nops > 16) return 0;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!ifconv_arm_int_result(rc, pc)) return 0;
+    int b = GETARG_B(*pc), c = GETARG_C(*pc);
+    int checkB = (o != OP_LOADI);
+    int checkC = (o == OP_ADD || o == OP_SUB || o == OP_MUL || o == OP_BAND ||
+                  o == OP_BOR || o == OP_BXOR || o == OP_SHL || o == OP_SHR);
+    for (int k = 0; k < nlocal; k++) {
+      if (checkB && local[k] == b) return 0;
+      if (checkC && local[k] == c) return 0;
+    }
+    int a = GETARG_A(*pc);
+    int seen = 0;
+    for (int k = 0; k < nlocal; k++) if (local[k] == a) { seen = 1; break; }
+    if (!seen) { if (nlocal >= 16) return 0; local[nlocal++] = a; }
+    seen = 0;
+    for (int k = 0; k < *nw; k++) if (wslots[k] == a) { seen = 1; break; }
+    if (!seen) { if (*nw >= IFCONV_MAX_SLOTS) return 0; wslots[(*nw)++] = a; }
+    wrote = 1;
+  }
+  return wrote;
+}
+
+/* Is register `reg` currently an integer? Uses the trace's tracked type if the
+   slot is already materialized, otherwise reads the live stack value's type --
+   so a loop-carried accumulator first referenced inside the arms (not yet loaded
+   at the comparison) is still classified without emitting any IR. Root frame. */
+static int ifconv_reg_is_int(SPTRecCtx *rc, int reg) {
+  SPTIRBuilder *ir = rc->ir;
+  if (ir->reg_map[rc->frame_base + reg] >= 0)
+    return ir->reg_type[rc->frame_base + reg] == SPTT_INT;
+  return ttisinteger(s2v((rc->ci->func.p + 1) + reg));
+}
+
+/* Will this arm op produce an INTEGER result, given the current operand types?
+   Checked before recording so a float-producing arm cleanly falls back to the
+   guarded branch instead of being recorded and then aborted. */
+static int ifconv_arm_int_result(SPTRecCtx *rc, const Instruction *op_pc) {
+  Instruction ins = *op_pc;
+  OpCode o = GET_OPCODE(ins);
+  int b = GETARG_B(ins), c = GETARG_C(ins);
+  int bint = ifconv_reg_is_int(rc, b);
+  switch (o) {
+    case OP_LOADI: return 1;
+    case OP_MOVE: case OP_UNM: case OP_BNOT: case OP_ADDI:
+      return bint;
+    case OP_ADD: case OP_SUB: case OP_MUL:
+    case OP_BAND: case OP_BOR: case OP_BXOR:
+    case OP_SHL: case OP_SHR:
+      return bint && ifconv_reg_is_int(rc, c);
+    case OP_ADDK: case OP_SUBK: case OP_MULK:
+    case OP_BANDK: case OP_BORK: case OP_BXORK:
+      return bint && ttisinteger(&rc->p->k[c]);
+    default: return 0;
+  }
+}
+
+/* Try to if-convert the comparison at rc->pc. Returns 1 if it took the
+   conversion path (caller returns 1 unless rc->aborted got set), 0 if not
+   applicable (caller falls back to the guarded branch, leaving state untouched). */
+static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
+                          SPTType at, SPTType bt) {
+  if (rc->frame_base != 0) return 0;              /* root frame only */
+  if (at != SPTT_INT || bt != SPTT_INT) return 0; /* integer compare only */
+  SPTIRBuilder *ir = rc->ir;
+  const Instruction *cmp_pc = rc->pc;
+  const Instruction *jmp = cmp_pc + 1;
+  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
+  const Instruction *T1 = jmp + 1 + GETARG_sJ(*jmp); /* JMP1 target */
+  if (T1 <= cmp_pc + 2) return 0;                 /* must skip forward over the then-arm */
+
+  const Instruction *then_start = cmp_pc + 2, *then_end, *else_start = NULL, *merge;
+  int is_ifelse = 0;
+  if (GET_OPCODE(T1[-1]) == OP_JMP) {             /* if-else: JMP2 just before else */
+    const Instruction *jmp2 = T1 - 1;
+    merge = jmp2 + 1 + GETARG_sJ(*jmp2);
+    if (merge <= T1) return 0;                    /* JMP2 must skip forward over the else-arm */
+    is_ifelse = 1; then_end = jmp2; else_start = T1;
+  } else {                                        /* if-only */
+    merge = T1; then_end = T1;
+  }
+
+  /* Parse both arms, unioning the set of written slots. An arm that does not
+     write a given slot leaves it unchanged (its select input is the old value). */
+  int wslots[IFCONV_MAX_SLOTS]; int nw = 0;
+  if (!parse_ifconv_arm(rc, then_start, then_end, wslots, &nw)) return 0;
+  if (is_ifelse && !parse_ifconv_arm(rc, else_start, merge, wslots, &nw)) return 0;
+
+  /* Every written slot must currently hold an integer: an if-only arm leaves the
+     other branch as the slot's old value, and arms may read the slot (s=s+1). */
+  for (int k = 0; k < nw; k++)
+    if (!ifconv_reg_is_int(rc, wslots[k])) return 0;
+
+  /* ---- commit. Make all written slots resident (load + type-guard live-ins),
+     then record each arm against a forked copy and build one select per slot. */
+  int old_ref[IFCONV_MAX_SLOTS], then_ref[IFCONV_MAX_SLOTS], else_ref[IFCONV_MAX_SLOTS];
+  for (int k = 0; k < nw; k++) {
+    old_ref[k] = rec_load_reg(rc, wslots[k]);
+    if (rc->aborted) return 1;
+  }
+
+  rc->pc = then_start;                              /* record the then-arm */
+  while (rc->pc < then_end) { if (!rec_inst(rc)) return 1; }
+  if (rc->pc != then_end) { rc->aborted = 1; return 1; }
+  for (int k = 0; k < nw; k++) {
+    if (ir->reg_type[wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
+    then_ref[k] = ir->reg_map[wslots[k]];
+  }
+  for (int k = 0; k < nw; k++) {
+    ir->reg_map[wslots[k]] = old_ref[k]; ir->reg_type[wslots[k]] = SPTT_INT;
+  }
+
+  if (is_ifelse) {                                  /* record the else-arm */
+    rc->pc = else_start;
+    while (rc->pc < merge) { if (!rec_inst(rc)) return 1; }
+    if (rc->pc != merge) { rc->aborted = 1; return 1; }
+    for (int k = 0; k < nw; k++) {
+      if (ir->reg_type[wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
+      else_ref[k] = ir->reg_map[wslots[k]];
+    }
+    for (int k = 0; k < nw; k++) {
+      ir->reg_map[wslots[k]] = old_ref[k]; ir->reg_type[wslots[k]] = SPTT_INT;
+    }
+  } else {
+    for (int k = 0; k < nw; k++) else_ref[k] = old_ref[k];
+  }
+
+  /* select_k = else_k + (then_k - else_k) * cond,  cond in {0,1} (one shared cmp) */
+  int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
+  for (int k = 0; k < nw; k++) {
+    int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref[k], else_ref[k], 0);
+    int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
+    int res  = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref[k], prod, 0);
+    ir->reg_map[wslots[k]] = res;
+    ir->reg_type[wslots[k]] = SPTT_INT;
+    if (wslots[k] > ir->maxslot) ir->maxslot = wslots[k];
+  }
+  rc->pc = merge;
+  return 1;
+}
+
+/* When recording an inlined callee whose entire body is a conditional return
+   `if(c){return A} return B`, if-convert it: record both return values against a
+   forked callee frame and bind the caller's result slot to a branchless select
+   (B + (A-B)*c), then resume in the caller -- exactly like an OP_RETURN1 but with
+   no side exit. Integer returns only (the static gate proto_is_condreturn_inlinable
+   already restricts the body to non-trapping integer ops). Returns 1 if it took
+   this path (caller returns 1 unless rc->aborted), 0 if not applicable (the caller
+   falls back to the guarded branch, which records one return path -- also correct). */
+static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
+                                     SPTType at, SPTType bt) {
+  if (rc->frame_base == 0) return 0;              /* only inside an inlined callee */
+  if (at != SPTT_INT || bt != SPTT_INT) return 0; /* integer compare only */
+  SPTIRBuilder *ir = rc->ir;
+  int fb = rc->frame_base;
+  const Instruction *cmp_pc = rc->pc;
+  const Instruction *jmp = cmp_pc + 1;
+  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
+  const Instruction *T1 = jmp + 1 + GETARG_sJ(*jmp);
+  const Instruction *cend = rc->p->code + rc->p->sizecode;
+  if (T1 <= cmp_pc + 2 || T1 >= cend) return 0;
+  if (GET_OPCODE(T1[-1]) != OP_RETURN1) return 0; /* then-arm ends in a return */
+  const Instruction *then_ret = T1 - 1;
+  for (const Instruction *q = cmp_pc + 2; q < then_ret; q++) {
+    OpCode o = GET_OPCODE(*q);
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  const Instruction *else_ret = NULL;             /* else-arm: first return */
+  for (const Instruction *q = T1; q < cend; q++) {
+    OpCode o = GET_OPCODE(*q);
+    if (o == OP_RETURN1) { else_ret = q; break; }
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  if (!else_ret) return 0;
+  int then_reg = GETARG_A(*then_ret), else_reg = GETARG_A(*else_ret);
+
+  int cmax = rc->p->maxstacksize;
+  if (cmax > 64) return 0;
+  int save_map[64]; SPTType save_type[64];
+  for (int k = 0; k < cmax; k++) { save_map[k] = ir->reg_map[fb+k]; save_type[k] = ir->reg_type[fb+k]; }
+
+  /* ---- commit: record the then-arm's value computation against a forked frame */
+  rc->pc = cmp_pc + 2;
+  while (rc->pc < then_ret) { if (!rec_inst(rc)) return 1; }
+  if (rc->pc != then_ret) { rc->aborted = 1; return 1; }
+  int then_ref = ir->reg_map[fb + then_reg];
+  if (then_ref < 0 || ir->reg_type[fb + then_reg] != SPTT_INT) { rc->aborted = 1; return 1; }
+  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+
+  /* ---- record the else-arm's value computation */
+  rc->pc = T1;
+  while (rc->pc < else_ret) { if (!rec_inst(rc)) return 1; }
+  if (rc->pc != else_ret) { rc->aborted = 1; return 1; }
+  int else_ref = ir->reg_map[fb + else_reg];
+  if (else_ref < 0 || ir->reg_type[fb + else_reg] != SPTT_INT) { rc->aborted = 1; return 1; }
+  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+
+  /* ---- result = else + (then-else)*cond, bind to caller, resume in caller */
+  int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
+  int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref, else_ref, 0);
+  int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
+  int res  = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref, prod, 0);
+  ir->reg_map[rc->call_result_slot] = res;
+  ir->reg_type[rc->call_result_slot] = SPTT_INT;
+  if (rc->call_result_slot > ir->maxslot) ir->maxslot = rc->call_result_slot;
+  rc->p = rc->save_p;
+  rc->k = rc->save_k;
+  rc->cl = rc->save_cl;
+  rc->frame_base = rc->save_frame_base;
+  rc->pc = rc->save_pc;
+  return 1;
+}
+
 /* Record a comparison + its trailing conditional JMP, following the branch the
    program actually takes at record time. 'fop' is the condition under which the
    bytecode falls through to the next instruction (the THEN block). We evaluate
@@ -555,6 +821,12 @@ static SPTIROp rec_negate_cmp(SPTIROp op) {
 static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
                            SPTType at, SPTType bt, int a_reg, int b_reg) {
   if (!sptt_isnum(at) || !sptt_isnum(bt)) { rc->aborted = 1; return 0; }
+  /* Prefer branchless if-conversion for simple integer if-else / if-only: it
+     keeps both arms in the trace with no side exit, which is a large win for
+     ~50/50 branches that would otherwise exit every other iteration. Falls back
+     to the guarded branch (below) when the shape isn't convertible. */
+  if (rec_try_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
+  if (rec_try_condreturn_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   const Instruction *jmp = rc->pc + 1; /* the JMP following the comparison */
   double xv, yv;
   int fall_through = 1; /* default: static fall-through (correct, maybe cold) */
@@ -805,6 +1077,59 @@ static int proto_is_inlinable(Proto *p, int *ret_reg) {
   }
   return saw_return;
 }
+
+static int op_is_comparison(OpCode o) {
+  return o == OP_EQ || o == OP_LT || o == OP_LE || o == OP_EQK ||
+         o == OP_EQI || o == OP_LTI || o == OP_LEI || o == OP_GTI || o == OP_GEI;
+}
+
+/* Decide whether `p` is an inlinable conditional-return leaf of the exact shape
+   `if (c) { return A } return B`: a straight-line prefix that computes the
+   compare operands, a single comparison + JMP, a then-arm that computes A and
+   ends in RETURN1, an else-arm that computes B and ends in RETURN1, and only
+   dead return boilerplate afterwards. Every non-control op (prefix and both
+   arms) must be a non-trapping integer if-conversion op -- this both guarantees
+   the two returned values are integers (so the select arithmetic is bit-exact)
+   and forbids a second branch, a call, a loop, or any side effect. Such a callee
+   is inlined and its conditional return if-converted into a branchless select. */
+static int proto_is_condreturn_inlinable(Proto *p) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 4 || n > 48) return 0;
+  int ci = -1;
+  for (int i = 0; i < n; i++)
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
+  if (ci < 0) return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);    /* JMP target = else-arm start */
+  if (t1 <= ci + 2 || t1 >= n) return 0;
+  if (GET_OPCODE(p->code[t1-1]) != OP_RETURN1) return 0;
+  for (int i = 0; i < ci; i++) {                 /* prefix */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  for (int i = ci + 2; i < t1 - 1; i++) {        /* then-arm compute */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  int e = -1;
+  for (int i = t1; i < n; i++) {                 /* else-arm: first RETURN1 */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_RETURN1) { e = i; break; }
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (!opcode_is_ifconv_safe(o)) return 0;
+  }
+  if (e < 0) return 0;
+  for (int i = e + 1; i < n; i++) {              /* only dead boilerplate after */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o != OP_RETURN0 && o != OP_RETURN) return 0;
+  }
+  return 1;
+}
+
 
 static int rec_inst(SPTRecCtx *rc) {
   SPTIRBuilder *ir = rc->ir;
@@ -1509,9 +1834,11 @@ static int rec_inst(SPTRecCtx *rc) {
       /* Argument count must match: B-1 passed values = receiver + numparams. */
       if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
 
-      /* Callee must be a pure straight-line leaf (no guards/exits/side effects). */
+      /* Callee must be a pure straight-line leaf, or a conditional-return leaf
+         `if(c){return A}return B` (whose return is if-converted to a select). */
       int ret_reg = -1;
-      if (!proto_is_inlinable(callee_p, &ret_reg)) { rc->aborted = 1; return 0; }
+      int straight = proto_is_inlinable(callee_p, &ret_reg);
+      if (!straight && !proto_is_condreturn_inlinable(callee_p)) { rc->aborted = 1; return 0; }
 
       /* New frame base = A+1 (the slot after the function). Keep the callee's
          whole frame inside the fixed-size backing reg_map array. */

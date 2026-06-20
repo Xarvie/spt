@@ -520,7 +520,8 @@ static const char *iropname(int op) {
     case SPTIR_GUARD_T: return "GUARD_T"; case SPTIR_EXIT: return "EXIT";
     case SPTIR_LOOP: return "LOOP"; case SPTIR_PHI: return "PHI";
     case SPTIR_CALL: return "CALL"; case SPTIR_RETURN: return "RETURN";
-    case SPTIR_NOP: return "NOP"; default: return "???";
+    case SPTIR_NOP: return "NOP"; case SPTIR_CMPSET: return "CMPSET";
+    default: return "???";
   }
 }
 

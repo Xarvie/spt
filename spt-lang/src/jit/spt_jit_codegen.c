@@ -110,6 +110,9 @@ typedef struct {
 
   /* ---- Linear-scan register allocation ---- */
   int use_ra;                 /* 1 if register residency is active */
+  int ra_conflict_abort;      /* 1 if a loop-carried conflict makes this trace not
+                                 worth compiling (the spill path is correct but
+                                 pathologically slow, e.g. running-max/min) */
   int8_t ref_reg[SPT_JIT_MAX_TRACE]; /* physical GPR per IR ref, or -1 (spilled) */
   int8_t ref_xmm[SPT_JIT_MAX_TRACE]; /* physical XMM per IR ref, or -1 (spilled) */
   uint8_t ref_hoist[SPT_JIT_MAX_TRACE]; /* 1 if emitted in preheader, skipped in body */
@@ -180,6 +183,7 @@ static int ra_op_is_safe(int op) {
     case SPTIR_SHL: case SPTIR_SHR:
     case SPTIR_EQ: case SPTIR_NE: case SPTIR_LT: case SPTIR_LE:
     case SPTIR_GT: case SPTIR_GE: case SPTIR_NOT:
+    case SPTIR_CMPSET:
     case SPTIR_TOFLT: case SPTIR_TOINT:
     case SPTIR_GUARD: case SPTIR_GUARD_LT: case SPTIR_GUARD_LE:
     case SPTIR_GUARD_EQ: case SPTIR_GUARD_T: case SPTIR_GUARD_ULT:
@@ -300,6 +304,41 @@ static void ra_analyze(SPTCodeGen *cg) {
     int src = (int)ir->insts[fref].aux;
     if (src == slot) continue;                 /* own read-only live-in: fine */
     if (ra_canon_ref(ir, ir->reg_map[src]) != fref) return; /* src mutated -> bail */
+  }
+
+  /* Bail if a resident slot's *old* value (its live-in SLOAD) is still read
+     after its *new* loop-end value has been materialized. Residency keeps both
+     the old and new value in the slot's single register, so a read of the old
+     value that comes after the new value is computed would see the new value
+     instead. This happens when the slot is a comparison/branch operand and is
+     reassigned to an unrelated value computed earlier in the iteration -- e.g.
+     running max `if (v > m) m = v;`: the guard reads old m, but m's loop-end
+     value is v = i%100, materialized at the top of the body into m's register,
+     clobbering old m before the guard. (When the new value derives from the old
+     -- `s = s + 1`, `m = m * 2` -- the producing instruction is itself the last
+     read of the old value, so there is no later read and this does not fire. A
+     constant/late reassignment like `m = 50` is materialized after the guard, so
+     it also does not fire.) The spill path re-reads every slot from the stack
+     each iteration, so it handles all of these correctly. */
+  for (int k = 0; k < nint; k++) {
+    int fr = ra_canon_ref(ir, ir->reg_map[islots[k]]);
+    if (fr < 0 || fr >= ir->ninst || fr == isload[k]) continue;
+    for (int u = fr + 1; u < ir->ninst; u++) {
+      if (ir->insts[u].flags & SPTIRF_DEAD) continue;
+      if (ir->insts[u].op == SPTIR_LOOP) continue; /* op1 is a position marker, not a value read */
+      if (ra_canon_ref(ir, ir->insts[u].op1) == isload[k] ||
+          ra_canon_ref(ir, ir->insts[u].op2) == isload[k]) { cg->ra_conflict_abort = 1; return; }
+    }
+  }
+  for (int k = 0; k < nflt; k++) {
+    int fr = ra_canon_ref(ir, ir->reg_map[fslots[k]]);
+    if (fr < 0 || fr >= ir->ninst || fr == fsload[k]) continue;
+    for (int u = fr + 1; u < ir->ninst; u++) {
+      if (ir->insts[u].flags & SPTIRF_DEAD) continue;
+      if (ir->insts[u].op == SPTIR_LOOP) continue; /* op1 is a position marker, not a value read */
+      if (ra_canon_ref(ir, ir->insts[u].op1) == fsload[k] ||
+          ra_canon_ref(ir, ir->insts[u].op2) == fsload[k]) { cg->ra_conflict_abort = 1; return; }
+    }
   }
 
   /* Assign a GPR to each integer-resident slot.
@@ -1139,6 +1178,28 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
       break;
     }
 
+    case SPTIR_CMPSET: {
+      /* Materialize (op1 cmp op2) as a 0/1 integer -- no side exit. aux holds
+         the comparison SPTIROp. Integer operands only. Used by if-conversion. */
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+      SPTCC cc;
+      switch ((SPTIROp)inst->aux) {
+        case SPTIR_EQ: cc = SPT_CC_E;   break;
+        case SPTIR_NE: cc = SPT_CC_NE;  break;
+        case SPTIR_LT: cc = SPT_CC_L;   break;
+        case SPTIR_LE: cc = SPT_CC_LE;  break;
+        case SPTIR_GT: cc = SPT_CC_NLE; break;  /* greater (signed >) */
+        case SPTIR_GE: cc = SPT_CC_NL;  break;  /* >= (not less) */
+        default:       cc = SPT_CC_E;
+      }
+      sptasm_setcc(a, cc, SPT_RAX);          /* AL = 0/1 */
+      sptasm_movzx_r8(a, SPT_RAX, SPT_RAX);  /* RAX = zero-extended AL (0 or 1) */
+      gen_store(cg, idx, SPT_RAX);
+      break;
+    }
+
     /* ---- Guards ---- */
     case SPTIR_GUARD_T: {
       /* Check type tag of the value on the stack. */
@@ -1361,6 +1422,16 @@ void sptjit_codegen_compile(SPTTrace *t, SPTJitState *js) {
 
   /* Plan register allocation (sets cg.use_ra and the residency maps). */
   ra_analyze(&cg);
+
+  /* A loop-carried conflict that forces the spill path on a variable-exit-rate
+     loop (e.g. running max/min: the guard flips after warmup and the trace
+     side-exits every iteration) compiles to something slower than the
+     interpreter. Per policy, leave t->code NULL so the recorder treats this as
+     an abort and the loop runs in the interpreter instead. */
+  if (cg.ra_conflict_abort) {
+    sptasm_free(&cg.asm_);
+    return;
+  }
   /* Hoist loop-invariant work (e.g. array pointer/length/type guard) once RA
      bindings are fixed. */
   ra_hoist_invariants(&cg);
