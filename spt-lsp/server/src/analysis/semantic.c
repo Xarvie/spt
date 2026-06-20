@@ -2,6 +2,7 @@
 ** semantic.c — 基于 AST 的符号收集与名字解析。
 */
 #include "semantic.h"
+#include "sem_index.h"
 
 #include "protocol.h"
 #include "spt_ast.h"
@@ -11,6 +12,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ===========================================================================
+** Phase 5a: 语义索引缓存（单条目，按 unit 指针命中）。
+** 服务器单线程，同一 dispatch 内 unit 稳定；用 source 指针防 stale（unit 释放后
+** 原址可能被新 parse 复用，source 指针必然不同）。
+** ========================================================================= */
+static const SptLspUnit *g_idx_unit = NULL;
+static const char *g_idx_source = NULL;
+static SemIndex *g_idx = NULL;
+
+static SemIndex *sem_get_index(const SptLspUnit *u) {
+  if (!u || !u->root) return NULL;
+  if (g_idx_unit == u && g_idx_source == u->source && g_idx) return g_idx;
+  if (g_idx) { sem_index_free(g_idx); g_idx = NULL; }
+  g_idx = sem_index_build(u->root);
+  g_idx_unit = u;
+  g_idx_source = u->source;
+  return g_idx;
+}
 
 /* ===========================================================================
 ** 基础：坐标换算、字符串拼接
@@ -250,14 +270,17 @@ static void collect_locals(const AstNode *n, Defs *out) {
   }
 }
 
-/* 找包含 off 的最内层函数（含方法）。 */
+/* 找包含 off 的最内层函数（含方法）。
+** 范围从函数声明起始位置（n->loc）到 body 结束位置，
+** 这样参数列表也在函数范围内（修复参数名被误报"未定义"的问题）。
+*/
 static void find_enclosing_fn(const AstNode *n, const Document *d, size_t off,
                               const AstNode **best, size_t *best_span) {
   if (!n) return;
   if (n->type == NODE_FUNCTION_DECL && n->u.func_decl.body &&
       n->u.func_decl.body->type == NODE_BLOCK && n->u.func_decl.body->u.block.use_end) {
     const AstNode *b = n->u.func_decl.body;
-    size_t s = off_of(d, b->loc.line, b->loc.column);
+    size_t s = off_of(d, n->loc.line, n->loc.column);
     size_t e = off_of(d, b->u.block.end_loc.line, b->u.block.end_loc.column);
     if (off >= s && off <= e) {
       size_t span = e - s;
@@ -332,9 +355,17 @@ static const AstNode *find_member_anywhere(const AstNode *root, const char *name
 ** Phase 2: 轻量类型推断
 ** ========================================================================= */
 
-/* 按类名查找 class_decl 节点（顶层 + declare 模块内）。 */
-static const AstNode *find_class_by_name(const AstNode *root, const char *name) {
-  if (!root || root->type != NODE_BLOCK || !name) return NULL;
+/* 按类名查找 class_decl 节点（顶层 + declare 模块内）。
+   Phase 5a: 优先查哈希索引，未命中回退线性扫描（零回归）。 */
+static const AstNode *find_class_by_name(const SptLspUnit *u, const char *name) {
+  if (!u || !u->root || !name) return NULL;
+  SemIndex *idx = sem_get_index(u);
+  if (idx) {
+    const AstNode *r = sem_index_lookup_class(idx, name);
+    if (r) return r;
+  }
+  /* 回退线性扫描。 */
+  const AstNode *root = u->root;
   const AstList *st = &root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
@@ -355,14 +386,14 @@ static const AstNode *find_class_by_name(const AstNode *root, const char *name) 
 }
 
 /* 从表达式推断其类型对应的 class_decl（仅用户类型）。基本类型返回 NULL。 */
-static const AstNode *infer_class_from_expr(const AstNode *root, const AstNode *expr) {
+static const AstNode *infer_class_from_expr(const SptLspUnit *u, const AstNode *expr) {
   if (!expr) return NULL;
   switch (expr->type) {
   case NODE_FUNCTION_CALL: {
     /* ClassName(...) → ClassName 实例 */
     const AstNode *callee = expr->u.call.func;
     if (callee && callee->type == NODE_IDENTIFIER && callee->u.ident.name)
-      return find_class_by_name(root, callee->u.ident.name);
+      return find_class_by_name(u, callee->u.ident.name);
     return NULL;
   }
   default:
@@ -371,8 +402,8 @@ static const AstNode *infer_class_from_expr(const AstNode *root, const AstNode *
 }
 
 /* 从定义节点（变量/参数）推断其类型对应的 class_decl。 */
-static const AstNode *infer_class_from_def(const AstNode *root, const AstNode *def) {
-  if (!def || !root) return NULL;
+static const AstNode *infer_class_from_def(const SptLspUnit *u, const AstNode *def) {
+  if (!def || !u) return NULL;
   const AstNode *type_ann = NULL;
   const AstNode *init = NULL;
   switch (def->type) {
@@ -391,10 +422,10 @@ static const AstNode *infer_class_from_def(const AstNode *root, const AstNode *d
     const char *name = NULL;
     if (type_ann->u.type_user.count > 0)
       name = type_ann->u.type_user.parts[type_ann->u.type_user.count - 1];
-    if (name) return find_class_by_name(root, name);
+    if (name) return find_class_by_name(u, name);
   }
   /* 从初始化表达式推断。 */
-  if (init) return infer_class_from_expr(root, init);
+  if (init) return infer_class_from_expr(u, init);
   return NULL;
 }
 
@@ -421,6 +452,12 @@ static const AstNode *find_def_by_name(const SptLspUnit *u, const Document *d,
       }
     }
     free(locs.a);
+  }
+  /* Phase 5a: 文件级查找优先查哈希索引，未命中回退 collect_file_defs 线性扫描。 */
+  SemIndex *idx = sem_get_index(u);
+  if (idx) {
+    const SemSlot *s = sem_index_lookup_def(idx, name);
+    if (s) return s->node;
   }
   Defs files = {0};
   collect_file_defs(u->root, &files);
@@ -558,7 +595,7 @@ SemRef sem_resolve(const SptLspUnit *u, const Document *d, size_t byte_off) {
     if (ti >= 2) {
       const AstNode *recv_def = resolve_ident_def(u, d, ti - 2);
       if (recv_def) {
-        const AstNode *cls = infer_class_from_def(u->root, recv_def);
+        const AstNode *cls = infer_class_from_def(u, recv_def);
         if (cls) {
           int kind = LSP_SK_FIELD;
           const AstNode *defn = find_member_in_class(cls, r.name, &kind);
@@ -883,7 +920,7 @@ int sem_members_of_receiver(const SptLspUnit *u, const Document *d,
   if (!u || !u->root || !d || !recv_name) return 0;
   const AstNode *recv_def = find_def_by_name(u, d, recv_name, dot_off);
   if (!recv_def) return 0;
-  const AstNode *cls = infer_class_from_def(u->root, recv_def);
+  const AstNode *cls = infer_class_from_def(u, recv_def);
   if (!cls) return 0;
   emit_class_members(cls, cb, ctx);
   return 1;
@@ -898,9 +935,17 @@ const AstNode *sem_enclosing_function(const SptLspUnit *u, const Document *d, si
   return fn;
 }
 
-/* 在全文件查找名为 name 的函数（顶层或类方法），用于 signature help。 */
+/* 在全文件查找名为 name 的函数（顶层或类方法），用于 signature help。
+   Phase 5a: 优先查哈希索引（O(1)），未命中回退线性扫描。
+   这是诊断/inlayHint 遍历所有函数调用时的热点路径。 */
 const AstNode *sem_find_function(const SptLspUnit *u, const char *name) {
-  if (!u || !u->root || u->root->type != NODE_BLOCK) return NULL;
+  if (!u || !u->root || u->root->type != NODE_BLOCK || !name) return NULL;
+  SemIndex *idx = sem_get_index(u);
+  if (idx) {
+    const AstNode *r = sem_index_lookup_func(idx, name);
+    if (r) return r;
+  }
+  /* 回退线性扫描。 */
   const AstList *st = &u->root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];

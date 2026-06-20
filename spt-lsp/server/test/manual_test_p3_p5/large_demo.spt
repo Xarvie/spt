@@ -1,0 +1,122 @@
+/* large_demo.spt — 大文件性能测试（P5a 哈希索引）
+**
+** 测试要点：
+**   P5a: 在文件末尾输入 func50 触发补全，验证响应速度（哈希索引 O(1)）
+**   P5a: 光标放在 func50 调用上，F12 跳转应瞬间到达定义
+**   P5a: workspace/symbol 搜索 func50 应快速命中
+**
+** 此文件含 100+ 函数定义，用于测试哈希索引 vs 线性扫描的性能差异。
+*/
+
+int func0(int x) { return x + 0; }
+int func1(int x) { return x + 1; }
+int func2(int x) { return x + 2; }
+int func3(int x) { return x + 3; }
+int func4(int x) { return x + 4; }
+int func5(int x) { return x + 5; }
+int func6(int x) { return x + 6; }
+int func7(int x) { return x + 7; }
+int func8(int x) { return x + 8; }
+int func9(int x) { return x + 9; }
+int func10(int x) { return x + 10; }
+int func11(int x) { return x + 11; }
+int func12(int x) { return x + 12; }
+int func13(int x) { return x + 13; }
+int func14(int x) { return x + 14; }
+int func15(int x) { return x + 15; }
+int func16(int x) { return x + 16; }
+int func17(int x) { return x + 17; }
+int func18(int x) { return x + 18; }
+int func19(int x) { return x + 19; }
+int func20(int x) { return x + 20; }
+int func21(int x) { return x + 21; }
+int func22(int x) { return x + 22; }
+int func23(int x) { return x + 23; }
+int func24(int x) { return x + 24; }
+int func25(int x) { return x + 25; }
+int func26(int x) { return x + 26; }
+int func27(int x) { return x + 27; }
+int func28(int x) { return x + 28; }
+int func29(int x) { return x + 29; }
+int func30(int x) { return x + 30; }
+int func31(int x) { return x + 31; }
+int func32(int x) { return x + 32; }
+int func33(int x) { return x + 33; }
+int func34(int x) { return x + 34; }
+int func35(int x) { return x + 35; }
+int func36(int x) { return x + 36; }
+int func37(int x) { return x + 37; }
+int func38(int x) { return x + 38; }
+int func39(int x) { return x + 39; }
+int func40(int x) { return x + 40; }
+int func41(int x) { return x + 41; }
+int func42(int x) { return x + 42; }
+int func43(int x) { return x + 43; }
+int func44(int x) { return x + 44; }
+int func45(int x) { return x + 45; }
+int func46(int x) { return x + 46; }
+int func47(int x) { return x + 47; }
+int func48(int x) { return x + 48; }
+int func49(int x) { return x + 49; }
+
+/* ↓ 在此行之后测试补全/跳转性能 ↓ */
+
+int callMany() {
+  int r0 = func0(1);
+  int r25 = func25(2);
+  int r49 = func49(3);
+  return r0 + r25 + r49;
+}
+
+int func50(int x) { return x + 50; }
+int func51(int x) { return x + 51; }
+int func52(int x) { return x + 52; }
+int func53(int x) { return x + 53; }
+int func54(int x) { return x + 54; }
+int func55(int x) { return x + 55; }
+int func56(int x) { return x + 56; }
+int func57(int x) { return x + 57; }
+int func58(int x) { return x + 58; }
+int func59(int x) { return x + 59; }
+int func60(int x) { return x + 60; }
+int func61(int x) { return x + 61; }
+int func62(int x) { return x + 62; }
+int func63(int x) { return x + 63; }
+int func64(int x) { return x + 64; }
+int func65(int x) { return x + 65; }
+int func66(int x) { return x + 66; }
+int func67(int x) { return x + 67; }
+int func68(int x) { return x + 68; }
+int func69(int x) { return x + 69; }
+int func70(int x) { return x + 70; }
+int func71(int x) { return x + 71; }
+int func72(int x) { return x + 72; }
+int func73(int x) { return x + 73; }
+int func74(int x) { return x + 74; }
+int func75(int x) { return x + 75; }
+int func76(int x) { return x + 76; }
+int func77(int x) { return x + 77; }
+int func78(int x) { return x + 78; }
+int func79(int x) { return x + 79; }
+int func80(int x) { return x + 80; }
+int func81(int x) { return x + 81; }
+int func82(int x) { return x + 82; }
+int func83(int x) { return x + 83; }
+int func84(int x) { return x + 84; }
+int func85(int x) { return x + 85; }
+int func86(int x) { return x + 86; }
+int func87(int x) { return x + 87; }
+int func88(int x) { return x + 88; }
+int func89(int x) { return x + 89; }
+int func90(int x) { return x + 90; }
+int func91(int x) { return x + 91; }
+int func92(int x) { return x + 92; }
+int func93(int x) { return x + 93; }
+int func94(int x) { return x + 94; }
+int func95(int x) { return x + 95; }
+int func96(int x) { return x + 96; }
+int func97(int x) { return x + 97; }
+int func98(int x) { return x + 98; }
+int func99(int x) { return x + 99; }
+
+/* ↓ 在文件末尾输入 func50 触发补全，验证哈希索引性能 ↓ */

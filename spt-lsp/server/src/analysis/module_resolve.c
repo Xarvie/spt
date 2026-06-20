@@ -63,19 +63,20 @@ static void join_spt(const char *dir, const char *name, char *out, size_t cap) {
 
 int resolve_module_path(const char *from_path, const char *module_name, char *out, size_t cap) {
   if (!from_path || !module_name || !out || cap == 0) return 0;
-  /* module_name 不允许含路径分隔符或点分（README 明确不支持）。 */
-  for (const char *p = module_name; *p; p++) {
-#ifdef _WIN32
-    if (*p == '/' || *p == '\\') return 0;
-#else
-    if (*p == '/') return 0;
-#endif
+
+  /* 处理相对路径前缀 ./ 或 .\（可连续，如 ././mod）。
+     也允许 subdir/mod 形式的相对子路径。 */
+  const char *name = module_name;
+  while (name[0] == '.' && (name[1] == '/' || name[1] == '\\')) {
+    name += 2;
   }
+  /* 空名或绝对路径拒绝。 */
+  if (!name[0] || name[0] == '/' || name[0] == '\\') return 0;
 
   /* 1. script_dir/<module>.spt */
   char dir[4096];
   dir_of(from_path, dir, sizeof dir);
-  join_spt(dir, module_name, out, cap);
+  join_spt(dir, name, out, cap);
   if (file_exists(out)) return 1;
 
   /* 2. $SPT_PATH 各分号段/<module>.spt */
@@ -88,7 +89,7 @@ int resolve_module_path(const char *from_path, const char *module_name, char *ou
       if (len > 0 && len < sizeof dir) {
         memcpy(dir, seg, len);
         dir[len] = '\0';
-        join_spt(dir, module_name, out, cap);
+        join_spt(dir, name, out, cap);
         if (file_exists(out)) return 1;
       }
       if (!semi) break;
@@ -97,7 +98,7 @@ int resolve_module_path(const char *from_path, const char *module_name, char *ou
   }
 
   /* 3. ./<module>.spt */
-  join_spt(".", module_name, out, cap);
+  join_spt(".", name, out, cap);
   if (file_exists(out)) return 1;
 
   out[0] = '\0';

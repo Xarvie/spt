@@ -201,7 +201,8 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
     cJSON *ctx = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "context");
     cJSON *idf = ctx ? cJSON_GetObjectItemCaseSensitive(ctx, "includeDeclaration") : NULL;
     if (idf && cJSON_IsBool(idf)) incl = cJSON_IsTrue(idf);
-    return rpc_make_response(id, d ? feature_references(d, get_pos(params), get_uri(params), incl)
+    return rpc_make_response(id, d ? feature_references(d, get_pos(params), get_uri(params),
+                                                          incl, &s->ws)
                                    : cJSON_CreateArray());
   }
   if (strcmp(method, "textDocument/completion") == 0) {
@@ -288,7 +289,7 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
     if (uri && cJSON_IsString(uri) && text && cJSON_IsString(text)) {
       doc_store_open(&s->docs, uri->valuestring, text->valuestring,
                      strlen(text->valuestring), ver && cJSON_IsNumber(ver) ? ver->valueint : 0);
-      workspace_mark_dirty(&s->ws);
+      workspace_mark_doc_dirty(&s->ws, uri->valuestring);
       publish_diagnostics(s, uri->valuestring);
     }
     return;
@@ -323,7 +324,7 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
                            strlen(t->valuestring), version);
         }
       }
-      workspace_mark_dirty(&s->ws);
+      workspace_mark_doc_dirty(&s->ws, uri->valuestring);
       publish_diagnostics(s, uri->valuestring);
     }
     return;
@@ -333,7 +334,7 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
     cJSON *uri = td ? cJSON_GetObjectItemCaseSensitive(td, "uri") : NULL;
     if (uri && cJSON_IsString(uri)) {
       doc_store_close(&s->docs, uri->valuestring);
-      workspace_mark_dirty(&s->ws);
+      workspace_mark_doc_dirty(&s->ws, uri->valuestring);
       /* 关闭时清空该文件的诊断（推送空数组）。 */
       cJSON *p = cJSON_CreateObject();
       cJSON_AddStringToObject(p, "uri", uri->valuestring);
@@ -354,7 +355,13 @@ cJSON *lsp_dispatch(LspServer *s, const cJSON *msg) {
   const cJSON *id = rpc_id(msg);
 
   FILE *dbg = spt_open_log();
-  if (dbg) { fprintf(dbg, "dispatch: method=%s has_id=%d\n", method ? method : "(null)", id ? 1 : 0); fflush(dbg); fclose(dbg); }
+  if (dbg) {
+    char *req = cJSON_PrintUnformatted(msg);
+    fprintf(dbg, ">>> REQ: %s\n", req ? req : "(null)");
+    free(req);
+    fflush(dbg);
+    fclose(dbg);
+  }
 
   if (!method) {
     /* 没有 method：若像请求则报错，否则忽略。 */
@@ -366,13 +373,19 @@ cJSON *lsp_dispatch(LspServer *s, const cJSON *msg) {
   if (rpc_is_request(msg)) {
     cJSON *resp = handle_request(s, method, id, rpc_params(msg));
     dbg = spt_open_log();
-    if (dbg) { fprintf(dbg, "dispatch: handle_request done resp=%s\n", resp ? "yes" : "no"); fflush(dbg); fclose(dbg); }
+    if (dbg) {
+      char *rs = resp ? cJSON_PrintUnformatted(resp) : strdup("(null)");
+      fprintf(dbg, "<<< RESP: %s\n", rs ? rs : "(null)");
+      free(rs);
+      fflush(dbg);
+      fclose(dbg);
+    }
     return resp;
   }
 
   handle_notification(s, method, rpc_params(msg));
   dbg = spt_open_log();
-  if (dbg) { fprintf(dbg, "dispatch: handle_notification done\n"); fflush(dbg); fclose(dbg); }
+  if (dbg) { fprintf(dbg, "    NOTIF done: %s\n", method); fflush(dbg); fclose(dbg); }
   return NULL;
 }
 

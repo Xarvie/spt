@@ -61,6 +61,7 @@ add_library(spt_lsp_core STATIC
   src/lsp/protocol.c
   src/lsp/documents.c
   src/analysis/semantic.c
+  src/analysis/sem_index.c
   src/analysis/workspace.c
   src/analysis/module_resolve.c
   src/features/diagnostics.c
@@ -103,7 +104,7 @@ target_link_libraries(sptscript-lsp PRIVATE spt_lsp_core)
 option(SPT_LSP_BUILD_TESTS "Build spt-lsp server tests" ON)
 if(SPT_LSP_BUILD_TESTS)
   enable_testing()
-  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete test_workspace test_cross_import test_type_infer test_phase3 test_phase4)
+  set(SPT_LSP_TESTS test_rpc test_server test_documents test_diagnostics test_features test_crash_semtok test_incomplete test_workspace test_cross_import test_type_infer test_phase3 test_phase4 test_phase5 test_manual_def test_format)
   foreach(t ${SPT_LSP_TESTS})
     add_executable(${t} test/${t}.c)
     target_link_libraries(${t} PRIVATE spt_lsp_core)

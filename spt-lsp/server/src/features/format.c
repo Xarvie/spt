@@ -43,14 +43,18 @@ cJSON *feature_format(const Document *d, const cJSON *options) {
     /* 记录非空白起始 */
     size_t content_start = i;
 
-    /* 2. 生成规范化后的前导白空 */
-    if (insert_spaces) {
-      for (int k = 0; k < col; k++) out[w++] = ' ';
-    } else {
-      int tabs = col / tab_size;
-      int spaces = col % tab_size;
-      for (int k = 0; k < tabs; k++) out[w++] = '\t';
-      for (int k = 0; k < spaces; k++) out[w++] = ' ';
+    /* 2. 生成规范化后的前导白空
+    **    将缩进向上对齐到 tabSize 倍数，修正"歪歪扭扭"的缩进。
+    **    例如 tabSize=4 时：col=2 → col=4 (1级), col=6 → col=8 (2级)。
+    */
+    if (col > 0) {
+      int aligned = ((col + tab_size - 1) / tab_size) * tab_size;
+      if (insert_spaces) {
+        for (int k = 0; k < aligned; k++) out[w++] = ' ';
+      } else {
+        int tabs = aligned / tab_size;
+        for (int k = 0; k < tabs; k++) out[w++] = '\t';
+      }
     }
 
     /* 3. 拷贝行内容到行尾（含 \n），去行尾空白 */

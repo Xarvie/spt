@@ -1,0 +1,36 @@
+/* format_demo.spt — 格式化测试（P4b）
+**
+** 测试要点：
+**   P4b: 打开此文件后执行 Format Document (Shift+Alt+F)
+**   验证：tab 被转为 4 空格，行尾空白被去除，缩进层级正确
+**
+** 格式化前：包含 tab/space 混合缩进 + 行尾空白 + 不规范缩进
+*/
+
+int f() {
+	return 1;
+  int x = 2;
+	if (true) {
+		return 2;
+  }
+  for (int i = 0, 10)    {
+	print(i);
+  }
+}
+
+class Demo {
+	int x;
+	int y;
+	void __init(int x, int y) {
+		this.x = x;
+	this.y = y;
+	}
+	int getX() {
+		return this.x;
+	}
+}
+
+int g(int a,
+  int b) {
+	return a + b;
+  }

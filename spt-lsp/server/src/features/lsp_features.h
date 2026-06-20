@@ -24,7 +24,8 @@ cJSON *feature_hover(const Document *d, LspPos pos, Workspace *ws);
 cJSON *feature_definition(const Document *d, LspPos pos, const char *uri, Workspace *ws);
 
 /* textDocument/references -> Location[] */
-cJSON *feature_references(const Document *d, LspPos pos, const char *uri, int include_decl);
+cJSON *feature_references(const Document *d, LspPos pos, const char *uri, int include_decl,
+                          Workspace *ws);
 
 /* textDocument/completion -> CompletionItem[]
    ws 可空；非空时支持命名空间导入 m. 的成员补全来自目标文件导出。 */

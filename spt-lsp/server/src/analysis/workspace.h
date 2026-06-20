@@ -49,6 +49,9 @@ typedef struct {
     int parsing;         /* 正在解析标记（防环） */
   } *units;
   int unit_count, unit_cap;
+  /* Phase 5b/5c: 引用倒排索引 + 模块依赖图（内部实现，opaque）。 */
+  void *ref_idx;    /* RefIndex* */
+  void *dep_graph;  /* DepGraph* */
 } Workspace;
 
 void workspace_init(Workspace *ws);
@@ -64,6 +67,10 @@ void workspace_set_overlay(Workspace *ws, const DocStore *overlay);
 
 /* 标记索引脏（打开文档变更后调用），下次查询时懒重建；同时清空目标文件缓存。 */
 void workspace_mark_dirty(Workspace *ws);
+
+/* Phase 5d: 按文档粒度失效——只清除该 URI 对应的缓存/索引条目并单文件重建，
+   其余文档复用缓存。若索引未建立或已脏，回退到 workspace_mark_dirty。 */
+void workspace_mark_doc_dirty(Workspace *ws, const char *uri);
 
 /* 扫描根目录并建立符号索引（可重复调用以重建）。 */
 void workspace_index(Workspace *ws);
@@ -86,5 +93,23 @@ WsUnit workspace_get_unit(Workspace *ws, const char *path);
 /* 工具：file:// URI <-> 本地路径（最小百分号解码/编码）。out 需足够大。 */
 void spt_uri_to_path(const char *uri, char *out, size_t cap);
 void spt_path_to_uri(const char *path, char *out, size_t cap);
+
+/* ===========================================================================
+** Phase 5b/5c: 引用倒排索引 + 模块依赖图
+** ========================================================================= */
+
+/* 引用出现回调（5b）：uri 为文件 URI，offset/length 为标识符 token 的字节区间。 */
+typedef void (*RefOccCb)(void *ctx, const char *uri, size_t offset, int length);
+
+/* 查找工作区内所有名为 name 的标识符出现（跨文件）。
+   索引未建或脏时回退为空结果（调用方应自行回退）。返回出现数。 */
+int workspace_find_occurrences(Workspace *ws, const char *name, RefOccCb cb, void *ctx);
+
+/* 导入者回调（5c）：importer_uri 为导入了 module_path 的文件 URI。 */
+typedef void (*ImporterCb)(void *ctx, const char *importer_uri);
+
+/* 查找所有导入了 module_path 的文件 URI。
+   索引未建或脏时返回 0。返回导入者数。 */
+int workspace_find_importers(Workspace *ws, const char *module_path, ImporterCb cb, void *ctx);
 
 #endif /* SPT_LSP_WORKSPACE_H */

@@ -1,0 +1,28 @@
+/* app.spt — 主入口
+**
+** 测试要点：
+**   P3a: 跨文件 definition — compute → services.spt, User → models.spt
+**   P3b: signatureHelp — compute( 后应显示签名
+**   P3c: 跨文件 rename — rename compute → calculate 应跨文件生效
+**   P3e: 跨文件 references — compute 的 references 应列出 services.spt + app.spt
+**   P4a: snippet 补全 — 末尾输入 User( 应触发 snippet
+**   P4d: 增量同步 — 修改 10 为 99，inlayHint 应实时更新
+**   P5:  workspace/symbol — 搜索 main/compute/User 应快速命中
+*/
+
+import { computeScore, getGreeting } from "./services";
+import { User } from "./models";
+
+int main() {
+  int result = computeScore(10, 99);
+  str greeting = getGreeting("World");
+
+  User admin = User(1, "admin", 30);
+  str name = admin.getName();
+
+  return result;
+}
+
+int helper() {
+  return computeScore(1, 2);
+}

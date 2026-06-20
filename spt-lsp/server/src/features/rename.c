@@ -10,6 +10,7 @@
 #include "spt_lsp_bridge.h"
 #include "workspace.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct { cJSON *edits; const Document *d; const char *new_name; } RenCtx;
@@ -21,12 +22,25 @@ static void ren_cb(void *ctx, size_t s, size_t e) {
   cJSON_AddItemToArray(c->edits, ed);
 }
 
-/* 在目标文件中查找所有匹配 name 的标识符 token，产出 TextEdit。 */
+/* 在目标文件中查找所有匹配 name 的标识符 token，产出 TextEdit。
+   Phase 5b: 若 ws 的引用倒排索引可用，直接查表（O(1)），否则回退到线性扫描。 */
 typedef struct { cJSON *edits; const Document *d; const char *new_name; const char *name; } CrossCtx;
 static void cross_ref_cb(void *ctx, size_t s, size_t e) {
   CrossCtx *c = (CrossCtx *)ctx;
   cJSON *ed = cJSON_CreateObject();
   cJSON_AddItemToObject(ed, "range", lsp_range_to_json(doc_range(c->d, s, e)));
+  cJSON_AddStringToObject(ed, "newText", c->new_name);
+  cJSON_AddItemToArray(c->edits, ed);
+}
+
+/* Phase 5b: 由倒排索引直接产出 TextEdit（offset/length 已知，无需再扫 token）。 */
+typedef struct { cJSON *edits; const Document *d; const char *new_name; } IdxCtx;
+static void idx_occ_cb(void *ctx, const char *uri, size_t offset, int length) {
+  (void)uri;
+  IdxCtx *c = (IdxCtx *)ctx;
+  if (!c->d) return;
+  cJSON *ed = cJSON_CreateObject();
+  cJSON_AddItemToObject(ed, "range", lsp_range_to_json(doc_range(c->d, offset, offset + (size_t)length)));
   cJSON_AddStringToObject(ed, "newText", c->new_name);
   cJSON_AddItemToArray(c->edits, ed);
 }
@@ -54,6 +68,17 @@ static int collect_token_edits(const WsUnit *wu, const char *name, const char *n
   }
   return n;
 }
+
+/* Phase 5b/5c: 候选 URI 集合（用于收集导入者 / 包含名字的文件）。 */
+typedef struct { char (*uris)[4096]; int count, cap; } UriSet;
+static void uriset_init(UriSet *s, int cap) { s->uris = (char(*)[4096])calloc(cap, 4096); s->count = 0; s->cap = cap; }
+static void uriset_free(UriSet *s) { free(s->uris); s->uris = NULL; s->count = s->cap = 0; }
+static void uriset_add(UriSet *s, const char *uri) {
+  for (int i = 0; i < s->count; i++) if (strcmp(s->uris[i], uri) == 0) return;
+  if (s->count < s->cap) { strncpy(s->uris[s->count], uri, 4095); s->uris[s->count][4095] = '\0'; s->count++; }
+}
+static void importer_cb(void *ctx, const char *importer_uri) { uriset_add((UriSet *)ctx, importer_uri); }
+static void occ_uri_cb(void *ctx, const char *uri, size_t off, int len) { (void)off; (void)len; uriset_add((UriSet *)ctx, uri); }
 
 cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char *new_name,
                       Workspace *ws) {
@@ -113,23 +138,36 @@ cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char
 
       /* 扫描工作区中所有文件，找出导入该符号的文件并改名。
          - 情况 A: 导入目标模块是当前文件（uri）。
-         - 情况 B: 导入目标模块是定义文件（def_uri）。 */
+         - 情况 B: 导入目标模块是定义文件（def_uri）。
+         Phase 5b/5c: 优先用倒排索引/依赖图缩小候选集，回退到全量扫描。 */
       const char *target_uri = def_uri[0] ? def_uri : uri;
-      const char *target_mod = def_uri[0] ? def_mod_path : "";
-      (void)target_mod;
 
-      for (int i = 0; i < ws->sym_count; i++) {
-        const char *other_uri = ws->syms[i].uri;
-        if (!other_uri) continue;
+      /* 收集候选 URI。
+         - 情况 B: 用依赖图查 def_mod_path 的导入者（5c）。
+         - 情况 A: 用引用倒排索引查包含 r.name 的文件（5b）。 */
+      UriSet cand;
+      uriset_init(&cand, 256);
+      int got = 0;
+      if (def_uri[0]) {
+        got = workspace_find_importers(ws, def_mod_path, importer_cb, &cand);
+      } else {
+        got = workspace_find_occurrences(ws, r.name, occ_uri_cb, &cand);
+      }
+
+      /* 索引未命中（脏或空）→ 回退到全量 sym 扫描。 */
+      if (got == 0) {
+        for (int i = 0; i < ws->sym_count; i++) {
+          const char *other_uri = ws->syms[i].uri;
+          if (!other_uri) continue;
+          uriset_add(&cand, other_uri);
+        }
+      }
+
+      for (int ci = 0; ci < cand.count; ci++) {
+        const char *other_uri = cand.uris[ci];
         /* 跳过当前文件（已处理）和定义文件（情况 B 已处理）。 */
         if (strcmp(other_uri, uri) == 0) continue;
         if (def_uri[0] && strcmp(other_uri, def_uri) == 0) continue;
-        /* 去重。 */
-        int dup = 0;
-        for (int j = 0; j < i; j++) {
-          if (ws->syms[j].uri && strcmp(ws->syms[j].uri, other_uri) == 0) { dup = 1; break; }
-        }
-        if (dup) continue;
 
         char other_path[4096];
         spt_uri_to_path(other_uri, other_path, sizeof other_path);
@@ -155,6 +193,7 @@ cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char
         else
           cJSON_Delete(cross_edits);
       }
+      uriset_free(&cand);
     }
 
     res = cJSON_CreateObject();

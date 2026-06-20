@@ -1,0 +1,52 @@
+/* models.spt — 数据模型（导出类）
+**
+** 测试要点：
+**   P3:  definition 跳转到 class User / class Order
+**   P3:  成员跳转 — User.getName() F12 跳到方法定义
+**   P5:  rename User → Account 验证跨文件重命名（依赖图 + 倒排索引）
+**   P5:  workspace/symbol 搜索 User/Order 应命中
+*/
+
+export class User {
+  int id;
+  str name;
+  int age;
+
+  void __init(int id, str name, int age) {
+    this.id = id;
+    this.name = name;
+    this.age = age;
+  }
+
+  str getName() {
+    return this.name;
+  }
+
+  int getAge() {
+    return this.age;
+  }
+
+  bool isAdult() {
+    return this.age >= 18;
+  }
+}
+
+export class Order {
+  int orderId;
+  User customer;
+  int amount;
+
+  void __init(int orderId, User customer, int amount) {
+    this.orderId = orderId;
+    this.customer = customer;
+    this.amount = amount;
+  }
+
+  int getAmount() {
+    return this.amount;
+  }
+
+  str summary() {
+    return "Order #" .. this.orderId .. " by " .. this.customer.getName();
+  }
+}

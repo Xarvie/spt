@@ -97,10 +97,10 @@ int main(void) {
   {
     char p[1024], u[1024];
 #ifdef _WIN32
-    spt_uri_to_path("file:///C:/a%20b/x.spt", p, sizeof p);
-    CHECK(strcmp(p, "C:\\a b\\x.spt") == 0, "uri_to_path decodes %20, strips scheme, drive + backslash");
+    spt_uri_to_path("file:///C%3A/a%20b/x.spt", p, sizeof p);
+    CHECK(strcmp(p, "C:\\a b\\x.spt") == 0, "uri_to_path decodes %20/%3A, strips scheme, drive + backslash");
     spt_path_to_uri("C:\\a b\\x.spt", u, sizeof u);
-    CHECK(strcmp(u, "file:///C:/a%20b/x.spt") == 0, "path_to_uri encodes space, flips backslash");
+    CHECK(strcmp(u, "file:///C%3A/a%20b/x.spt") == 0, "path_to_uri encodes space/colon, flips backslash");
 #else
     spt_uri_to_path("file:///tmp/a%20b/x.spt", p, sizeof p);
     CHECK(strcmp(p, "/tmp/a b/x.spt") == 0, "uri_to_path decodes %20 and strips scheme");

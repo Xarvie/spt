@@ -1,0 +1,31 @@
+/* services.spt — 业务逻辑（具名导入 + 命名空间导入）
+**
+** 测试要点：
+**   P3a: F12 跳转 — calculate → utils.spt, User → models.spt
+**   P3b: signatureHelp — 光标放在 calculate( 后，应显示参数签名
+**   P3d: 命名空间跳转 — M.formatTime 的 formatTime F12 → utils.spt
+**   P4a: snippet 补全 — 文件末尾输入 calculate，应插入 ${1:a}, ${2:b} 占位符
+**   P5:  增量失效 — utils.spt 新增函数后，此处补全应能列出
+*/
+
+import { calculate } from "./utils";
+import { User, Order } from "./models";
+import * as M from "./utils";
+
+int processOrder(int orderId, str userName, int userAge, int amount) {
+  User customer = User(orderId, userName, userAge);
+  Order order = Order(orderId, customer, amount);
+
+  int total = calculate(order.getAmount(), 10);
+  str time = M.formatTime(3661);
+
+  return total;
+}
+
+export int computeScore(int base, int bonus) {
+  return calculate(base,bonus);
+}
+
+export str getGreeting(str name) {
+  return M.greet(name);
+}
