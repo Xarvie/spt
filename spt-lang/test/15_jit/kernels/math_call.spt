@@ -1,0 +1,25 @@
+// JIT kernel: unary math functions in a hot loop via a direct libm C call.
+//
+// math.sqrt(x) compiles as GETTABUP(_ENV["math"]) -> SELF(math["sqrt"]) -> CALL.
+// The recorder recognizes the SELF as a known strictly-unary libm math method
+// and lowers the CALL to an SPTIR_FMATH: a direct C call to the libm function
+// (sqrt/sin/cos/...), with the argument in XMM0 and the result read back from
+// XMM0. A GUARD_CFUNC pins math["sqrt"] to the exact known C function (looked up
+// at run time), so reassigning the method or the whole math table side-exits to
+// the interpreter. The math library table is re-derived at record time from the
+// stable _ENV upvalue (not the live R[B] register, which is overwritten by the
+// call result inside the loop body). FMATH is not RA-safe, so these traces run
+// with register allocation disabled; the trace body keeps the stack 8 (mod 16)
+// so one `sub rsp,8` aligns for the call. Covers float args, an int arg (a TOFLT
+// is inserted before the call), and several different math functions so multiple
+// libm targets and the per-call guard are all exercised. Output is a transcendental
+// sum, identical to the interpreter (the guards, not the prediction, are load-bearing).
+list<float> fa = [0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5];
+list<int> ia = [1, 4, 9, 16, 25, 36, 49, 64];
+float s = 0.0;
+for (int rep = 0, 3000) {
+  for (int j = 0, 7) {
+    s = s + math.sqrt(fa[j]) + math.sin(fa[j]) + math.cos(fa[j]) + math.sqrt(ia[j]);
+  }
+}
+print(s);

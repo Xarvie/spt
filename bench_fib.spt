@@ -1,0 +1,98 @@
+// Fibonacci 基准测试：迭代 vs 递归，对比 JIT 与解释器
+// 不针对 JIT 做任何特殊优化，正常写法
+
+// 迭代版 fib
+int fib_iter(int n) {
+    if (n < 2) { return n; }
+    int a = 0;
+    int b = 1;
+    int i = 2;
+    while (i <= n) {
+        int t = a + b;
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    return b;
+}
+
+// 递归版 fib（JIT 不支持递归，会 abort 走解释器）
+int fib_rec(int n) {
+    if (n < 2) { return n; }
+    return fib_rec(n - 1) + fib_rec(n - 2);
+}
+
+// 批量调用 fib_iter，模拟日常使用中循环调用
+int fib_iter_batch(int count, int mod) {
+    int sum = 0;
+    for (int i = 0, count) {
+        sum = sum + fib_iter(i % mod);
+    }
+    return sum;
+}
+
+// 纯循环内联 fib 计算（不调用函数，JIT 友好）
+int fib_loop(int count, int mod) {
+    int sum = 0;
+    for (int i = 0, count) {
+        int n = i % mod;
+        if (n < 2) {
+            sum = sum + n;
+        } else {
+            int a = 0;
+            int b = 1;
+            int j = 2;
+            while (j <= n) {
+                int t = a + b;
+                a = b;
+                b = t;
+                j = j + 1;
+            }
+            sum = sum + b;
+        }
+    }
+    return sum;
+}
+
+int main() {
+    print("=== Fibonacci 基准测试 ===");
+
+    // 正确性验证
+    print("fib_iter(0)=" .. tostring(fib_iter(0)));
+    print("fib_iter(1)=" .. tostring(fib_iter(1)));
+    print("fib_iter(10)=" .. tostring(fib_iter(10)));
+    print("fib_iter(20)=" .. tostring(fib_iter(20)));
+    print("fib_iter(90)=" .. tostring(fib_iter(90)));
+    print("fib_rec(10)=" .. tostring(fib_rec(10)));
+    print("fib_rec(20)=" .. tostring(fib_rec(20)));
+
+    // 性能测试
+    int BATCH = 2000000;
+    int MOD = 91;
+
+    float t0 = os.clock();
+    int r1 = fib_iter_batch(BATCH, MOD);
+    float t1 = os.clock();
+    print("fib_iter_batch: count=" .. tostring(BATCH) .. " sum=" .. tostring(r1) .. " calc=" .. tostring(t1 - t0) .. "s");
+
+    t0 = os.clock();
+    int r2 = fib_loop(BATCH, MOD);
+    t1 = os.clock();
+    print("fib_loop:       count=" .. tostring(BATCH) .. " sum=" .. tostring(r2) .. " calc=" .. tostring(t1 - t0) .. "s");
+
+    // 递归 fib（量小，因为 O(2^n)）
+    t0 = os.clock();
+    int r3 = fib_rec(30);
+    t1 = os.clock();
+    print("fib_rec(30)=" .. tostring(r3) .. " calc=" .. tostring(t1 - t0) .. "s");
+
+    t0 = os.clock();
+    int r4 = fib_rec(35);
+    t1 = os.clock();
+    print("fib_rec(35)=" .. tostring(r4) .. " calc=" .. tostring(t1 - t0) .. "s");
+
+    print("=== 完成 ===");
+    return 0;
+}
+
+main();

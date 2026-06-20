@@ -528,6 +528,17 @@ void sptasm_movq_xmm_to_gpr(SPTAsm *a, SPTReg dst, SPTXmmReg src) {
   emit_modrm(a, 3, src, dst);
 }
 
+/* Move a GPR's 64 bits into the low 64 of an XMM (movq xmm, r64).
+   66 REX.W 0F 6E /r, with the XMM in the reg field and the GPR in r/m.
+   Used to lift an integer all-ones/all-zeros mask into an XMM for FSELECT. */
+void sptasm_movq_gpr_to_xmm(SPTAsm *a, SPTXmmReg dst, SPTReg src) {
+  sptasm_byte(a, 0x66);
+  emit_rex_xmm(a, 1, dst, src);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0x6E); /* MOVQ xmm, r/m64 */
+  emit_modrm(a, 3, dst, src);
+}
+
 static void sse2_op_rr(SPTAsm *a, uint8_t opcode, SPTXmmReg dst, SPTXmmReg src) {
   sptasm_byte(a, 0xF2);
   emit_rex_xmm_xmm(a, dst, src);
@@ -546,6 +557,32 @@ void sptasm_xorps(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) {
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0x57); /* XORPS (no mandatory prefix) */
   emit_modrm(a, 3, dst, src);
+}
+
+/* Packed-double bitwise ops (0x66 0x0F .. /r). Used to build a bit-exact float
+   select: result = (then & mask) | (else & ~mask). We operate on the full 128
+   bits but only the low 64 (the scalar double) are ever read back. */
+static void sse2_op66_rr(SPTAsm *a, uint8_t opcode, SPTXmmReg dst, SPTXmmReg src) {
+  sptasm_byte(a, 0x66);
+  emit_rex_xmm_xmm(a, dst, src);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, opcode);
+  emit_modrm(a, 3, dst, src);
+}
+void sptasm_andpd (SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x54, dst, src); }
+void sptasm_andnpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x55, dst, src); } /* dst = ~dst & src */
+void sptasm_orpd  (SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x56, dst, src); }
+
+/* CMPSD xmm1, xmm2, imm8 (0xF2 0x0F 0xC2 /r ib): low 64 of dst = all-ones if
+   (dst CMP src) else all-zeros; predicate imm8: 0=EQ 1=LT 2=LE 4=NEQ (all the
+   ordered/quiet senses that match Lua's NaN behavior). */
+void sptasm_cmpsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src, uint8_t imm8) {
+  sptasm_byte(a, 0xF2);
+  emit_rex_xmm_xmm(a, dst, src);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0xC2);
+  emit_modrm(a, 3, dst, src);
+  sptasm_byte(a, imm8);
 }
 
 void sptasm_ucomisd(SPTAsm *a, SPTXmmReg r1, SPTXmmReg r2) {

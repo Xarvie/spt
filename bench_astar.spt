@@ -1,0 +1,185 @@
+// A* 寻路基准测试
+// 在网格上找最短路径，对比 JIT 与解释器
+// 正常写法，不针对 JIT 做特殊优化
+
+int W = 200;
+int H = 200;
+int GRID_N = 40000;  // W * H
+
+// 曼哈顿距离启发式
+int heuristic(int x1, int y1, int x2, int y2) {
+    int dx = x1 - x2;
+    if (dx < 0) { dx = -dx; }
+    int dy = y1 - y2;
+    if (dy < 0) { dy = -dy; }
+    return dx + dy;
+}
+
+// A* 寻路，返回路径长度（-1 表示无路径）
+// 工作数组由外部传入，避免每次调用重新分配
+int astar(int sx, int sy, int ex, int ey,
+         list<int> grid, list<int> closed, list<int> gscore, list<int> came_from,
+         list<int> open_x, list<int> open_y, list<int> open_f) {
+    // 重置工作数组
+    for (int i = 0, GRID_N - 1) {
+        closed[i] = 0;
+        gscore[i] = 999999;
+        came_from[i] = -1;
+    }
+
+    int start_idx = sy * W + sx;
+    gscore[start_idx] = 0;
+    open_x[0] = sx;
+    open_y[0] = sy;
+    open_f[0] = heuristic(sx, sy, ex, ey);
+    int open_count = 1;
+    int explored = 0;
+
+    while (open_count > 0) {
+        // 找 f 值最小的节点（线性扫描）
+        int min_idx = 0;
+        int min_f = open_f[0];
+        for (int i = 1, open_count - 1) {
+            if (open_f[i] < min_f) {
+                min_f = open_f[i];
+                min_idx = i;
+            }
+        }
+
+        int cx = open_x[min_idx];
+        int cy = open_y[min_idx];
+        int cidx = cy * W + cx;
+
+        // 到达终点
+        if (cx == ex && cy == ey) {
+            int path_len = 0;
+            int cur = cidx;
+            while (cur != -1) {
+                path_len = path_len + 1;
+                cur = came_from[cur];
+            }
+            return path_len * 1000 + explored;
+        }
+
+        // 从开放列表移除（用最后元素填补）
+        open_count = open_count - 1;
+        open_x[min_idx] = open_x[open_count];
+        open_y[min_idx] = open_y[open_count];
+        open_f[min_idx] = open_f[open_count];
+
+        closed[cidx] = 1;
+        explored = explored + 1;
+
+        // 遍历 4 个邻居
+        for (int d = 0, 3) {
+            int nx = cx;
+            int ny = cy;
+            if (d == 0) { ny = cy - 1; }
+            if (d == 1) { ny = cy + 1; }
+            if (d == 2) { nx = cx - 1; }
+            if (d == 3) { nx = cx + 1; }
+
+            if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
+                int nidx = ny * W + nx;
+                if (grid[nidx] == 0 && closed[nidx] == 0) {
+                    int new_g = gscore[cidx] + 1;
+                    if (new_g < gscore[nidx]) {
+                        came_from[nidx] = cidx;
+                        gscore[nidx] = new_g;
+                        int new_f = new_g + heuristic(nx, ny, ex, ey);
+
+                        // 检查是否已在开放列表
+                        int in_open = 0;
+                        for (int i = 0, open_count - 1) {
+                            if (open_x[i] == nx && open_y[i] == ny) {
+                                open_f[i] = new_f;
+                                in_open = 1;
+                            }
+                        }
+                        if (in_open == 0) {
+                            open_x[open_count] = nx;
+                            open_y[open_count] = ny;
+                            open_f[open_count] = new_f;
+                            open_count = open_count + 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return -1;
+}
+
+int main() {
+    print("=== A* 寻路基准测试 ===");
+    print("grid=" .. tostring(W) .. "x" .. tostring(H) .. " (" .. tostring(GRID_N) .. " cells)");
+
+    // 生成网格（30% 障碍）
+    list<int> grid = [];
+    for (int i = 0, GRID_N - 1) { table.push(grid, 0); }
+
+    // 简单 PRNG 生成障碍
+    int seed = 12345;
+    for (int i = 0, GRID_N - 1) {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        if (seed % 100 < 30) {
+            grid[i] = 1;
+        }
+    }
+
+    // 预分配工作数组
+    list<int> closed = [];
+    list<int> gscore = [];
+    list<int> came_from = [];
+    list<int> open_x = [];
+    list<int> open_y = [];
+    list<int> open_f = [];
+    for (int i = 0, GRID_N - 1) {
+        table.push(closed, 0);
+        table.push(gscore, 0);
+        table.push(came_from, 0);
+        table.push(open_x, 0);
+        table.push(open_y, 0);
+        table.push(open_f, 0);
+    }
+
+    float t0 = os.clock();
+    // 预分配完成
+    float t1 = os.clock();
+    print("init=" .. tostring(t1 - t0) .. "s");
+
+    // 跑多次寻路
+    int NUM_PATHS = 20;
+    int total_result = 0;
+
+    t0 = os.clock();
+    for (int p = 0, NUM_PATHS - 1) {
+        int sx = (p * 37) % W;
+        int sy = (p * 53) % H;
+        int ex = (p * 71 + 100) % W;
+        int ey = (p * 89 + 100) % H;
+        // 确保起点终点不是障碍
+        grid[sy * W + sx] = 0;
+        grid[ey * W + ex] = 0;
+
+        int r = astar(sx, sy, ex, ey, grid, closed, gscore, came_from, open_x, open_y, open_f);
+        total_result = total_result + r;
+    }
+    t1 = os.clock();
+
+    print("paths=" .. tostring(NUM_PATHS) .. " total_result=" .. tostring(total_result) .. " calc=" .. tostring(t1 - t0) .. "s");
+
+    // 单次长路径测试（对角穿越）
+    t0 = os.clock();
+    grid[0] = 0;
+    grid[GRID_N - 1] = 0;
+    int r_single = astar(0, 0, W - 1, H - 1, grid, closed, gscore, came_from, open_x, open_y, open_f);
+    t1 = os.clock();
+    print("single diagonal: result=" .. tostring(r_single) .. " calc=" .. tostring(t1 - t0) .. "s");
+
+    print("=== 完成 ===");
+    return 0;
+}
+
+main();

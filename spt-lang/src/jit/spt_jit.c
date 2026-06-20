@@ -30,6 +30,15 @@
 #include <stddef.h>
 #include <stdio.h>
 
+/* Maps a math-library C function to its unary libm function (double->double),
+   or NULL if not a JIT-lowerable strictly-unary math fn. Defined in lmathlib.c
+   (the math_* functions are file-static there). */
+typedef double (*spt_unary_libm_fn)(double);
+extern spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f);
+/* Address of luaB_next (the pairs() iterator); used to pin a for-each trace's
+   iterator with an entry guard. See lbaselib.c. */
+extern lua_CFunction spt_jit_pairs_next(void);
+
 /* =====================================================================
 ** Branch-direction profiling (see spt_jit.h). Global fast gate + tally.
 ** ===================================================================== */
@@ -134,6 +143,9 @@ SPTJitState *sptjit_create(void) {
     return NULL;
   }
   js->hot_threshold = SPT_JIT_HOT;
+  js->side_hot_threshold = SPT_JIT_SIDE_HOT;
+  js->side_min_ir = SPT_JIT_SIDE_MIN_IR;
+  js->unroll_max = SPT_JIT_UNROLL_MAX;
 
   /* Environment configuration:
      SPT_JIT=1 / on / true  -> enable JIT
@@ -157,6 +169,21 @@ SPTJitState *sptjit_create(void) {
     if (h && *h) {
       int v = atoi(h);
       if (v > 0) js->hot_threshold = (uint16_t)(v > 0xFFFE ? 0xFFFE : v);
+    }
+    const char *sh = getenv("SPT_JIT_SIDE_HOT");
+    if (sh && *sh) {
+      int v = atoi(sh);
+      if (v > 0) js->side_hot_threshold = (uint32_t)v;
+    }
+    const char *smi = getenv("SPT_JIT_SIDE_MIN_IR");
+    if (smi && *smi) {
+      int v = atoi(smi);
+      if (v >= 0) js->side_min_ir = v;
+    }
+    const char *um = getenv("SPT_JIT_UNROLL_MAX");
+    if (um && *um) {
+      int v = atoi(um);
+      if (v >= 0) js->unroll_max = v;
     }
     const char *d = getenv("SPT_JIT_DEBUG");
     js->debug = (d && *d) ? atoi(d) : 0;
@@ -304,6 +331,13 @@ typedef struct {
      argument slots coincide with the caller's argument registers already in
      reg_map (Lua slot-0-receiver: callee slot 0 = caller A+1). */
   int frame_base;
+  /* Side-trace mode (Phase 2): this trace was started at a parent trace's hot
+     exit PC, mid-loop. Its forward recording will eventually reach a loop
+     back-edge whose target is *before* start_pc -- in a root trace that aborts
+     (§nested-loop guard), but a side trace instead closes with an unconditional
+     exit-to-interpreter at the back-edge (sptir_exit), handing control back so
+     the interpreter runs the back-edge and re-enters the parent. */
+  int is_side_trace;
   /* Single inlined-call entry check, set on the first inlined CALL. The trace
      may only be entered when this stack slot still holds this exact proto;
      all inlined calls in one trace must share the same (slot, proto). */
@@ -316,6 +350,16 @@ typedef struct {
   const Instruction *save_pc;   /* caller PC just after the CALL */
   int save_frame_base;
   int call_result_slot;     /* absolute reg_map slot receiving the return value */
+  /* Pending unary-math call set up by an OP_SELF that resolved a known libm
+     math method (e.g. math.sqrt): the immediately following OP_CALL on this
+     slot is lowered to an SPTIR_FMATH instead of a real call. -1 slot = none. */
+  void *pending_cfn_libm;   /* libm double(*)(double), baked into the FMATH */
+  int pending_cfn_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  /* for-each over a List specialized to a native index loop (OP_TFORCALL).
+     The iterator function is loop-invariant; the trace pins it to luaB_next
+     with a once-per-entry C guard (analogous to inline_fn). -1 slot = none. */
+  int forin_iter_slot;      /* absolute slot of the iterator fn (ra+0); -1 = none */
+  lua_CFunction forin_iter_fn; /* expected iterator (= luaB_next) */
 } SPTRecCtx;
 
 /* Get current type of a register from the actual stack value. */
@@ -335,6 +379,21 @@ static SPTType rec_value_type(const TValue *v) {
     case LUA_VCCL:     return SPTT_FUNC;
     case LUA_VUSERDATA: return SPTT_UD;
     default:           return SPTT_ANY;
+  }
+}
+
+/* Look a constant short-string key up in a table's hash part by walking the
+   main position + collision chain (mirrors luaH_getshortstr / gen_hash_find).
+   Returns the value TValue*, or NULL if the key is absent. Used at record time
+   to resolve stable library lookups (e.g. _ENV["math"]["sqrt"]). */
+static const TValue *rec_table_getstr(Table *t, TString *key) {
+  Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+  for (;;) {
+    if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key)
+      return &n->i_val;
+    int nx = (int)n->u.next;
+    if (nx == 0) return NULL;
+    n += nx;
   }
 }
 
@@ -412,29 +471,53 @@ static int rec_eval_int(SPTRecCtx *rc, int ref, lua_Integer *out) {
   return 0;
 }
 
-/* Recover the record-time array (Table*) behind an IR ref: an SLOAD reads the
-   stack slot; a nested GETI evaluates array[index] recursively (for chained
-   access m[i][j], whose intermediate array's slot may be reused). NULL if
-   undeterminable. */
-static Table *rec_eval_array(SPTRecCtx *rc, int ref) {
+/* Recover the record-time TValue behind an IR ref that denotes a *container
+   element/field*, following SLOAD (stack slot), GETI (List element), and
+   GETFIELD (Map field by interned short-string key). Fills *out and returns 1
+   on success, 0 if undeterminable. This unifies arbitrary chained container
+   access -- a[i][j], m["k"][j], m["k1"]["k2"], g.list[j] (g via SLOAD of an
+   upvalue-backed local) -- so element types can be predicted; the value is
+   always bounds/type-guarded at run time, so this is only a prediction.
+   List vs Map travels with the TValue tag (LUA_VARRAY vs LUA_VTABLE), so each
+   level checks the matching tag before using avalue()/hvalue(). */
+static int rec_eval_container(SPTRecCtx *rc, int ref, TValue *out) {
   SPTIRInst *in = sptir_get(rc->ir, ref);
-  if (!in) return NULL;
-  if (in->op == SPTIR_SLOAD) {
-    TValue *v = s2v((rc->ci->func.p + 1) + (int)in->aux);
-    return ttisarray(v) ? avalue(v) : NULL;
+  if (!in) return 0;
+  switch (in->op) {
+    case SPTIR_SLOAD: {
+      *out = *s2v((rc->ci->func.p + 1) + (int)in->aux);
+      return 1;
+    }
+    case SPTIR_GETI: {                       /* element of a List */
+      TValue cont;
+      if (!rec_eval_container(rc, in->op1, &cont) || !ttisarray(&cont)) return 0;
+      Table *arr = avalue(&cont);
+      lua_Integer idx;
+      if (!rec_eval_int(rc, in->op2, &idx)) return 0;
+      if (idx < 0 || (lua_Unsigned)idx >= arr->loglen) return 0;
+      out->tt_ = *getArrTag(arr, (lua_Unsigned)idx);
+      out->value_ = *getArrVal(arr, (lua_Unsigned)idx);
+      return 1;
+    }
+    case SPTIR_GETFIELD: {                   /* field of a Map by interned key */
+      TValue cont;
+      if (!rec_eval_container(rc, in->op1, &cont) || !ttistable(&cont)) return 0;
+      TString *key = (TString *)(intptr_t)in->aux;
+      /* Fills *out with the field value (or a nil tag if absent); the caller's
+         ttisarray/ttistable check then rejects an absent or wrong-typed field. */
+      luaH_getshortstr(rc->L, hvalue(&cont), key, out);
+      return 1;
+    }
+    default: return 0;
   }
-  if (in->op == SPTIR_GETI) {
-    Table *arr = rec_eval_array(rc, in->op1);
-    lua_Integer idx;
-    if (!arr || !rec_eval_int(rc, in->op2, &idx)) return NULL;
-    if (idx < 0 || (lua_Unsigned)idx >= arr->loglen) return NULL;
-    lu_byte tag = *getArrTag(arr, (lua_Unsigned)idx);
-    TValue tmp;
-    tmp.tt_ = tag;
-    tmp.value_ = *getArrVal(arr, (lua_Unsigned)idx);
-    return ttisarray(&tmp) ? avalue(&tmp) : NULL;
-  }
-  return NULL;
+}
+
+/* Recover the record-time List (array-mode Table*) behind an IR ref. NULL if it
+   does not resolve to a List value. */
+static Table *rec_eval_array(SPTRecCtx *rc, int ref) {
+  TValue v;
+  if (!rec_eval_container(rc, ref, &v)) return NULL;
+  return ttisarray(&v) ? avalue(&v) : NULL;
 }
 
 static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
@@ -579,29 +662,38 @@ static int opcode_is_ifconv_safe(OpCode o) {
 
 static int ifconv_reg_is_int(SPTRecCtx *rc, int reg);
 static int ifconv_arm_int_result(SPTRecCtx *rc, const Instruction *op_pc);
+static int opcode_is_ifconv_safe_flt(OpCode o);
+static int ifconv_arm_flt_result(SPTRecCtx *rc, const Instruction *op_pc);
 
 /* Parse an if-conversion arm body [start,end): a straight-line run of
-   non-trapping integer value-producing ops, each optionally followed by its
-   MMBIN marker, and nothing else. Unions the distinct destination slots into
-   wslots (which already holds *nw entries from a previously parsed arm).
-   Rejects: a non-convertible op, a float-producing op, an operand that was
-   written earlier in THIS arm (an intra-arm dependency would make the
-   pre-recording type check unreliable), and more than IFCONV_MAX_SLOTS slots.
-   Returns 1 on success (and only if the arm writes at least one slot). */
+   non-trapping value-producing ops (integer when is_flt==0, float when is_flt==1),
+   each optionally followed by its MMBIN marker, and nothing else. Unions the
+   distinct destination slots into wslots (which already holds *nw entries from a
+   previously parsed arm). Rejects: a non-convertible op, a wrong-typed-result op,
+   an operand that was written earlier in THIS arm (an intra-arm dependency would
+   make the pre-recording type check unreliable), and more than IFCONV_MAX_SLOTS
+   slots. Returns 1 on success (and only if the arm writes at least one slot). */
 static int parse_ifconv_arm(SPTRecCtx *rc, const Instruction *start,
-                            const Instruction *end, int *wslots, int *nw) {
+                            const Instruction *end, int *wslots, int *nw,
+                            int is_flt) {
   int local[16], nlocal = 0;          /* slots written so far within this arm */
   int wrote = 0, nops = 0;
   for (const Instruction *pc = start; pc < end; pc++) {
     OpCode o = GET_OPCODE(*pc);
     if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
     if (++nops > 16) return 0;
-    if (!opcode_is_ifconv_safe(o)) return 0;
-    if (!ifconv_arm_int_result(rc, pc)) return 0;
+    if (is_flt) {
+      if (!opcode_is_ifconv_safe_flt(o)) return 0;
+      if (!ifconv_arm_flt_result(rc, pc)) return 0;
+    } else {
+      if (!opcode_is_ifconv_safe(o)) return 0;
+      if (!ifconv_arm_int_result(rc, pc)) return 0;
+    }
     int b = GETARG_B(*pc), c = GETARG_C(*pc);
-    int checkB = (o != OP_LOADI);
-    int checkC = (o == OP_ADD || o == OP_SUB || o == OP_MUL || o == OP_BAND ||
-                  o == OP_BOR || o == OP_BXOR || o == OP_SHL || o == OP_SHR);
+    int checkB = (o != OP_LOADI && o != OP_LOADF && o != OP_LOADK);
+    int checkC = (o == OP_ADD || o == OP_SUB || o == OP_MUL || o == OP_DIV ||
+                  o == OP_BAND || o == OP_BOR || o == OP_BXOR ||
+                  o == OP_SHL || o == OP_SHR);
     for (int k = 0; k < nlocal; k++) {
       if (checkB && local[k] == b) return 0;
       if (checkC && local[k] == c) return 0;
@@ -640,18 +732,74 @@ static int ifconv_arm_int_result(SPTRecCtx *rc, const Instruction *op_pc) {
   Instruction ins = *op_pc;
   OpCode o = GET_OPCODE(ins);
   int b = GETARG_B(ins), c = GETARG_C(ins);
-  int bint = ifconv_reg_is_int(rc, b);
+  /* Probe operand register types lazily, inside the cases that actually use B
+     (and C) as registers: for LOADI the B/Bx field is an immediate, not a
+     register, so reading reg B's type would index off the end of the stack
+     (caught by ASan). */
   switch (o) {
     case OP_LOADI: return 1;
     case OP_MOVE: case OP_UNM: case OP_BNOT: case OP_ADDI:
-      return bint;
+      return ifconv_reg_is_int(rc, b);
     case OP_ADD: case OP_SUB: case OP_MUL:
     case OP_BAND: case OP_BOR: case OP_BXOR:
     case OP_SHL: case OP_SHR:
-      return bint && ifconv_reg_is_int(rc, c);
+      return ifconv_reg_is_int(rc, b) && ifconv_reg_is_int(rc, c);
     case OP_ADDK: case OP_SUBK: case OP_MULK:
     case OP_BANDK: case OP_BORK: case OP_BXORK:
-      return bint && ttisinteger(&rc->p->k[c]);
+      return ifconv_reg_is_int(rc, b) && ttisinteger(&rc->p->k[c]);
+    default: return 0;
+  }
+}
+
+/* Float analogues. A float slot's live type, with the same callee-frame caveat. */
+static int ifconv_reg_is_flt(SPTRecCtx *rc, int reg) {
+  SPTIRBuilder *ir = rc->ir;
+  if (ir->reg_map[rc->frame_base + reg] >= 0)
+    return ir->reg_type[rc->frame_base + reg] == SPTT_FLT;
+  if (rc->frame_base != 0) return 0;
+  return ttisfloat(s2v((rc->ci->func.p + 1) + reg));
+}
+
+/* Is this op a non-trapping FLOAT-producing arm op? Float arithmetic never traps
+   (IEEE: div-by-zero -> inf, no exception), so even DIV is admissible in an arm
+   whose untaken side is still evaluated -- unlike the integer case. */
+static int opcode_is_ifconv_safe_flt(OpCode o) {
+  switch (o) {
+    case OP_MOVE: case OP_LOADF: case OP_LOADK:
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+    case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
+    case OP_UNM:
+      return 1;
+    default: return 0;
+  }
+}
+
+/* A proto body op is statically inlinable as a conditional-assignment arm if it
+   is a non-trapping value op of EITHER numeric kind -- the actual int/float type
+   is resolved at record time (the callee if-conversion picks the right select),
+   so the static gate accepts the union. */
+static int opcode_is_ifconv_safe_any(OpCode o) {
+  return opcode_is_ifconv_safe(o) || opcode_is_ifconv_safe_flt(o);
+}
+
+/* Will this arm op produce a FLOAT result, given the current operand types? */
+static int ifconv_arm_flt_result(SPTRecCtx *rc, const Instruction *op_pc) {
+  Instruction ins = *op_pc;
+  OpCode o = GET_OPCODE(ins);
+  int b = GETARG_B(ins), c = GETARG_C(ins);
+  /* Probe operand register types lazily, inside the cases that use B (and C) as
+     registers: LOADF/LOADK carry an immediate / constant index in the B/Bx
+     field, not a register, so reading reg B's type would run off the stack
+     (caught by ASan). */
+  switch (o) {
+    case OP_LOADF: return 1;
+    case OP_LOADK: return ttisfloat(&rc->p->k[GETARG_Bx(ins)]);
+    case OP_MOVE: case OP_UNM:
+      return ifconv_reg_is_flt(rc, b);
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+      return ifconv_reg_is_flt(rc, b) && ifconv_reg_is_flt(rc, c);
+    case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
+      return ifconv_reg_is_flt(rc, b) && ttisfloat(&rc->p->k[c]);
     default: return 0;
   }
 }
@@ -661,7 +809,12 @@ static int ifconv_arm_int_result(SPTRecCtx *rc, const Instruction *op_pc) {
    applicable (caller falls back to the guarded branch, leaving state untouched). */
 static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
                           SPTType at, SPTType bt) {
-  if (at != SPTT_INT || bt != SPTT_INT) return 0; /* integer compare only */
+  /* A comparison counts as float if EITHER operand is float -- LTI/LEI/GTI/GEI
+     pass an integer immediate for the second operand even when the first is a
+     float (e.g. `v < 0.0` compiles to `LTI v, 0`), so the int side is promoted
+     to double below for the mask. Both must be numeric. */
+  if (!(sptt_isnum(at) && sptt_isnum(bt))) return 0;
+  int is_flt_cmp = (at == SPTT_FLT || bt == SPTT_FLT);
   SPTIRBuilder *ir = rc->ir;
   int fb = rc->frame_base;                         /* 0 at root; nonzero in an inlined callee */
   const Instruction *cmp_pc = rc->pc;
@@ -681,18 +834,35 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
     merge = T1; then_end = T1;
   }
 
+  /* Decide int vs float select from what the arms WRITE, not just the
+     comparison: a branch with an INTEGER condition but FLOAT arms (e.g.
+     `if(i%2==0){s=s+v}else{s=s+1.0}`) still needs the bit-exact float blend,
+     with the mask built from the integer compare (ICMPMASK). Peek the first
+     arm op's destination slot to classify; a wrong guess just makes the arm
+     parse below fail and we fall back cleanly. */
+  int arm_is_flt = 0;
+  for (const Instruction *pc = then_start; pc < then_end; pc++) {
+    OpCode o = GET_OPCODE(*pc);
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    arm_is_flt = ifconv_reg_is_flt(rc, GETARG_A(*pc));
+    break;
+  }
+  int is_flt = is_flt_cmp || arm_is_flt;
+  SPTType want = is_flt ? SPTT_FLT : SPTT_INT;
+
   /* Parse both arms, unioning the set of written slots. An arm that does not
      write a given slot leaves it unchanged (its select input is the old value). */
   int wslots[IFCONV_MAX_SLOTS]; int nw = 0;
-  if (!parse_ifconv_arm(rc, then_start, then_end, wslots, &nw)) return 0;
-  if (is_ifelse && !parse_ifconv_arm(rc, else_start, merge, wslots, &nw)) return 0;
+  if (!parse_ifconv_arm(rc, then_start, then_end, wslots, &nw, is_flt)) return 0;
+  if (is_ifelse && !parse_ifconv_arm(rc, else_start, merge, wslots, &nw, is_flt)) return 0;
 
-  /* Every written slot must currently hold an integer: an if-only arm leaves the
-     other branch as the slot's old value, and arms may read the slot (s=s+1).
-     Inside a callee an unmaterialized slot bails here (ifconv_reg_is_int returns
-     0), so the rec_load_reg below never hits its callee-frame abort path. */
+  /* Every written slot must currently hold the expected type: an if-only arm
+     leaves the other branch as the slot's old value, and arms may read the slot
+     (s=s+1). Inside a callee an unmaterialized slot bails here (the type probe
+     returns 0), so the rec_load_reg below never hits its callee-frame abort. */
   for (int k = 0; k < nw; k++)
-    if (!ifconv_reg_is_int(rc, wslots[k])) return 0;
+    if (!(is_flt ? ifconv_reg_is_flt(rc, wslots[k])
+                 : ifconv_reg_is_int(rc, wslots[k]))) return 0;
 
   /* ---- commit. Make all written slots resident (load + type-guard live-ins),
      then record each arm against a forked copy and build one select per slot. */
@@ -706,11 +876,11 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   while (rc->pc < then_end) { if (!rec_inst(rc)) return 1; }
   if (rc->pc != then_end) { rc->aborted = 1; return 1; }
   for (int k = 0; k < nw; k++) {
-    if (ir->reg_type[fb + wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
+    if (ir->reg_type[fb + wslots[k]] != want) { rc->aborted = 1; return 1; }
     then_ref[k] = ir->reg_map[fb + wslots[k]];
   }
   for (int k = 0; k < nw; k++) {
-    ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = SPTT_INT;
+    ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = want;
   }
 
   if (is_ifelse) {                                  /* record the else-arm */
@@ -718,25 +888,55 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
     while (rc->pc < merge) { if (!rec_inst(rc)) return 1; }
     if (rc->pc != merge) { rc->aborted = 1; return 1; }
     for (int k = 0; k < nw; k++) {
-      if (ir->reg_type[fb + wslots[k]] != SPTT_INT) { rc->aborted = 1; return 1; }
+      if (ir->reg_type[fb + wslots[k]] != want) { rc->aborted = 1; return 1; }
       else_ref[k] = ir->reg_map[fb + wslots[k]];
     }
     for (int k = 0; k < nw; k++) {
-      ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = SPTT_INT;
+      ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = want;
     }
   } else {
     for (int k = 0; k < nw; k++) else_ref[k] = old_ref[k];
   }
 
-  /* select_k = else_k + (then_k - else_k) * cond,  cond in {0,1} (one shared cmp) */
-  int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
-  for (int k = 0; k < nw; k++) {
-    int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref[k], else_ref[k], 0);
-    int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
-    int res  = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref[k], prod, 0);
-    ir->reg_map[fb + wslots[k]] = res;
-    ir->reg_type[fb + wslots[k]] = SPTT_INT;
-    if (fb + wslots[k] > ir->maxslot) ir->maxslot = fb + wslots[k];
+  if (is_flt) {
+    /* Bit-exact blend: mask = (a fop b) ? all-ones : all-zeros; per slot
+       result = (then & mask) | (else & ~mask). A float select via the integer
+       trick else+(then-else)*cond would round, so it must NOT be used here.
+       The mask comes from a float compare (FCMPMASK, with the int side promoted
+       and GT/GE emitted as swapped LT/LE -- CMPSD has no >/>= predicate that
+       keeps Lua's NaN-as-false sense) when either operand is float, or from an
+       integer compare (ICMPMASK, no swap) when the condition is integer.
+       One shared mask across all slots. */
+    int mask;
+    if (is_flt_cmp) {
+      int ca = aref, cb = bref;
+      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb; SPTIROp mop = fop;
+      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
+      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
+    } else {
+      mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
+    }
+    for (int k = 0; k < nw; k++) {
+      int sel = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT,
+                           then_ref[k], else_ref[k], (int64_t)mask);
+      ir->reg_map[fb + wslots[k]] = sel;
+      ir->reg_type[fb + wslots[k]] = SPTT_FLT;
+      if (fb + wslots[k] > ir->maxslot) ir->maxslot = fb + wslots[k];
+    }
+  } else {
+    /* select_k = else_k + (then_k - else_k) * cond,  cond in {0,1} (one shared cmp) */
+    int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
+    for (int k = 0; k < nw; k++) {
+      int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref[k], else_ref[k], 0);
+      int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
+      int res  = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref[k], prod, 0);
+      ir->reg_map[fb + wslots[k]] = res;
+      ir->reg_type[fb + wslots[k]] = SPTT_INT;
+      if (fb + wslots[k] > ir->maxslot) ir->maxslot = fb + wslots[k];
+    }
   }
   rc->pc = merge;
   return 1;
@@ -850,8 +1050,16 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
      lets it stay internally looping instead of side-exiting every iteration.
      Correctness-safe: the IR is built symbolically via reg_map (not the live
      stack), and the emitted comparison is still a runtime guard, so a wrong
-     majority only yields a suboptimal trace -- never an incorrect result. */
-  if (g_prof.proto == rc->p && g_prof.n > 0) {
+     majority only yields a suboptimal trace -- never an incorrect result.
+
+     NOT for a side trace: a side trace is recorded precisely because the parent
+     kept side-exiting at this branch, so it exists to cover the *minority*
+     direction. The record-time frozen value here IS that minority direction (the
+     parent just exited on it), which is exactly what the side trace must record.
+     Applying the parent's majority profile would make the side trace record the
+     same direction as the parent -- a useless trace that immediately re-exits on
+     its own root guard every time it is entered. So follow the frozen value. */
+  if (!rc->is_side_trace && g_prof.proto == rc->p && g_prof.n > 0) {
     int cmp_off = (int)(rc->pc - rc->p->code);
     for (int k = 0; k < g_prof.n; k++) {
       if (g_prof.br_pc[k] == cmp_off) {
@@ -1167,25 +1375,300 @@ static int proto_is_condassign_inlinable(Proto *p) {
   for (int i = 0; i < ci; i++) {                 /* prefix */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!opcode_is_ifconv_safe_any(o)) return 0;
   }
   for (int i = ci + 2; i < t1; i++) {            /* then-arm: assignments only, no return */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!opcode_is_ifconv_safe_any(o)) return 0;
   }
   int ret_idx = -1;
   for (int i = t1; i < n; i++) {                 /* post-merge: compute then RETURN1 */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_RETURN1) { ret_idx = i; break; }
     if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!opcode_is_ifconv_safe_any(o)) return 0;
   }
   if (ret_idx < 0) return 0;
   for (int i = ret_idx + 1; i < n; i++) {        /* only dead boilerplate after */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o != OP_RETURN0 && o != OP_RETURN) return 0;
   }
+  return 1;
+}
+
+
+/* ===================================================================
+   Inner-loop unrolling (Phase 3a / nested-loop optimization)
+   ===================================================================
+   A nested loop where only the inner loop is hot gets traced as the inner
+   loop alone; per outer iteration the interpreter drives the outer FORLOOP and
+   re-enters the inner trace, paying an exit (state flush) + re-entry (reload)
+   each time. For a SHORT inner loop that overhead is not amortized -- measured
+   as a *negative* optimization (inner trip=4 ran at 0.98x, slower than the
+   interpreter). When the outer trace records *through* an inner numeric for
+   loop, we instead unroll the inner loop inline so the whole nest is one
+   linear trace with no per-outer-iteration hand-off. This is correctness-
+   tractable only under tight conditions (constant trip count, straight-line
+   body); otherwise we fall back to the existing behaviour (skip + abort the
+   outer trace, keep the inner loop's own trace), which is always safe. */
+
+/* Ops that make an inner-loop body un-unrollable: any control flow (we are
+   linearising the body, so a branch/skip would be miscompiled), any nested
+   loop, and any call/return/closure/vararg (frame effects). Everything else is
+   left to rec_inst, which aborts the whole trace if it cannot handle an op --
+   also safe. */
+static int unroll_unsafe_op(OpCode op) {
+  switch (op) {
+    /* branches + conditional skips */
+    case OP_JMP:
+    case OP_EQ: case OP_LT: case OP_LE:
+    case OP_EQK: case OP_EQI: case OP_LTI: case OP_LEI:
+    case OP_GTI: case OP_GEI:
+    case OP_TEST: case OP_TESTSET:
+    /* generic-for loops (iterator protocol) -- not handled by the recorder */
+    case OP_TFORPREP: case OP_TFORCALL: case OP_TFORLOOP:
+    /* calls / returns / frame effects */
+    case OP_CALL: case OP_TAILCALL:
+    case OP_RETURN: case OP_RETURN0: case OP_RETURN1:
+    case OP_CLOSURE: case OP_CLOSE: case OP_TBC:
+    case OP_VARARG: case OP_VARARGPREP:
+      return 1;
+    /* NOTE: OP_FORPREP / OP_FORLOOP (a *nested numeric for*) are allowed in the
+       body: the replay reaches the inner FORPREP via rec_inst and recursively
+       unrolls it, so an all-constant nested loop (e.g. a fixed-size matrix
+       multiply) collapses fully into one linear trace. If an inner loop turns
+       out NOT to be unrollable (e.g. variable bounds), the recursive attempt
+       falls back and the inner FORLOOP back-edge aborts the whole trace -- the
+       same safe fall-back as before, just discovered one level deeper. */
+    default:
+      return 0;
+  }
+}
+
+/* Whether opcode `op` writes its A field as a fresh destination register (so an
+   A that equals a loop control slot means the loop variable is reassigned). The
+   exceptions take A as an operand (MMBIN family) or write through R[A] without
+   reassigning it (table/upvalue stores). Everything else here writes R[A]. */
+static int unroll_writes_dest_A(OpCode op) {
+  switch (op) {
+    case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
+    case OP_SETI: case OP_SETTABLE: case OP_SETFIELD:
+    case OP_SETTABUP: case OP_SETUPVAL:
+      return 0;
+    default:
+      return 1;
+  }
+}
+
+/* Evaluate an IR ref to an integer the recorder can observe right now, reading
+   the LIVE value of any SLOAD leaf. Succeeds only for a constant or a pure
+   integer expression over loop-INVARIANT stack loads -- a leaf must be a KINT or
+   an SLOAD whose slot still maps to that same load (i.e. not reassigned, and in
+   particular not a PHI / loop induction variable). This drives *speculative*
+   inner-loop unrolling: the value is only a guess that we PIN with a run-time
+   guard, so a wrong guess stays correct (the guard side-exits). Excluding PHIs
+   and recomputed values keeps the guard from failing on every iteration -- e.g.
+   a triangular `for j = 0, i` (limit = the outer loop var, a PHI) is rejected
+   here, so we never speculate it into a negative optimization. */
+static int eval_invariant_int(SPTRecCtx *rc, int ref, lua_Integer *out) {
+  SPTIRBuilder *ir = rc->ir;
+  if (ref < 0 || ref >= ir->ninst) return 0;
+  SPTIRInst *in = &ir->insts[ref];
+  switch (in->op) {
+    case SPTIR_KINT:
+      *out = (lua_Integer)in->aux;
+      return 1;
+    case SPTIR_SLOAD: {
+      int slot = (int)in->aux;
+      if (slot < 0 || slot >= 256) return 0;
+      /* Invariant only if the slot has not been reassigned since this load. */
+      if (ir->reg_map[slot] != ref) return 0;
+      TValue *v = s2v((rc->ci->func.p + 1) + slot);
+      if (!ttisinteger(v)) return 0;
+      *out = ivalue(v);
+      return 1;
+    }
+    case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL: {
+      lua_Integer x, y;
+      if (!eval_invariant_int(rc, in->op1, &x)) return 0;
+      if (!eval_invariant_int(rc, in->op2, &y)) return 0;
+      *out = (in->op == SPTIR_ADD) ? x + y
+           : (in->op == SPTIR_SUB) ? x - y
+                                   : x * y;
+      return 1;
+    }
+    default:
+      return 0;
+  }
+}
+
+/* Pin IR value `ref` to the constant `val` with a run-time guard (two GUARD_LE:
+   ref <= val and val <= ref). If either fails the trace side-exits at the
+   snapshot (taken by the caller at the inner FORPREP), so the interpreter
+   re-runs the loop with the real bound. GUARD_EQ has no codegen; two GUARD_LE
+   reuse the existing path. GUARD_LE(op1, aux) means R[op1] <= R[aux]. */
+static void emit_pin_guard(SPTIRBuilder *ir, int ref, lua_Integer val, int snap) {
+  int kv = sptir_kint(ir, val);
+  int g1 = sptir_emit(ir, SPTIR_GUARD_LE, SPTT_NIL, ref, SPTIR_NULL, kv);
+  if (g1 != SPTIR_NULL) { ir->insts[g1].flags |= SPTIRF_GUARD; ir->insts[g1].snap_idx = snap; }
+  int g2 = sptir_emit(ir, SPTIR_GUARD_LE, SPTT_NIL, kv, SPTIR_NULL, ref);
+  if (g2 != SPTIR_NULL) { ir->insts[g2].flags |= SPTIRF_GUARD; ir->insts[g2].snap_idx = snap; }
+}
+
+/* Try to unroll the inner numeric for-loop whose FORPREP is `i` (at rc->pc)
+   inline into the current trace. Returns 1 if unrolled (rc->pc has been
+   advanced past the inner FORLOOP; the caller should continue recording the
+   outer body), 0 if not unrollable (caller falls back to skip+abort). On a
+   replay abort the whole trace is aborted (rc->aborted set) and 1 is returned
+   so the caller stops; the trace is then discarded -- safe. */
+static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
+  SPTIRBuilder *ir = rc->ir;
+  SPTJitState *js = rc->js;
+  if (js->unroll_max <= 0) return 0;
+
+  int a = GETARG_A(i);
+  int bx = GETARG_Bx(i);
+  int base = rc->frame_base;
+
+  /* Pre-FORPREP register layout: R[A]=init, R[A+1]=limit, R[A+2]=step.
+     A bound that is already an integer KINT needs no guard. A bound that is a
+     loop-INVARIANT integer expression (SLOAD leaves) is read now and PINNED with
+     a run-time guard, so the speculative trip count is safe (a mismatch
+     side-exits). Anything else (a PHI/loop-variable bound, a non-integer, a
+     value we cannot evaluate) makes the trip count unknowable -- bail. */
+  int init_ref  = ir->reg_map[base + a];
+  int limit_ref = ir->reg_map[base + a + 1];
+  int step_ref  = ir->reg_map[base + a + 2];
+  if (init_ref < 0 || limit_ref < 0 || step_ref < 0) return 0;
+  if (init_ref >= ir->ninst || limit_ref >= ir->ninst || step_ref >= ir->ninst)
+    return 0;
+  int init_k  = (ir->insts[init_ref].op  == SPTIR_KINT);
+  int limit_k = (ir->insts[limit_ref].op == SPTIR_KINT);
+  int step_k  = (ir->insts[step_ref].op  == SPTIR_KINT);
+  lua_Integer init, limit, step;
+  if (init_k)  init  = (lua_Integer)ir->insts[init_ref].aux;
+  else if (!eval_invariant_int(rc, init_ref, &init))   return 0;
+  if (limit_k) limit = (lua_Integer)ir->insts[limit_ref].aux;
+  else if (!eval_invariant_int(rc, limit_ref, &limit)) return 0;
+  if (step_k)  step  = (lua_Integer)ir->insts[step_ref].aux;
+  else if (!eval_invariant_int(rc, step_ref, &step))   return 0;
+  if (step == 0) return 0;
+
+  /* Trip count, computed exactly as the VM's forprep() does for an integer
+     loop. The body runs (count + 1) times with idx = init + k*step, and
+     R[A] (the FORLOOP counter) holds (count - k) during body iteration k. */
+  lua_Unsigned count;
+  if (step > 0) {
+    if (init > limit) return 0;          /* empty loop: rare, just bail */
+    count = (lua_Unsigned)limit - (lua_Unsigned)init;
+    if (step != 1) count /= (lua_Unsigned)step;
+  } else {
+    if (init < limit) return 0;          /* empty loop */
+    count = (lua_Unsigned)init - (lua_Unsigned)limit;
+    count /= (lua_Unsigned)(-(step + 1)) + 1u;
+  }
+  if (count + 1 > (lua_Unsigned)js->unroll_max) return 0;   /* too long */
+  int trips = (int)(count + 1);
+
+  /* Inner body is [body_pc, forloop_pc); FORLOOP closes it. */
+  const Instruction *body_pc    = rc->pc + 1;
+  const Instruction *forloop_pc = rc->pc + bx + 1;
+  if (forloop_pc <= body_pc) return 0;
+  if (GET_OPCODE(*forloop_pc) != OP_FORLOOP) return 0;
+  if (GETARG_A(*forloop_pc) != a) return 0;
+  /* FORLOOP must jump back to body_pc (its target = (forloop_pc+1) - Bx). */
+  if ((forloop_pc + 1) - GETARG_Bx(*forloop_pc) != body_pc) return 0;
+
+  /* Body must be straight-line and must not overwrite the loop control slots
+     (A=counter, A+1=step, A+2=idx); we pin those to constants per copy. */
+  /* Body must be straight-line and must not REASSIGN the loop control slots
+     (A=counter, A+1=step, A+2=idx) -- those are pinned to constants per copy, so
+     a body that overwrote the loop variable would be miscompiled (in SPT the
+     body reads the control var R[A+2] directly, no private copy). The check only
+     applies to ops whose A is a destination: MMBIN/MMBINI/MMBINK take A as an
+     OPERAND (a metamethod-fallback hint, skipped on the numeric fast path), and
+     SETI/SETTABLE/SETFIELD/SETTABUP/SETUPVAL write *through* R[A] (a table or
+     upvalue) without reassigning R[A]; none clobber the loop variable. Reading
+     R[A+2] as an operand (the normal use of the loop index) is fine.
+
+     We also refuse to unroll a body that both READS and WRITES the same array
+     (a read-modify-write like `a[idx] = a[idx] + ...`). Fully unrolling such a
+     loop produces many element loads/stores to indices that fold to constants;
+     when the same element is touched repeatedly through *colliding* computed
+     indices (e.g. a histogram `a[i+j]++`), the large straight-line trace
+     mis-codegens the load-after-store dependency. Matrix multiply etc. are
+     unaffected: they read a/b and write a *different* array c, with no
+     element aliased. Detect by array-base register: GETI/GETTABLE/GETFIELD read
+     R[B], SETI/SETTABLE/SETFIELD write R[A]; a register in both sets means the
+     same array is read and written, so we fall back (safe) rather than risk it. */
+  uint8_t reads[256]; uint8_t writes[256];
+  memset(reads, 0, sizeof(reads)); memset(writes, 0, sizeof(writes));
+  for (const Instruction *p = body_pc; p < forloop_pc; p++) {
+    OpCode op = GET_OPCODE(*p);
+    if (unroll_unsafe_op(op)) return 0;
+    if (unroll_writes_dest_A(op)) {
+      int da = GETARG_A(*p);
+      if (da == a || da == a + 1 || da == a + 2) return 0;
+    }
+    switch (op) {
+      case OP_GETI: case OP_GETTABLE: case OP_GETFIELD:
+        reads[GETARG_B(*p) & 0xFF] = 1; break;
+      case OP_SETI: case OP_SETTABLE: case OP_SETFIELD:
+        writes[GETARG_A(*p) & 0xFF] = 1; break;
+      default: break;
+    }
+  }
+  for (int s = 0; s < 256; s++)
+    if (reads[s] && writes[s]) return 0;     /* read-modify-write same array */
+
+  /* For any bound that was not a compile-time KINT, pin it to the value we
+     speculated with a run-time guard, snapshotting the FORPREP so a mismatch
+     resumes the interpreter there (which re-runs the inner loop normally). The
+     snapshot must be taken BEFORE pinning the control slots below, so it
+     captures the real init/limit/step. All-constant loops emit no guard and are
+     byte-identical to the previous (constant-only) unroller. */
+  if (!init_k || !limit_k || !step_k) {
+    int snap = sptir_snapshot(ir, rc->pc);
+    if (!init_k)  emit_pin_guard(ir, init_ref,  init,  snap);
+    if (!limit_k) emit_pin_guard(ir, limit_ref, limit, snap);
+    if (!step_k)  emit_pin_guard(ir, step_ref,  step,  snap);
+  }
+
+  /* Commit: replay the body `trips` times. From here we emit IR; if rec_inst
+     aborts we propagate the abort (the trace is discarded). */
+  for (int k = 0; k < trips; k++) {
+    lua_Integer idx = init + (lua_Integer)k * step;
+    /* Pin the control slots so any guard's snapshot in this copy flushes the
+       exact interpreter state for inner iteration k (counter = count - k). */
+    ir->reg_map[base + a]     = sptir_kint(ir, (lua_Integer)(count - (lua_Unsigned)k));
+    ir->reg_type[base + a]    = SPTT_INT;
+    ir->reg_map[base + a + 1] = sptir_kint(ir, step);
+    ir->reg_type[base + a + 1] = SPTT_INT;
+    ir->reg_map[base + a + 2] = sptir_kint(ir, idx);
+    ir->reg_type[base + a + 2] = SPTT_INT;
+    if (a + 2 > ir->maxslot) ir->maxslot = a + 2;
+
+    rc->pc = body_pc;
+    while (rc->pc < forloop_pc) {
+      if (!rec_inst(rc)) {
+        if (!rc->aborted) rc->aborted = 1;  /* unexpected early close -> discard */
+        return 1;
+      }
+    }
+  }
+
+  /* Post-loop register state (what the interpreter would hold after the inner
+     FORLOOP falls through): counter = 0, step unchanged, idx = init + count*step
+     (the last body iteration's value; FORLOOP does not bump idx on exit). */
+  ir->reg_map[base + a]     = sptir_kint(ir, 0);
+  ir->reg_type[base + a]    = SPTT_INT;
+  ir->reg_map[base + a + 1] = sptir_kint(ir, step);
+  ir->reg_type[base + a + 1] = SPTT_INT;
+  ir->reg_map[base + a + 2] = sptir_kint(ir, init + (lua_Integer)count * step);
+  ir->reg_type[base + a + 2] = SPTT_INT;
+
+  rc->pc = forloop_pc + 1;                 /* continue the outer body */
   return 1;
 }
 
@@ -1301,12 +1784,41 @@ static int rec_inst(SPTRecCtx *rc) {
     /* ---- Table/Array access ---- */
     case OP_GETTABUP: {
       int a = GETARG_A(i), b = GETARG_B(i);
-      /* UpValue[B][K[C]:shortstring] */
+      /* UpValue[B][K[C]] for a constant short-string key (e.g. a global read:
+         _ENV["g"], or a library table like _ENV["math"]). ULOAD yields the
+         upvalue table; the codegen then does the same inline hash-slot search as
+         GETFIELD (gen_hash_find) on it. We read the live upvalue table here to
+         (a) confirm the key is present and (b) predict the value type; the
+         codegen re-walks at run time so a moved/absent key still resolves or
+         side-exits. Only the top frame's upvalues are read (an inlined callee
+         would have different upvalues). */
+      if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
+      TValue *kc = &rc->k[GETARG_C(i)];
+      if (!ttisshrstring(kc)) { rc->aborted = 1; return 0; }
+      TString *key = tsvalue(kc);
+      LClosure *cl = clLvalue(s2v(rc->ci->func.p));
+      if (b >= cl->nupvalues) { rc->aborted = 1; return 0; }
+      TValue *envtv = cl->upvals[b]->v.p;
+      if (!ttistable(envtv)) { rc->aborted = 1; return 0; }
+      Table *envt = hvalue(envtv);
+      Node *n = &envt->node[(unsigned int)key->hash & ((1u << envt->lsizenode) - 1u)];
+      for (;;) {
+        if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
+        int nx = (int)n->u.next;
+        if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort */
+        n += nx;
+      }
+      SPTType et = rec_value_type(&n->i_val);
+      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR &&
+          et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
       int upref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
-      int ref = sptir_emit(ir, SPTIR_GETTABUP, SPTT_ANY, upref, SPTIR_NULL,
-                           (int64_t)tsvalue(&rc->k[GETARG_C(i)]));
+      int ref = sptir_emit(ir, SPTIR_GETTABUP, et, upref, SPTIR_NULL,
+                           (int64_t)(intptr_t)key);
+      int snap = sptir_snapshot(ir, rc->pc);
+      ir->insts[ref].snap_idx = snap;
+      ir->insts[ref].flags |= SPTIRF_GUARD;
       ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_ANY;
+      ir->reg_type[rc->frame_base + a] = et;
       if (a > ir->maxslot) ir->maxslot = a;
       break;
     }
@@ -1334,9 +1846,55 @@ static int rec_inst(SPTRecCtx *rc) {
       break;
     }
     case OP_GETFIELD: {
-      /* Map field reads: separate (unverified) path; abort for now. */
-      rc->aborted = 1;
-      return 0;
+      /* R[A] = R[B][K[C]:shortstring]  -- map read by a constant short-string
+         key. The key is interned, so the codegen's inline hash-slot fast path
+         can pointer-compare it (see SPTIR_GETFIELD codegen). We record it only
+         when, in the live map, the key sits at its MAIN POSITION (so the
+         fast-path key guard will match) and its value has a traceable type;
+         otherwise the compiled trace would always side-exit, so abort instead
+         (correctness either way -- the guard, not this prediction, is load-bearing). */
+      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+      int bref = rec_load_reg(rc, b);
+      if (ir->reg_type[rc->frame_base + b] != SPTT_TAB) { rc->aborted = 1; return 0; }
+      const TValue *kc = &rc->k[c];
+      if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
+      TString *key = tsvalue(kc);
+      /* Resolve the base Map through the IR when possible: for a chained
+         m["k1"]["k2"] the intermediate map is produced earlier in THIS trace, so
+         its live stack slot is stale (holds the previous iteration's value --
+         the same §10.42 hazard). rec_eval_container follows SLOAD/GETI/GETFIELD
+         to the record-time map; fall back to the live slot for a base it can't
+         follow (e.g. a loop-invariant global via GETTABUP), preserving the prior
+         behavior. Record-time only; the codegen re-walks with guards. */
+      TValue mapval;
+      if (!rec_eval_container(rc, bref, &mapval))
+        mapval = *s2v((rc->ci->func.p + 1) + b);
+      if (!ttistable(&mapval)) { rc->aborted = 1; return 0; }
+      Table *t = hvalue(&mapval);
+      /* Walk the key's main position + collision chain, exactly as the codegen
+         (gen_hash_find) will, to (a) confirm the key is PRESENT -- if it is
+         absent we abort, since the compiled chain-walk would side-exit every
+         time -- and (b) predict the value's type for the guard. The codegen
+         re-walks at run time, so a key that moves between record and run still
+         resolves correctly (or side-exits); this is only a prediction. */
+      Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+      for (;;) {
+        if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
+        int nx = (int)n->u.next;
+        if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort */
+        n += nx;
+      }
+      SPTType et = rec_value_type(&n->i_val);
+      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR &&
+          et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
+      int ref = sptir_emit(ir, SPTIR_GETFIELD, et, bref, SPTIR_NULL, (int64_t)(intptr_t)key);
+      int snap = sptir_snapshot(ir, rc->pc);
+      ir->insts[ref].snap_idx = snap;
+      ir->insts[ref].flags |= SPTIRF_GUARD;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = et;
+      if (a > ir->maxslot) ir->maxslot = a;
+      break;
     }
     case OP_GETTABLE: {
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
@@ -1403,14 +1961,53 @@ static int rec_inst(SPTRecCtx *rc) {
       break;
     }
     case OP_SETFIELD: {
-      /* Map field writes: separate (unverified) path; abort for now. */
-      rc->aborted = 1;
-      return 0;
+      /* R[A][K[B]:shortstring] := RK(C)  -- map write by a constant short
+         string key. Symmetric to OP_GETFIELD's inline hash-slot fast path: we
+         compile it only when the key ALREADY EXISTS at its MAIN POSITION in the
+         live map (so the codegen overwrites the right node; an absent key would
+         need an insert/rehash, and a chained key isn't at the computed slot --
+         both side-exit to the interpreter). We also store only INTEGER/FLOAT
+         values: those are non-collectable, so no GC write barrier is needed
+         (exactly the restriction SETI uses). A collectable value (string/table)
+         would require luaC_barrier and is left to the interpreter. */
+      int a = GETARG_A(i), b = GETARG_B(i);
+      int aref = rec_load_reg(rc, a);
+      if (ir->reg_type[rc->frame_base + a] != SPTT_TAB) { rc->aborted = 1; return 0; }
+      const TValue *kc = &rc->k[b];
+      if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
+      TString *key = tsvalue(kc);
+      int cref = rec_load_rkc(rc, i);
+      SPTType vt = sptir_type(ir, cref);
+      if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }  /* no barrier */
+      TValue *atv = s2v((rc->ci->func.p + 1) + a);
+      if (!ttistable(atv)) { rc->aborted = 1; return 0; }
+      Table *t = hvalue(atv);
+      /* Confirm the key EXISTS somewhere in its chain (we update, never insert;
+         an absent key side-exits via the codegen chain-walk). Same walk as
+         gen_hash_find / luaH_Hgetshortstr. */
+      Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+      for (;;) {
+        if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
+        int nx = (int)n->u.next;
+        if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort (would insert) */
+        n += nx;
+      }
+      int snap = sptir_snapshot(ir, rc->pc);
+      int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
+      ir->insts[ref].snap_idx = snap;
+      ir->insts[ref].flags |= SPTIRF_GUARD;
+      break;
     }
 
     /* ---- Arithmetic ---- */
     case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
     case OP_MOD: case OP_IDIV: case OP_POW: {
+      /* OP_POW emits SPTIR_POW, which has NO codegen (it would need a libm pow
+         C call). No current SPT syntax generates OP_POW (`^` lexes to bitwise
+         XOR / OP_BXOR), so this is defensive: abort cleanly rather than emit an
+         un-codegen-able op that would compile to garbage if OP_POW ever appears.
+         (Enable via the C-call milestone -- see JIT_DEV_NOTES §10.40.) */
+      if (op == OP_POW) { rc->aborted = 1; return 0; }
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_reg(rc, c);
@@ -1436,6 +2033,8 @@ static int rec_inst(SPTRecCtx *rc) {
     }
     case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
     case OP_MODK: case OP_IDIVK: case OP_POWK: {
+      /* See OP_POW above: SPTIR_POW has no codegen; abort defensively. */
+      if (op == OP_POWK) { rc->aborted = 1; return 0; }
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
       int bref = rec_load_reg(rc, b);
       int cref = rec_load_k(rc, c);
@@ -1755,6 +2354,17 @@ static int rec_inst(SPTRecCtx *rc) {
           sptir_loop(ir);
           return 0;
         }
+        /* Back-edge to a target before our start. In a root trace this is an
+           inner loop we can't represent (abort). In a SIDE trace started
+           mid-loop, the parent's loop header is necessarily before our start, so
+           this is the expected close point: emit an unconditional exit to the
+           interpreter at the back-edge PC and end successfully. The interpreter
+           runs the back-edge JMP and re-enters the parent (or the link
+           trampoline hands off). */
+        if (rc->is_side_trace) {
+          sptir_exit(ir, rc->pc);
+          return 0;
+        }
         rc->aborted = 1;
         rc->abort_pc = rc->pc;
         return 0;
@@ -1772,7 +2382,11 @@ static int rec_inst(SPTRecCtx *rc) {
     /* ---- Numeric for loop ---- */
     case OP_FORPREP: {
       /* SPT for loop: after FORPREP, R[A]=count, R[A+1]=step, R[A+2]=init.
-         FORPREP jumps to FORLOOP, so we skip it in the trace. */
+         FORPREP jumps to FORLOOP, so we skip it in the trace. But if this is an
+         inner loop inside the (outer) trace we are recording, try to unroll it
+         inline first so the whole nest becomes one linear trace (Phase 3a). */
+      if (try_unroll_inner_loop(rc, i))
+        return rc->aborted ? 0 : 1;
       int bx = GETARG_Bx(i);
       rc->pc += bx + 1;
       return 1;
@@ -1794,6 +2408,17 @@ static int rec_inst(SPTRecCtx *rc) {
          keeps its own (already compiled) trace, so the hot path is preserved. */
       const Instruction *target = rc->pc + 1 - GETARG_Bx(i);
       if (target != rc->start_pc) {
+        /* Side trace reaching the (outer) loop's FORLOOP back-edge: it targets
+           the loop header, which is before our mid-loop start, so we cannot loop
+           on it. Close with an unconditional exit at the FORLOOP PC *before*
+           emitting the count/idx update -- the interpreter then executes FORLOOP
+           (decrement, idx += step, back-jump) and its hot-check re-enters the
+           parent. Slots we never touched (idx, count) keep their flushed stack
+           values via the snapshot's -1 entries; that is exactly correct. */
+        if (rc->is_side_trace) {
+          sptir_exit(ir, rc->pc);
+          return 0;
+        }
         rc->aborted = 1;
         return 0;
       }
@@ -1873,6 +2498,31 @@ static int rec_inst(SPTRecCtx *rc) {
          R[A+2..] are the actual arguments. */
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
 
+      /* Pending unary-math call armed by a preceding SELF (e.g. math.sqrt)?
+         The SPT convention puts the receiver at R[A+1] and the single real
+         argument at R[A+2]; math_* read luaL_checknumber(L, 2). Lower it to a
+         direct libm call (SPTIR_FMATH). Requires exactly one real arg
+         (B == 3: function + receiver + arg) and one result (C == 2). */
+      if (rc->pending_cfn_slot == rc->frame_base + a) {
+        void *libm = rc->pending_cfn_libm;
+        rc->pending_cfn_slot = -1; rc->pending_cfn_libm = NULL;
+        if (b != 3 || c != 2) { rc->aborted = 1; return 0; }
+        int arg = ir->reg_map[rc->frame_base + a + 2];
+        if (arg < 0) { rc->aborted = 1; return 0; }
+        SPTType at = ir->reg_type[rc->frame_base + a + 2];
+        if (at == SPTT_INT) {
+          arg = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg, SPTIR_NULL, 0);
+        } else if (at != SPTT_FLT) {
+          rc->aborted = 1; return 0;       /* non-numeric arg */
+        }
+        int fref = sptir_emit(ir, SPTIR_FMATH, SPTT_FLT, arg, SPTIR_NULL,
+                              (int64_t)(intptr_t)libm);
+        ir->reg_map[rc->frame_base + a] = fref;
+        ir->reg_type[rc->frame_base + a] = SPTT_FLT;
+        if (a > ir->maxslot) ir->maxslot = a;
+        break;
+      }
+
       /* Restrict to: a single fixed result (C==2), a fixed, known argument
          count (B!=0), and depth-1 (not already inside an inlined callee). */
       if (c != 2 || b < 1 || rc->frame_base != 0) { rc->aborted = 1; return 0; }
@@ -1933,12 +2583,168 @@ static int rec_inst(SPTRecCtx *rc) {
     }
 
 
-    case OP_TFORPREP:
-    case OP_TFORCALL:
-    case OP_TFORLOOP:
+    case OP_TFORPREP: {
+      /* Generic-for preheader. The outer loop's own TFORPREP is before
+         start_pc and never recorded; reaching one here means an *inner*
+         for-each nested in the trace we're recording. We don't unroll
+         for-each, so abort and let the interpreter drive the inner loop. */
+      rc->aborted = 1;
+      return 0;
+    }
+
+    case OP_TFORCALL: {
+      /* Generic-for iterator step, specialized ONLY for `for k[,v] : pairs(L)`
+         over a List. luaH_next over an array-mode table yields keys
+         0,1,...,loglen-1 with value = L[key] (see ltable.c luaH_next), so the
+         whole loop is a native index loop -- no C call, no GC.
+
+         SPT layout after TFORCALL (see lvm.c): iterator at ra+0, state at ra+1
+         (both loop-invariant), the call results land at ra+3 (key, which also
+         serves as the next iteration's control) and ra+4 (value). We model the
+         step as: newkey = key + 1; GUARD newkey < #state (loop-continue);
+         value = state[newkey]. The guard/value snapshots capture the PRE-update
+         state at this PC, so when the guard fails (key was the last element) the
+         exit re-runs the real TFORCALL -> next returns nil -> TFORLOOP ends the
+         loop. The iterator identity (== luaB_next) is pinned with a once-per-
+         entry C guard (forin_iter_slot). Top frame only. */
+      int a = GETARG_A(i), c = GETARG_C(i);
+      if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
+      /* next yields exactly (key,value); support 1 or 2 loop vars. >2 would bind
+         nils we don't model. */
+      if (c < 1 || c > 2) { rc->aborted = 1; return 0; }
+
+      StkId base = rc->ci->func.p + 1;
+      /* Iterator must be luaB_next (a light C function); pinned in C at entry. */
+      TValue *fv = s2v(base + a);
+      if (!ttislcf(fv) || fvalue(fv) != spt_jit_pairs_next()) { rc->aborted = 1; return 0; }
+      /* State must be a List (array-mode table). */
+      TValue *sv = s2v(base + a + 1);
+      if (!ttisarray(sv)) { rc->aborted = 1; return 0; }
+      /* SLOAD the state (loop-invariant) -> emits GUARD_T(ARR), hoisted and
+         checked at entry via the live-in list. The iterator is NOT loaded into
+         the IR (no use); its identity is the C entry guard below. */
+      int sref = rec_load_reg(rc, a + 1);
+      if (ir->reg_type[rc->frame_base + a + 1] != SPTT_ARR) { rc->aborted = 1; return 0; }
+      /* Record the iterator entry guard. All for-each loops in one trace must
+         share the same iterator slot. */
+      if (rc->forin_iter_slot < 0) {
+        rc->forin_iter_slot = a;
+        rc->forin_iter_fn = fvalue(fv);
+      } else if (rc->forin_iter_slot != a) {
+        rc->aborted = 1; return 0;
+      }
+
+      /* Control variable (current key) at ra+3 -- must be an integer. */
+      int keyref = rec_load_reg(rc, a + 3);
+      if (ir->reg_type[rc->frame_base + a + 3] != SPTT_INT) { rc->aborted = 1; return 0; }
+
+      /* newkey = key + 1 */
+      int newkey = sptir_emit(ir, SPTIR_ADD, SPTT_INT, keyref, sptir_kint(ir, 1), 0);
+      /* len = #state */
+      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, sref, SPTIR_NULL, 0);
+      /* Loop-continue guard: newkey < len. Snapshot = pre-update state at this
+         PC; on failure the interpreter re-runs the real TFORCALL (next -> nil). */
+      sptir_guard(ir, SPTIR_GUARD_LT, newkey, (int64_t)lenref, rc->pc);
+
+      if (c >= 2) {
+        /* value = state[newkey]. newkey >= 1 > 0 and < len (continue guard) so it
+           is in bounds; SPTIR_GETI only type-guards and relies on the preceding
+           bounds guard, exactly like OP_GETI/OP_GETTABLE. Predict the element
+           type from L[newkey] (rec_array_elem_type clamps out-of-range); the
+           runtime type guard, not this prediction, is load-bearing. */
+        TValue *ktv = s2v(base + a + 3);
+        lua_Integer kpred = ttisinteger(ktv) ? ivalue(ktv) + 1 : 0;
+        SPTType et = rec_array_elem_type(rc, a + 1, kpred);
+        if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR) {
+          rc->aborted = 1; return 0;
+        }
+        int vref = sptir_emit(ir, SPTIR_GETI, et, sref, newkey, 0);
+        int snap = sptir_snapshot(ir, rc->pc);
+        ir->insts[vref].snap_idx = snap;
+        ir->insts[vref].flags |= SPTIRF_GUARD;
+        ir->reg_map[rc->frame_base + a + 4] = vref;
+        ir->reg_type[rc->frame_base + a + 4] = et;
+        if (a + 4 > ir->maxslot) ir->maxslot = a + 4;
+      }
+
+      /* Commit the new key AFTER the snapshots above (so they carry the OLD
+         key). This is the loop-carried induction variable. */
+      ir->reg_map[rc->frame_base + a + 3] = newkey;
+      ir->reg_type[rc->frame_base + a + 3] = SPTT_INT;
+      if (a + 3 > ir->maxslot) ir->maxslot = a + 3;
+      break;
+    }
+
+    case OP_TFORLOOP: {
+      /* Back-edge of the generic-for. Mirrors OP_FORLOOP: only closes the trace
+         when it targets our loop header; an inner loop we recorded through has a
+         different target -> a side trace exits to the interpreter, a root trace
+         aborts. The continue test was already emitted as the GUARD_LT in the
+         preceding TFORCALL. */
+      const Instruction *target = rc->pc + 1 - GETARG_Bx(i);
+      if (target != rc->start_pc) {
+        if (rc->is_side_trace) { sptir_exit(ir, rc->pc); return 0; }
+        rc->aborted = 1;
+        return 0;
+      }
+      sptir_loop(ir);
+      return 0;
+    }
+
     case OP_SETLIST:
     case OP_CLOSURE:
     case OP_VARARG:
+    case OP_SELF: {
+      /* R[A+1] = R[B]; R[A] = R[B][K[C]].  Specialized ONLY for the unary-libm
+         math-method idiom (e.g. math.sqrt): R[B] is a library/global table read
+         (a GETTABUP) and R[B][key] resolves to a known math C function. We don't
+         materialize the function/receiver -- we arm a pending FMATH that the
+         next CALL on R[A] consumes, and pin the method with a GUARD_CFUNC so
+         reassigning it (or the library table) side-exits. Anything else aborts.
+
+         The library table must be re-derived from the STABLE upvalue source, NOT
+         the live R[B] register: in this idiom R[B] is overwritten by the call
+         result within the loop body, so the live stack at record time holds a
+         stale value. We recover _ENV (the upvalue) and the library key from the
+         GETTABUP/ULOAD IR and look up _ENV[libkey][methodkey] directly. The run-
+         time GUARD_CFUNC re-walks on the (dynamic) GETTABUP result, so the live
+         lookup here is only a prediction. Top frame only. */
+      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+      if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
+      const TValue *kc = &rc->k[c];
+      if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
+      TString *key = tsvalue(kc);
+      int bref = rec_load_reg(rc, b);
+      if (ir->reg_type[rc->frame_base + b] != SPTT_TAB) { rc->aborted = 1; return 0; }
+      SPTIRInst *gi = sptir_get(ir, bref);
+      if (!gi || gi->op != SPTIR_GETTABUP) { rc->aborted = 1; return 0; }
+      SPTIRInst *uli = sptir_get(ir, gi->op1);
+      if (!uli || uli->op != SPTIR_ULOAD) { rc->aborted = 1; return 0; }
+      int uvidx = (int)uli->aux;
+      TString *libkey = (TString *)(intptr_t)gi->aux;       /* e.g. "math" */
+      LClosure *cl = clLvalue(s2v(rc->ci->func.p));
+      if (uvidx >= cl->nupvalues) { rc->aborted = 1; return 0; }
+      TValue *envtv = cl->upvals[uvidx]->v.p;
+      if (!ttistable(envtv)) { rc->aborted = 1; return 0; }
+      const TValue *libtv = rec_table_getstr(hvalue(envtv), libkey);
+      if (!libtv || !ttistable(libtv)) { rc->aborted = 1; return 0; }
+      const TValue *fv = rec_table_getstr(hvalue(libtv), key);
+      if (!fv) { rc->aborted = 1; return 0; }
+      /* math.* are registered by luaL_newlib (nup=0) as LIGHT C functions
+         (LUA_VLCF), so the value is the lua_CFunction directly. */
+      if (!ttislcf(fv)) { rc->aborted = 1; return 0; }
+      spt_unary_libm_fn libm = spt_jit_unary_math(fvalue(fv));
+      if (!libm) { rc->aborted = 1; return 0; }
+      int kref = sptir_kptr(ir, (void *)key);
+      int gref = sptir_emit(ir, SPTIR_GUARD_CFUNC, SPTT_NIL, bref, kref,
+                            (int64_t)(intptr_t)fvalue(fv));
+      int snap = sptir_snapshot(ir, rc->pc);
+      ir->insts[gref].snap_idx = snap;
+      ir->insts[gref].flags |= SPTIRF_GUARD;
+      rc->pending_cfn_libm = (void *)libm;
+      rc->pending_cfn_slot = rc->frame_base + a;
+      break;
+    }
     case OP_GETVARG:
     case OP_VARARGPREP:
     case OP_CONCAT:
@@ -1946,7 +2752,6 @@ static int rec_inst(SPTRecCtx *rc) {
     case OP_TBC:
     case OP_NEWTABLE:
     case OP_NEWLIST:
-    case OP_SELF:
     case OP_ERRNNIL:
     case OP_SETTABUP:
     case OP_EXTRAARG:
@@ -1973,7 +2778,7 @@ static int rec_inst(SPTRecCtx *rc) {
 
 /* Record a trace starting from start_pc. */
 static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
-                               const Instruction *start_pc) {
+                               const Instruction *start_pc, int is_side) {
   LClosure *cl = clLvalue(s2v(ci->func.p));
   Proto *p = cl->p;
 
@@ -1993,8 +2798,13 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.pc = start_pc;
   rc.ir = &t->ir;
   rc.frame_base = 0;
+  rc.is_side_trace = is_side;
   rc.inline_fn_slot = -1;
   rc.inline_fn_proto = NULL;
+  rc.pending_cfn_libm = NULL;
+  rc.pending_cfn_slot = -1;
+  rc.forin_iter_slot = -1;
+  rc.forin_iter_fn = NULL;
 
   /* Mark loop start in IR. */
   t->ir.loop_start = t->ir.ninst;
@@ -2029,6 +2839,10 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   t->inline_fn_slot = rc.inline_fn_slot;
   t->inline_fn_proto = rc.inline_fn_proto;
 
+  /* Carry the for-each iterator entry check (if any) onto the trace. */
+  t->forin_iter_slot = rc.forin_iter_slot;
+  t->forin_iter_fn = rc.forin_iter_fn;
+
   if (js->debug >= 2) sptir_dump(&t->ir, "pre-opt");
 
   /* Optimize the IR. */
@@ -2058,6 +2872,21 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
     t->livein_slot[t->n_livein] = (uint8_t)slot;
     t->livein_type[t->n_livein] = (uint8_t)(SPTType)gi->aux;
     t->n_livein++;
+  }
+
+  /* Side-trace amortization gate: discard a side trace whose body is too small to
+     pay back the stack-mediated link overhead (see SPT_JIT_SIDE_MIN_IR). Done
+     after optimize (so the count matches the post-opt IR size) but BEFORE codegen,
+     so a rejected side trace never consumes code-pool space. Root traces are
+     never gated. Returning NULL makes maybe_record_side_trace leave the arm to
+     the interpreter -- exactly the pre-Phase-2 behavior, so no regression. */
+  if (rc.is_side_trace && (int)t->ir.ninst < js->side_min_ir) {
+    if (js->debug)
+      fprintf(stderr, "[JIT] side trace too small (ir=%d < %d), discarded; "
+              "arm stays in interpreter\n", t->ir.ninst, js->side_min_ir);
+    sptir_free(&t->ir);
+    free(t);
+    return NULL;
   }
 
   /* Generate native code. */
@@ -2092,6 +2921,123 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
 /* The trace entry point type. */
 typedef void (*SPTTraceEntry)(lua_State *L, CallInfo *ci);
 
+/* Re-validate a trace's entry guards against the live interpreter state in `ci`.
+   Returns 1 if the trace may be entered, 0 if a guard would fail (so the
+   interpreter should run instead). Factored out so the link trampoline can apply
+   the same checks to every trace it hands off to.
+
+   (1) Inlined-call guard: a trace that inlined a pure leaf call may only be
+       entered while the function slot still holds a closure of the inlined
+       proto; otherwise the inlined body would be wrong.
+   (2) Loop-carried live-in type guard: a trace pins the type of each live-in it
+       reads (a GUARD_T on the SLOAD). When such a value's type changes mid-loop
+       (e.g. an int accumulator that becomes a float on a side branch) the change
+       persists, and the trace's hoisted entry guard would then fail on *every*
+       subsequent entry -- re-validating in C and declining lets the interpreter
+       advance the loop instead of livelocking. The compact (slot,type) list is
+       precomputed at record time; n_livein == -1 means it overflowed, so fall
+       back to a full IR scan (rare). */
+static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
+  if (t->inline_fn_slot >= 0) {
+    TValue *fv = s2v(ci->func.p + 1 + t->inline_fn_slot);
+    if (!ttisLclosure(fv) || clLvalue(fv)->p != t->inline_fn_proto)
+      return 0;
+  }
+  /* for-each list specialization: the iterator slot must still hold the exact
+     C function (luaB_next) we specialized for. A custom iterator or a map
+     iterator would not produce the contiguous 0-based key sequence the native
+     loop assumes, so decline and let the interpreter run the generic-for. */
+  if (t->forin_iter_slot >= 0) {
+    TValue *fv = s2v(ci->func.p + 1 + t->forin_iter_slot);
+    if (!ttislcf(fv) || fvalue(fv) != t->forin_iter_fn)
+      return 0;
+  }
+  if (t->n_livein >= 0) {
+    for (int k = 0; k < t->n_livein; k++) {
+      int slot = t->livein_slot[k];
+      if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)t->livein_type[k])
+        return 0;
+    }
+  } else {
+    SPTIRBuilder *tir = &t->ir;
+    for (int k = 0; k < tir->ninst; k++) {
+      SPTIRInst *gi = &tir->insts[k];
+      if (gi->op != SPTIR_GUARD_T) continue;
+      int sref = gi->op1;
+      if (sref < 0 || sref >= tir->ninst) continue;
+      if (tir->insts[sref].op != SPTIR_SLOAD) continue;
+      int slot = (int)tir->insts[sref].aux;
+      if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)gi->aux)
+        return 0;
+    }
+  }
+  return 1;
+}
+
+/* Phase 2: when a parent trace's side exit at `exit_pc` has been taken often
+   enough and no trace is compiled there yet, record a side trace rooted at
+   exit_pc. The parent has just flushed full interpreter state to the stack, so
+   the recorder reads exactly the post-exit state (frozen stack). A successful
+   side trace is registered in the hot table at (proto, exit_pc); the link
+   trampoline then hands off to it on subsequent exits, turning the otherwise-
+   interpreted "wrong arm + rest of loop body" into native code.
+
+   Called only on a trampoline miss (no trace at exit_pc yet). Once a side trace
+   exists the trampoline enters it instead, so this stops firing for that PC.
+   Abort accounting mirrors the root path: repeated failures blacklist the PC. */
+static void maybe_record_side_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
+                                     SPTTrace *parent, const Instruction *exit_pc) {
+  if (!parent || !exit_pc) return;
+
+  LClosure *cl = clLvalue(s2v(ci->func.p));
+  if (!cl || !cl->p) return;
+  Proto *p = cl->p;
+  int pc_offset = (int)(exit_pc - p->code);
+  if (pc_offset < 0 || pc_offset >= p->sizecode) return;
+
+  /* Don't root a side trace on a loop back-edge. A trace started at a FORLOOP /
+     TFORLOOP / backward JMP would hit that back-edge as its first instruction --
+     its target is before its own start, so it would close immediately with an
+     exit at the same PC: a degenerate "enter, exit where you started" trace that
+     the trampoline's progress check rejects anyway. The interpreter runs the
+     back-edge (one bytecode) and re-enters the parent, which is already optimal. */
+  OpCode bop = GET_OPCODE(*exit_pc);
+  if (bop == OP_FORLOOP || bop == OP_TFORLOOP) return;
+  if (bop == OP_JMP && GETARG_sJ(*exit_pc) < 0) return;
+
+  /* Cheap rejections FIRST -- this runs on every trampoline miss, including the
+     steady state of a PC we have already blacklisted (e.g. a too-small side trace
+     that was discarded). Doing the hot_lookup + blacklist check before the
+     snapshot scan keeps that steady-state path O(1), so a gated arm costs the same
+     as the pre-Phase-2 fallback (no per-miss snapshot loop). */
+  SPTHotEntry *e = hot_lookup(js, p, pc_offset);
+  if (!e) return;
+  if (e->trace && e->trace->code) return;        /* already have a side trace */
+  if (e->aborts >= SPT_JIT_MAX_ABORTS) return;   /* gave up on this PC */
+
+  /* Is this exit hot? Find a parent snapshot whose exit PC matches and whose
+     taken-count (bumped by the exit stub) has crossed the side-trace threshold.
+     Multiple snapshots may share a PC; any one being hot makes the PC hot. */
+  int hot = 0;
+  for (int s = 0; s < parent->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++) {
+    if (parent->exit_pcs[s] == exit_pc &&
+        parent->exit_count[s] >= js->side_hot_threshold) { hot = 1; break; }
+  }
+  if (!hot) return;
+
+  SPTTrace *st = record_trace(js, L, ci, exit_pc, /*is_side=*/1);
+  if (st) {
+    e->proto = p;
+    e->pc_offset = pc_offset;
+    e->trace = st;
+    if (js->debug)
+      fprintf(stderr, "[JIT] recorded side trace: proto=%p pc_offset=%d "
+              "(parent exit hot)\n", (void *)p, pc_offset);
+  } else if (e->aborts < 0xFFFF) {
+    e->aborts++;
+  }
+}
+
 int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
   global_State *g = G(L);
   SPTJitState *js = (SPTJitState *)g->jit_state; /* will be added */
@@ -2104,56 +3050,50 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
 
   SPTHotEntry *e = hot_lookup(js, p, pc_offset);
   if (!e || !e->trace || !e->trace->code) return 0;
+  if (!trace_entry_guards_ok(e->trace, ci)) return 0;
 
-  /* Inlined-call entry guard: a trace that inlined a pure leaf call may only be
-     entered while the function slot still holds a closure of the inlined proto.
-     If something else is there now, the inlined body would be wrong, so decline
-     and let the interpreter run the loop (and the call) normally. */
-  if (e->trace->inline_fn_slot >= 0) {
-    TValue *fv = s2v(ci->func.p + 1 + e->trace->inline_fn_slot);
-    if (!ttisLclosure(fv) || clLvalue(fv)->p != e->trace->inline_fn_proto)
-      return 0;
-  }
+  /* Enter the trace, then follow stitched links (Phase 2). When a trace exits it
+     has written every live stack slot back and set ci->u.l.savedpc to the resume
+     PC -- the interpreter stack is fully consistent, exactly as if the
+     interpreter were about to dispatch savedpc. So if a compiled trace exists at
+     that PC and its entry guards pass, we re-enter it directly here instead of
+     returning to the dispatch loop. Every hand-off goes through the exit stub's
+     full stack flush and the next trace's SLOAD reload, so the stack is the
+     single source of truth: no register-state matching between traces is needed
+     (the lower-risk alternative to LuaJIT's register-mediated linking).
 
-  /* Loop-carried live-in type guard. A trace pins the type of each live-in it
-     reads (a GUARD_T on the SLOAD). When a value's type changes mid-loop -- e.g.
-     an integer accumulator that becomes a float on a side branch -- that change
-     persists, and the trace's hoisted entry guard would then fail on *every*
-     subsequent entry. Re-validating in C and declining on a mismatch lets the
-     interpreter run (and advance) the loop instead of livelocking on a guard
-     that never lets the trace make progress.
+     Termination is guaranteed two ways: we only continue while the resume PC
+     strictly differs from the PC we just entered at (so a trace that exits where
+     it started -- or that left savedpc unchanged, e.g. a degenerate top-level
+     RETURN -- breaks the chain rather than spinning), and SPT_JIT_MAX_LINK_HOPS
+     is an absolute cap. On any miss we fall through to the interpreter exactly as
+     the single-entry path did before. ci->func (hence the proto) is unchanged by
+     a trace -- traces never perform a real call or return -- so `p` stays valid
+     across hops; the PC bounds check defends against it anyway. */
+  const Instruction *entered_pc = pc;
+  SPTTrace *t = e->trace;
+  for (int hops = 0; hops < SPT_JIT_MAX_LINK_HOPS; hops++) {
+    js->stats.trace_entries++;
+    SPTTraceEntry entry = (SPTTraceEntry)t->code;
+    entry(L, ci);
 
-     The check iterates the compact (slot,type) list precomputed at record time
-     rather than rescanning the whole IR each entry; this matters on hot loops
-     re-entered millions of times. n_livein == -1 means the list overflowed, so
-     fall back to a full IR scan (rare). */
-  {
-    SPTTrace *t = e->trace;
-    if (t->n_livein >= 0) {
-      for (int k = 0; k < t->n_livein; k++) {
-        int slot = t->livein_slot[k];
-        if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)t->livein_type[k])
-          return 0;
-      }
-    } else {
-      SPTIRBuilder *tir = &t->ir;
-      for (int k = 0; k < tir->ninst; k++) {
-        SPTIRInst *gi = &tir->insts[k];
-        if (gi->op != SPTIR_GUARD_T) continue;
-        int sref = gi->op1;
-        if (sref < 0 || sref >= tir->ninst) continue;
-        if (tir->insts[sref].op != SPTIR_SLOAD) continue;
-        int slot = (int)tir->insts[sref].aux;
-        if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)gi->aux)
-          return 0;
-      }
+    const Instruction *next_pc = ci->u.l.savedpc;
+    if (next_pc == entered_pc) break;       /* no forward progress */
+    int npc_off = (int)(next_pc - p->code);
+    if (npc_off < 0 || npc_off >= p->sizecode) break;
+    SPTHotEntry *ne = hot_lookup(js, p, npc_off);
+    if (!ne || !ne->trace || !ne->trace->code) {
+      /* No trace at this exit PC. If the exit is hot, record a side trace here;
+         the trampoline picks it up on the next exit. Either way, stop and let
+         the interpreter resume at next_pc this time. */
+      maybe_record_side_trace(js, L, ci, t, next_pc);
+      break;
     }
-  }
+    if (!trace_entry_guards_ok(ne->trace, ci)) break;
 
-  /* Enter the trace. */
-  js->stats.trace_entries++;
-  SPTTraceEntry entry = (SPTTraceEntry)e->trace->code;
-  entry(L, ci);
+    entered_pc = next_pc;
+    t = ne->trace;
+  }
   return 1;
 }
 
@@ -2195,7 +3135,7 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
       /* Enough samples: stop profiling and record using the majority tally. */
       sptjit_profiling_active = 0;
       e->counter = 0;
-      SPTTrace *t = record_trace(js, L, ci, pc);
+      SPTTrace *t = record_trace(js, L, ci, pc, /*is_side=*/0);
       if (t) { e->trace = t; return sptjit_trace_enter(L, ci, pc); }
       if (e->aborts < 0xFFFF) e->aborts++;
       e->counter = e->aborts;

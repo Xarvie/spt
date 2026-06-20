@@ -1,0 +1,16 @@
+// Phase-2 side-trace regression: a ~50/50 branch whose else-arm performs an array
+// store (a side effect), so if-conversion bails and the root trace takes a guarded
+// branch with a side exit on the minority arm. That exit gets hot and Phase-2
+// records a SIDE TRACE for it. The side trace must record the OTHER direction than
+// the profiled majority of the parent (the bug fixed in section 10.31); linked
+// native execution must match the interpreter byte-for-byte, array contents incl.
+list<int> a = [0, 0, 0, 0, 0, 0, 0, 0];
+int s = 0;
+int k = 0;
+for (int i = 1, 200000) {
+  if (i % 2 == 0) { s = s + i; }
+  else { a[k % 8] = i; k = k + 1; }
+}
+print(s);
+print(k);
+for (int j = 0, 7) { print(a[j]); }

@@ -1,0 +1,15 @@
+// Side-trace with a BIASED branch: the rare (10%) arm stores to an array, so
+// if-conversion bails. The root trace covers the common arm (90%) and the rare
+// arm becomes a hot side exit compiled as a side trace. Complements the 50/50
+// side_arr_write kernel by exercising side-trace linking where the parent records
+// the MAJORITY direction and the side trace records the rarely-taken minority.
+list<int> a = [0, 0, 0, 0, 0, 0, 0, 0];
+int s = 0;
+int k = 0;
+for (int i = 1, 300000) {
+  if (i % 10 == 0) { a[k % 8] = i; k = k + 1; }
+  else { s = s + i; }
+}
+print(s);
+print(k);
+for (int j = 0, 7) { print(a[j]); }

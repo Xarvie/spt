@@ -51,6 +51,15 @@
 #define OFF_TABLE_LOGLEN offsetof(Table, loglen)
 #define OFF_TABLE_ARRAY offsetof(Table, array)
 #define OFF_TABLE_MODE  offsetof(Table, mode)
+#define OFF_TABLE_NODE      offsetof(Table, node)
+#define OFF_TABLE_LSIZENODE offsetof(Table, lsizenode)
+/* Node (hash slot) internal offsets, used by the inline GETFIELD fast path. */
+#define OFF_NODE_VAL    offsetof(Node, i_val.value_)   /* node value bits   */
+#define OFF_NODE_VAL_TT (offsetof(Node, i_val) + offsetof(TValue, tt_)) /* value tag */
+#define OFF_NODE_KEY_TT offsetof(Node, u.key_tt)       /* key tag byte      */
+#define OFF_NODE_KEY    offsetof(Node, u.key_val)      /* key value (gc ptr) */
+#define OFF_NODE_NEXT   offsetof(Node, u.next)         /* chain offset (int32) */
+#define SZ_NODE         ((int)sizeof(Node))
 
 #define SLOT_SIZE 16
 
@@ -184,14 +193,16 @@ static int ra_op_is_safe(int op) {
     case SPTIR_EQ: case SPTIR_NE: case SPTIR_LT: case SPTIR_LE:
     case SPTIR_GT: case SPTIR_GE: case SPTIR_NOT:
     case SPTIR_CMPSET:
+    case SPTIR_FCMPMASK: case SPTIR_FSELECT: case SPTIR_ICMPMASK:
     case SPTIR_TOFLT: case SPTIR_TOINT:
     case SPTIR_GUARD: case SPTIR_GUARD_LT: case SPTIR_GUARD_LE:
     case SPTIR_GUARD_EQ: case SPTIR_GUARD_T: case SPTIR_GUARD_ULT:
     case SPTIR_GETI: case SPTIR_LEN: case SPTIR_SETI:
+    case SPTIR_GETFIELD: case SPTIR_SETFIELD:
     case SPTIR_LOOP: case SPTIR_PHI: case SPTIR_NOP:
       return 1;
     default:
-      /* POW (libm), ULOAD/USTORE, GETFIELD/SETFIELD, GETTABUP,
+      /* POW (libm), ULOAD/USTORE, GETTABUP,
          CALL, RETURN, EXIT: not safe / not handled here. */
       return 0;
   }
@@ -233,6 +244,18 @@ static void ra_analyze(SPTCodeGen *cg) {
   /* Only optimize loop traces (must end in a LOOP back-edge). */
   if (!ir->have_loop) return;
   if (ir->ninst > SPT_JIT_MAX_TRACE) return;
+
+  /* for-each (OP_TFORCALL) traces: the loop-carried key is incremented in place
+     (newkey = key + 1) and the loop-continue guard / value GETI are emitted
+     AFTER that increment. Under residency the SLOAD and newkey share one
+     register, so a snapshot that maps the key slot to the (old-key) SLOAD would
+     flush the already-incremented value at an exit -- the loop-end exit then
+     passes an out-of-range key to next(), and a value type-guard exit would skip
+     an element. The spill-everything path gives the SLOAD and newkey distinct
+     slots, so its snapshots flush the correct old key. Keep for-each on the
+     spill path (correct; still well ahead of the interpreter's per-element C
+     call into luaB_next). RA residency for for-each is a future optimization. */
+  if (cg->trace->forin_iter_slot >= 0) return;
 
   /* Bail on any non-scalar / call-bearing op. Also bail on float comparisons:
      the comparison codegen is integer-only, and a resident float operand would
@@ -867,6 +890,56 @@ static void emit_int_inplace(SPTCodeGen *cg, int op, SPTReg R, int srcref) {
   }
 }
 
+/* Inline hash-slot key search for a constant short-string key, shared by
+   GETFIELD/SETFIELD. Computes the key's main position in t's node array
+   (slot = key->hash & (sizenode-1); sizenode = 1<<lsizenode), then walks the
+   collision chain following Node.u.next EXACTLY as luaH_Hgetshortstr does:
+   at each node, if it holds a short-string key equal to ours (interned pointer
+   compare) we stop with RDX = &that node and fall through; otherwise we take
+   the signed `next` offset and, if it is 0 (chain end -> key absent at run
+   time), jump to `exlbl` (side-exit; the interpreter then does the lookup,
+   handling a freshly-inserted/rehashed/moved key correctly). The runtime table
+   (op1) is guarded to be a map by its SLOAD. Clobbers RAX/RCX/RDX only, so the
+   op stays RA-safe. `table_ref` is the map's IR ref. */
+static void gen_hash_find(SPTCodeGen *cg, int table_ref, TString *key,
+                          int32_t exlbl) {
+  SPTAsm *a = &cg->asm_;
+  uint32_t khash = key->hash;
+  gen_load(cg, SPT_RAX, table_ref, SPTT_TAB);            /* RAX = Table* t */
+  sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx ecx, byte[rax+lsizenode] */
+  sptasm_byte(a, 0x48); sptasm_byte(a, OFF_TABLE_LSIZENODE);
+  sptasm_mov_rm(a, SPT_RDX, SPT_RAX, OFF_TABLE_NODE);    /* RDX = t->node */
+  sptasm_mov_ri32(a, SPT_RAX, 1);
+  sptasm_shl_cl(a, SPT_RAX);
+  sptasm_sub_ri(a, SPT_RAX, 1);
+  sptasm_and_ri(a, SPT_RAX, (int32_t)khash);             /* RAX = main-position slot */
+  sptasm_imul_rri(a, SPT_RAX, SPT_RAX, SZ_NODE);
+  sptasm_add_rr(a, SPT_RDX, SPT_RAX);                    /* RDX = &node[slot] */
+  int32_t loop_top = sptasm_newlabel(a);
+  int32_t advance  = sptasm_newlabel(a);
+  int32_t found    = sptasm_newlabel(a);
+  sptasm_place(a, loop_top);
+  /* if node holds a short-string key equal to ours -> found */
+  sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+key_tt] */
+  sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_KEY_TT);
+  sptasm_cmp_ri(a, SPT_RAX, ctb(LUA_VSHRSTR));
+  sptasm_jcc(a, SPT_CC_NE, advance);
+  sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_KEY);      /* RAX = node key ptr */
+  sptasm_mov_ri64(a, SPT_RCX, (int64_t)(intptr_t)key);
+  sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+  sptasm_jcc(a, SPT_CC_E, found);
+  sptasm_place(a, advance);
+  /* nx = (int32)node->u.next; nx==0 -> not found -> side-exit; else n += nx */
+  sptasm_mov_rm32(a, SPT_RAX, SPT_RDX, OFF_NODE_NEXT);   /* eax = nx (signed) */
+  sptasm_test_rr(a, SPT_RAX, SPT_RAX);
+  sptasm_jcc(a, SPT_CC_E, exlbl);
+  sptasm_byte(a, 0x48); sptasm_byte(a, 0x63); sptasm_byte(a, 0xC0); /* movsxd rax, eax */
+  sptasm_imul_rri(a, SPT_RAX, SPT_RAX, SZ_NODE);
+  sptasm_add_rr(a, SPT_RDX, SPT_RAX);                    /* RDX = next node */
+  sptasm_jmp(a, loop_top);
+  sptasm_place(a, found);                                /* RDX = &found node */
+}
+
 static void gen_inst(SPTCodeGen *cg, int idx) {
   SPTAsm *a = &cg->asm_;
   SPTIRBuilder *ir = &cg->trace->ir;
@@ -1200,6 +1273,65 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
       break;
     }
 
+    case SPTIR_FCMPMASK: {
+      /* (op1 cmp op2) on doubles -> all-ones/all-zeros bitmask. aux holds the
+         comparison SPTIROp; GT/GE were emitted by the recorder as swapped LT/LE,
+         so only EQ/NE/LT/LE reach here. Predicates chosen to match Lua's NaN
+         behavior (ordered for </<=/==, unordered for !=). Float if-conversion. */
+      gen_load_xmm(cg, SPT_XMM0, inst->op1);
+      gen_load_xmm(cg, SPT_XMM1, inst->op2);
+      uint8_t pred;
+      switch ((SPTIROp)inst->aux) {
+        case SPTIR_EQ: pred = 0; break;  /* EQ_OQ  : NaN -> false */
+        case SPTIR_LT: pred = 1; break;  /* LT_OS  : NaN -> false */
+        case SPTIR_LE: pred = 2; break;  /* LE_OS  : NaN -> false */
+        case SPTIR_NE: pred = 4; break;  /* NEQ_UQ : NaN -> true  */
+        default:       pred = 0;
+      }
+      sptasm_cmpsd(a, SPT_XMM0, SPT_XMM1, pred);  /* XMM0 = mask */
+      gen_store_xmm(cg, idx, SPT_XMM0);
+      break;
+    }
+
+    case SPTIR_ICMPMASK: {
+      /* (op1 cmp op2) on integers -> all-ones/all-zeros mask, lifted into XMM.
+         Integers are totally ordered, so the signed setcc senses (incl. GT/GE)
+         are used directly with no operand swap; -setcc turns 0/1 into 0/-1. */
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+      SPTCC cc;
+      switch ((SPTIROp)inst->aux) {
+        case SPTIR_EQ: cc = SPT_CC_E;   break;
+        case SPTIR_NE: cc = SPT_CC_NE;  break;
+        case SPTIR_LT: cc = SPT_CC_L;   break;
+        case SPTIR_LE: cc = SPT_CC_LE;  break;
+        case SPTIR_GT: cc = SPT_CC_NLE; break;
+        case SPTIR_GE: cc = SPT_CC_NL;  break;
+        default:       cc = SPT_CC_E;
+      }
+      sptasm_setcc(a, cc, SPT_RAX);          /* AL = 0/1 */
+      sptasm_movzx_r8(a, SPT_RAX, SPT_RAX);  /* RAX = 0 or 1 */
+      sptasm_neg_r(a, SPT_RAX);              /* RAX = 0 or -1 (all-ones) */
+      sptasm_movq_gpr_to_xmm(a, SPT_XMM0, SPT_RAX); /* XMM0 = mask */
+      gen_store_xmm(cg, idx, SPT_XMM0);
+      break;
+    }
+
+    case SPTIR_FSELECT: {
+      /* Bit-exact float select: result = (then & mask) | (else & ~mask).
+         op1=then, op2=else, aux=mask ref. Reproduces the chosen double exactly
+         (a B+(A-B)*c float select would round). Uses scratch XMM0/1/2. */
+      gen_load_xmm(cg, SPT_XMM0, inst->op1);          /* then */
+      gen_load_xmm(cg, SPT_XMM1, inst->op2);          /* else */
+      gen_load_xmm(cg, SPT_XMM2, (int)inst->aux);     /* mask */
+      sptasm_andpd(a, SPT_XMM0, SPT_XMM2);            /* XMM0 = then & mask */
+      sptasm_andnpd(a, SPT_XMM2, SPT_XMM1);          /* XMM2 = ~mask & else */
+      sptasm_orpd(a, SPT_XMM0, SPT_XMM2);            /* XMM0 = result */
+      gen_store_xmm(cg, idx, SPT_XMM0);
+      break;
+    }
+
     /* ---- Guards ---- */
     case SPTIR_GUARD_T: {
       /* Check type tag of the value on the stack. */
@@ -1323,6 +1455,107 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
       break;
     }
 
+    case SPTIR_GETFIELD: {
+      /* R[A] = map[K]  for a constant short-string key.  op1 = map ref,
+         aux = the key TString*.  Inline hash-slot fast path (LuaJIT-style):
+         search the key's main position and its collision chain (gen_hash_find),
+         then type-guard and load the found node's value. A key that is absent at
+         run time side-exits (gen_hash_find jumps to exlbl on chain end). No C
+         call; RA-safe (RAX/RCX/RDX scratch only). */
+      TString *key = (TString *)(intptr_t)inst->aux;
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
+      /* value type guard: node->i_val.tt_ == recorded type */
+      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+val_tt] */
+      sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
+      sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag(inst->type));
+      sptasm_jcc(a, SPT_CC_NE, exlbl);
+      /* load value bits */
+      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL);      /* RAX = value bits   */
+      gen_store(cg, idx, SPT_RAX);
+      break;
+    }
+    case SPTIR_GETTABUP: {
+      /* R[A] = UpVal[B][K]  for a constant short-string key (global / library
+         read). op1 = the ULOAD ref that yields the upvalue table; aux = key
+         TString*. Same inline hash-slot search + value load as GETFIELD, just
+         with the table coming from the ULOAD instead of a register operand.
+         GETTABUP is not RA-safe (see ra_op_is_safe), so these traces run with
+         RA disabled and the ULOAD result is read from its spill slot. */
+      TString *key = (TString *)(intptr_t)inst->aux;
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
+      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+val_tt] */
+      sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
+      sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag(inst->type));
+      sptasm_jcc(a, SPT_CC_NE, exlbl);
+      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL);      /* RAX = value bits */
+      gen_store(cg, idx, SPT_RAX);
+      break;
+    }
+    case SPTIR_GUARD_CFUNC: {
+      /* Guard table[key] == expected C closure. op1 = table ref (e.g. the math
+         library table from a GETTABUP), op2 = KPTR holding the key TString*,
+         aux = expected GCObject* (the CClosure). Look the key up in the table
+         (gen_hash_find -> side-exit if absent) and side-exit unless the found
+         value equals the expected function -- this pins e.g. math.sqrt to the
+         known C function before lowering the call to a direct libm call, so
+         reassigning the method (or the whole library table) side-exits. */
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      TString *key = (TString *)(intptr_t)ir->insts[inst->op2].aux;
+      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
+      /* value must still be a light C function (tag) and the exact function */
+      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+val_tt] */
+      sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
+      sptasm_cmp_ri(a, SPT_RAX, LUA_VLCF);
+      sptasm_jcc(a, SPT_CC_NE, exlbl);
+      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL);      /* RAX = value bits (fn ptr) */
+      sptasm_mov_ri64(a, SPT_RCX, (int64_t)inst->aux);       /* RCX = expected fn */
+      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+      sptasm_jcc(a, SPT_CC_NE, exlbl);
+      break;
+    }
+    case SPTIR_FMATH: {
+      /* result = libm_fn(arg). op1 = float arg ref, aux = double(*)(double).
+         A direct C call to a leaf libm function (no GC, no Lua callback). The
+         trace runs with RA disabled (FMATH is not in ra_op_is_safe), so the
+         infra registers (L/ci/base/k, callee-saved) survive the call and no
+         caller-saved loop value is live across it. The trace body keeps
+         RSP == 8 (mod 16), so one `sub rsp,8` aligns to 16 for the call. */
+      gen_load_xmm(cg, SPT_XMM0, inst->op1);                 /* XMM0 = arg */
+      sptasm_sub_rsp(a, 8);                                  /* 16-byte align */
+      sptasm_mov_ri64(a, SPT_RAX, (int64_t)inst->aux);       /* RAX = libm fn */
+      sptasm_call_r(a, SPT_RAX);
+      sptasm_add_rsp(a, 8);
+      gen_store_xmm(cg, idx, SPT_XMM0);                      /* result in XMM0 */
+      break;
+    }
+
+    case SPTIR_SETFIELD: {
+      /* map[K] = val  for a constant short-string key, val an int/float.
+         op1 = map ref, op2 = value ref, aux = key TString*. Same inline
+         hash-slot search as GETFIELD (gen_hash_find: main position + collision
+         chain), then overwrite the found node's value bits + tag. The recorder
+         only emits this for a key that EXISTS (an insert isn't handled here, so
+         an absent key side-exits via gen_hash_find's chain-end). The value is
+         non-collectable (int/float, enforced at record time), so NO GC write
+         barrier is needed. Scratch RAX/RCX/RDX only -> RA-safe. */
+      TString *key = (TString *)(intptr_t)inst->aux;
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
+      /* store value bits then tag (value is int/float -> no GC barrier) */
+      gen_load(cg, SPT_RAX, inst->op2, SPTT_ANY);            /* RAX = value bits */
+      sptasm_mov_mr(a, SPT_RDX, OFF_NODE_VAL, SPT_RAX);      /* node->i_val.value_ = RAX */
+      {
+        uint8_t tag = spt_type_to_tag(sptir_type(ir, (int)inst->op2));
+        sptasm_byte(a, 0xC6);                  /* MOV r/m8, imm8 */
+        sptasm_byte(a, 0x42);                  /* mod=01 reg=000 rm=010(RDX) */
+        sptasm_byte(a, OFF_NODE_VAL_TT);       /* disp8 = value tag offset (8) */
+        sptasm_byte(a, tag);
+      }
+      break;
+    }
+
     case SPTIR_SETI: {
       /* R[A][B] = val.  op1 = array ref, op2 = index ref, aux = value ref.
          Layout (ltable.h): value k at [array-(k+1)*8], tag k at [array+4+k].
@@ -1384,6 +1617,18 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
       }
       /* Jump to epilogue. */
       sptasm_jmp(a, cg->epilogue_label);
+      break;
+    }
+
+    /* ---- Unconditional side exit (side-trace tail) ----
+       Closes a side trace at a back-edge it cannot loop on. Jump unconditionally
+       to the snapshot's exit stub, which flushes live state to the interpreter
+       stack, sets ci->u.l.savedpc = exit_pc, and returns. Unlike a guard there is
+       no condition; control always leaves the trace here. The exit stub is
+       generated later (snap_emitted marks it) and reached via this jmp. */
+    case SPTIR_EXIT: {
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      sptasm_jmp(a, exlbl);
       break;
     }
 

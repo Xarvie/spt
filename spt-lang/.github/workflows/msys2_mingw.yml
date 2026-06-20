@@ -1,0 +1,63 @@
+name: Compile Check MSYS2 (MingW)
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}-MSYS2_MINGW-${{ matrix.arch }}
+    runs-on: windows-latest
+
+    concurrency:
+      group: ${{ github.ref }}-${{ github.base_ref }}-${{ github.head_ref }}-MSYS2_MINGW-${{ matrix.arch }}
+      cancel-in-progress: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [
+          { msystem: MINGW64, arch: x86_64, prefix: /mingw64 },
+          { msystem: MINGW32, arch: i686, prefix: /mingw32   }
+        ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: temp
+          submodules: true
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          install: git base-devel mingw-w64-${{ matrix.arch }}-toolchain mingw-w64-${{ matrix.arch }}-cmake mingw-w64-${{ matrix.arch }}-ninja
+          update: true
+
+      - name: Move Checkout
+        run: |
+          Copy-Item -Path ".\temp" -Destination "C:\_" -Recurse
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          cd /C/_
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          cd /C/_
+          cmake --build build --config Release
+
+      - name: Run tests
+        shell: msys2 {0}
+        run: |
+          cd /C/_
+          cd build
+          ctest --output-on-failure -j4
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: C:/_/build/Testing/**/*.xml

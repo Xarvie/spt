@@ -72,6 +72,9 @@ typedef enum {
   SPTIR_IDIV,         /* op1 // op2 (floor div) */
   SPTIR_POW,          /* op1 ^ op2 */
   SPTIR_NEG,          /* -op1 (unary minus) */
+  SPTIR_FMATH,        /* libm unary math call: op1 = float arg, aux = double(*)(double)
+                         libm function pointer. Result is float. Emits a C call
+                         (disables RA for the trace). Used for math.sqrt/sin/... */
 
   /* Bitwise (integer) */
   SPTIR_BAND,         /* op1 & op2 */
@@ -110,6 +113,11 @@ typedef enum {
   SPTIR_GUARD_LT,     /* guard op1 < aux (bounds check) */
   SPTIR_GUARD_LE,     /* guard op1 <= aux */
   SPTIR_GUARD_EQ,     /* guard op1 == aux (constant) */
+  SPTIR_GUARD_CFUNC,  /* guard table[key] == expected C closure: op1 = table ref,
+                         op2 = KPTR ref holding the key TString*, aux = expected
+                         GCObject* (the CClosure). Looks up key in the table and
+                         side-exits unless the found value equals expected. Pins
+                         a math.* method to its known function before an FMATH. */
   SPTIR_GUARD_T,      /* guard type of op1 == aux (SPTType) */
   SPTIR_GUARD_ULT,    /* guard (unsigned)op1 < aux (constant); used for shift
                          counts so out-of-range counts side-exit */
@@ -124,6 +132,17 @@ typedef enum {
                          Like a comparison but materializes a 0/1 value instead of
                          guarding. Used by if-conversion to build branchless
                          select = else + (then-else)*cond. Integer operands only. */
+  SPTIR_FCMPMASK,     /* (op1 cmp op2) on doubles -> all-ones/all-zeros bitmask;
+                         aux = comparison SPTIROp (EQ/NE/LT/LE only; GT/GE are
+                         emitted as swapped LT/LE). Float if-conversion. */
+  SPTIR_ICMPMASK,     /* (op1 cmp op2) on integers -> all-ones/all-zeros bitmask
+                         lifted into an XMM; aux = comparison SPTIROp. Lets an
+                         integer-conditioned branch with float arms use FSELECT
+                         (the integer values are compared exactly, no rounding). */
+  SPTIR_FSELECT,      /* bit-exact float select: op1=then, op2=else, aux=mask ref
+                         (an FCMPMASK). result = (then & mask) | (else & ~mask).
+                         Not arithmetic, so the chosen operand is reproduced
+                         bit-for-bit (float select via B+(A-B)*c is NOT exact). */
 
   SPTIR_NOP,          /* no-op (placeholder) */
   SPTIR_MAX
@@ -242,6 +261,10 @@ int sptir_kptr(SPTIRBuilder *b, void *ptr);
 /* Emit a guard and create a snapshot. */
 int sptir_guard(SPTIRBuilder *b, SPTIROp gop, int32_t val_ref, int64_t aux,
                 const Instruction *exit_pc);
+
+/* Emit an unconditional side exit to the interpreter at exit_pc (closes a side
+   trace at a back-edge it cannot loop on). Creates a snapshot for restoration. */
+int sptir_exit(SPTIRBuilder *b, const Instruction *exit_pc);
 
 /* Create a snapshot of current register state. */
 int sptir_snapshot(SPTIRBuilder *b, const Instruction *exit_pc);

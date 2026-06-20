@@ -664,6 +664,35 @@ static int math_log10(lua_State *L) {
 #endif
 /* }================================================================== */
 
+/* For the SPT JIT: map a math-library C function to its underlying unary libm
+   function (double -> double), or NULL if it is not one of the strictly-unary,
+   always-float-returning math functions the JIT can lower to a direct libm
+   call. Only functions that read exactly one numeric argument (arg 2 under the
+   SELF receiver convention) and always return a float are listed -- variadic
+   ones (atan/atan2, log with optional base) and int-preserving ones
+   (floor/ceil/abs) are excluded. Defined non-static so the JIT can reference
+   it; the math_* functions are file-static, so this mapping must live here. */
+/* Map a Lua math C function to the bare libm double(double) function pointer the
+   JIT's SPTIR_FMATH calls directly. NOTE: do NOT wrap these in l_mathop(): under
+   luaconf.h's C89/HUGE_VALF fallback (`#if defined(LUA_USE_C89) || (defined(
+   HUGE_VAL) && !defined(HUGE_VALF))`), l_mathop(op) expands to `(lua_Number) op`,
+   which casts the *function* to a double -> compile error here (l_mathop is meant
+   to wrap a math *call* like l_mathop(sqrt)(x), not to take a function pointer).
+   The double-precision libm functions match this typedef directly (lua_Number is
+   double), and the FMATH codegen operates in double, so the bare names are also
+   the type-correct choice regardless of which l_mathop branch a build selects. */
+typedef double (*spt_unary_libm_fn)(double);
+spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f) {
+  if (f == math_sqrt) return sqrt;
+  if (f == math_sin)  return sin;
+  if (f == math_cos)  return cos;
+  if (f == math_tan)  return tan;
+  if (f == math_exp)  return exp;
+  if (f == math_asin) return asin;
+  if (f == math_acos) return acos;
+  return NULL;
+}
+
 static const luaL_Reg mathlib[] = {{"abs", math_abs},
                                    {"acos", math_acos},
                                    {"asin", math_asin},

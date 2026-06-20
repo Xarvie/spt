@@ -144,6 +144,26 @@ int sptir_guard(SPTIRBuilder *b, SPTIROp gop, int32_t val_ref, int64_t aux,
   return ref;
 }
 
+/* Emit an UNCONDITIONAL side exit to the interpreter at `exit_pc`. Used to close
+   a side trace that has recorded forward from a parent's hot exit and reached a
+   loop back-edge whose target is *before* its own start (so it cannot form a
+   self-loop and cannot abort -- it must hand control back). A snapshot captures
+   the current register->slot mapping; codegen emits a plain `jmp` to that
+   snapshot's exit stub, which flushes live state to the interpreter stack, sets
+   savedpc = exit_pc, and returns. The interpreter (or the link trampoline) then
+   resumes at exit_pc -- typically the FORLOOP/JMP back-edge, which re-enters the
+   parent trace. snap_idx (used by codegen to find the exit stub) is mirrored
+   into aux so the IR dump and any aux-based pass see a consistent value. */
+int sptir_exit(SPTIRBuilder *b, const Instruction *exit_pc) {
+  int ref = sptir_emit(b, SPTIR_EXIT, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
+  if (ref >= 0) {
+    int snap = sptir_snapshot(b, exit_pc);
+    b->insts[ref].snap_idx = snap;
+    b->insts[ref].aux = snap;
+  }
+  return ref;
+}
+
 /* =====================================================================
 ** Loop handling: insert phi nodes at loop header
 ** ===================================================================== */
@@ -432,9 +452,11 @@ static void mark_used(SPTIRBuilder *b, int ref, uint8_t *used) {
   mark_used(b, ir->op1, used);
   mark_used(b, ir->op2, used);
   /* GUARD_LT/GUARD_LE keep their bound (e.g. an array LEN) in aux as an IR ref,
-     not in op2. Follow it, or the bound is dead-code-eliminated and the guard
-     reads an uninitialised spill slot at run time. */
-  if (ir->op == SPTIR_GUARD_LT || ir->op == SPTIR_GUARD_LE)
+     not in op2. FSELECT keeps its mask (an FCMPMASK) in aux. Follow these, or the
+     referenced value is dead-code-eliminated and read from an uninitialised spill
+     slot at run time. */
+  if (ir->op == SPTIR_GUARD_LT || ir->op == SPTIR_GUARD_LE ||
+      ir->op == SPTIR_FSELECT)
     mark_used(b, (int)ir->aux, used);
 }
 
@@ -505,6 +527,7 @@ static const char *iropname(int op) {
     case SPTIR_MUL: return "MUL"; case SPTIR_DIV: return "DIV";
     case SPTIR_MOD: return "MOD"; case SPTIR_IDIV: return "IDIV";
     case SPTIR_POW: return "POW"; case SPTIR_NEG: return "NEG";
+    case SPTIR_FMATH: return "FMATH";
     case SPTIR_BAND: return "BAND"; case SPTIR_BOR: return "BOR";
     case SPTIR_BXOR: return "BXOR"; case SPTIR_BNOT: return "BNOT";
     case SPTIR_SHL: return "SHL"; case SPTIR_SHR: return "SHR";
@@ -518,9 +541,12 @@ static const char *iropname(int op) {
     case SPTIR_GUARD: return "GUARD"; case SPTIR_GUARD_LT: return "GUARD_LT";
     case SPTIR_GUARD_LE: return "GUARD_LE"; case SPTIR_GUARD_EQ: return "GUARD_EQ";
     case SPTIR_GUARD_T: return "GUARD_T"; case SPTIR_EXIT: return "EXIT";
+    case SPTIR_GUARD_CFUNC: return "GUARD_CFUNC";
     case SPTIR_LOOP: return "LOOP"; case SPTIR_PHI: return "PHI";
     case SPTIR_CALL: return "CALL"; case SPTIR_RETURN: return "RETURN";
     case SPTIR_NOP: return "NOP"; case SPTIR_CMPSET: return "CMPSET";
+    case SPTIR_FCMPMASK: return "FCMPMASK"; case SPTIR_FSELECT: return "FSELECT";
+    case SPTIR_ICMPMASK: return "ICMPMASK";
     default: return "???";
   }
 }

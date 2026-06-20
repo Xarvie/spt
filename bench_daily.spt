@@ -1,0 +1,369 @@
+// 日常使用场景模拟：日志分析系统
+// 混合数据过滤、统计聚合、map 查询、数学计算、排序等真实工作负载
+// 不针对 JIT 做任何特殊优化，按正常写法编写
+// 注意：SPT 的 for (int i = 0, N) 是包含 N 的（0..N，共 N+1 次）
+
+// ============================ 数据生成 ============================
+// 模拟生成日志数据：时间戳、级别(0-3=debug/info/warn/error)、响应时间、状态码
+int gen_logs(int n, list<int> ts, list<int> level, list<int> rtime, list<int> status) {
+    int seed = 12345;
+    for (int i = 0, n - 1) {
+        // 简单 LCG 伪随机
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        ts[i] = 1700000000 + i;
+        level[i] = seed % 4;           // 0=debug 1=info 2=warn 3=error
+        rtime[i] = (seed % 500) + 10;  // 10-509 ms
+        status[i] = 200 + (seed % 5) * 100;  // 200/300/400/500/600
+    }
+    return n;
+}
+
+// ============================ 任务 1: 过滤错误日志 ============================
+// 遍历所有日志，筛选出 error 级别且状态码 >= 500 的记录索引
+int filter_errors(int n, list<int> level, list<int> status, list<int> out_idx) {
+    int count = 0;
+    for (int i = 0, n - 1) {
+        if (level[i] >= 3) {
+            if (status[i] >= 500) {
+                out_idx[count] = i;
+                count = count + 1;
+            }
+        }
+    }
+    return count;
+}
+
+// ============================ 任务 2: 级别统计 ============================
+// 统计每个日志级别的出现次数
+int count_levels(int n, list<int> level, list<int> counts) {
+    for (int i = 0, 3) { counts[i] = 0; }
+    for (int i = 0, n - 1) {
+        int lv = level[i];
+        counts[lv] = counts[lv] + 1;
+    }
+    return counts[0] + counts[1] * 100 + counts[2] * 10000 + counts[3] * 1000000;
+}
+
+// ============================ 任务 3: 响应时间统计 ============================
+// 计算 min/max/sum/sum_sq，用于后续 avg 和 stddev
+int rtime_stats(int n, list<int> rtime, list<float> out) {
+    int mn = rtime[0];
+    int mx = rtime[0];
+    int sum = 0;
+    float sum_sq = 0.0;
+    for (int i = 0, n - 1) {
+        int v = rtime[i];
+        if (v < mn) { mn = v; }
+        if (v > mx) { mx = v; }
+        sum = sum + v;
+        sum_sq = sum_sq + (v * v) * 1.0;
+    }
+    out[0] = mn * 1.0;
+    out[1] = mx * 1.0;
+    out[2] = sum * 1.0;
+    out[3] = sum_sq;
+    return sum;
+}
+
+// ============================ 任务 4: 分位数计算（采样排序） ============================
+// 对前 sample 个元素插入排序，然后取分位数（日常场景：采样估计分位数）
+int partial_sort_pct(int n, list<int> rtime, list<int> out) {
+    int sample = 2000;
+    if (sample > n) { sample = n; }
+    // 复制前 sample 个
+    for (int i = 0, sample - 1) { out[i] = rtime[i]; }
+    // 插入排序
+    for (int i = 1, sample - 1) {
+        int key = out[i];
+        int j = i - 1;
+        int done = 0;
+        while (j >= 0 && done == 0) {
+            if (out[j] > key) {
+                out[j + 1] = out[j];
+                j = j - 1;
+            } else {
+                done = 1;
+            }
+        }
+        out[j + 1] = key;
+    }
+    // 返回 p50 和 p90 的组合值
+    int p50 = out[math.floor(sample / 2)];
+    int p90 = out[math.floor(sample * 9 / 10)];
+    return p50 * 10000 + p90;
+}
+
+// ============================ 任务 5: 按服务分组聚合 ============================
+// 模拟 8 个服务，每个日志分配到一个服务，统计每服务的总响应时间
+int group_by_service(int n, list<int> rtime, list<int> svc, list<int> out) {
+    for (int i = 0, 7) { out[i] = 0; }
+    for (int i = 0, n - 1) {
+        int s = svc[i];
+        out[s] = out[s] + rtime[i];
+    }
+    // 返回所有服务总和，用于校验
+    int total = 0;
+    for (int i = 0, 7) { total = total + out[i]; }
+    return total;
+}
+
+// ============================ 任务 6: 缓存查询模拟 ============================
+// 模拟一个开放寻址哈希表缓存，查询 n 个 key
+int cache_lookup(int n, list<int> keys, list<int> table, int table_size) {
+    int hits = 0;
+    int misses = 0;
+    for (int i = 0, n - 1) {
+        int key = keys[i];
+        int slot = key & (table_size - 1);
+        int probe = 0;
+        int found = 0;
+        while (probe < 8) {
+            int idx = (slot + probe) & (table_size - 1);
+            if (table[idx] == key) {
+                found = 1;
+                probe = 8;  // break
+            } else {
+                if (table[idx] == 0) {
+                    probe = 8;  // break, empty slot = miss
+                } else {
+                    probe = probe + 1;
+                }
+            }
+        }
+        if (found == 1) {
+            hits = hits + 1;
+        } else {
+            misses = misses + 1;
+        }
+    }
+    return hits * 1000 + misses;
+}
+
+// ============================ 任务 7: 数学计算（标准差 + 归一化） ============================
+// 计算 stddev 并做 min-max 归一化到 [0, 1000]
+float math_compute(int n, list<int> rtime, list<float> out, float avg, float mn, float mx) {
+    float range = mx - mn;
+    if (range < 0.001) { range = 1.0; }
+    // 归一化
+    for (int i = 0, n - 1) {
+        out[i] = (rtime[i] * 1.0 - mn) / range * 1000.0;
+    }
+    // 计算 stddev（用 math.sqrt）
+    float var = 0.0;
+    for (int i = 0, n - 1) {
+        float d = rtime[i] * 1.0 - avg;
+        var = var + d * d;
+    }
+    var = var / (n * 1.0);
+    // math.sqrt 是 libm 调用
+    float sd = math.sqrt(var);
+    return sd;
+}
+
+// ============================ 任务 8: 状态机模拟 ============================
+// 模拟一个简单的请求处理状态机：0=recv 1=parse 2=process 3=respond 4=done
+int state_machine(int n, list<int> events, list<int> out) {
+    int state = 0;
+    int done_count = 0;
+    int error_count = 0;
+    for (int i = 0, n - 1) {
+        int ev = events[i];
+        if (state == 0) {
+            if (ev == 1) { state = 1; }
+            else { if (ev == 9) { error_count = error_count + 1; } }
+        } else {
+            if (state == 1) {
+                if (ev == 2) { state = 2; }
+                else { if (ev == 9) { state = 0; error_count = error_count + 1; } }
+            } else {
+                if (state == 2) {
+                    if (ev == 3) { state = 3; }
+                    else { if (ev == 9) { state = 0; error_count = error_count + 1; } }
+                } else {
+                    if (state == 3) {
+                        if (ev == 4) { state = 0; done_count = done_count + 1; }
+                        else { if (ev == 9) { state = 0; error_count = error_count + 1; } }
+                    }
+                }
+            }
+        }
+    }
+    return done_count * 1000 + error_count;
+}
+
+// ============================ 任务 9: 滑动窗口聚合 ============================
+// 计算大小为 w 的滑动窗口内的最大值
+int sliding_window_max(int n, list<int> data, int w, list<int> out) {
+    int out_idx = 0;
+    for (int i = 0, n - w) {
+        int mx = data[i];
+        for (int j = i + 1, i + w - 1) {
+            if (data[j] > mx) { mx = data[j]; }
+        }
+        out[out_idx] = mx;
+        out_idx = out_idx + 1;
+    }
+    // 返回所有窗口最大值之和
+    int sum = 0;
+    for (int i = 0, out_idx - 1) { sum = sum + out[i]; }
+    return sum;
+}
+
+// ============================ 任务 10: 简单 LRU 计数器 ============================
+// 模拟 LRU 缓存命中统计：用数组模拟最近访问时间戳
+int lru_simulate(int n, list<int> accesses, list<int> last_access, int capacity) {
+    int hits = 0;
+    int evictions = 0;
+    for (int i = 0, n - 1) {
+        int key = accesses[i] & (capacity - 1);
+        if (last_access[key] >= 0) {
+            hits = hits + 1;
+        } else {
+            evictions = evictions + 1;
+        }
+        last_access[key] = i;
+    }
+    return hits * 100 + evictions;
+}
+
+// ============================ main ============================
+int main() {
+    print("=== 日常场景模拟：日志分析系统 ===");
+
+    int N = 500000;
+    int CAP = 65536;
+
+    // 数据数组
+    list<int> ts = [];
+    list<int> level = [];
+    list<int> rtime = [];
+    list<int> status = [];
+    list<int> svc = [];
+    table.push(ts, 0); table.push(level, 0); table.push(rtime, 0); table.push(status, 0); table.push(svc, 0);
+    for (int i = 0, N - 1) {
+        table.push(ts, 0); table.push(level, 0); table.push(rtime, 0); table.push(status, 0); table.push(svc, 0);
+    }
+
+    // 生成数据
+    float t0 = os.clock();
+    gen_logs(N, ts, level, rtime, status);
+    // 分配服务
+    int seed2 = 999;
+    for (int i = 0, N - 1) {
+        seed2 = (seed2 * 6364136223846793005 + 1442695040888963407) & 0x7fffffff;
+        svc[i] = seed2 & 7;
+    }
+    float t1 = os.clock();
+    print("Init: " .. tostring(t1 - t0) .. "s");
+
+    float total_interp = 0.0;
+    float total_jit = 0.0;
+
+    // --- Task 1: 过滤错误日志 ---
+    list<int> err_idx = [];
+    for (int i = 0, N - 1) { table.push(err_idx, 0); }
+    float tc0 = os.clock();
+    int err_count = filter_errors(N, level, status, err_idx);
+    float tc1 = os.clock();
+    print("Task1 FilterErrors: count=" .. tostring(err_count) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 2: 级别统计 ---
+    list<int> counts = [0, 0, 0, 0];
+    tc0 = os.clock();
+    int lv_hash = count_levels(N, level, counts);
+    tc1 = os.clock();
+    print("Task2 CountLevels: hash=" .. tostring(lv_hash) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 3: 响应时间统计 ---
+    list<float> stats_out = [0.0, 0.0, 0.0, 0.0];
+    tc0 = os.clock();
+    int sum_rtime = rtime_stats(N, rtime, stats_out);
+    tc1 = os.clock();
+    float avg = stats_out[2] / (N * 1.0);
+    print("Task3 RtimeStats: sum=" .. tostring(sum_rtime) .. " avg=" .. tostring(avg) .. " min=" .. tostring(stats_out[0]) .. " max=" .. tostring(stats_out[1]) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 4: 分位数（插入排序） ---
+    list<int> sorted = [];
+    for (int i = 0, 1999) { table.push(sorted, 0); }
+    tc0 = os.clock();
+    int pct = partial_sort_pct(N, rtime, sorted);
+    tc1 = os.clock();
+    print("Task4 Percentile: p50=" .. tostring(math.floor(pct / 10000)) .. " p90=" .. tostring(pct % 10000) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 5: 按服务分组 ---
+    list<int> svc_totals = [0, 0, 0, 0, 0, 0, 0, 0];
+    tc0 = os.clock();
+    int svc_total = group_by_service(N, rtime, svc, svc_totals);
+    tc1 = os.clock();
+    print("Task5 GroupByService: total=" .. tostring(svc_total) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 6: 缓存查询 ---
+    list<int> cache_keys = [];
+    for (int i = 0, N - 1) { table.push(cache_keys, i * 7 + 3); }
+    list<int> cache_table = [];
+    for (int i = 0, CAP - 1) { table.push(cache_table, 0); }
+    // 填充一半缓存
+    for (int i = 0, CAP / 2 - 1) { cache_table[i] = i * 7 + 3; }
+    tc0 = os.clock();
+    int cache_result = cache_lookup(N, cache_keys, cache_table, CAP);
+    tc1 = os.clock();
+    print("Task6 CacheLookup: result=" .. tostring(cache_result) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 7: 数学计算 ---
+    list<float> norm_out = [];
+    for (int i = 0, N - 1) { table.push(norm_out, 0.0); }
+    tc0 = os.clock();
+    float sd = math_compute(N, rtime, norm_out, avg, stats_out[0], stats_out[1]);
+    tc1 = os.clock();
+    print("Task7 MathCompute: stddev=" .. tostring(sd) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 8: 状态机 ---
+    list<int> events = [];
+    for (int i = 0, N - 1) {
+        int e;
+        if (i % 5 == 0) { e = 9; } else { e = (i % 4) + 1; }
+        table.push(events, e);
+    }
+    list<int> sm_out = [];
+    for (int i = 0, N - 1) { table.push(sm_out, 0); }
+    tc0 = os.clock();
+    int sm_result = state_machine(N, events, sm_out);
+    tc1 = os.clock();
+    print("Task8 StateMachine: result=" .. tostring(sm_result) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 9: 滑动窗口最大值 ---
+    int WIN = 64;
+    int win_outs = N - WIN + 1;
+    list<int> swm_out = [];
+    for (int i = 0, win_outs - 1) { table.push(swm_out, 0); }
+    tc0 = os.clock();
+    int swm_sum = sliding_window_max(N, rtime, WIN, swm_out);
+    tc1 = os.clock();
+    print("Task9 SlidingWindowMax: sum=" .. tostring(swm_sum) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    // --- Task 10: LRU 模拟 ---
+    int LRUCAP = 1024;
+    list<int> last_access = [];
+    for (int i = 0, LRUCAP - 1) { table.push(last_access, -1); }
+    list<int> accesses = [];
+    for (int i = 0, N - 1) { table.push(accesses, i); }
+    tc0 = os.clock();
+    int lru_result = lru_simulate(N, accesses, last_access, LRUCAP);
+    tc1 = os.clock();
+    print("Task10 LruSimulate: result=" .. tostring(lru_result) .. " calc=" .. tostring(tc1 - tc0) .. "s");
+    total_interp = total_interp + (tc1 - tc0);
+
+    print("=== 全部完成 total_calc=" .. tostring(total_interp) .. "s ===");
+    return 0;
+}
+
+main();

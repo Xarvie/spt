@@ -289,6 +289,14 @@ static int luaB_next(lua_State *L) {
   }
 }
 
+/* The pairs() iterator over a list is exactly luaB_next, whose array-mode key
+   sequence is 0,1,...,loglen-1 (see luaH_next). The trace JIT specializes
+   `for k,v : pairs(list)` to a native index loop and pins the iterator function
+   to this address with an entry guard; if the slot ever holds a different
+   function the trace declines and the interpreter runs. luaB_next is
+   file-static, so this accessor must live here. */
+lua_CFunction spt_jit_pairs_next(void) { return luaB_next; }
+
 static int pairscont(lua_State *L, int status, lua_KContext k) {
   (void)L;
   (void)status;

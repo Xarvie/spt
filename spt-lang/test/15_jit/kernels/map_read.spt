@@ -1,0 +1,22 @@
+// Regression kernel for inline hash-slot GETFIELD (map read by a constant
+// short-string key). The codegen computes the key's main position and walks the
+// collision chain (gen_hash_find, mirroring luaH_Hgetshortstr) until it finds
+// the node holding our key, then type-guards and loads its value; a key that is
+// absent at run time side-exits and the interpreter handles it. Collision-
+// chained keys are fully handled (the chain walk), so unlike the first
+// main-position-only version this compiles deterministically regardless of the
+// per-run string-hash seed. The loaded value equals the interpreter's whether
+// or not it JITs (correctness rests on the key + value-type guards). Mixes
+// several keys, an int and a float map, and a map value used as a list index.
+map<str, int> w = {"rate": 3, "base": 5, "scale": 2, "lo": 1, "hi": 4};
+map<str, float> f = {"a": 1.5, "b": 2.5, "c": 0.5};
+list<int> tab = [10, 11, 12, 13, 14, 15, 16, 17];
+int si = 0;
+float sf = 0.0;
+for (int rep = 0, 200000) {
+  si = si + w["rate"] - w["scale"] + w["hi"];
+  si = si + tab[w["lo"]] + tab[w["base"]];
+  sf = sf + f["a"] * f["c"] + f["b"];
+}
+print(si);
+print(sf);

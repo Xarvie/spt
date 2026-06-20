@@ -1,0 +1,15 @@
+// Phase-3a unrolling edge mix in one kernel: a very SHORT inner loop (4 trips --
+// the case that was a NEGATIVE optimization at 0.98x before unrolling), a
+// DESCENDING inner loop (negative step -- exercises the step<0 trip-count
+// formula), and an inner loop that WRITES the array (SETI inside the unrolled
+// body). The control slots are pinned to constants per unrolled copy, so a
+// guard side-exit inside an unrolled body must restore the exact interpreter
+// loop state. Output (including array contents) must match byte-for-byte.
+list<int> a = [0, 0, 0, 0, 0, 0, 0, 0];
+int s = 0;
+for (int t = 0, 300000) {
+  for (int j = 0, 3) { s = s + j * 2; }      // short inner (4 trips)
+  for (int j = 7, 0, -1) { a[j] = a[j] + 1; } // descending + array write
+}
+print(s);
+for (int j = 0, 7) { print(a[j]); }

@@ -97,6 +97,88 @@ def gen_branch(r):
             f"for (int i = 0, {n}) {{ if ({cond}) {{ s = s + {a}; }} "
             f"else {{ s = s + {b}; }} }}\nprint(s);\n")
 
+def gen_side_store(r):
+    # Phase-2 side-trace shapes: a branch with a side-effecting (array-store) arm.
+    # If-conversion bails on the store, so the root trace takes a guarded branch
+    # and the minority arm becomes a hot side exit that gets compiled as a side
+    # trace. Sweeps: which arm stores, branch bias (50/50 vs rare vs common), and
+    # whether the OTHER arm also has a store (both arms non-if-convertible). The
+    # side trace must record the direction the parent did NOT, and linked
+    # execution must match the interpreter incl. all array contents.
+    sz = 8
+    av = ", ".join("0" for _ in range(sz))
+    n = r.choice([200000, 300000, 1000000])
+    md = r.choice([2, 2, 3, 5, 10])           # 2 => 50/50; larger => biased
+    rel = r.choice(["==", "!="])               # which side is the store arm
+    store_then = r.choice([True, False])       # store in then- vs else-arm
+    both = r.choice([True, False])             # both arms store (2 arrays)
+    cond = f"i % {md} {rel} 0"
+    store_a = "a[k % 8] = i; k = k + 1;"
+    accum = "s = s + i;"
+    if both:
+        store_b = "b[m % 8] = i + 1; m = m + 1;"
+        then_body = store_a if store_then else store_b
+        else_body = store_b if store_then else store_a
+        decl = (f"list<int> a = [{av}];\nlist<int> b = [{av}];\n"
+                f"int s = 0;\nint k = 0;\nint m = 0;\n")
+        tail = ("print(k);\nprint(m);\n"
+                "for (int j = 0, 7) { print(a[j]); }\n"
+                "for (int j = 0, 7) { print(b[j]); }\n")
+    else:
+        then_body = store_a if store_then else accum
+        else_body = accum if store_then else store_a
+        decl = f"list<int> a = [{av}];\nint s = 0;\nint k = 0;\n"
+        tail = ("print(s);\nprint(k);\n"
+                "for (int j = 0, 7) { print(a[j]); }\n")
+    return (decl +
+            f"for (int i = 1, {n}) {{ if ({cond}) {{ {then_body} }} "
+            f"else {{ {else_body} }} }}\n" + tail)
+
+
+def gen_unroll_nest(r):
+    """Nested loop with a SHORT, CONSTANT-bound inner loop -- the case
+    inner-loop unrolling (Phase 3a) targets. Sweeps inner trip count across the
+    UNROLL_MAX boundary (1..18), step (incl. negative), non-zero init, and inner
+    body kind (scalar / float / array read / array write). The fuzzer also
+    sweeps SPT_JIT_UNROLL_MAX, so both the unrolled and the fall-back (skip+abort
+    the outer trace) paths are exercised against the interpreter. A wrong trip
+    count or stale loop-index in the unroll shows up immediately as a sum
+    mismatch. Deterministic."""
+    outer = r.choice([20000, 100000, 300000])
+    step = r.choice([1, 1, 1, 2, 3, -1, -2])
+    trips = r.randint(1, 18)
+    if step > 0:
+        init = r.choice([0, 0, 1, 3])
+        limit = init + (trips - 1) * step
+    else:
+        init = r.choice([8, 10, 14, 17])
+        limit = init + (trips - 1) * step
+        if limit < 0:
+            limit = 0                      # keep indices valid; trip count just shrinks
+    maxidx = max(init, limit)              # j stays within [min,max]; both >= 0
+    hdr = (f"for (int j = {init}, {limit})" if step == 1
+           else f"for (int j = {init}, {limit}, {step})")
+    kind = r.choice(["scalar", "float", "arr_read", "arr_write"])
+    if kind == "scalar":
+        op = r.choice(AOPS)
+        return (f"int s = 0;\n"
+                f"for (int t = 0, {outer}) {{ {hdr} {{ s = s + (j {op} 2); }} }}\n"
+                f"print(s);\n")
+    if kind == "float":
+        return (f"float s = 0.0;\n"
+                f"for (int t = 0, {outer}) {{ {hdr} {{ s = s + j * 1.5; }} }}\n"
+                f"print(s);\n")
+    vals = ", ".join(str((q * 3 + 1) % 7) for q in range(maxidx + 1))
+    if kind == "arr_read":
+        return (f"list<int> a = [{vals}];\n"
+                f"int s = 0;\n"
+                f"for (int t = 0, {outer}) {{ {hdr} {{ s = s + a[j]; }} }}\n"
+                f"print(s);\n")
+    return (f"list<int> a = [{vals}];\n"
+            f"for (int t = 0, {min(outer, 80000)}) {{ {hdr} {{ a[j] = a[j] + 1; }} }}\n"
+            f"print(a[0] + a[{maxidx}]);\n")
+
+
 def gen_moddiv(r):
     """Exercise %% and ~/ with potentially-negative dividends and both signs of
     divisor (floored-semantics path). Divisors are nonzero constants."""
@@ -131,6 +213,185 @@ def gen_multi_accum(r):
             f"for (int i = 1, {n}) {{ s1 = s1 + i; s2 = (s2 * 3 + i) % {m}; "
             f"s3 = s3 ^ i; s4 = s4 + (i % 5); }}\n"
             f"print(s1); print(s2); print(s3); print(s4);\n")
+
+def gen_recursive_nest(r):
+    """All-constant nested loops collapsed by RECURSIVE inner-loop unrolling
+    (Phase 3a extension): an outer rep loop wraps 2-3 constant-bound inner loops
+    so every inner level unrolls inline into the rep trace (a fixed-size matrix
+    multiply is the motivating case). Covers the bug class where a loop variable
+    is an operand of an MMBIN that follows arithmetic (e.g. `i*k` makes the
+    control slot an MMBIN operand -- must NOT be mistaken for a control-slot
+    write), plus nested array reads/writes with indices that become constants
+    after unrolling. The fuzzer sweeps SPT_JIT_UNROLL_MAX, so partial-unroll and
+    full-fall-back paths are also hit. Deterministic."""
+    rep = r.choice([50000, 200000])
+    depth = r.choice([2, 2, 3])
+    # small constant trips so the nest fully unrolls (product stays bounded)
+    trips = [r.randint(2, 4) for _ in range(depth)]
+    vs = ["i", "j", "k"][:depth]
+    hdrs = "".join(f"for (int {vs[d]} = 0, {trips[d]-1}) {{ " for d in range(depth))
+    close = "}" * depth
+    kind = r.choice(["scalar_mmbin", "arr_read", "arr_write"])
+    if kind == "scalar_mmbin":
+        # loop vars as MMBIN operands: i*i - i, (i*j)+k, etc.
+        o1 = r.choice(AOPS); o2 = r.choice(AOPS)
+        expr = f"({vs[0]} {o1} {vs[0]}) {o2} {vs[-1]}"
+        return (f"int s = 0;\n"
+                f"for (int rep = 0, {rep}) {{ {hdrs} s = s + {expr}; {close} }}\n"
+                f"print(s);\n")
+    # array cases: index = a constant combination of the loop vars (max < n)
+    maxv = sum(t - 1 for t in trips)            # max index reached by sum of vars
+    n = maxv + 1
+    vals = ", ".join(str((q * 2 + 1) % 9) for q in range(n))
+    idx = " + ".join(vs)
+    if kind == "arr_read":
+        return (f"list<int> a = [{vals}];\n"
+                f"int s = 0;\n"
+                f"for (int rep = 0, {rep}) {{ {hdrs} s = s + a[{idx}]; {close} }}\n"
+                f"print(s);\n")
+    return (f"list<int> a = [{vals}];\n"
+            f"for (int rep = 0, {min(rep,60000)}) {{ {hdrs} a[{idx}] = a[{idx}] + 1; {close} }}\n"
+            f"print(a[0] + a[{maxv}]);\n")
+
+
+def gen_speculative_nest(r):
+    """Nested loops whose INNER bound is a loop-INVARIANT VARIABLE (not a
+    compile-time constant): `for j = 0, N-1`, `for j = 0, N`, variable init
+    `for j = M, N`, variable step `for j = 0, N, S`, and a two-level case whose
+    outer constant index pins the inner variable bound. These exercise the
+    GUARDED SPECULATIVE unroller (Phase 3a): the recorder reads the invariant
+    bound's value, pins it with a run-time guard (two GUARD_LE), and unrolls the
+    speculated trip count -- a variable-dimension matrix multiply / gemv is the
+    motivating case. Correctness rests entirely on the guard (a wrong or stale
+    guess just side-exits), so output must match the interpreter under every
+    SPT_JIT_UNROLL_MAX. Bodies never read AND write the same array (that path
+    bails). Deterministic."""
+    rep = r.choice([50000, 200000])
+    N = r.randint(3, 8)                 # invariant dimension, set once
+    M = r.randint(0, 2)
+    S = r.choice([1, 2, 3])
+    use_arr = r.random() < 0.5
+    style = r.choice(["limit_minus", "limit_direct", "init_var", "step_var", "two_level"])
+    setup = f"int N = {N};\n"
+    if use_arr:
+        vals = ", ".join(str((q * 3 + 1) % 7) for q in range(N + 1))
+        setup += f"list<int> a = [{vals}];\n"
+        rd = "a[j]"
+    else:
+        rd = "j"
+    if style == "limit_minus":
+        inner = f"for (int j = 0, N-1) {{ s = s + {rd}; }}"
+    elif style == "limit_direct":
+        inner = f"for (int j = 0, N) {{ s = s + {rd}; }}"
+    elif style == "init_var":
+        setup += f"int M = {M};\n"
+        inner = f"for (int j = M, N) {{ s = s + {rd}; }}"
+    elif style == "step_var":
+        setup += f"int S = {S};\n"
+        inner = f"for (int j = 0, N, S) {{ s = s + {rd}; }}"
+    else:  # two_level: outer constant i is pinned -> inner N stays speculative
+        rd2 = "a[j]" if use_arr else "(i + j)"
+        inner = f"for (int i = 0, 3) {{ for (int j = 0, N-1) {{ s = s + {rd2}; }} }}"
+    return (setup +
+            f"int s = 0;\n"
+            f"for (int rep = 0, {rep}) {{ {inner} }}\n"
+            f"print(s);\n")
+
+
+def gen_map_access(r):
+    """Map reads by constant short-string keys in a hot loop: exercises the
+    inline hash-slot GETFIELD fast path. The recorder records a read only when
+    the key sits at its MAIN POSITION in the live map (else it aborts and the
+    interpreter handles it); since the string hash is seeded per run, a given
+    key may or may not be at its main position, so this sweeps BOTH the
+    fast-path-compiled and the collision-fallback cases. Either way the value is
+    the same as the interpreter's (correctness rests on the key+type guards plus
+    side-exit), so output is deterministic and the differential gate is stable.
+    Covers int- and float-valued maps, several keys, and a map value used as a
+    list index (the m[k] result feeding a guarded GETI). Deterministic."""
+    KEYS = ["a", "b", "c", "x", "y", "z", "key", "val", "name", "id",
+            "alpha", "beta", "gamma", "lo", "hi", "sum", "n", "k", "q", "w"]
+    rep = r.choice([50000, 200000])
+    nkeys = r.randint(2, 6)
+    keys = r.sample(KEYS, nkeys)
+    flt = r.random() < 0.4
+    if flt:
+        pairs = ", ".join(f'"{k}": {r.randint(1, 9)}.{r.randint(0, 9)}' for k in keys)
+        decl = f"map<str, float> m = {{{pairs}}};"
+        acc0 = "0.0"
+    else:
+        pairs = ", ".join(f'"{k}": {r.randint(1, 40)}' for k in keys)
+        decl = f"map<str, int> m = {{{pairs}}};"
+        acc0 = "0"
+    # read 1..3 keys, combined with +/- (and * for a non-zero start)
+    nread = r.randint(1, min(3, nkeys))
+    rk = r.sample(keys, nread)
+    ops = ["+", "-", "+"]
+    expr = f'm["{rk[0]}"]'
+    for j in range(1, nread):
+        expr += f' {ops[j % 3]} m["{rk[j]}"]'
+    style = r.choice(["accum", "accum", "idx"])
+    if style == "idx" and not flt:
+        # use an int map value (0..n-1) as a list index
+        n = 8
+        vals = ", ".join(str((q * 2 + 1) % 13) for q in range(n))
+        ik = keys[0]
+        # clamp the indexing key's value into range via a fresh small map
+        decl = (f"map<str, int> m = {{" +
+                ", ".join(f'"{k}": {r.randint(0, n - 1)}' for k in keys) + "};\n"
+                f"list<int> arr = [{vals}];")
+        return (decl + "\n"
+                f"int s = 0;\n"
+                f"for (int i = 0, {rep}) {{ s = s + arr[m[\"{ik}\"]]; }}\n"
+                f"print(s);\n")
+    return (decl + "\n"
+            f"{'float' if flt else 'int'} s = {acc0};\n"
+            f"for (int i = 0, {rep}) {{ s = s {('+' if flt else '+')} {expr}; }}\n"
+            f"print(s);\n")
+
+
+def gen_map_write(r):
+    """Map WRITES by constant short-string keys in a hot loop: exercises the
+    inline hash-slot SETFIELD fast path (and GETFIELD for the read side of an
+    accumulate). Only int/float values are written (no GC barrier), and only an
+    EXISTING main-position key updates on the fast path -- an absent/chained key
+    or a resized table side-exits and the interpreter stores. The classic shape
+    is `m[k] = m[k] + x` (read-modify-write the same key, like a counter or a
+    histogram bucket). As with gen_map_access the hash is seeded per run, so
+    whether the write JITs varies, but the resulting map is identical to the
+    interpreter's -- output is deterministic, gate stable. Deterministic."""
+    KEYS = ["count", "sum", "total", "acc", "n", "hi", "lo", "x", "y", "k", "s", "v"]
+    rep = r.choice([50000, 200000])
+    nkeys = r.randint(1, 4)
+    keys = r.sample(KEYS, nkeys)
+    flt = r.random() < 0.35
+    if flt:
+        decl = "map<str, float> m = {" + ", ".join(f'"{k}": 0.0' for k in keys) + "};"
+        inc = f'{r.randint(1, 5)}.{r.randint(0, 9)}'
+    else:
+        decl = "map<str, int> m = {" + ", ".join(f'"{k}": 0' for k in keys) + "};"
+        inc = str(r.randint(1, 7))
+    wk = keys[0]
+    style = r.choice(["rmw_const", "rmw_self", "two_keys", "nested_arr"])
+    if style == "rmw_const":
+        body = f'm["{wk}"] = m["{wk}"] + {inc};'
+        loop = f"for (int i = 0, {rep}) {{ {body} }}"
+    elif style == "two_keys" and nkeys >= 2:
+        k2 = keys[1]
+        body = f'm["{wk}"] = m["{wk}"] + {inc}; m["{k2}"] = m["{k2}"] - {inc};'
+        loop = f"for (int i = 0, {rep}) {{ {body} }}"
+    elif style == "nested_arr" and not flt:
+        n = 8
+        vals = ", ".join(str((q * 2 + 1) % 11) for q in range(n))
+        decl = decl + f"\nlist<int> a = [{vals}];"
+        loop = (f"for (int rep = 0, {min(rep, 80000)}) {{ for (int j = 0, 7) {{ "
+                f'm["{wk}"] = m["{wk}"] + a[j]; }} }}')
+    else:  # rmw_self: accumulate using the running value
+        body = f'm["{wk}"] = m["{wk}"] + {inc};'
+        loop = f"for (int i = 0, {rep}) {{ {body} }}"
+    rd = f'print(m["{wk}"]);'
+    return decl + "\n" + loop + "\n" + rd + "\n"
+
 
 def gen_nested3(r):
     a = r.randint(2, 50); b = r.randint(2, 12); c = r.randint(2, 8)
@@ -515,6 +776,162 @@ def gen_condassign(r):
             f"int s = 0;\nfor (int i = 0, {n}) {{ s = s + f(i % {md} - {md//2}); }}\n"
             f"print(s % 1000000000);\n")
 
+def gen_global_read(r):
+    """Reading globals inside a hot loop: exercises OP_GETTABUP (ULOAD of the
+    _ENV upvalue table + inline hash-slot lookup of a constant short-string key,
+    lowered like GETFIELD). Declares a few int/float globals and combines them
+    in a nested loop. The value type is predicted at record time and guarded at
+    run time; here globals keep a fixed type so the fast path fires. GETTABUP is
+    not RA-safe, so the trace runs with RA disabled. Output is deterministic and
+    identical to the interpreter regardless of whether it JITs."""
+    NAMES = ["g", "gi", "gf", "gx", "gy", "gz", "gk", "gn", "ga", "gb",
+             "gc", "gq", "gw", "gv", "gh", "gl", "gm", "gp", "gr", "gs"]
+    rep = r.choice([4000, 30000])
+    inner = r.choice([7, 15])
+    nint = r.randint(1, 3)
+    flt = r.random() < 0.4
+    names = r.sample(NAMES, nint + (1 if flt else 0))
+    ints = names[:nint]
+    decls = "".join(f"{nm} = {r.randint(1, 40)};\n" for nm in ints)
+    lines = [decls, "int si = 0;\n"]
+    # int expression combining the int globals
+    iops = ["+", "-", "+", "*"]
+    iexpr = ints[0]
+    for nm in ints[1:]:
+        iexpr += f" {r.choice(iops)} {nm}"
+    body = [f"    si = si + ({iexpr});\n"]
+    tail = ["print(si);\n"]
+    if flt:
+        gfn = names[nint]
+        decls2 = f"{gfn} = {r.randint(1, 9)}.{r.randint(0, 9)};\n"
+        lines[0] = decls2 + lines[0]
+        lines.append("float sf = 0.0;\n")
+        body.append(f"    sf = sf + {gfn};\n")
+        tail.append("print(sf);\n")
+    src = "".join(lines)
+    src += f"for (int rep = 0, {rep}) {{\n  for (int j = 0, {inner}) {{\n"
+    src += "".join(body)
+    src += "  }\n}\n"
+    src += "".join(tail)
+    return src
+
+def gen_math_call(r):
+    """Unary math functions in a hot loop (math.sqrt/sin/cos/... via a direct
+    libm C call, SPTIR_FMATH). Exercises the C-call mechanism, the GUARD_CFUNC
+    method pin, and the int-arg TOFLT path. Several functions and both float and
+    int argument lists are combined; results are transcendental but deterministic
+    and identical to the interpreter (the run-time guards, not the record-time
+    prediction, are load-bearing). The trace runs with RA disabled (FMATH is not
+    RA-safe), and the C call is ABI-sensitive, so this is also a valgrind probe."""
+    FNS = ["sqrt", "sin", "cos", "tan", "exp", "asin", "acos"]
+    # asin/acos need |x|<=1; keep the float list in [0,1] and reserve sqrt/exp
+    # for any-positive values. Use a [0,1) float list so every fn is well-defined.
+    rep = r.choice([3000, 20000])
+    inner = r.choice([7, 15])
+    fa = ", ".join(f"0.{r.randint(0, 9)}{r.randint(1, 9)}" for _ in range(inner + 1))
+    decls = [f"list<float> fa = [{fa}];", "float s = 0.0;"]
+    use_int = r.random() < 0.5
+    if use_int:
+        ia = ", ".join(str(r.randint(1, 80)) for _ in range(inner + 1))
+        decls.insert(1, f"list<int> ia = [{ia}];")
+    # build the body: 1..3 math terms on fa[j], optionally one sqrt on ia[j]
+    nterm = r.randint(1, 3)
+    fns = [r.choice(FNS) for _ in range(nterm)]
+    terms = [f"math.{fn}(fa[j])" for fn in fns]
+    if use_int:
+        terms.append("math.sqrt(ia[j])")   # int arg -> TOFLT before the call
+    expr = " + ".join(terms)
+    src = "\n".join(decls) + "\n"
+    src += f"for (int rep = 0, {rep}) {{\n  for (int j = 0, {inner}) {{\n"
+    src += f"    s = s + {expr};\n"
+    src += "  }\n}\nprint(s);\n"
+    return src
+
+def gen_for_each(r):
+    """Generic for-each over a List: `for k[,v] : pairs(L)` compiles to a native
+    index loop (the OP_TFORCALL/OP_TFORLOOP specialization). The iterator step
+    lowers to newkey = key + 1; GUARD newkey < #L; value = L[newkey] (a GETI) --
+    no C call into luaB_next, no GC. Exercises the iterator entry guard (pinned
+    to luaB_next), int/float element paths, key carrying, a branch in the body,
+    and per-entry state reload (a different list each outer iteration). The
+    loop-end exit re-runs the real TFORCALL so termination matches the
+    interpreter exactly; for-each runs on the spill path (RA disabled because the
+    loop-carried key is incremented in place)."""
+    typ = r.choice(["int", "float"])
+    if typ == "float":
+        shape = r.choice(["value", "value_branch"])
+    else:
+        shape = r.choice(["value", "value_branch", "keyvalue", "key"])
+    rep = r.choice([20000, 50000])
+    def mklist(n):
+        if typ == "int":
+            return ", ".join(str(r.randint(-9, 30)) for _ in range(n))
+        return ", ".join(f"{r.randint(1,40)}.{r.choice([0,25,5,75,125])}" for _ in range(n))
+    decls = [f"list<{typ}> la = [{mklist(r.randint(1, 12))}];"]
+    reassign = r.random() < 0.4
+    if reassign:
+        decls.append(f"list<{typ}> lb = [{mklist(r.randint(1, 12))}];")
+    decls.append("int s = 0;" if typ == "int" else "float s = 0.0;")
+    op = r.choice(["+", "-"]) if typ == "float" else r.choice(AOPS)
+    need_sk = (shape == "keyvalue")
+    if need_sk:
+        decls.append("int sk = 0;")
+    if shape == "value":
+        loopvars, body = "k, v", f"s = s {op} v;"
+    elif shape == "value_branch":
+        thresh = r.randint(0, 10) if typ == "int" else f"{r.randint(0,20)}.0"
+        loopvars, body = "k, v", f"if (v > {thresh}) {{ s = s {op} v; }} else {{ s = s + v; }}"
+    elif shape == "keyvalue":
+        loopvars, body = "k, v", f"s = s {op} v; sk = sk + k;"
+    else:  # key only (1 loop var)
+        loopvars, body = "k", "s = s + k;"
+    src = "\n".join(decls) + "\n"
+    src += f"for (int rep = 0, {rep}) {{\n"
+    if reassign:
+        src += f"  list<{typ}> cur = la;\n  if (rep >= {rep // 2}) {{ cur = lb; }}\n"
+        target = "cur"
+    else:
+        target = "la"
+    src += f"  for ({loopvars} : pairs({target})) {{ {body} }}\n}}\n"
+    src += "print(s);\n"
+    if need_sk:
+        src += "print(sk);\n"
+    return src
+
+def gen_nested_container(r):
+    """Chained container access rooted in a Map: m["k"][j] (map of list) and
+    m["k1"]["k2"] (map of map), plus list-of-list a[i][j]. The element-type
+    predictor (rec_eval_container) follows the IR SLOAD->GETFIELD->GETI/GETFIELD
+    to the record-time inner container, since the intermediate List/Map is
+    produced earlier in the trace and its live stack slot is stale by the
+    back-edge; the base map of a chained GETFIELD is likewise IR-resolved. All
+    loads stay bounds/type-guarded at run time (prediction is never
+    load-bearing); no C call, no GC."""
+    shape = r.choice(["mol_int", "mol_flt", "mom", "lol"])
+    rep = r.choice([20000, 50000])
+    if shape == "mol_int":
+        sz = r.randint(1, 8)
+        vals = ", ".join(str(r.randint(-9, 30)) for _ in range(sz))
+        key = r.choice(["a", "b", "k", "x"]); op = r.choice(AOPS)
+        return (f'map<string,list<int>> m = {{}};\nm["{key}"] = [{vals}];\nint s = 0;\n'
+                f'for (int rep = 0, {rep}) {{ for (int j = 0, {sz-1}) {{ s = s {op} m["{key}"][j]; }} }}\nprint(s);\n')
+    if shape == "mol_flt":
+        sz = r.randint(1, 8)
+        vals = ", ".join(f"{r.randint(1,40)}.{r.choice([0,25,5,75,125])}" for _ in range(sz))
+        key = r.choice(["a", "v", "k"]); op = r.choice(["+", "-"])
+        return (f'map<string,list<float>> m = {{}};\nm["{key}"] = [{vals}];\nfloat s = 0.0;\n'
+                f'for (int rep = 0, {rep}) {{ for (int j = 0, {sz-1}) {{ s = s {op} m["{key}"][j]; }} }}\nprint(s);\n')
+    if shape == "mom":
+        k1 = r.choice(["p", "q", "a"]); vx = r.randint(-20, 50); vy = r.randint(-20, 50)
+        inner = r.choice([7, 13]); op = r.choice(AOPS)
+        return (f'map<string,map<string,int>> m = {{}};\nmap<string,int> inner = {{}};\n'
+                f'inner["x"] = {vx};\ninner["y"] = {vy};\nm["{k1}"] = inner;\nint s = 0;\n'
+                f'for (int rep = 0, {rep}) {{ for (int j = 0, {inner}) {{ s = s + m["{k1}"]["x"] {op} m["{k1}"]["y"]; }} }}\nprint(s);\n')
+    rows = r.randint(1, 4); cols = r.randint(1, 4); op = r.choice(AOPS)
+    rowstrs = ["[" + ", ".join(str(r.randint(-9, 20)) for _ in range(cols)) + "]" for _ in range(rows)]
+    return (f'list<list<int>> a = [{", ".join(rowstrs)}];\nint s = 0;\n'
+            f'for (int rep = 0, {rep}) {{ for (int i = 0, {rows-1}) {{ for (int j = 0, {cols-1}) {{ s = s {op} a[i][j]; }} }} }}\nprint(s);\n')
+
 GENS = [gen_scalar,
         lambda r: gen_array_reduce(r, "int"),
         lambda r: gen_array_reduce(r, "float"),
@@ -522,7 +939,7 @@ GENS = [gen_scalar,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
         gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix,
-        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign]
+        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:

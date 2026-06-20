@@ -1,0 +1,31 @@
+// JIT kernel: generic for-each over a List (OP_TFORCALL / OP_TFORLOOP).
+//
+// `for k,v : pairs(L)` over a List compiles to a native index loop. The key
+// insight (see ltable.c luaH_next): iterating an array-mode table yields keys
+// 0,1,...,loglen-1 in order with value = L[key]. So the iterator step lowers to
+// newkey = key + 1; GUARD newkey < #L (loop-continue); value = L[newkey] -- a
+// GETI -- with NO C call into luaB_next and no GC. The iterator function is
+// pinned to luaB_next with a once-per-entry C guard, so a custom iterator or a
+// map iterator declines (the interpreter runs the generic-for). The loop-end
+// exit re-runs the real TFORCALL (next -> nil) so termination is exactly the
+// interpreter's. for-each traces run on the spill path (RA disabled) because the
+// loop-carried key is incremented in place; still well ahead of the per-element
+// C call the interpreter makes. This mixes the value-only sum, the key sum, and
+// a float list, exercising the int and float element paths plus key carrying.
+list<int> li = [3, 1, 4, 1, 5, 9, 2, 6];
+list<float> lf = [1.5, 2.5, 3.0, 0.5];
+int sv = 0;
+int sk = 0;
+float sf = 0.0;
+for (int rep = 0, 50000) {
+  for (k, v : pairs(li)) {
+    sv = sv + v;
+    sk = sk + k;
+  }
+  for (kk, vv : pairs(lf)) {
+    sf = sf + vv;
+  }
+}
+print(sv);
+print(sk);
+print(sf);

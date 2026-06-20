@@ -1,0 +1,26 @@
+// Phase-2 side-trace WIN case: a ~50/50 branch whose minority arm does enough
+// work (several array stores + arithmetic) that its native side trace amortizes
+// the stack-mediated link overhead and beats both the interpreter and the
+// pre-Phase-2 root-trace-with-interpreter-fallback (measured ~1.2x vs no-side-
+// trace). The side trace passes the SPT_JIT_SIDE_MIN_IR amortization gate at
+// default settings, so this kernel exercises the recorded-side-trace + linking
+// path without env overrides. Output (incl. all array contents) must match the
+// interpreter byte-for-byte.
+list<int> a = [0, 0, 0, 0, 0, 0, 0, 0];
+int s = 0;
+int k = 0;
+for (int i = 1, 400000) {
+  if (i % 2 == 0) {
+    s = s + i;
+  } else {
+    int x = i * 3 + 7;
+    a[k % 8] = x;
+    a[(k + 1) % 8] = x - i;
+    a[(k + 2) % 8] = x * 2;
+    s = s + x;
+    k = k + 3;
+  }
+}
+print(s);
+print(k);
+for (int j = 0, 7) { print(a[j]); }

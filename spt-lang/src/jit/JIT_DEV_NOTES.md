@@ -1317,3 +1317,653 @@ int/float 实参混合、可选循环携带变量)。每个程序 JIT off vs on 
 
 **留作长期回归资产**。教训固化:**回退路径必须用真正会走到它的输入去触发测试**,加新特性前先用组合模糊把
 交互面打一遍。
+
+### 10.30 浮点 if-conversion:位精确掩码混合(FCMPMASK/FSELECT)
+
+**动机/问题**:整数条件分支早已被 §10.25/§10.26 if-conversion 成无分支(50/50→2.2×、max+index→1.92×),
+但**浮点条件分支仍回退到守卫分支**,且其中多条是**真实负优化**(比解释器慢):
+float max-into `if(v>m){m=v}` **0.61×**(相变分支,守卫每轮失败、20M 次退出);
+float clamp-high `if(v>100.0){v=100.0}` **0.97×**;float two-slot **0.95×**;
+float clamp(ReLU)/select-const 也仅 ~1.0–1.05×。全都因为浮点臂落到退出密集的守卫分支(每轮一次 side-exit)。
+按"trace 不得慢于解释器"的硬约束,这些必须修。
+
+**为什么不能照搬整数那套**:整数 if-conversion 用 `select = else + (then-else)*cond`(cond∈{0,1})。
+浮点**不能**这样——`(then-else)*cond` 会引入**舍入**,结果不是被选中那个 double 的逐位复制。
+必须用**位掩码混合**:`result = (then & mask) | (else & ~mask)`,其中 `mask` 是全 1 / 全 0 的 64 位掩码。
+这样被选中的操作数被**逐位**搬运,绝对位精确(分数值 6178079.285713153 之类与解释器完全一致)。
+
+**实现**(asm → IR → codegen → recorder 四层):
+- **asm**(`spt_jit_asm.c`):新增 `sptasm_cmpsd(dst,src,imm8)`(0xF2 0F C2,标量双精度比较→掩码)、
+  `sptasm_andpd/andnpd/orpd`(0x66 0F 54/55/56,打包双精度位运算;ANDNPD 是 `dst=~dst&src`)。
+  打包指令作用于全 128 位但只回读低 64 位的标量 double,安全。
+- **IR**(`spt_jit_ir.{h,c}`):新增 `SPTIR_FCMPMASK`(op1=a,op2=b,aux=比较 SPTIROp)和
+  `SPTIR_FSELECT`(op1=then,op2=else,**aux=mask 引用**)。两者像 CMPSET 一样**不进 CSE/常量折叠**。
+  **关键**:DCE 的 `mark_used` 必须像 GUARD_LT/LE 那样**跟踪 FSELECT 的 aux**(mask 引用),
+  否则 FCMPMASK 被当成无用代码消除,FSELECT 读到垃圾。
+- **codegen**(`spt_jit_codegen.c`):全部走 **spill 模型**(`gen_load_xmm`/`gen_store_xmm` 透明处理常驻或溢出),
+  用 XMM0/1/2 作 scratch,**完全不碰寄存器常驻(XMM4-7)**,规避寄存器分配风险。
+  FCMPMASK:载入 a,b → `cmpsd` → 存掩码。FSELECT:载入 then/else/mask → `andpd`/`andnpd`/`orpd` → 存结果
+  (mask 寄存器既是输入又当 scratch 复用,因为 FSELECT 后即死)。两者加入 `ra_op_is_safe`(纯 SSE,无 C 调用)。
+- **recorder**(`spt_jit.c`):`rec_try_ifconv` 泛化为 int/float 双路。
+  `parse_ifconv_arm` 加 `is_flt` 参数;浮点臂用 `opcode_is_ifconv_safe_flt`(MOVE/LOADF/LOADK/ADD/SUB/MUL/**DIV**/+K/UNM
+  ——浮点永不陷入,故 DIV 也可)+ `ifconv_arm_flt_result`。结构解析(then/else/merge)与类型无关、共用。
+
+**NaN/inf 语义**:CMPSD 谓词精确匹配 Lua:`==`→0(EQ_OQ,NaN→假)、`<`→1(LT_OS)、`<=`→2(LE_OS)、
+`!=`→4(NEQ_UQ,NaN→真);`>`/`>=` 没有"NaN 为假"的谓词,故**交换操作数发成 LT/LE**。
+实测:clamp 遇 NaN 保持 -nan、max-into 遇 NaN 不更新(NaN>m 为假)、`!=` 遇 NaN 为真、max-into 遇 inf 取 inf——全部与解释器一致。
+
+**踩坑**:`v<0.0` 被编译成 `LTI v,0`——**整数立即数 0**,recorder 传 `bt=SPTT_INT`(见 §LTI 行为)。
+所以判据改为"**任一操作数是浮点即走浮点路径**"(`is_flt = at==FLT || bt==FLT`),并在构造掩码前把整数那侧 `TOFLT` 提升为 double。
+初版写成 `at==FLT && bt==FLT` 时 clamp 完全不触发,正是栽在这里。
+
+**作用域**:**Case 2 = 浮点比较(任一浮点,整数立即数提升)+ 浮点臂**(掩码用 `FCMPMASK`);
+**Case 3 = 整数比较 + 浮点臂**(如 `if(i%2==0){s=s+v}else{s=s+1.0}`,掩码用 `ICMPMASK`:
+整数比较→setcc→`neg`(0/1→0/-1 全 1)→`movq` 提进 XMM,整数全序故无需交换操作数,且整数按位精确比较、无精度损失)。
+两者都用同一个位精确 `FSELECT` 混合。is_flt 的判定改为"**看臂写什么槽**"(偷看第一条臂指令的目标槽类型),
+而非只看比较——所以整数条件+浮点臂也能正确进浮点路径;判错只会让臂解析失败、干净回退。
+Case 4(浮点比较 + 整数臂)仍干净回退(整数臂在浮点解析下失败)。
+
+**踩坑 2(Case 3 为什么不能直接把整数操作数提升为 double 再比)**:`(double)a < (double)b` 仅当 a,b 都 ≤ 2^53 时精确;
+对任意 int64 会丢精度、比较结果可能不同。故 Case 3 必须用 `ICMPMASK` 在**整数域**比较,而不是提升后用 FCMPMASK。
+
+**被内联 callee 内的浮点条件赋值 helper**:条件赋值路径用的就是 `rec_try_ifconv`(已浮点就绪),
+故只需把静态门 `proto_is_condassign_inlinable` 的算子检查改用 `opcode_is_ifconv_safe_any`(int||float 并集),
+`clampf`/`reluf` 风格的浮点 helper(`function f(float x){if(x<0.0){x=0.0;}return x;}`)即被内联 + if-convert(comp=1,exits=1,位精确)。
+条件返回 helper 暂不支持(`rec_try_condreturn_ifconv` 仍是整数版、遇浮点 reg_type 即 abort,扩展静态门也只会干净 abort、无收益)。
+
+**性能**(负优化全部消除,均 exits=1 无分支、逐位一致):
+float max-into **0.61→2.33×**、clamp-high **0.97→2.83×**、two-slot **0.95→2.03×**、clamp(ReLU)→2.63×、select-const→3.14×。
+Case 3(整数条件+浮点臂,此前 1.07–1.34×):50/50 if-else→2.18×、accum-if-only→2.03×、two-slot→1.90×。
+整数 if-conversion 不受影响(50/50 2.2×、clamp、max+index、two-carried 全 exits=1)。
+
+**验证**:287 ctest + 73 kernel + 284 差分 + valgrind(根帧浮点 + callee 浮点 if-conv + ICMPMASK 路径,exit=0)+
+新模糊器 `scripts/jit_fuzz_float_ifconv.py`(Case 2 的 clamp/into/select/twoslot/ifelse_assign 五形态 × 六比较,
+以及 Case 3 的整数条件 accum/ifelse/select/twoslot 四形态;分数操作数 × 3 HOT,seeds 1-22 共 2640 例 × 3 ≈ **7900 次逐位检查 0 失配**,
+覆盖确认 ICMPMASK 与 FCMPMASK 都被触发)+ helper-zoo 模糊(含 callee 浮点 if-conv,实测发出 FCMPMASK)+
+NaN/inf 手工探测(含 Case 3 臂内 NaN/inf)全过。边界(臂内依赖 abs/swap、多算子带临时量、Case 4 错配)全部干净回退、正确。
+
+**关键教训**:(1)浮点 select 必须位精确——算术混合会舍入,只能用 FCMPMASK+FSELECT 的 andpd/andnpd/orpd 位掩码混合。
+(2)`LTI/LEI/GTI/GEI` 即使 R[A] 是浮点也传整数立即数(`bt=INT`),浮点 if-conv 必须"任一浮点即浮点"并提升整数侧。
+(3)CMPSD 无"NaN 为假"的 >/>= 谓词,一律交换操作数发 LT/LE。
+(4)任何把 IR 引用存进 aux 的算子(GUARD_LT/LE 的界、FSELECT 的 mask)都必须在 DCE 里跟踪 aux,否则被错误消除。
+(5)新 SSE 算子走 spill 模型 + scratch XMM0/1/2,完全不碰常驻寄存器,把寄存器分配风险降到零;mask 死后即复用为 scratch 省一个寄存器。
+
+### 10.31 Phase 2:侧 trace 链接(栈中介 C-trampoline,非 LuaJIT 寄存器匹配)—— 覆盖不可 if-conversion 的少数臂
+
+**动机/问题**:§10.25–§10.30 的 if-conversion 把**简单**整数/浮点 if-else/if-only 转成无分支 select,消灭了它们的侧退出。
+但臂里有**副作用/循环/调用/可能陷入**的分支转不了无分支(数组写 `a[i]=x` 的 SETI、自增计数 `k=k+1` 跨迭代依赖、调用、可能 abort 的 op),
+只能落到**守卫分支 + 少数臂每轮一次 side-exit**。对 `if(i%2==0){s+=i}else{a[k%8]=i;k++}` 这种 50/50、少数臂带数组写的循环,
+trace 每个奇数迭代都退出到解释器跑完"另一臂 + 剩余循环体 + FORLOOP"再重入——退出密集,白白浪费。
+Phase 2(roadmap §五)= **从热侧退出再录一条 trace 并链接回来**,正是这个残余问题的解法。
+
+**设计抉择(关键,低风险优先)**:**栈中介的 C-trampoline 链接**,而非 LuaJIT 的**寄存器中介**链接。
+理由:本 JIT 的退出 stub(`gen_exit_stub`)**本来就把全部活状态 flush 回解释器栈**并写好 `ci->u.l.savedpc`——
+退出那一刻栈是**完全自洽的真相源**,和解释器即将 dispatch `savedpc` 时一模一样。
+所以在退出 PC 重入一条 trace(其 SLOAD 会从栈重载)**完全不需要 trace 间寄存器状态匹配**:
+每次交接都过"退出 stub 全量 flush → 下条 trace SLOAD 重载",栈是唯一真相。
+代价是每次链接多一遍 flush/reload(性能不如寄存器直传),换来的是**风险骤降**——契合本项目"慢但对 > 快但错"的硬规矩。
+
+**实现(asm 无新增;IR → codegen → recorder → trampoline 四层)**:
+- **IR**(`spt_jit_ir.{h,c}`):新增 `sptir_exit(b, exit_pc)`——发 `SPTIR_EXIT` + 建快照(捕获当前 `reg_map`),
+  把快照号写进 `snap_idx`(并镜像进 aux)。`SPTIR_EXIT` 本来就是 DCE 根、快照引用的值都会被保活,无需改 DCE。
+- **codegen**(`spt_jit_codegen.c`):新增 `case SPTIR_EXIT`——`jmp` 到该快照的退出 stub(`ensure_exit_label`)。
+  无条件(不像守卫有条件),控制流必从此处离开 trace;退出 stub 负责 flush + 写 savedpc=exit_pc + 回 epilogue。
+- **recorder**(`spt_jit.c`):`SPTRecCtx` 加 `is_side_trace`;`record_trace` 加 `is_side` 形参。
+  在 **OP_JMP 后向**与 **OP_FORLOOP** 两处,当 `target != start_pc`(根 trace 视作嵌套循环 abort,见 §10.15)时,
+  **侧 trace 改为发 `sptir_exit(rc->pc)` 并干净收口(return 0)**:把控制交还解释器,由它跑那条 back-edge 再重入父 trace。
+  FORLOOP 处的退出发在 count/idx 更新**之前**——解释器随后会自己执行 FORLOOP;侧 trace 没碰的槽(idx/count)
+  靠快照里的 -1 项保留栈上的 flush 值,**恰好正确**。
+- **trampoline**(`sptjit_trace_enter`):进入父 trace 后**循环**:读 `savedpc`,若该 PC 有已编译且入口守卫通过的 trace、
+  且 `savedpc != 上次进入的 PC`(严格前进)、且在界内、且跳数 < `SPT_JIT_MAX_LINK_HOPS`(=64 绝对上限),就直接重入;
+  否则跳出回解释器。**终止双保险**:严格前进(退到原地或不动则断链)+ 跳数上限。
+  在**未命中分支**(退出 PC 无 trace)调 `maybe_record_side_trace`:若父某快照在该 PC 的退出计数(退出 stub 累加)
+  ≥ `side_hot_threshold` 且该 PC 尚无 trace、未被拉黑,就 `record_trace(...,is_side=1)` 并登记进 hot_table。
+  侧 trace 只经 trampoline 进入(其头是循环体中部 PC,**不是 back-edge**,解释器 hot-check 永不直接进它),这印证了 trampoline 的必要性。
+
+**踩坑 1(headline 调试):侧 trace 录成了和父 trace 相同的方向,毫无收益**。
+首版测 `if(i%2==0){s+=i}else{a[k%8]=i;k++}`:父 trace 在 pc20(OP_EQI `i%2==0`)守卫"偶数",奇数时退出到 pc20。
+侧 trace 从 pc20 起录,**本应跟随录制时刻冻结栈的方向**(slot6=i%2=1,奇数 → 录 ELSE 臂的数组写)。
+但 IR 里 `EQ slot6==0` 竟评估为**真(偶数)**、录了 `s+=i`(THEN 臂)——侧 trace 录成偶数假设,
+却只在奇数时被进入,每次一进门就在根守卫 `EQ` 失败、立即退回 pc20(149908 次无用退出)。
+**根因**:§10.23 的"**基于剖析的多数方向覆盖**"(`rec_cond_branch` 里按比较 PC 偏移查 `g_prof`)被套到了侧 trace 头上——
+侧 trace 复用了父 trace 对该分支的剖析(50/50 时 `ft>=tk` 取 fall-through=偶数),覆盖了录制时的真实方向。
+**修复**:`!rc->is_side_trace && g_prof...` 门住该覆盖。侧 trace 存在的**全部意义就是覆盖少数方向**(导致父退出的那个),
+而录制时刻的冻结栈值**正是**那个少数方向(父刚在它上面退出)。修后侧 trace 含 SETI(数组写=ELSE 臂)、退到 FORLOOP,正确且有用。
+(共享循环体里更深的分支仍可复用父剖析——按 PC 偏移匹配、且发射的比较始终是运行时守卫,无论方向都正确。)
+
+**踩坑 2:在 back-edge PC 录出退化侧 trace**。修踩坑 1 后,侧 trace 退到 FORLOOP(pc30,op74),
+trampoline 又在 pc30 触发录制——但从 FORLOOP 起录,第一条就是 FORLOOP 本身(`target!=start`),
+立即 `sptir_exit` 收口成"在自己起点退出"的退化 trace(退到 pc30 自身)。trampoline 的严格前进检查会拒绝它(不死循环),
+但仍是无用 trace + 每轮一次白进白出。**修复**:`maybe_record_side_trace` 加 back-edge 守卫——
+起点 opcode 是 `OP_FORLOOP/OP_TFORLOOP/后向 OP_JMP(sJ<0)` 时不录(那种 trace 必退化;解释器跑一条 back-edge 重入父 trace 已是最优)。
+
+**重入安全**:从 trampoline 调 `record_trace` 是安全的——录制器只**读冻结栈**、靠 `reg_map` **符号化**建 IR,
+**不执行字节码、不改栈、不分配 Lua 对象/不触发可移动栈的 GC**;malloc trace/IR 与从代码池分配机器码都不动 Lua 栈。
+父 trace 退出后栈已 flush 到位,录制器读到的正是退出后的精确状态。
+
+**配置**:新增 `SPT_JIT_SIDE_HOT`(默认 `SPT_JIT_SIDE_HOT` 常量,内部 `side_hot_threshold`)——父退出计数达此阈值才录侧 trace,
+低值用于测试主动触发。`SPT_JIT_MAX_LINK_HOPS`(=64)是链接跳数绝对上限。
+
+**正确性不变量**:全程 `entries==exits`(如 300k 测试 299867==299867、2M 测试同步);
+"另一臂 + 剩余循环体"现由侧 trace 原生执行,解释器每个少数迭代只跑一条 FORLOOP 后重入父 trace。
+
+**验证**:287 ctest + **75** kernel(新增 `side_arr_write` 50/50 数组写臂、`side_biased_store` 10% 偏置稀有臂带写,
+默认阈值即触发侧 trace)+ **286** 全量差分,**默认阈值与 `SIDE_HOT=30` 两档都 0 失配**;
+差分 fuzz 新增 `gen_side_store` 生成器(扫:哪臂带写、50/50 vs 稀有 vs 常见偏置、是否双臂都带写),
+seeds 多组共 **2300+ 例 0 失配**;valgrind(侧 trace 录制+链接路径 + 默认阈值根路径 + 现有分支 kernel,0 错误 0 泄漏)。
+off vs on 逐字节一致含数组内容。
+
+**关键教训**:
+(1)栈中介链接的全部底气来自"退出 stub 本就全量 flush + 下条 trace SLOAD 重载"——栈是唯一真相,故无需寄存器匹配,风险最低。
+(2)**侧 trace 必须跟随导致父退出的那个(少数)方向**,绝不能套父 trace 的多数剖析——否则录成父的镜像、一进门就退、纯负担。
+(3)别在 back-edge(FORLOOP/TFORLOOP/后向 JMP)上扎侧 trace,必退化;解释器跑一条 back-edge 重入父 trace 已最优。
+(4)终止靠"严格前进 + 跳数上限"双保险;任何"退到原地/savedpc 不动"都断链而非自旋。
+(5)从 trampoline 递归调录制器安全,前提是录制器纯读栈、符号化建 IR、不执行不分配——这是本 JIT 录制器一贯的设计,Phase 2 直接受益。
+
+### 10.32 Phase 2 性能修正:侧 trace 摊销门 + 拉黑路径 O(1) 化(测出来的负优化)
+
+**问题(主动基准发现)**:§10.31 把侧 trace 做对了,但**没量性能**。补做 A/B/C 三方基准
+(A=解释器、B=开侧 trace、C=高 `SIDE_HOT` 不触发侧 trace 即 Phase 2 前的根 trace+解释器兜底)后发现:
+**对最典型的目标场景(50/50、轻少数臂:1 次数组写 + 自增),侧 trace 是负优化**——
+20M 迭代:A 0.353s、C 0.439s(0.80×,已是负优化、§10.22 的残余难例)、**B 0.525s(0.67×,比解释器还慢)**,
+且 **B<C(0.84×)**——侧 trace 把 JIT 自身基线**也**拖差了。这违反项目"trace 不得慢于解释器"硬约束。
+
+**根因**:栈中介链接每次交接付一套**固定开销**(父退出全量 flush + 侧 trace 自己的 prologue + SLOAD 重载 + epilogue)。
+对小臂,这套固定开销**超过**让解释器直接 dispatch 那几条字节码的成本。B 比 C 多了一整次侧 trace 的进入+退出,
+对小 body 完全摊不平。(这正是栈中介换低风险的代价;LuaJIT 用寄存器中介直跳入侧 trace、近零开销,但高风险。)
+
+**刻画边界(IR 总指令数 vs B/C)**:
+- 轻臂 1 数组写 = **21 insts** → B/C **0.84×**(亏)
+- 中臂 2 数组写 = **32 insts** → B/C **1.11×**(赚)
+- 重臂 3 数组写+算术 = **49 insts** → B/C **1.25×**(赚)
+- 偏置 10% 轻臂 = 21 insts → B/C **0.95×**(略亏)
+
+**关键观察**:决定因素是 **per-link 经济性(臂大小)**,不是触发频率——小臂在任何频率都是 per-link 净亏
+(频率只放大幅度:50/50 亏得多、10% 亏得少),大臂任何频率都净赚。所以**按臂大小门控**正是对的信号。
+
+**修复 1:摊销门**(`SPT_JIT_SIDE_MIN_IR`,默认 28)。`record_trace` 在 optimize 之后、codegen **之前**
+(让计数与 debug 的 post-opt `ir.ninst` 一致,且被拒的侧 trace **不占代码池**)对侧 trace 判大小:
+`ninst < side_min_ir` 即丢弃(`sptir_free`+`free`,返回 NULL)。`maybe_record_side_trace` 收到 NULL 走原有
+`aborts++` 分支,几次后拉黑该 PC——于是被门掉的臂**回退到 Phase 2 前的解释器兜底**,无回归。
+阈值在 21(亏)与 32(赚)之间取 28;**环境可调**,`SPT_JIT_SIDE_MIN_IR=0` 强制录制每条侧 trace(测试用,
+让 difftest/fuzz/valgrind 仍能在小 kernel 上压侧 trace 录制+链接路径)。
+
+**修复 2:拉黑路径 O(1) 化**。`maybe_record_side_trace` 在**每次 trampoline 未命中**都跑(含已拉黑 PC 的稳态,
+如被门掉的轻臂)。原来先扫父快照判热度(每次 miss 都扫),再 hot_lookup+拉黑判断。**重排**为:
+先做廉价的 hot_lookup + `e->trace` + `e->aborts>=MAX` 拉黑判断,**通过后才扫快照**。
+这样被门掉的 PC 稳态是 O(1)(无每-miss 快照扫描),被门臂的代价真正等于 C。
+
+**修复后 B vs C(负优化消除)**:50/50 轻臂 **0.84→~1.0×**(中性、噪声内,回退到 C 兜底)、
+偏置轻臂 ~1.0×、中臂 **1.09×**、重臂 **1.23×**(收益保留)。
+即 Phase 2 现在对 JIT 自身基线**只增不减**:小臂中性、实质臂净赚。
+(注:轻臂场景 C 本身相对解释器仍是 0.75–0.81× 负优化,那是 §10.22 的根 trace 残余、非 Phase 2 引入,
+也非 Phase 2 目标;Phase 2 的职责是"别把 C 弄得更差",已达成。)
+
+**验证**:290 ctest(新增重臂 kernel `side_heavy_arm`,默认设置即过门、录侧 trace)+ 76 kernel + 287 全量差分,
+**默认设置(轻 kernel 被门、重 kernel 录侧 trace)与 `SIDE_MIN_IR=0`(强制全录)两档都 0 失配**;
+`gen_side_store` fuzz 多种子(`SIDE_MIN_IR=0` 强制)0 失配;valgrind(强制侧 trace,重/轻 kernel)0 错误。
+
+**关键教训**:
+(1)**做对≠做值**:正确性全绿不代表是收益,新优化必须补 A/B/C 基准(对照 Phase 2 前基线 C),否则可能悄悄装了个负优化。
+(2)栈中介链接有固定 per-hand-off 开销,只对**实质大小**的侧 trace 划算;按臂大小门控(per-link 经济性)是对的信号,频率不是。
+(3)在 codegen **之前**判门,被拒的侧 trace 不占代码池;计数放 optimize 之后以匹配最终 IR 规模。
+(4)每-miss 热路径里,把廉价的拉黑判断放到昂贵的快照扫描之前,让被门控/拉黑的稳态保持 O(1)、等价于兜底。
+(5)门控阈值与强制开关都做成环境可调:默认走划算策略,测试用 `SIDE_MIN_IR=0` 仍能压满侧 trace 代码路径。
+
+---
+
+## §10.33 嵌套循环优化(Phase 3a):数据驱动定位 + 内层循环展开
+
+**目标:顶尖 JIT。先测再优化(§10.32 教训),用基准否掉了两个红鲱鱼,定位到真正瓶颈。**
+
+### 性能画像(20M 级 kernel,on-vs-off best-of-4)
+标量 4.3×、浮点单累加 4.6×、浮点多累加 9.8×、Horner 21.4×——单循环已很强,浮点驻留不是瓶颈。
+**点积 1.75×(最弱)。** 进一步切分(决定性):
+
+| 形态 | 加速 |
+|------|------|
+| flt_flat 单循环数组 | 4.25× |
+| flt_dot_long 嵌套内层=256 | 4.49× |
+| flt_dot 嵌套内层=8 | 1.79× |
+| **flt_dot_short 嵌套内层=4** | **0.98×(负优化!)** |
+
+### 否掉的两个红鲱鱼(都靠测量,没靠直觉)
+1. **数组边界检查消除(BCE)不值得做**:临时禁用变量下标 GETI 的 `GUARD_LE/GUARD_LT`(spt_jit.c ~1499),
+   点积 1.75→1.77×(噪声内)。边界守卫是 compare+branch、分支预测命中、CPU 近乎免费。已还原。
+2. **浮点寄存器分配不是瓶颈**:多累加(4 个、2 个要 spill)9.8×、Horner 21.4×。SysV 驻留池虽只 {XMM4,XMM5}
+   (XMM6-15 caller-saved 可扩,见 codegen ~144),但当前画像下扩它收益甚微。
+
+### 真因:嵌套循环 + 短内层
+JIT 只 trace 内层(§10.15 外层 trace 在内层 back-edge abort);每个外层迭代"进入内层 trace→跑几次→
+退出(全量 flush)→解释器跑外层 FORLOOP→重入(reload)",进入/退出固定开销摊不到几次内层迭代上。
+内层 256 摊得开(4.49×),内层 4 时比解释器还慢(0.98×)——§10.22 式负优化。嵌套数值代码(矩阵、小向量)
+是顶尖 JIT 的核心场景,必须解决。
+
+### 修复:内层循环展开(recorder-only,不动 codegen)
+外层 trace 录到内层 `OP_FORPREP` 时(`try_unroll_inner_loop`,spt_jit.c),若:
+- init/limit/step 都已是 IR 整数常量(`reg_map[A/A+1/A+2]` 均 `SPTIR_KINT`——如内层体内 LOADI 设的字面量边界);
+- trip count(按 VM `forprep` 同款公式算,含 step<0 降序)≤ `SPT_JIT_UNROLL_MAX`(默认 16,`SPT_JIT_UNROLL_MAX` 可调,0 关);
+- 内层体 `[body_pc, forloop_pc)` 直线(无 JMP/比较/TEST/嵌套循环/调用/返回——见 `unroll_unsafe_op`)且不写控制槽 A/A+1/A+2;
+
+就把内层体重放 `trips` 次(`while(rc->pc<forloop_pc){rec_inst}`,复用 if-conversion 录臂的模式),
+每份副本前把 `reg_map[A+2]=KINT(init+k·step)` 设成该次的下标,然后跳过内层 FORLOOP 继续外层体。
+整个嵌套塌成一条线性 trace(外层为唯一循环),且**变量下标 a[j] 变成常量下标**(常量折叠 + LICM 提升 → 更优)。
+否则回退原行为(`pc+=bx+1`→内层 FORLOOP abort 外层 trace,内层保留自己的 trace)——**永远安全**。
+
+### 一个致命的正确性点(快照一致性)
+展开每份副本 k 不只设 idx,还必须把 **`reg_map[A]=count=trips-1-k`(FORLOOP 计数器)、`reg_map[A+1]=step`** 也设成 KINT。
+否则副本内某个类型/边界守卫侧退出时,快照 flush 出的 R[A] 是错的(初值而非剩余计数),解释器会用错的计数续跑内层
+→ 跑错迭代次数 → 结果错。设对后,副本 k 的守卫侧退出 → 快照恢复 count=trips-1-k、idx=init+k·step → 解释器从内层第 k 次正确续跑。
+循环后状态设为 count=0、idx=init+count·step(末次副本的 idx,FORLOOP 退出时不再 bump)。
+
+### 确认的 for-loop 布局(去风险前提)
+`for(int j=0,N)`:循环变量 **j 就是 R[A+2](idx),无单独 R[A+3] 用户副本**(IR 显示体直接 SLOAD idx 槽)。
+FORPREP 落入体(idx=init),尾部 FORLOOP 递减 count、idx+=step、跳回;**body 跑 count+1 次,idx=init+k·step(k=0..count)**。
+
+### 效果(零回归)
+点积 1.79→**6.33×**、内层=4 的负优化 0.98→**5.46×**;内层=256 正确地不展开(超 UNROLL_MAX)维持 4.45×;
+单循环/标量/浮点全部维持(4.06/4.61/9.72/21.45×,噪声内)。
+
+### 验证(完整门槛,干净重建后全绿)
+292 ctest(新增 `nested_dot`/`nested_short_mix`)· 76 kernel · 287 全量差分 **三档(默认 UNROLL_MAX=16 / =4 / =0 关)**·
+手工 16 种嵌套形态(边界 trip=15/16/17、步长 2/3、降序负步长、非零 init、嵌套数组写 SETI、三重嵌套、浮点)× 3 档 0 失配·
+新 `gen_unroll_nest` 生成器(内层数组读写/浮点/步长/负步长/跨 UNROLL_MAX 边界)476 例 × 3 档 0 失配·
+默认 fuzz(含新生成器)多种子 0 失配· valgrind(点积/短内层/三重+负步长+写)0 错误· `entries==exits` 保持。
+
+**关键教训**:
+(1)**先测再优化**:本轮靠基准切分(单循环 vs 长内层 vs 短内层)否掉了 BCE 和浮点寄存器两个看似合理的方向,
+   省下了高风险无收益的工作——§10.32"做对≠做值"的姊妹篇是"别优化没量过的东西"。
+(2)负优化(0.98×)本身就是违反"trace 不得慢于解释器"硬规的 bug,顺带修掉。
+(3)recorder 级展开把变量下标转成常量下标,白嫖了已有的常量折叠/LICM——找对杠杆点,小改动撬大收益。
+(4)深层 recorder 改动的正确性核心在**快照一致性**:任何 pin 成常量的循环控制状态,都要保证侧退出时 flush 出的值
+   与解释器在该迭代点的真实值逐字节一致。
+
+---
+
+## §10.34 嵌套循环优化(Phase 3a 续):递归展开 + 两个被模糊器抓出的 bug
+
+§10.33 的单层展开只把**最内层**循环展进它的直接父循环。再测画像发现下一个瓶颈:
+**定长矩阵乘 matmul_const 仅 1.22×**(即便维度是常量!)。`SPT_JIT_DEBUG` 显示 entries=1.6M、aborted=24、只编译 1 条 trace。
+
+### 根因:展开只做了一层
+`for rep: for i: for j: for k: c[i*4+j]+=a[i*4+k]*b[k*4+j]` 四层。k(最内、常量)展进 j,j-trace 编译成功;
+但录到 i-loop 时,i-body 含 j-FORPREP,`unroll_unsafe_op` 把 FORPREP/FORLOOP 当不安全 op 直接 bail →
+i 不展开 → i-trace 在 j 的 back-edge abort。结果 i、rep 在解释器里跑,每个 (rep,i) 重入 j-trace 1.6M 次,
+进入/退出开销淹没了内层 16 次乘法 → 1.22×。**展开必须递归**:含(可递归展开的)内层循环的循环也要能展开。
+
+### 修复 1:递归展开(replay 天然递归)
+`unroll_unsafe_op` 去掉 OP_FORPREP/OP_FORLOOP(保留 TFOR* 仍不安全)。展开的 replay 循环 `while(rc->pc<forloop_pc){rec_inst}`
+本就会在内层 FORPREP 处经 `rec_inst→OP_FORPREP→try_unroll_inner_loop` **递归调用自己**,所以全常量嵌套自动逐层塌进
+最外层、成一条线性 trace。无需 IR 回滚:全常量嵌套在 replay 到内层 FORPREP 时,内层边界已是 KINT(外层体的 LOADI 刚执行过),
+递归 try_unroll 成功;只有"含变量边界内层"才会在 replay 中途 abort —— 那本就回退(=旧行为,无回归,且因 abort 黑名单有界)。
+尺寸靠 `rec_inst` 的 `inst_count`/MAX_TRACE(4096,跨递归累计)硬封顶,巨型嵌套 abort 回退。
+**快照正确性递归成立**:每层 try_unroll 只 pin 自己的控制槽,内层 replay 不动外层槽,所以任意层的守卫侧退出时,
+快照能恢复**所有层**的 count/idx(逐字节对齐解释器)。效果:matmul_const **1.22→7.9×**(entries 1.6M→491,aborted 24→0),
+matmul_var/nest_var(变量边界)正确地不变(1.2/1.5×),单层/标量/浮点零回归。
+
+### 修复 2:MMBIN 误报(放开 FORPREP 后立刻撞上)
+matmul 还是不展开,debug 显示 try_unroll 在 "op 47 (MMBIN) writes control slot da=6" 处 bail。
+MMBIN(元方法回退,跟在算术后、数值快路径**被跳过**)的 A 字段是**操作数**(这里=循环变量 i 的槽 R[6]),不是目标。
+我的"控制槽写"检查把它误判成"重新赋值循环变量"。修法:加 `unroll_writes_dest_A(op)` —— MMBIN/MMBINI/MMBINK(A 是操作数)、
+SETI/SETTABLE/SETFIELD/SETTABUP/SETUPVAL(R[A] 是表/upval 基址、不重新赋值 R[A])返回 0,其余返回 1。控制槽写检查只对真正以 A 为目标的 op 生效。
+
+### 修复 3:读改写同数组的 codegen bug(新生成器 `gen_recursive_nest` 抓出)—— 安全回退
+新加的递归嵌套生成器立刻抓到一个**真 correctness bug**:`a[i+j+k]=a[i+j+k]+1`(直方图,索引碰撞)结果错。
+逐步缩小后的决定性事实:
+- **纯写碰撞** `a[i+j]=7` 正确;只有**读改写(RMW)同一元素** `a[c]=a[c]+...` 经碰撞常量索引才错。
+- matmul(读 a/b、写**不同**数组 c,无元素别名)不受影响 —— 所以 matmul_const 通过。点积(只读)不受影响。
+- 单层同字面索引 RMW(`for j:a[3]=a[3]+1`,**连续**写,任意次数)正确;只有**非连续(交错)**的同元素 RMW 才错。
+- 症状:碰撞重的元素(每 rep 被读改写 ≥8 次)最终值≈1 个 rep 的量(GETI 像是读了入口缓存值、没每轮重读内存);
+  碰撞轻的元素恰好多算 1 个 rep。阈值约"单元素碰撞 8 次"。post-opt IR 显示绝大多数 GETI/SETI 被去掉(只剩约 18/128)。
+- 排除了 CSE(GETI CSE 在 has_table_write 时正确禁用,行 627-635 扫 SETI/SETFIELD;CSE 64 窗口、guard_dedup 128 窗口都只动守卫/纯算)。
+  根因落在**大展开 trace + 同数组 RMW 时的 codegen 驻留/spill 复用**,未精确定位(需深挖 codegen)。
+
+按项目纪律(correctness 第一;"正确但不值也要权衡"),采取**精准安全回退**而非硬啃深层根因:
+**展开体若对同一数组既读又写就不展开**。检测靠数组基址寄存器:GETI/GETTABLE/GETFIELD 读 R[B]、SETI/SETTABLE/SETFIELD 写 R[A],
+有寄存器同时出现在两边 → 回退。这精确避开直方图/RMW,同时**保住 matmul(c≠a/b)、点积(只读)、标量累加**的展开收益。
+同数组 RMW 循环回退到内层 trace(正确、约原速)。回归 kernel:`test/15_jit/kernels/nested_histogram.spt`。
+
+### 验证(完整门槛,reconfigure 后全绿)
+293 ctest(新增 `nested_histogram`)· 78 kernel · 289 全量差分 **三档(16/4/0)**· 10 种递归嵌套边界 × 4 档 0 失配·
+`gen_recursive_nest`(三/四重、MMBIN 控制槽、嵌套数组读/写碰撞、常量外+变量内回退)477 例 × 3 档 0 失配·
+默认 fuzz(全 GENS)多种子 0 失配· valgrind(histogram 回退 + matmul 展开)0 错误· `entries==exits` 保持。
+
+**关键教训**:
+(1)**每修一个 bug 类就加一个回归生成器** —— `gen_recursive_nest` 正是为递归展开补的,立刻抓到了 RMW codegen bug,印证了价值。
+(2)放开一个限制(FORPREP)会立刻暴露被它掩盖的下游误报(MMBIN 把操作数当目标)——"操作数 vs 目标"必须按 opcode 精确区分。
+(3)缩小 correctness bug 用**正交切分**(纯写 vs 读改写、连续 vs 交错、同数组 vs 不同数组、碰撞次数阈值)定位到最小触发面,
+   再决定"修根因 vs 精准回退"。当根因在深层且范围窄,精准回退(保住大收益、放弃小众场景)是符合纪律的选择。
+(4)展开+codegen 的交互在**大 trace + 别名写**上才暴露——小负载全绿不代表 codegen 在重度展开下也对(§10.32 的"做对≠做值"延伸到"小对≠大对")。
+
+---
+
+## §10.35 变量边界内层循环:带守卫的推测展开(Phase 3a 续 2)
+
+§10.33/§10.34 的展开都要求内层 `init/limit/step` 是**编译期整数常量**(KINT)。再测画像,变量边界短内层成了仅存的数值弱点:
+matmul_var(**变量维度**矩阵乘——最典型的数值基准)仅 1.26×、nest_var 1.44×、gemv_var 1.95×(长内层 stencil_var 3.41× 已摊销、不弱)。
+这些循环写成 `for j = 0, N-1`,N 是运行时才知道的不变量,展开器看到 limit 非 KINT 直接 bail。
+
+### 思路:LuaJIT 式按观测值特化 + 守卫(比 P3b 双层 trace 风险低)
+内层 trip 不是常量,但对一次热运行而言 N 是**循环不变量**(矩阵维度,设一次、不改)。于是在录制内层 `FORPREP` 时:
+读出 N 的运行时值、按它算出 trip、**发一个运行时守卫把边界钉成该值**、再按常量 trip 展开。
+**关键正确性洞察:正确性完全落在守卫上**——展开用的值只是个"猜测",守卫保证"边界确实等于所猜"才走展开码;
+若运行时边界不同(守卫失败),就**侧退出**到 `FORPREP` 快照,解释器用真实边界重跑内层。**所以猜错也正确**(只是没加速)。
+因此 eval 的精度只影响**性能**、不影响正确性。
+
+### 三块实现(spt_jit.c,均在 try_unroll_inner_loop 前/内)
+1. **`eval_invariant_int(rc, ref, *out)`**:递归把 IR ref 求成整数。`KINT`→aux;`SLOAD(slot)`→**当且仅当 `reg_map[slot]` 仍指向该 SLOAD**
+   (即该槽未被重新赋值——尤其排除 PHI/循环归纳变量)且活栈 `s2v((ci->func.p+1)+slot)` 是整数,取其活值;`ADD/SUB/MUL`→两子表达式都可求则折叠;
+   其余→失败。读活栈对不变量 SLOAD 在**任意递归展开深度**都正确,因为不变量值不随执行点变(`N-1` 在 i/j 各层重放里都求得同一值)。
+2. **`emit_pin_guard(ir, ref, val, snap)`**:把 ref 钉成 val。`GUARD_EQ` **枚举里有但 codegen 主 switch 未实现**(只有 GUARD_LT/LE/ULT/真值),
+   故用**两个 GUARD_LE**(`GUARD_LE(op1,aux)`=`R[op1]<=R[aux]`):`ref<=val`(op1=ref,aux=KINT) 且 `val<=ref`(op1=KINT,aux=ref),合起来 ==。两守卫共享 snap。
+3. **try_unroll 边界段改写**:init/limit/step 各自——是 KINT 则直接用(无守卫);否则 `eval_invariant_int` 求值或 bail。
+   做完体安全扫描、**钉控制槽之前**,对每个非 KINT 边界 `sptir_snapshot(FORPREP)` + `emit_pin_guard`。
+   **全常量循环不发任何守卫,与 §10.33/§10.34 的常量展开逐字节相同**(零回归)。
+
+### 为什么不会负优化(PHI 排除是关键)
+归纳变量在 IR 里是 **SPTIR_PHI**(非 SLOAD)。所以 `eval_invariant_int` 对"边界=外层循环变量"的情况求值失败 → bail → 不推测展开。
+于是**三角循环 `for j = 0, i`** 不会被推测成"每轮守卫失败"的负优化。实测三角循环反而 6.18×——因为外层 i 是常量边界(0,7)、
+被常量展开 pin 成 KINT,内层 limit=i 随之变常量,走的是**常量路径**(不是推测路径)。而真正每轮都变的边界(如 `for j=0,lens[i]`,limit 是 GETI):
+GETI 不被 eval 接受 → 不推测 → 该例 0.95×,但**这是预存的短变化内层固有成本**(特性开/关都 0.95×,见验证),非本改动引入。
+
+### 效果(全部正确)
+matmul_var **1.26→6.06×**(变量维度矩阵乘完全塌进一条 trace,`guard_fail=0`——N 不变,守卫恒过)、nest_var **1.44→8.0×**、
+gemv_var **1.95→5.5×**;常量路径(matmul_const 7.9×、点积 6.3×)与单循环/标量/浮点全维持。回归 kernel `nested_var_bound.spt`。
+
+### 验证(完整门槛,全绿)
+294 ctest(新增 `nested_var_bound`)· 79 kernel · 290 全量差分 **三档(16/4/0)**· 变量边界嵌套电池 7 例(nest_N、nest_N_direct=直接 SLOAD 边界、
+matmul_N、var_init、var_step、三角、N-2)× 3 档 0 失配· **新生成器 `gen_speculative_nest`(变量 limit/init/step、两层、标量+数组读)597 例 × 3 档 0 失配**·
+全 GENS 多种子 1400 例 0 失配· valgrind(matmul_var、nest_var)0 错误· `entries==exits` 且 `guard_fail=0`。
+
+**关键教训**:
+(1)**对变量 trip,守卫(而非 eval 精度)是正确性的根**——猜错就侧退出,所以可以大胆按观测值特化。
+(2)缺一个 codegen 算子(GUARD_EQ)时,常能用已实现的算子(两个 GUARD_LE)等价合成,避免动 codegen(降风险)。
+(3)**不变量分析(叶子限 KINT/SLOAD、排除 PHI)同时服务正确性的对象选择和负优化的规避**:它既保证 eval 读到稳定值,又把"边界=循环变量"的负优化场景挡在门外。
+(4)同一能力对常量与变量边界要走不同路径,但常量路径必须**字节不变**(回归护栏):新增推测仅在"非 KINT"分支生效。
+(5)再次印证§10.32:先测量后优化——画像把有限改动精确投到 matmul_var 这个最高价值点。
+
+---
+
+## §10.36 map 读取:内联哈希槽 GETFIELD(覆盖扩展,首个非数值能力)
+
+数值路径已强(4–21×)后重新画像,发现三类**非数值热循环 JIT 完全不编译**(每次 abort、还轻微负优化):
+**map 访问** `m["key"]` abort 于 OP_GETFIELD(0.88×)、**for-each** `for x:pairs(l)` abort 于 OP_TFORCALL(0.93×)、
+**方法调用** `a.add()` abort 于 OP_SELF(0.98×)。这三类是"完整 JIT"的主要短板。先攻**最自包含、价值最高**的 map 读取(常量字符串键)。
+
+### 为什么走内联哈希槽,而不是调 luaH_getshortstr
+codegen **没有 C 调用机制**(GETI 是纯内联内存访问,无 `call`;引入通用 C 调用要处理 SysV ABI/栈对齐/调用者保存寄存器/调用中 GC,风险高)。
+故采用 **LuaJIT 式内联哈希槽快速路径**(纯内存访问 + 守卫,和 GETI 同类):常量短字符串键的 hash 编译期已知,
+运行时算主位置、守卫该位置的节点键==我们的键、命中则载值。
+
+### 实现
+**布局**(offsetof 实测):`sizeof(Node)=24`;Table.node=32、lsizenode=11;Node 值位 i_val.value_=0、值标签 tt_=8、key_tt=9、next=12、key_val=16;TString.hash=12。
+主位置 `slot = key->hash & (sizenode-1)`,`sizenode = 1<<lsizenode`(即 luaH_getshortstr 的 lmod)。短字符串驻留 → 键指针比较精确;键标签 = `ctb(LUA_VSHRSTR)=68`。
+- **recorder**(OP_GETFIELD,替换原 abort stub):容器须 SPTT_TAB、键须 K[C] 短字符串。读活表算主位置,**仅当键在主位置**(`keytt(n)==ctb(VSHRSTR) && keyval(n).gc==key`)且值类型可载时录制;
+  否则 abort(codegen 会恒侧退出、不值得)。发 `SPTIR_GETFIELD(et, bref, aux=key)`、置 GUARD、设 reg_map/type。
+- **codegen**(新 `case SPTIR_GETFIELD`,GETI 之后):`key=(TString*)aux`、`khash=key->hash`(codegen 时读)。
+  `gen_load RAX=t`;`movzx ecx,[rax+lsizenode]`;`mov rdx,[rax+node]`;`mov rax,1; shl rax,cl; sub rax,1`(掩码);`and rax,khash`(slot,掩码仅低位故精确);
+  `imul rax,rax,24; add rdx,rax`(&node[slot]);**键守卫 1** `movzx eax,[rdx+9]` cmp 68 jne exit;**键守卫 2** `mov rax,[rdx+16]; mov rcx,key; cmp jne exit`;
+  **值类型守卫** `movzx eax,[rdx+8]` cmp 预测标签 jne exit;`mov rax,[rdx+0]` 载值。**仅用 RAX/RCX/RDX,RA 安全**。加入 codegen 可处理白名单。
+
+### 效果与限制
+map_access **0.88→4.89×**;m2(map 值参与 float RMW 写 list)、m4(map 值做 list 索引)均编译+正确+valgrind 0 错误。
+**限制(性能,非正确性)**:① 仅主位置键走快速路径——**碰撞链上的键**当前 abort 回退(整条循环 trace 若含一个链式键就不编译);
+② 字符串 hash 种子**每次运行随机**(`luaL_makeseed`),故同一键是否在主位置因运行而异,即 map 读取能否 JIT 不确定——但**输出永远正确**(守卫/回退),差分门槛稳定。
+链式键的健壮处理(codegen 跟 `next` 链:或生成回边循环、需局部标签设施;或定深展开)风险更高,列为独立后续单元。
+
+### 验证(完整门槛,全绿)
+295 ctest(新增 `map_read`)· 80 kernel · 291 全量差分 ×双档 · **新生成器 `gen_map_access`(int/float map、多键、主位置命中 + 碰撞回退、map 值做 list 索引)249 例 ×双档 0 失配** ·
+全 GENS 多种子 1100+ 例 0 失配 · valgrind(m2/m4)0 错误 · map_access entries==exits、guard_fail=0。
+
+**关键教训**:
+(1)**画像要覆盖非数值类别**——数值全绿不代表 JIT"完整";map/for-each/方法调用三类此前 100% abort(且轻微负优化)是真实短板。
+(2)缺底层设施(C 调用)时,**换一条不需要它的等价路径**(内联哈希槽 vs C 调用)能以更低风险拿下能力——和 §10.35 用两个 GUARD_LE 合成 GUARD_EQ 同理。
+(3)**正确性靠守卫,快速路径可以只覆盖常见情形**(主位置键),不常见情形(碰撞链)安全侧退出/abort 即可——先拿到主位置的 4.89×,再按需健壮化。
+(4)种子随机导致"是否加速"不确定,但只要正确性不依赖它,门槛就稳定——再次印证正确性与性能解耦。
+
+---
+
+## §10.37 map 写入:内联哈希槽 SETFIELD(免 GC 屏障,与 §10.36 配对)
+
+紧接 §10.36 的 map 读取,补上**写**——这样 `m[k] = m[k] + x`(读改写同键:计数器/直方图桶/累加器)这类热循环能整体 JIT。
+与 GETFIELD 完全对称,复用同一套内联哈希槽寻址(算主位置、守卫节点键==键),只把"载值"换成"存值"。
+
+### 两个降风险的关键限制
+1. **只写 int/float 值 → 无需 GC 写屏障**。写屏障(luaC_barrier)只在把**可回收**值(字符串/表/函数)存进表时才需要——否则 GC 可能回收仍被引用的对象 → 崩溃/损坏。
+   int/float 不引用 GC 对象,故免屏障。这正是 SETI 用的同款限制。可回收值的写交给解释器。
+2. **只更新已存在的主位置键**。录制时检查键已在其主位置(`keytt(n)==ctb(VSHRSTR) && keyval(n).gc==key`);
+   缺失键需插入(可能 rehash/分配)、链式键不在算出的槽、表被 resize 会移动键——这些都侧退出回解释器去存。
+   故 codegen 只覆盖"覆写一个已存在主位置键的值",纯内存写、无分配。
+
+### 实现
+- **recorder**(OP_SETFIELD `R[A][K[B]] := RK(C)`,替换 abort stub):容器 SPTT_TAB、键 K[B] 短字符串、值 INT/FLT(否则 abort);
+  读活表确认键在主位置(否则 abort)。发 `SPTIR_SETFIELD(SPTT_NIL, op1=表, op2=值, aux=key)`、置 GUARD + snapshot(键守卫的退出)。
+- **codegen**(新 `case SPTIR_SETFIELD`,GETFIELD 之后):同 GETFIELD 算 &node[slot] + 两个键守卫;然后 `gen_load RAX=值位`、
+  `mov [rdx+0], rax`(node 值)、`mov byte[rdx+8], tag`(node 值标签,tag=spt_type_to_tag(值类型))。**无屏障**。仅 RAX/RCX/RDX,RA 安全。加入白名单。
+- **IR opt 早已接线**:DCE 把 SETI/**SETFIELD** 列为根(store,不可消除);表写检测把 SETFIELD 当写 → **禁用含写时的 GETI/GETFIELD CSE**
+  (故 `m[k]=m[k]+x` 的读不会跨写被合并——正确性所需)。这些此前已存在(IR 早定义了 SETFIELD 算子),无需改。
+
+### 效果(全部正确)
+map_write(`m[k]=m[k]+1` 等)**4.03×**(单键可靠走快速路径)、float 累加 4.x×;w2(map 写在嵌套循环、值来自 list)编译+正确。
+限制同 §10.36(主位置键、hash 种子随机故是否 JIT 因运行而异,但输出永远正确;碰撞键 abort 但**已加黑限界**,非持续负优化)。
+
+### 验证(完整门槛,全绿)
+296 ctest(新增 `map_write`,单键可靠 JIT:recorded=1/compiled=1/aborted=0/entries==exits/guard_fail=0)· 81 kernel · 292 全量差分 ×双档 ·
+**新生成器 `gen_map_write`(rmw_const/two_keys/nested_arr、int+float)199 例 ×双档 0 失配** · 全 GENS 多种子 600+ 例 0 失配 · valgrind(map_write/w1/w2)0 错误。
+
+**关键教训**:
+(1)**用"非可回收值"限制绕开 GC 屏障**是写类操作的低风险切入——免去屏障的 ABI/时机/正确性风险(和 SETI 同策),先拿下 int/float 写。
+(2)**"只覆写已存在键"避开分配/rehash**——写的快速路径只做纯内存覆写,插入交给解释器侧退出;再次"快速路径覆盖常见情形 + 守卫兜底"。
+(3)读写对称复用同一寻址与守卫,边际成本低——铺好 GETFIELD 后 SETFIELD 几乎是镜像。
+(4)IR 层(DCE 根、表写禁 CSE)在算子定义时就为读写都接好线,印证"先定义完整 IR 语义、再分别实现 recorder/codegen"的分层好处。
+
+---
+
+## §10.38 map 读写健壮化:碰撞链遍历(消除主位置限制与种子依赖)
+
+§10.36/§10.37 的 GETFIELD/SETFIELD 只走**主位置**:碰撞链上的键录制时 abort 回退,且因 `luaL_makeseed` 随机、
+键是否落在主位置因运行而异 → map 能否 JIT 不确定(虽输出恒正确)。多键 map(如 5 键)常因某键碰撞而整条循环不编译。
+本节把快速路径升级为**完整链遍历**,与 `luaH_Hgetshortstr` 逐字节对应。
+
+### 实现(codegen 现成的标签/重定位设施使其低风险)
+codegen 早有 `sptasm_newlabel/place/jmp/jcc` + 重定位补丁(CMPSET 等已用局部前向标签),故生成"带回边的链遍历循环"风险低。
+新增共享辅助 **`gen_hash_find(cg, table_ref, key, exlbl)`**(GETFIELD/SETFIELD 共用),发射:
+```
+  RAX=t; RCX=lsizenode; RDX=t->node; RAX=(1<<cl)-1 & khash(主位置slot); RDX=&node[slot]
+loop_top:
+  movzx eax,[rdx+key_tt]; cmp ctb(VSHRSTR); jne advance
+  mov rax,[rdx+key]; mov rcx,key; cmp; je found
+advance:
+  mov eax,dword[rdx+next]; test; jz exit        ; nx==0 → 未找到 → 侧退出
+  movsxd rax,eax; imul rax,24; add rdx,rax; jmp loop_top   ; n += (有符号)nx
+found:  (RDX = 命中节点)
+```
+`next` 是**有符号** int(偏移,可负),故 `movsxd`(raw `48 63 C0`)符号扩展后再 `imul 24` 前进。链终止于 `nx==0`(Lua 表保证无环 → 必终止)。
+- **GETFIELD**:`gen_hash_find` 后接值类型守卫 + 载值。
+- **SETFIELD**:`gen_hash_find` 后存值位 + 标签(仍限 int/float 免屏障)。
+- **recorder**:两者改为**录制时走同样的链**(复刻 luaH_Hgetshortstr)——找到键才录(GETFIELD 顺便预测值类型;SETFIELD 确认键存在),
+  **仅真正缺失才 abort**(原"非主位置即 abort"取消)。codegen 运行时重走链,故键在录制/运行间移动仍正确解析或侧退出。
+
+### 效果
+之前因碰撞 abort 的多键 map(m1=5 键、m3=嵌套)现在 **compiled=1、aborted=0、确定性编译**(连跑 5 次均编译,不再随种子);
+正确 + valgrind 0 错误。**主位置常见情形零回归**:主位置键 `loop_top` 首轮即命中跳 found、走 0 链步,map_access 维持 **4.90×**(对比 4.89×)。
+m1(5 键)4.76×、map_write 4.56×。**剩余的真·限制**仅:写仍限 int/float(可回收值需 GC 屏障)、写仍只更新已存在键(插入侧退出)。
+
+### 验证(完整门槛,全绿)
+296 ctest · 82 kernel · 293 全量差分 ×双档 · 全 GENS(含 `gen_map_access`/`gen_map_write`,均用至多 6 键 → 现覆盖链遍历路径)多种子 600+ 例 0 失配 ·
+valgrind(m1/m3/map_write)0 错误 · entries==exits、guard_fail=0。
+
+**关键教训**:
+(1)**先用最小快速路径(主位置)破冰、再按需健壮化(链遍历)**——上轮拿到主位置的 4.89×验证了整条数据通路,本轮只补链遍历这一段,风险被前一步大幅压低。
+(2)**复用宿主语义的精确实现**(逐字节对应 luaH_Hgetshortstr)是哈希/数据结构类 codegen 正确性的最稳来源——包括"next 是有符号偏移""nx==0 终止"这些易错细节。
+(3)codegen 已有的局部标签/重定位设施让"生成带回边循环"从高风险降为常规——动手前先确认底层设施(本轮)与缺设施时换等价路径(§10.36)是对偶的两手。
+(4)健壮化同时消除了"种子依赖致是否 JIT 不确定"这一可用性瑕疵——正确性本就解耦,现在性能也变确定。
+
+---
+
+## §10.39 同数组 RMW 展开 bug:诊断进展(根因定位,仍以 bail 规避)
+
+§10.34 记录的"展开体对同一数组既读又写(如直方图 `a[i+j+k]++`)→ 不展开(bail)"是**安全规避一个未定位的 codegen/多-trace bug**。本轮做了**受控复现与诊断**(临时关 bail),取得关键进展,但确认根因较深、仍维持 bail。
+
+### 复现(临时关 bail)
+`list<int> a=[..10..]; for rep=0,50000: for i=0,3: for j=0,3: for k=0,3: a[i+j+k]=a[i+j+k]+1;`(三层各 0..3,idx=i+j+k∈0..9,大量碰撞)。
+- **小 rep(≤5)或 HOT=1 不触发**(输出正确);**大 rep + HOT=8 才触发**——说明非每轮稳态错误,而是与 trace 生命周期/侧 trace 相关。
+- 逐单元对比(rep=50001):**低索引 a[0..3] 多算 count(idx)(+1/+3/+6/+10)、a[9] +1;高索引 a[4..8] 的写几乎全丢**(只剩录制那一轮 ≈ count(idx),编译 trace 根本没更新它们)。
+  即**编译 trace 丢弃了对一部分索引的 SETI**。
+
+### 诊断发现
+- **不是 GETI CSE**:`try_cse` 在 `has_table_write` 时对 GETI 返回 0(已禁用),确认无误。
+- **是多 trace 组合**:该 case 关 bail 后 `recorded=4`(主 trace + 3 条侧 trace),四条 trace 的 SETI 数分别 **5 / 20 / 80 / 64**。
+  本应是**一条 64-SETI 的递归展开 trace**;却被拆成不同展开深度的多条 + 侧 trace(`entries=491`、`guard_fail=0`,即非守卫失败的退出)。
+  bug 出在这些**不同展开深度的 trace + 侧退出/侧 trace 的组合**:某条 trace 覆盖一部分索引的写、另一条覆盖另一部分,边界处写丢失/重复。
+- bail 打开(正常)时此 case 不展开(走内层 trace)→ 没有这套多-trace 组合 → 正确。故 bail 是对症的安全网。
+
+### 结论 / 下一步(未来专项)
+根因 = **同数组 RMW 在递归展开 + 侧 trace 组合下的写覆盖不一致**(非单条 trace 的 CSE/DCE)。修复方向(择一):
+(a)定位为何该嵌套被拆成 4 条而非 1 条(理想递归展开应单条),消除多余侧 trace;
+(b)或在 SETI codegen / 快照里保证同数组多写的顺序与持久化在跨 trace 边界一致。
+风险中等偏深,**应作为独立专项**(带本节复现脚手架)。当前继续以 bail 规避(正确、零回归)。
+
+**关键教训**:(1)**一个看似 +2 的小偏差可能掩盖大面积错误**——必须逐单元、足够大 rep 复现才看清(a[0]+a[9] 恰好 +2,实则 a[4..8] 几乎全丢)。
+(2)bug 只在"大 rep + 真实 HOT"下现形 → 复现要贴近真实 trace 生命周期(侧 trace 只在足够热时产生)。
+(3)诊断先排除简单嫌疑(CSE)、再顺 `recorded=N`/SETI 计数定位到"多 trace 组合"这一层,避免在错误层面空转。
+(4)**深 + 窄的 bug 维持精确 bail、记录复现脚手架、留待专项**,是比"带病修"更稳的工程选择(与 §10.34 一致)。
+
+---
+
+## §10.40 调研:C 调用机制可行性 + math 函数加速机会(下一里程碑,本轮未实现)
+
+本轮系统排查了剩余高价值缺口,确认**下一个里程碑是 C 调用机制**,并定位其最佳首用例与可行路径(为专项实现铺路)。
+
+### 排查结论
+- **for-each(OP_TFORCALL)**:SPT 用改过的 generic-for——TFORCALL 经 `luaD_call` **真正调用迭代器**(`pairs(l)`→`(luaB_next,l,nil,nil)`,迭代器还被当 receiver 传)。要 JIT 须 C 调用设施或特化 luaB_next/ipairsaux(后者需暴露 static C 函数地址 + 逐字节复刻 lua_next 语义,易错)。
+- **POW 是死路**:SPT 的 `^` 运行时是**整数 XOR**(`2^10=8`、`3^2=1`、非整数报错),虽 parser 写 OPR_POW、lvm 走 luai_numpow。`math.pow` 未在 math 表注册可调形态。故 SPT **无可用指数运算符**,"为 libm pow 建 C 调用"无意义。
+- **math 函数可用且高价值**:`math.sqrt(16.0)=4.0` 正常,math 库齐全(sqrt/sin/cos/tan/exp/log/abs/floor/ceil…全是一元 double→double 的 libm 包装),数值循环极常见。**但** `math.sqrt(x)` 编译为 **OP_SELF(op21)+ C函数 CALL**(非纯 CALL);OP_CALL 录制仅内联 Lua 闭包(`ttisLclosure` 否则 abort)。当前干净回退(输出一致)。
+
+### C 调用机制可行性(已确认,降险)
+- **基础设施寄存器 R12=L / R13=ci / RBX=base / R14=k 是被调用者保存**(序言 push)→ C 调用按 SysV ABI 自动保留,调用后无需重载。
+- **RA 池含 R8-R11/RSI/RDI(调用者保存)** → C 调用会破坏其中的循环值。安全方案:**对含调用的 trace 禁 RA**——`ra_analyze` 行 254 已有 `if(!ra_op_is_safe(op)) return;`,新调用类 op **不加入 ra_op_is_safe** 即自动禁 RA(走 spill-everything,值都在栈、跨 op 无寄存器存活,调用只破坏 scratch)。
+- **栈对齐简单**:序言 8 个 push(64B)+ `sub rsp,frame_size`(16 对齐),trace 体内 RSP 恒 **≡8 mod 16** → C 调用前 `sub rsp,8` 即 16 对齐、调用后 `add rsp,8`。
+- **GC 安全**:libm 数学函数是叶函数(无 GC/无 Lua 回调/无 longjmp)→ 无栈一致性顾虑(首用例最稳)。for-each 的迭代器调用会触发 GC → 需在调用点把快照 spill 成合法 Lua 栈(更复杂,后续)。
+
+### 推荐下一里程碑实现顺序(专项)
+1. **一元 math 函数(sqrt/sin/cos/exp/log/…)**:首用例,叶函数无 GC。需:(a)在 lmathlib 暴露 "C函数指针→libm指针" 映射(把对应 math_* 去 static 或加查表函数);(b)录制识别 **OP_SELF+CALL** 到已知一元 math 函数,发新 IR(如 `SPTIR_FMATH(op1=arg, aux=libm_ptr)`);(c)codegen:`gen_load_xmm XMM0=arg; sub rsp,8; mov rax,libm_ptr; call rax; add rsp,8; 存 XMM0`;(d)新 op 不入 ra_op_is_safe(自动禁 RA);(e)处理 codegen 接受门(本轮未定位——gen_inst default 仅 break,故必有上游门拒未支持 op 致回退,需找到并放行新 op);(f)valgrind 充分验证(ABI 敏感)。
+2. 之后复用该 C 调用设施做 **for-each**(迭代器调用 + 调用点快照 spill 保证 GC 安全)与**方法调用**(OP_SELF + Lua/C 调用帧)。
+
+### 本轮产出
+排除死路(POW)、根因深 bug(RMW §10.39)、确立并降险下一里程碑(C 调用 + math)。代码保持清洁全绿(296 ctest / 82 kernel / 全量差分双档 / fuzz)。无新特性上线——SPT 无"纯简单 C 调用"用例(math 带 OP_SELF、for-each 带 GC/协议),C 调用须与其一同建,属实质性专注工作,不在长调研末仓促上线(遵循正确性优先、避免半成品不稳)。
+
+---
+
+## §10.41 GETTABUP codegen:循环内读全局 / 库表(C 调用里程碑 Unit 1)
+
+C 调用里程碑(§10.40)的第一个独立单元。GETTABUP(`R[A]=UpVal[B][K]`,即全局读 `_ENV["g"]` 或库表 `_ENV["math"]`)此前 recorder 发 **SPTT_ANY** → 下游 ADD 等因类型未知 abort,故循环内读全局整体回退。本节让 GETTABUP **类型预测 + codegen**,本质是"ULOAD 取 _ENV 表 + GETFIELD 式哈希查找",直接复用 §10.38 的 `gen_hash_find`。
+
+### 实现
+- **recorder**(OP_GETTABUP):限顶层帧(`frame_base==0`;内联帧上值不同)。取运行闭包 `clLvalue(s2v(ci->func.p))`、上值表 `cl->upvals[B]->v.p`(须 table)、键 `K[C]`(须短串)。**走与 GETFIELD 同样的碰撞链**确认键存在并预测值类型(INT/FLT/STR/ARR/TAB,否则 abort)。发 `ULOAD(b)` + `GETTABUP(et, op1=ULOAD ref, aux=key)` + GUARD + snap。
+- **codegen**(SPTIR_GETTABUP):`gen_hash_find(op1=ULOAD ref, key)` → 值类型守卫 → 载值。与 GETFIELD 唯一区别:表来自 ULOAD ref(非寄存器操作数)。运行时动态查找 + 类型守卫保证正确(全局被改类型/缺失 → 侧退出),**无需烘焙表指针**。
+- GETTABUP 不在 `ra_op_is_safe` → 这类 trace **自动禁 RA**(值在 spill 槽,ULOAD 结果由 gen_hash_find 的 gen_load 读出)。GETTABUP 带 GUARD 标志 → DCE 保留;是读非写,不驱动 has_table_write。
+
+### 效果
+循环内读全局现可 JIT:`s=s+g`(int)**3.98×**、`s=s+gf*gi`(float 多全局)**2.57×**(每轮两次哈希查找 + 无 RA)。这也是 **math 函数加速的前置**(`math.sqrt` 经 GETTABUP 取 math 表)。
+
+### 验证(完整门槛,全绿)
+**297 ctest**(+kernel `test/15_jit/kernels/global_read.spt`,混 int/float 全局,1344336/160040.0)· 82+ kernel · **294 全量差分** ×双档 · 新增 fuzz 生成器 `gen_global_read`(int/float 全局、嵌套组合)200 例 0 失配,全 GENS 多种子 600+ 0 失配 · valgrind 0 错误 · entries==exits、guard_fail=0。
+
+### 下一单元(Unit 2):math 函数 C 调用
+有了 GETTABUP,`math.sqrt(x)` 仅差:(a)识别 SELF 取到的函数是已知一元 math C 函数(需 lmathlib 暴露 C函数→libm 映射,math_* 现为 static);(b)新 IR `SPTIR_FMATH(arg, libm_ptr)` + codegen 发 C 调用(`gen_load_xmm XMM0=arg; sub rsp,8; call libm; add rsp,8; 存 XMM0`,体内 RSP≡8 mod 16 已验);(c)FMATH 不入 ra_op_is_safe(自动禁 RA);(d)注意 SPT 改过的调用约定:`math.sqrt(x)` 经 SELF 把接收者作 arg1、真参在 arg2,math_* 读 `luaL_checknumber(L,2)`。
+
+**关键教训**:把大特性(C 调用 + math 习语)**拆成可独立验证的单元**——Unit 1(GETTABUP,无 C 调用、纯哈希查找复用)先落地、全绿、且自身有价值(全局读),把 Unit 2(真正的 C 调用)的前置和风险都先清掉。复用 `gen_hash_find`(§10.38)使 GETTABUP codegen 近乎零新增风险。
+
+---
+
+## §10.42 math 函数 C 调用:SPTIR_FMATH + GUARD_CFUNC(C 调用里程碑 Unit 2 ✅ 阶段达成)
+
+里程碑的核心单元:让循环内的一元 math 函数(`math.sqrt/sin/cos/tan/exp/asin/acos`)经**直接 libm C 调用**编译。这是 JIT **首个 C 调用机制**——此前任何需要调用 C 函数的路径(math、for-each、方法)都死路。
+
+### 习语与约定
+`math.sqrt(x)` 编译为 `GETTABUP(_ENV["math"]) → SELF(R[A]=math["sqrt"], R[A+1]=math 接收者) → CALL`。SPT 改过的调用约定:**接收者作 arg1、真参在 arg2**,`math_*(L)` 读 `luaL_checknumber(L,2)`、用 `l_mathop(fn)` 直调 libm。math 函数经 `luaL_newlib`(nup=0)注册 → 是**轻量 C 函数 LUA_VLCF**(非 C 闭包),值即 `lua_CFunction` 指针。
+
+### 实现(4 部件)
+1. **lmathlib.c** 暴露非 static `spt_jit_unary_math(lua_CFunction)→double(*)(double)|NULL`,映射 7 个**严格一元、恒返回 float** 的函数(排除变参的 atan/log、返回 int 的 floor/ceil/abs)。math_* 是 file-static,故映射必须住在 lmathlib。
+2. **SPTIR_FMATH**(op1=float 参, aux=libm 指针, 结果 float):codegen 发 C 调用 `gen_load_xmm XMM0=arg; sub rsp,8; mov rax,libm; call rax; add rsp,8; 存 XMM0`。体内 RSP≡8 mod 16,一次 `sub rsp,8` 对齐到 16。
+3. **SPTIR_GUARD_CFUNC**(op1=表 ref, op2=KPTR(方法键), aux=期望 fn 指针):正确性锚点——运行时 `gen_hash_find` 查方法键、守卫 `值标签==LUA_VLCF && 值位==期望 fn`,否则侧退出。**一个守卫即足够**:无论 math 表或 sqrt 字段如何被改,只要解析出的函数 ≠ 期望即侧退出(若解析仍是 math_sqrt 则调 libm 正确,与表怎么来无关)。
+4. **recorder**:OP_SELF 从 abort 组拉出专门处理(限顶层帧)——发 GUARD_CFUNC + 设 `pending_cfn_{libm,slot}`;OP_CALL 开头若 `pending_cfn_slot==frame_base+a` 则要求 `b==3 && c==2`、取 R[A+2] 真参(int 则插 TOFLT)、发 FMATH→R[A]、类型 FLT。两者都不入 `ra_op_is_safe` → 自动禁 RA。
+
+### 关键 BUG(本节最重要的教训)
+OP_SELF 起初读 **live R[B]** 取 math 表 → `live R[8] not table` abort。根因:循环体内 `R[8]` 被 **CALL 结果覆盖**(`R[8]=sqrt 值`),录制发生在回边,live R[8] 是上轮的浮点结果而非 math 表。**修复:从稳定的 _ENV 源重新解析**——经 SELF 的 `bref` 要求是 `SPTIR_GETTABUP`,从其 ULOAD 取上值索引、从 GETTABUP.aux 取库键("math"),读 `cl->upvals[idx]->v.p`(=_ENV,稳定)→ 查 "math" → 查 "sqrt"。新增 `rec_table_getstr(Table*,TString*)` 链遍历辅助。这把 math 习语限定为**全局/库表**(`math` 是全局 → GETTABUP),正好覆盖 math.*。运行时 GUARD_CFUNC 在(动态的)GETTABUP 结果上重走,故录制期解析仅为预测。spill-everything 下每个 IR ref 有独立槽,GETTABUP ref 的槽 ≠ FMATH 的槽(顺序 GETTABUP→GUARD_CFUNC→FMATH),故 GUARD_CFUNC 读 op1 拿到的是 math 表而非被 FMATH 覆盖的结果。
+
+### 效果与验证(完整门槛,全绿)
+`math.sqrt` **1.92×**、sin/cos/exp 混合 **2.15×**、int 参数(TOFLT)**1.85×**(libm 调用 + 每轮 GUARD_CFUNC 哈希查找 + 禁 RA;加速适中但真实)。**298 ctest**(+kernel `math_call.spt`)· **295 全量差分** ×双档 · 新增 fuzz `gen_math_call`(7 函数 × float/int 参 × 多项组合)**200 例 0 失配、200 编译(100%)**,全 GENS 700 0 失配 · **valgrind 全干净**(C 调用 ABI 敏感,5 个 fuzz 案例 + 3 个手测 0 错误)· entries==exits、guard_fail=0。
+
+### 教训
+- **live-stack 读取对"循环体内被覆盖的寄存器"是陷阱**——必须从稳定源(上值/IR ref)重新派生(§10.41 GETTABUP 已是前奏,本节是其直接受益:正因 R[B] 是 GETTABUP 才能反查 _ENV)。
+- C 调用机制可行性(§10.40 分析)全部兑现:infra 寄存器(L/ci/base/k)callee-saved 跨调用存活、不入 ra_op_is_safe 自动禁 RA、体内 RSP≡8 mod 16 一次 sub 对齐、libm 叶函数无 GC。**valgrind 是 ABI 正确性的命门**。
+- **正确性靠运行时守卫(GUARD_CFUNC),不靠录制期解析**——表/方法被改即侧退出。
+- 拆单元奏效:Unit 1(GETTABUP)清掉前置+风险,Unit 2 才聚焦真正的 C 调用;两单元各自全绿。
+
+## §10.43 for-each 列表迭代:OP_TFORCALL/TFORLOOP 原生索引循环特化(✅ 阶段达成)
+
+把 `for k[,v] : pairs(L)`(L 为 List)编译成**原生索引循环**。这是首个"真实代码"高频习语,且与 §10.42 形成关键对比:**完全不需要 C 调用**——故特意选它绕开本环境缺失 valgrind 带来的 ABI 校验风险。
+
+### 习语与约定
+SPT 的 `for k,v : pairs(L)` 编译为 `pairs() CALL(返回 luaB_next, 状态=L, nil, nil) → TFORPREP → 体 → TFORCALL → TFORLOOP 回边`。决定性事实(在 `ltable.c luaH_next` 中核实):**对数组态 List 经 luaB_next 迭代,键恰好是 0,1,…,loglen-1,值=L[键];越界(i≥loglen)时干净返回 nil(非报错)**。故整个 for-each 退化为索引循环。SPT 槽位(见 lvm.c):迭代器在 ra+0、状态在 ra+1(均循环不变)、键落 ra+3(兼下轮控制变量)、值落 ra+4。`pairs()` 返回 `luaB_next`(轻量 C 函数 LUA_VLCF;`ipairs` 返回的是 `ipairsaux`,不同函数)。
+
+### 实现(无新 IR、无 codegen 改动——纯 recorder 变换)
+与 §10.42 的最大不同:**不新增任何 IR opcode、不动 codegen**。整个特化只发既有的 `SLOAD/ADD/LEN/GETI/GUARD_LT/GUARD_T`,因这些全在 `ra_op_is_safe` 内。基础设施只 3 件:
+1. **lbaselib.c** 暴露非 static `spt_jit_pairs_next()→luaB_next`(luaB_next 是 file-static,故访问器必须住这)。
+2. **入口守卫**:SPTRecCtx/SPTTrace 加 `forin_iter_slot/forin_iter_fn`;`trace_entry_guards_ok` 中若 `forin_iter_slot>=0` 则校验该槽仍是 `ttislcf && fvalue==luaB_next`,否则拒绝进 trace(类比 inline_fn 的一次性 C 入口检查)。**迭代器身份只靠这个 C 入口守卫,不入 IR**——避免对函数槽发一个无 codegen 的 FUNC 类型守卫。
+3. **recorder**:把 TFORPREP/TFORCALL/TFORLOOP 从 OP_SELF 的共享 abort 组拉出专门处理:
+   - **TFORCALL**(限顶层帧、c∈[1,2]):校验迭代器==luaB_next、状态 `ttisarray`;`SLOAD 状态`(发 GUARD_T(ARR),提升进 preheader、入口 live-in);**守卫旧键**(见下);`newkey=ADD(键,1)`;`len=LEN(状态)`;若 c≥2 发 `值=GETI(状态,newkey)`(元素类型由 `rec_array_elem_type` 预测、运行时类型守卫兜底)+ 快照;**在快照之后**才提交 `reg_map[ra+3]=newkey、reg_map[ra+4]=值`(使快照携带旧键)。
+   - **TFORLOOP**:回边目标检查照搬 FORLOOP(`(pc+1)-Bx==start_pc`?否则侧 trace→`sptir_exit`、根 trace→abort),再 `sptir_loop`。
+   - **TFORPREP**:abort(只会在内层 for-each 嵌套时遇到——外层自身的 TFORPREP 在 start_pc 之前不录;不展开 for-each)。
+
+### 关键 BUG(本节最重要的教训:RA 原地更新 vs 快照需旧值)
+首版把循环继续守卫建在 **newkey**(自增**之后**)上,首跑即 `invalid key to 'next'`。根因:开 RA 时,循环携带的键其 `SLOAD(ra+3)` 与 `newkey=键+1` **共用一个寄存器(原地自增)**;`newkey` 的机器码在守卫之前执行,故循环末守卫的退出分支触发时寄存器**已是 newkey**;而该守卫的快照把 `ra+3` 映射到 `SLOAD(ra+3)`,于是**冲出 newkey(越界值)**给解释器 → `next(L, 越界)` 报错。更隐蔽地:**值类型守卫退出**也会冲出 newkey 并**跳过一个元素**。
+**修复:对 for-each trace 禁用 RA**(`ra_analyze` 开头 `if (cg->trace->forin_iter_slot>=0) return;`)。spill-everything 下每个 IR ref 有独立槽,`SLOAD(ra+3)` 的槽始终存旧键、`newkey` 写另一槽,故所有快照都冲出正确的旧键;循环末退出重跑真实 TFORCALL(`next(L,旧键)→nil`)与解释器逐字一致。这与 §10.41/§10.42 的 RA-off 先例同构。**对 for-each 启用 RA 留作后续优化**(需照 FORLOOP 把守卫改建在旧键上,且必须消除"值 GETI 在自增后取快照"这一结构——本质是 for-each 在迭代末尾"提前取下一元素"破坏了 FORLOOP "自增是最后一步、退出分支在自增机器码之前"的安全前提)。
+
+### 附带修复:ASan 揪出的一个**预存**越界(与 for-each 无关,顺手加固)
+首次以 ASan+UBSan(本环境无 valgrind 的替身)跑 kernel,`bool_and_or`/`cmp_float` 触发 **heap-buffer-overflow**:`ifconv_arm_int_result`/`ifconv_arm_flt_result` 对 **LOADI/LOADF/LOADK** 这类 B 字段非寄存器的臂操作,仍**急切**地 `ifconv_reg_is_{int,flt}(rc, GETARG_B(ins))` → 用垃圾寄存器号读到栈外(报错栈区后 3416 字节)。这些 op 的返回值本就不用那个急切结果(LOADI/LOADF 返 1、LOADK 查 k[Bx]),故**仅是越界读、返回值一直正确**——这正是它能长期潜伏到现在的原因。**修复:把 B/C 的类型探测改为惰性**,只在真把 B/C 当寄存器的 case 内调用。与 for-each 改动正交,但作为内存安全加固一并修掉。
+
+### 效果与验证(完整门槛,全绿;valgrind→ASan/UBSan 替身)
+差分正确(off==on):int 求和、float 求和、键求和、仅键(c==1)、体内分支、**中途把状态换成另一个不同长度的数组**(fe_reassign:trace 经运行时 SLOAD/LEN 适配任意数组,正确)。安全用例均正确且不崩:map 迭代(编译=0,干净 abort)、ipairs(编译=0)、自定义 Lua 闭包迭代器(编译=0,因非 luaB_next)。**85 kernel**(+`for_each_list.spt`)· **297 ctest** ×(默认/HOT=8/HOT=2 压力)· 新增 fuzz `gen_for_each`(int/float × value/value_branch/keyvalue/key × 可选换表)**聚焦 500 例 0 失配、编译率 100%**,全量 fuzz 1250(种子 1-5)0 失配 · **ASan+UBSan 全干净**:85 kernel + 297 ctest ×(HOT=8,HOT=2) + fuzz 批次 0 错误,并**修掉其揪出的预存 ifconv 越界** · entries==exits、guard_fail=0。
+
+### 教训
+- **RA 原地更新与"快照需旧值"的根本张力**:任何在归纳变量自增**之后**取的快照都会冲掉旧值(SLOAD 与 new 值共寄存器)。FORLOOP 安全是因守卫在自增前——其退出分支的机器码在自增之前。for-each 因"末尾提前取值"破坏该结构 → 本轮以禁 RA 换正确性(慢但对 > 快但错)。
+- **与 §10.42 的关键对比**:for-each over List **无需 C 调用**——luaH_next 的数组键序恰是 0..n-1,整循环退化为原生索引(仅 GETI+守卫);选它正为绕开缺 valgrind 的 ABI 风险。亦印证"能不发 C 调用就不发"。
+- **正确性靠运行时守卫,录制期仅预测**:LEN/GETI 的边界与类型守卫 + C 入口迭代器固定;故状态中途换数组也正确。
+- **终止逻辑不自造**:循环末退出重跑真实 TFORCALL(next→nil)。
+- **缺 valgrind 时 ASan+UBSan 是有效替身**,且首跑即逮到一个预存越界——任何"从未跑过 sanitizer"的代码库都值得跑一遍。
+
+## §10.44 链式容器访问:Map 取字段 → 索引/取字段(rec_eval_container 统一,✅ 阶段达成)
+
+让 `m["k"][j]`(map-of-list)、`m["k1"]["k2"]`(map-of-map)等**经 Map 根的链式访问**能编译。对比:`a[i][j]`(list-of-list,纯链式 GETI)此前已支持;缺的是"中间容器来自 GETFIELD"的情形。**无 C 调用、无 GC**——故是当前最干净、最易差分验证的覆盖缺口(数据驱动画像选出)。
+
+### 根因(数据驱动定位)
+画像常见热循环的 abort,发现 `m["a"][j]` 100% abort、`a[i][j]` 正常。两处根因都是"读 live 栈而非顺 IR 解析":
+1. **取索引那步(GETTABLE/GETI)abort**:`rec_array_elem_type → rec_eval_array` 只顺 `SLOAD/GETI` 解析中间数组,**不认 GETFIELD 产出的嵌套 List** → 返回 `SPTT_ANY` → abort。
+2. **map-of-map 第二个 GETFIELD abort**:OP_GETFIELD recorder 读 `s2v(base+b)` 找基 map,但 `m["p"]` 是**本 trace 早先产出的中间值**,录制发生在回边、该栈槽是上一轮的陈旧值(非 map)→ `ttistable` 失败 → abort(§10.42 同款 live-stack 陈旧陷阱)。
+
+### 实现(2 处,均改为"顺 IR 解析";无新 IR、无 codegen 改动)
+1. **统一 `rec_eval_container`**:把原 `rec_eval_array` 重构为返回 `TValue` 的通用解析器,顺 `SLOAD`(栈槽)/ `GETI`(List 元素)/ `GETFIELD`(Map 字段,interned 短串键经 `luaH_getshortstr`)链向下;**List/Map 标签随 TValue 走**(`LUA_VARRAY` vs `LUA_VTABLE`),每层按标签用对应的 `avalue()`/`hvalue()`。`rec_eval_array` 变成"取 container 后过滤 array 态"的薄封装。这让任意混合链(`a[i][j]` / `m["k"][j]` / `m["k1"]["k2"]` / 更深)都能预测元素类型。
+2. **OP_GETFIELD 基 map 改为顺 IR 解析**:先 `rec_eval_container(bref)` 顺 IR 求基 map,**失败再回退 `s2v(base+b)` live 栈槽**——保持全局 map(经 GETTABUP 的基)等其它无法顺链解析之基的旧行为不变(零回归),只把"中间 GETFIELD/GETI 产出之基"改走 IR。
+
+为何无需动 codegen:GETFIELD 早已声明可产 `SPTT_ARR/SPTT_TAB` 结果、GETI/GETTABLE 早已接受 `SPTT_ARR` 基;codegen 上 GETI 的 `gen_load`、GETFIELD 的 `gen_hash_find` 直接消费 GETFIELD 产出的 `Table*` 指针(与消费 SLOAD 产出的数组指针同构)。缺的**仅是录制期"顺 IR 解析中间容器"**这一块预测逻辑。
+
+### 效果与验证(完整门槛,全绿)
+差分正确(off==on):map-of-list(int/float)、双字段 `m["a"][j]-m["b"][j]`、map-of-map `m["p"]["x"]`;list-of-list **零回归**;现存 `map_read`/`map_write` kernel **零回归**。**86 kernel**(+`nested_container.spt`)· **298 ctest** ×(默认/HOT=8/HOT=2)· 新增 fuzz `gen_nested_container`(mol_int/mol_flt/mom/lol 四形)**聚焦 500 例 0 失配、编译率 100%**,全量 1250(种子 1-5)0 失配 · **ASan+UBSan 全干净**(86 kernel + 298 ctest ×双档 + fuzz 批次;GETFIELD 在热路径上,故重点复验)· entries==exits、guard_fail=0。
+
+### 教训
+- **"顺 IR 解析,别读 live 栈"是处理链式/循环携带中间值的通用法则**:§10.42 已立(math 表)、§10.43 已用(for-each 键),本节再次受益并**推广到 Map 容器链**。live 栈对"本 trace 早先产出的中间容器"必然陈旧——这是一类反复出现的陷阱。
+- **List/Map 标签随 TValue 走**(`LUA_VARRAY`/`LUA_VTABLE`),链式解析每层必须按标签选 `avalue`/`hvalue`,不能只凭 `Table*`。
+- **"顺 IR 解析失败再回退 live 栈"是低风险扩展模式**:新增能力同时严格保持旧路径行为(GETFIELD 基的改动对全局 map 等零影响)。
+- **数据驱动选题**:与其猜,不如画像常见热循环的 abort,直接命中最高价值的干净缺口(无 C 调用、无 GC、差分可验)——本轮即由 `m["a"][j]` 的 100% abort 定位到此。
+
+## §10.42-fix 构建可移植性:spt_jit_unary_math 去掉 l_mathop(裸 libm 函数名)
+§10.42 的 `spt_jit_unary_math` 用 `return l_mathop(sqrt);` 取函数指针,在**某些构建配置下编译失败**(报 `pointer value used where a floating-point was expected`)。
+
+**根因**:`luaconf.h:565` 的 `#if defined(LUA_USE_C89) || (defined(HUGE_VAL) && !defined(HUGE_VALF))` 为真时,`l_mathop(op)` 被重定义为 `(lua_Number) op`。`l_mathop` 的本意是包裹一个 math **调用**(`l_mathop(sqrt)(x)` → `(lua_Number) sqrt(x)`,转的是调用**结果**);但当它包裹一个**裸函数名**(`l_mathop(sqrt)` → `(lua_Number) sqrt`)时,就成了把**函数指针**强转成 double → 编译错误。该分支是否触发取决于处理 luaconf.h 时 `HUGE_VALF` 是否可见(include 顺序 / 是否 `-DLUA_USE_C89`),故 CMake 构建命中、本地 build.sh(identity 分支)未命中。
+
+**修复**:`spt_jit_unary_math` 直接返回裸 libm 函数名(`return sqrt;` 等)。typedef 本就是 `double(*)(double)`、libm 双精度函数恰好匹配、FMATH codegen 也以 double 运作,故裸名是**类型正确**的选择,且与可用构建里 `l_mathop`=identity 时的展开**完全一致**(行为不变)。lobject.c 中其余 `l_mathop(...)` 都是调用或常量(`(lua_Number) ldexp(r,e)`/`(lua_Number) 0.0`),不受影响。
+
+**验证**:`-DLUA_USE_C89` 强制该分支后**整项目编译+链接通过**、math_call kernel off==on(147672.5484453346)、86 kernel difftest 全绿;正常构建 86 kernel + 298 ctest + fuzz 全绿、math 行为不变。**教训**:用宏取"函数指针"前先看它在所有 luaconf 分支下的展开——为"调用"设计的宏未必能用于"取址";跨构建可移植性要按最严格分支(C89 fallback)校验。

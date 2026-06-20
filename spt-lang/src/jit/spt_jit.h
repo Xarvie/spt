@@ -53,6 +53,17 @@ typedef l_uint32 Instruction;
 /* Maximum trace length (instructions). Longer traces are aborted. */
 #define SPT_JIT_MAX_TRACE 4096
 
+/* Inner-loop unrolling (Phase 3a / nested loops): when an outer trace records
+   through an inner numeric for-loop whose init/limit/step are compile-time
+   integer constants and whose body is straight-line, the inner loop is fully
+   unrolled inline (the whole nested loop becomes one linear trace) provided the
+   trip count does not exceed this cap. This removes the per-outer-iteration
+   inner-trace exit/re-entry that made short inner loops a net loss (measured:
+   inner=4 was 0.98x, a negative optimization). Larger inner loops are left as
+   their own trace (already profitable; unrolling them would bloat the trace).
+   Env-overridable via SPT_JIT_UNROLL_MAX (0 disables unrolling entirely). */
+#define SPT_JIT_UNROLL_MAX 16
+
 /* Maximum IR instructions per trace. */
 #define SPT_JIT_MAX_IR 8192
 
@@ -61,6 +72,37 @@ typedef l_uint32 Instruction;
 
 /* Maximum side exits per trace. */
 #define SPT_JIT_MAX_EXITS 128
+
+/* Trace-linking ("stitching", Phase 2): after a trace exits with full state
+   flushed to the interpreter stack, sptjit_trace_enter may re-enter a compiled
+   trace found at the resume PC instead of returning to the interpreter dispatch
+   loop. This is a hard backstop on the number of consecutive native hand-offs
+   per C entry; in practice the chain is 1-3 hops (parent -> side trace -> back).
+   The strict forward-progress check is the primary terminator; this cap is an
+   absolute safety net against any unforeseen non-progressing cycle. */
+#define SPT_JIT_MAX_LINK_HOPS 64
+
+/* Side-trace recording (Phase 2): a parent trace's side exit becomes a side-
+   trace candidate after it is taken this many times. Recording a side trace
+   rooted at the exit PC turns the "wrong arm + rest of loop body" path -- which
+   otherwise round-trips through the interpreter every time -- into native code
+   that the link trampoline hands off to. Kept well above SPT_JIT_HOT so we only
+   spend a side trace on an exit that is genuinely, repeatedly hot. */
+#define SPT_JIT_SIDE_HOT 200
+
+/* Minimum IR size (total instructions) for a side trace to be KEPT. Stack-
+   mediated linking pays a fixed per-hand-off cost: the parent's exit flushes all
+   live state to the stack, then the side trace runs its own prologue + SLOAD
+   reloads + epilogue. For a tiny minority arm that fixed cost exceeds simply
+   letting the interpreter dispatch the arm's few bytecodes, making the side trace
+   a net LOSS versus the pre-Phase-2 fallback. Measured (20M-iter 50/50, side
+   trace vs no-side-trace): ~21-inst arm 0.84x (loss), ~32-inst 1.11x, ~49-inst
+   1.25x (wins). So a side trace is only kept once its body is large enough to
+   amortize the link overhead; below this it is discarded and the arm runs in the
+   interpreter (no regression from Phase 2). Env-overridable (SPT_JIT_SIDE_MIN_IR);
+   set to 0 to force-record every side trace (used by the test harness to exercise
+   the recording/linking path on small kernels). */
+#define SPT_JIT_SIDE_MIN_IR 28
 
 /* Maximum distinct live-in slots tracked for the per-entry type recheck.
    Loops rarely carry more than a handful of typed live-ins; a trace exceeding

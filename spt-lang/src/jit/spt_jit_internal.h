@@ -11,6 +11,11 @@
 #include "spt_jit.h"
 #include "spt_jit_ir.h"
 
+/* lua_CFunction is identical to lua.h's typedef (C11 allows the redefinition);
+   declared here so SPTTrace can store the for-each iterator identity without
+   pulling in the full VM headers. */
+typedef int (*lua_CFunction)(lua_State *L);
+
 /* =====================================================================
 ** Trace structure
 ** ===================================================================== */
@@ -51,6 +56,14 @@ struct SPTTrace {
   int inline_fn_slot;
   Proto *inline_fn_proto;
 
+  /* for-each (OP_TFORCALL) list specialization: the trace iterated a List via
+     pairs() and may only be entered while slot `forin_iter_slot` still holds the
+     expected iterator C function `forin_iter_fn` (= luaB_next). Re-derives the
+     key sequence (0,1,...) and value (GETI) natively, so a different iterator
+     (custom / over a map) would be wrong -> decline. -1 = not a for-each trace. */
+  int forin_iter_slot;
+  lua_CFunction forin_iter_fn;
+
   /* Compact live-in type-check list, precomputed at record time from the IR's
      GUARD_T-on-SLOAD instructions (deduped by slot). The entry check in
      sptjit_trace_enter iterates THIS instead of scanning the full IR on every
@@ -84,6 +97,9 @@ struct SPTJitState {
   SPTJitStats stats;
 
   uint16_t hot_threshold;  /* trips before recording (configurable) */
+  uint32_t side_hot_threshold; /* parent-exit taken-count before a side trace */
+  int side_min_ir;         /* min IR size to keep a side trace (amortize linking) */
+  int unroll_max;          /* max inner-loop trip count to unroll inline (0=off) */
   int debug;               /* emit diagnostics to stderr */
 
   /* Hot loop detection: hash table keyed by (proto, pc_offset) */

@@ -266,6 +266,10 @@ void sptasm_mulsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src);
 void sptasm_divsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src);
 /* XORPS xmm, xmm (zero) */
 void sptasm_xorps(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src);
+void sptasm_andpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src);
+void sptasm_andnpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src);
+void sptasm_orpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src);
+void sptasm_cmpsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src, uint8_t imm8);
 /* UCOMISD xmm, xmm (compare) */
 void sptasm_ucomisd(SPTAsm *a, SPTXmmReg r1, SPTXmmReg r2);
 /* CVTSI2SD xmm, reg (int to float) */
@@ -273,6 +277,7 @@ void sptasm_cvtsi2sd(SPTAsm *a, SPTXmmReg dst, SPTReg src);
 /* CVTSD2SI reg, xmm (float to int, truncation) */
 void sptasm_cvtsd2si(SPTAsm *a, SPTReg dst, SPTXmmReg src);
 void sptasm_movq_xmm_to_gpr(SPTAsm *a, SPTReg dst, SPTXmmReg src);
+void sptasm_movq_gpr_to_xmm(SPTAsm *a, SPTXmmReg dst, SPTReg src);
 /* CVTSS2SD / CVTSD2SS not needed; we use double everywhere */
 
 /* ---- Memory management for executable code ---- */

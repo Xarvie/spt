@@ -1,0 +1,25 @@
+// JIT kernel: reading globals inside a hot loop (OP_GETTABUP).
+//
+// A global read compiles to ULOAD (fetch the _ENV upvalue table) + GETTABUP,
+// which the codegen lowers exactly like GETFIELD: an inline hash-slot search of
+// _ENV for the constant short-string key (gen_hash_find, walking the collision
+// chain) followed by a value-type guard and load. The value type is predicted
+// at record time from the live global and guarded at run time, so reassigning a
+// global to a different type side-exits; an absent global (chain end) also
+// side-exits. GETTABUP is not RA-safe, so these traces run with register
+// allocation disabled (values in spill slots) -- still far faster than the
+// interpreter. This mixes an int global, a float global, and an expression that
+// combines them, so both the int and float GETTABUP value paths are exercised.
+gi = 7;
+gf = 2.5;
+gi2 = 3;
+int si = 0;
+float sf = 0.0;
+for (int rep = 0, 4000) {
+  for (int j = 0, 15) {
+    si = si + gi * gi2;
+    sf = sf + gf;
+  }
+}
+print(si);
+print(sf);

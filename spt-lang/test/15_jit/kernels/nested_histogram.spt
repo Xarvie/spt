@@ -1,0 +1,22 @@
+// Phase-3a regression guard for the read-modify-write-same-array bail. A
+// histogram nested loop `a[i+j+k]++` where the index COLLIDES (many (i,j,k)
+// triples map to the same cell, e.g. index 4 is hit 12 times per rep). Fully
+// unrolling this produced a wrong result: the large straight-line trace
+// mis-codegens the load-after-store dependency once a single cell is touched
+// many times through colliding constant indices (caught by the gen_recursive_nest
+// fuzzer). The unroller now refuses to unroll a body that both reads AND writes
+// the same array, so this falls back to the inner-loop trace and stays correct.
+// Matrix multiply (writes a DIFFERENT array than it reads) is unaffected and
+// still unrolls -- see nested_dot.spt / the matmul perf kernels. Output (every
+// bin) must match the interpreter byte-for-byte.
+list<int> a = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+for (int rep = 0, 200000) {
+  for (int i = 0, 3) {
+    for (int j = 0, 3) {
+      for (int k = 0, 3) {
+        a[i + j + k] = a[i + j + k] + 1;
+      }
+    }
+  }
+}
+for (int x = 0, 9) { print(a[x]); }

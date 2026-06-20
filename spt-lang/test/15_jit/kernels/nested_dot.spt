@@ -1,0 +1,16 @@
+// Phase-3a inner-loop-unrolling flagship: a dot product with a SHORT, constant-
+// bound inner loop nested in a hot outer loop. Before unrolling the JIT traced
+// only the inner loop and paid an exit+re-entry per outer iteration, so this ran
+// ~1.8x (and a 4-trip inner loop ran <1.0x -- a negative optimization). With the
+// inner loop unrolled inline the whole nest is one linear trace (~6x), and the
+// variable-index a[j]/b[j] loads become constant-index loads. Output must match
+// the interpreter byte-for-byte (the sum is a sensitive off-by-one oracle).
+list<float> u = [1.5, 2.5, 3.5, 0.5, 1.0, 2.0, 4.5, 0.25];
+list<float> v = [0.5, 1.5, 2.0, 3.0, 1.25, 0.75, 2.5, 1.0];
+float s = 0.0;
+for (int r = 0, 200000) {
+  for (int j = 0, 7) {
+    s = s + u[j] * v[j];
+  }
+}
+print(s);

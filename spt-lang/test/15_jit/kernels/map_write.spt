@@ -1,0 +1,23 @@
+// Regression kernel for inline hash-slot SETFIELD (map write by a constant
+// short-string key), symmetric to GETFIELD. The codegen computes the key's main
+// position and walks the collision chain (gen_hash_find) to the node holding our
+// key, then overwrites its value bits + tag. An EXISTING key is updated on the
+// fast path (collision-chained keys included); an absent key would need an
+// insert, so it side-exits to the interpreter. Only int/float values are stored
+// -- non-collectable, so NO GC write barrier. The dominant shape is read-modify-
+// write the same key (`m[k] = m[k] + x`, a counter): GETFIELD reads, SETFIELD
+// writes, and the table-write CSE guard keeps the read from being merged across
+// the write. Single-key maps keep this kernel's output trivial to follow;
+// multi-key / collision coverage lives in the fuzzer (gen_map_write). Output is
+// the interpreter's regardless of whether it JITs.
+map<str, int> hits = {"v": 0};
+map<str, int> miss = {"v": 0};
+map<str, float> total = {"v": 0.0};
+for (int rep = 0, 2000000) {
+  hits["v"] = hits["v"] + 1;
+  miss["v"] = miss["v"] + 3;
+  total["v"] = total["v"] + 1.5;
+}
+print(hits["v"]);
+print(miss["v"]);
+print(total["v"]);
