@@ -1,0 +1,47 @@
+// CONDITIONAL-WRITE methods: an if-only conditional field write `if(c) this.f=A;`
+// (the ubiquitous running-max/min tracker, in-place clamp, value cap) is inlined
+// and if-converted to ONE unconditional trailing write of a branchless select,
+// this.f = select(c, A, old), where old is this.f's current value (a compare
+// operand). Composes the §10.30/§10.48 select with §10.49's single-trailing-write
+// safety: the SETFIELD is the last guard-emitting op, so resume-at-SELF never
+// fires after the write commits -- no double write, no new codegen.
+//
+// The summed field values below are the correctness AND double-write detector: a
+// double write or a wrong select would change the running max/min and diverge the
+// sum from the interpreter. Covers int (CMPSET select) and float (FSELECT,
+// NaN-as-false) fields, register and constant written values, and the safety
+// boundary (multi-write / read-after-write / compare-other-field / if-else all
+// abort cleanly and stay correct -- exercised in the fuzzer).
+class IMax { int peak; void __init(){ this.peak = -1000000; }
+             void track(int x){ if(x > this.peak) this.peak = x; }       // running max (x > field)
+             int get(){ return this.peak; } }
+class IMin { int low; void __init(){ this.low = 1000000; }
+             void track(int x){ if(x < this.low) this.low = x; }         // running min (x < field)
+             int get(){ return this.low; } }
+class Clamp { int v; void __init(int a){ this.v = a; }
+              void low(){ if(this.v < 0) this.v = 0; }                   // clamp low (constant 0, k-flag)
+              void cap(int m){ if(this.v > m) this.v = m; }              // cap high (param)
+              int get(){ return this.v; } }
+class FMax { float peak; void __init(float v){ this.peak = v; }
+             void track(float x){ if(x > this.peak) this.peak = x; }     // float running max (FSELECT)
+             float get(){ return this.peak; } }
+
+float big = 1.0e308 * 10.0; float nan = big - big; float ninf = 0.0 - big;
+
+int iacc = 0;
+IMax mx = IMax();
+for (int r = 0, 200000) { for (int j = 0, 25) { mx.track((j * 7 + r) % 50 - 25); } iacc = iacc + mx.get(); }   // running max
+IMin mn = IMin();
+for (int r = 0, 200000) { for (int j = 0, 25) { mn.track((j * 5 + r) % 40 - 20); } iacc = iacc + mn.get(); }   // running min
+for (int r = 0, 200000) { Clamp c = Clamp(8 - (r % 17)); for (int j = 0, 10) { c.low(); } iacc = iacc + c.get(); }   // clamp low
+for (int r = 0, 200000) { Clamp c = Clamp(100 - (r % 30)); for (int j = 0, 10) { c.cap(60); } iacc = iacc + c.get(); } // cap high
+print(iacc);
+
+float facc = 0.0;
+FMax fx = FMax(-1.0e30);
+for (int r = 0, 200000) { for (int j = 0, 20) { fx.track(0.25 * j - 2.0); } facc = facc + fx.get(); }          // float running max
+FMax fn = FMax(nan);
+for (int r = 0, 150000) { for (int j = 0, 12) { fn.track(0.5 * j); } facc = facc + fn.get(); }                 // NaN start: NaN-as-false
+FMax fi = FMax(ninf);
+for (int r = 0, 150000) { for (int j = 0, 12) { fi.track(0.5 * j - 4.0); } facc = facc + fi.get(); }           // -inf start
+print(facc);

@@ -1,0 +1,8 @@
+int s = 0;
+int m = 0;
+for (int i = 0, 200000) {
+  s = s + i * 8;
+  m = m + i % 16;
+}
+print(s);
+print(m);

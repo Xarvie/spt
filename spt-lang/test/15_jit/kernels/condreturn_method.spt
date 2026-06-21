@@ -1,0 +1,39 @@
+// Conditional-return pure-read method inlining: a method of the exact shape
+// `if (c) { return A } return B` whose prefix/arms read `this` fields is inlined
+// AND its branch if-converted to a branchless select (no in-callee guarded
+// branch -- which a single-entry trace cannot represent; see §10.28/§10.46).
+// Covers clamp/abs/max/min/select-of-two-fields on integer fields, with and
+// without params, and composed with straight-line methods on the same receiver
+// (multiple-methods-per-trace). Field-read guards on the pinned class are
+// stable, so these stay branchless with no side exit. Bodies are pure reads, so
+// any in-method guard resumes at the caller's SELF (idempotent). Float returns
+// and bounds-guarded variable-index reads (GETI in an arm) deliberately fall
+// back to the interpreter rather than risk a spurious per-iteration side exit;
+// every result must match the interpreter byte-for-byte either way.
+class N  { int v; void __init(int x){ this.v = x; }
+           int relu(){ if(this.v < 0) return 0; return this.v; }
+           int absx(){ if(this.v < 0) return 0 - this.v; return this.v; }
+           int maxp(int p){ if(this.v > p) return this.v; return p; }
+           int dbl(){ return this.v + this.v; } }
+class P  { int flag; int a; int b; void __init(int f, int x, int y){ this.flag = f; this.a = x; this.b = y; }
+           int pick(){ if(this.flag > 0) return this.a; return this.b; } }
+class FF { float x; void __init(float v){ this.x = v; } float relu(){ if(this.x < 0.0) return 0.0; return this.x; } }
+class BB { list<int> d; int n; void __init(list<int> dd, int nn){ this.d = dd; this.n = nn; }
+           int safe(int i){ if(i < this.n) return this.d[i]; return -1; } }
+
+N  np = N(7);   N nn = N(-4);
+P  pp = P(1, 100, 200);
+FF ff = FF(-2.5);
+BB bb = BB([10, 20, 30, 40], 4);
+
+int si = 0;
+float sf = 0.0;
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + np.relu() + nn.relu(); } }       // ReLU on field, both signs
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + nn.absx(); } }                    // abs on field
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + np.maxp(j) + nn.maxp(j); } }      // max(field, param)
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + pp.pick(); } }                    // select of two fields
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + np.dbl() + np.relu(); } }         // straight-line + cond-return, same receiver
+for (int r = 0, 200000) { for (int j = 0, 15) { sf = sf + ff.relu(); } }                    // float cond-return: abort, stay correct
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + bb.safe(j % 4); } }               // var-index cond-return: abort, stay correct
+print(si);
+print(sf);

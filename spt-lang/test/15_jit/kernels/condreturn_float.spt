@@ -1,0 +1,39 @@
+// FLOAT conditional-return if-conversion: a cond-return leaf `if(c){return A}
+// return B` whose returns are float (e.g. ReLU `float relu(){ if(this.x<0.0)
+// return 0.0; return this.x; }`, clamp/abs/min/max) is inlined and if-converted
+// to a BIT-EXACT branchless float select (FCMPMASK/ICMPMASK + FSELECT -- the same
+// machinery conditional ASSIGNMENT uses; the integer else+(then-else)*cond trick
+// would round, so it must not be used for floats). Works for both cond-return
+// METHODS (float fields) and free-function helpers. Comparison predicates >/>=
+// compile as swapped LT/LE so NaN stays false (Lua semantics): every result here
+// must match the interpreter byte-for-byte, including NaN/+inf/-inf. Mixed-type
+// arms (one int, one float) and int-arms-under-a-float-compare fall back to the
+// interpreter rather than change a value's type. Float `/` (always float in Lua)
+// is allowed in an arm; trapping integer `//` is not.
+class N { float x; void __init(float v){ this.x = v; }
+          float relu(){ if(this.x < 0.0) return 0.0; return this.x; }          // <
+          float clamphi(){ if(this.x > 1.0) return 1.0; return this.x; }       // > (swapped LT)
+          float ge0(){ if(this.x >= 0.0) return this.x; return 0.0; }          // >= (swapped LE)
+          float le1(){ if(this.x <= 1.0) return this.x; return 1.0; }          // <=
+          float absf(){ if(this.x < 0.0) return 0.0 - this.x; return this.x; } // abs (SUB in arm)
+          float maxp(float p){ if(this.x > p) return this.x; return p; } }     // max(field, param), both float vars
+float clampf(float x){ if(x < 0.0) return 0.0; return x; }                     // free-function clamp
+float minf(float a, float b){ if(a < b) return a; return b; }                  // free-function min
+
+float big  = 1.0e308 * 10.0;     // +inf
+float nan  = big - big;          // NaN
+float ninf = 0.0 - big;          // -inf
+N pos = N(2.5);  N neg = N(-1.5);  N mid = N(0.5);
+N vnan = N(nan); N vinf = N(big);  N vninf = N(ninf);
+
+float s = 0.0;
+for (int r = 0, 150000) { for (int j = 0, 12) { s = s + pos.relu() + neg.relu(); } }                       // ReLU, both signs
+for (int r = 0, 150000) { for (int j = 0, 12) { s = s + pos.clamphi() + mid.clamphi(); } }                  // clamp high (>)
+for (int r = 0, 150000) { for (int j = 0, 12) { s = s + neg.ge0() + pos.le1(); } }                          // >=, <=
+for (int r = 0, 150000) { for (int j = 0, 12) { s = s + neg.absf(); } }                                     // abs
+for (int r = 0, 150000) { for (int j = 0, 12) { s = s + pos.maxp(mid.x) + neg.maxp(mid.x); } }              // max(field, param)
+for (int r = 0, 150000) { for (int j = 0, 12) { s = s + clampf(neg.x) + clampf(pos.x); } }                  // free-function clamp
+for (int r = 0, 150000) { for (int j = 0, 12) { s = s + minf(pos.x, mid.x); } }                             // free-function min
+for (int r = 0, 100000) { for (int j = 0, 10) { s = s + vnan.relu() + vinf.relu() + vninf.relu(); } }       // NaN / +inf / -inf
+for (int r = 0, 100000) { for (int j = 0, 10) { s = s + vnan.clamphi() + vnan.ge0() + vnan.le1(); } }       // NaN through every predicate
+print(s);

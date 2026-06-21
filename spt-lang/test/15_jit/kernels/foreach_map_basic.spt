@@ -1,0 +1,6 @@
+int s = 0;
+map<string, int> m = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5};
+for (string k, int v : pairs(m)) {
+  s = s + v;
+}
+print(s);

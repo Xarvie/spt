@@ -112,6 +112,12 @@ typedef l_uint32 Instruction;
 /* Maximum upvalues referenced by a trace. */
 #define SPT_JIT_MAX_UPVALS 32
 
+/* Maximum distinct inlined methods (OP_SELF + CALL) pinned by one trace. Real
+   OOP loops call only a handful of distinct methods on stable receivers (e.g.
+   `a.foo(); a.bar()`); a trace exceeding this aborts the extra method (correct,
+   just not inlined). Each pinned method is re-validated once per entry. */
+#define SPT_JIT_MAX_METHODS 8
+
 /* Trace cache size (must be power of 2). */
 #define SPT_JIT_CACHE_SIZE 256
 

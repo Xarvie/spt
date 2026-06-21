@@ -1,0 +1,8 @@
+int s = 0;
+for (int i = 0, 1000) {
+  map<string, int> m = {"x": 10, "y": 20, "z": 30};
+  for (string k, int v : pairs(m)) {
+    s = s + v;
+  }
+}
+print(s);

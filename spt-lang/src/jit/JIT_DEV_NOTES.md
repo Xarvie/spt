@@ -1967,3 +1967,212 @@ SPT 的 `for k,v : pairs(L)` 编译为 `pairs() CALL(返回 luaB_next, 状态=L,
 **修复**:`spt_jit_unary_math` 直接返回裸 libm 函数名(`return sqrt;` 等)。typedef 本就是 `double(*)(double)`、libm 双精度函数恰好匹配、FMATH codegen 也以 double 运作,故裸名是**类型正确**的选择,且与可用构建里 `l_mathop`=identity 时的展开**完全一致**(行为不变)。lobject.c 中其余 `l_mathop(...)` 都是调用或常量(`(lua_Number) ldexp(r,e)`/`(lua_Number) 0.0`),不受影响。
 
 **验证**:`-DLUA_USE_C89` 强制该分支后**整项目编译+链接通过**、math_call kernel off==on(147672.5484453346)、86 kernel difftest 全绿;正常构建 86 kernel + 298 ctest + fuzz 全绿、math 行为不变。**教训**:用宏取"函数指针"前先看它在所有 luaconf 分支下的展开——为"调用"设计的宏未必能用于"取址";跨构建可移植性要按最严格分支(C89 fallback)校验。
+
+## §10.45 List of Map 元素:GETI/GETTABLE/for-each 放行 TAB 元素(✅ 阶段达成)
+
+让 `list<map<...>>` 的元素访问能编译:`a[i]["k"]`(读)、`a[i]["k"]=...`(写)、`for k,mp : pairs(a)` 取 `mp["k"]`。是 §10.44(Map-of-List)的**对称补全**(List-of-Map)。**无 C 调用、无 GC**。
+
+### 根因(数据驱动,一行白名单)
+画像发现 `a[i]["v"]` 100% abort,而 `m["a"][j]` 已通(§10.44)。abort 在取索引那步(GETI/GETTABLE):它们的**元素类型白名单只放 `INT/FLT/STR/ARR`,漏了 `TAB`(Map)**;而 GETFIELD(map 读)的值白名单**早已放行 `TAB`**。即:List 能装 Map(`list<map>`),但 GETI 不让加载 Map 元素 → 一读 `a[i]` 就 abort。
+
+### 实现(极小;无新 IR、无 codegen 改动)
+GETI、GETTABLE、for-each 值加载三处白名单各加 `SPTT_TAB`。**TAB 元素与 ARR 元素表示完全相同**(8 字节 `Table*` gc 指针 + 标签守卫),GETI codegen 早已能产 TAB 结果(被 GETFIELD 复用)、`spt_type_to_tag(SPTT_TAB)=TAG_TAB`,故只需录制期放行、零 codegen 风险。后续 `a[i]["k"]` 的字段读写走既有内联哈希槽(§10.36/§10.37),内层 Map 经 `rec_eval_container` 顺 IR 解析(§10.44)。
+
+### 效果与验证(完整门槛,全绿)
+差分正确(off==on):`a[i]["v"]` 读、`a[i]["v"]=a[i]["v"]+1` 写、`for k,mp:pairs(a)` 取 `mp["v"]`;**list-of-list 零回归**;**现存数组读路径零回归**(白名单只新增放行,非 TAB 分支字节级不变,fuzz 种子 1-3 共 750 例 0 失配确认)。**87 kernel**(+`list_of_map.spt`)· **299 ctest** ×(默认/HOT=8/HOT=2)· `gen_nested_container` 增 `lom_read`/`lom_write` 形,聚焦 500 例 0 失配、编译率 100% · **ASan+UBSan 全干净**(87 kernel + 299 ctest ×双档 + fuzz;GETI/GETTABLE 是最热路径,重点复验)· entries==exits、guard_fail=0。
+
+### 教训
+- **对称性审视暴露缺口**:GETFIELD 放行 TAB 值、GETI 却不放行 TAB 元素——同样的表示、不一致的白名单。把"读 Map 的字段值"与"读 List 的元素值"对照,一眼看出该补 `TAB`。和 §10.44(Map-of-List)合起来,任意 List/Map 嵌套链(`a[i][j]` / `m["k"][j]` / `m["k1"]["k2"]` / `a[i]["k"]`)读写都覆盖了。
+- **同构表示 → 录制期放行即可**:TAB 与 ARR 在 codegen 完全同构(都是 `Table*` + 标签守卫),无需任何 codegen 改动。
+- **数据驱动再次奏效**:画像直接命中 `a[i]["v"]` 的 abort,改动收敛到一行白名单。
+
+## §10.46 方法调用内联:obj.method() 纯读方法(OP_SELF + CALL,resume-at-SELF,✅ 阶段达成)
+
+让类实例的**纯读方法**(getter / 基于 this 字段+参数的计算值,无写)在热循环里被内联进 trace:`m.scale(j)`、`p.sum()`、`v.dot()`、`b.at(i)`(变量下标)、`w.f(p,q,t)`。**纯 Lua、无 C 调用、无 GC**,故可用现有工具完整差分验证。
+
+### 类即元表(SPT 习惯)
+SPT 的 class 是 `setmetatable(inst, Class)` 且 `Class.__index = Class`(见 ast_codegen.c),所以**方法直接挂在接收者的元表上**:`rec_table_getstr(recv->metatable, key)` 即得方法闭包,无需解析 `__index`(它就是元表自身)。
+
+### 接线(对称复用自由函数内联)
+- **OP_SELF**:`R[B]` 是类实例且来自**稳定槽的 SLOAD**(⇒ 循环不变接收者:体内若重新赋值接收者就不是裸 SLOAD,自然 abort)时,解析元表上的方法 → 把接收者放进 `R[A+1]`(被调方槽 0 = this),武装 `pending_method`(下一条 CALL 内联它),并记录**一组方法身份**(recv_slot/元表/key/proto);第二个不同方法 → 失配 abort(**每 trace 一个方法**)。
+- **OP_CALL**:`pending_method_slot==frame_base+a` 时,镜像自由函数内联(`proto_is_method_inlinable` 体纯度门、保存/切换 caller 上下文、`new_fb=A+1`、深度 1)。
+- **入口守卫**(`trace_entry_guards_ok`):接收者槽仍是 table、其元表==记录的类、且 key 在元表上**重新解析**回同一 proto(防方法被改写后用了过期内联)。
+- **OP_SETFIELD 基**:原先用裸栈槽 `s2v((func+1)+a)` 取基表——内联帧里 `a` 是被调方相对槽(0=this),绝对位置是 `frame_base+a`,取错表。改为 `rec_eval_container(aref)` **顺 IR 解析到 live 接收者**(镜像 GETFIELD 的 §10.44)。这让带字段访问的方法体能正确取到 this 的表。
+
+### 关键正确性:内联帧退出 = 必须 resume-at-SELF(本节核心)
+退出桩做 `ci->u.l.savedpc = exit_pc` 后返回解释器,而解释器仍在 **caller 的 CallInfo**(内联从未压被调方帧)。所以一个在内联方法体内触发的守卫,若快照 PC 指向**被调方字节码**,退出后会在 caller 帧下执行被调方字节码 → **栈基/常量全错 → 损坏**。两道机制根除之:
+
+1. **resume-at-SELF**:方法体内每个守卫(字段守卫走 `rec_snap`、`sptir_guard` 建的下标越界守卫走 `rec_guard_pc`)的退出 PC 一律设为 caller 的 **SELF 指令**。守卫失败 → 解释器从 SELF 重跑 SELF+CALL+method。**仅因纯读方法体无已提交副作用、重跑幂等才成立**——故门 `proto_is_method_inlinable` 禁 `SETFIELD/SETI/SETTABLE`。快照在 CALL 处(仍在 caller 帧)取,捕获 caller 活值(循环归纳、累加器、接收者源);被调方临时值随后被重跑覆盖,无害。变量下标越界(`b.at(8)`)即走此路:退出→解释器重跑→解释器报正确的越界错(实测 off==on 同错、无崩溃)。
+2. **入口前安全网**(`sptir_optimize` 后、codegen 前):扫所有 live 守卫,任一退出 PC 落在主 proto `[code,code+sizecode)` **之外**(即仍指向内联体)→ **拒绝编译、回退解释器**(同侧 trace 摊销门)。这**保证绝不发出任何 in-callee 退出桩**;它正是抓住了未重定向前的下标越界守卫,也是任何遗漏的兜底。
+
+> 早期教训:常量 key 的字段守卫**并未被 LICM 完全消除/外提**,而是作为 live 守卫携带 in-callee 快照 PC 留存(对稳定形状实例永不触发,但是潜藏地雷)。安全网正确地把所有方法都拦了下来——证明\"靠 LICM 一定会外提\"不可依赖,必须**显式校验**(resume-at-SELF 给出主-proto 退出 PC,安全网放行;否则拦截)。
+
+### 边界(本轮明确不做,均干净 abort 回退)
+- **写/RMW 方法**(`this.f = ...`):`this.total=this.total+x` 编译后**写后还会 GETFIELD 重读** this.total(写之后的守卫)→ resume-at-SELF 重跑会**双写** → 不安全。需\"入口期字段布局守卫 + 无守卫字段访问 codegen\"(更大改动),故暂禁(门排除写)。
+- **变量下标**(`this.d[i]`)纯读**支持**(越界经 resume-at-SELF 正确回退);写下标随写方法一并暂禁。
+- **每 trace 多方法 / 分支方法体(cond-return)**:暂不支持(单方法、直线体)。
+
+### 效果与验证(完整门槛,全绿)
+差分正确(off==on)且 compiled≥1:`scale(v)`、`sum()` 双字段、`dot()` 浮点字段、`at(i)` 变量下标、`first()` 常量下标、零参 getter、三参方法。安全:`varying_receiver`(对象列表,接收者是 GETI 非 SLOAD → abort)、`non_class_map_field`(普通 map 不受影响)、方法内越界(off==on 同解释器错、无崩溃)均正确回退。**全局快照路径改动(`rec_snap`/`rec_guard_pc`)零回归**:88 kernel(+`method_call.spt`)· 299 ctest ×(默认/HOT=8/HOT=2)· 多种子 fuzz(HOT=8 五种子 1250 例 + HOT=2 两种子 400 例 + 聚焦 `gen_method_call` 400 例)共 ~2050 例 0 失配 · **ASan+UBSan 全干净**(88 kernel difftest + 方法用例 + 120 例 fuzz)· entries==exits、guard_fail=0。
+
+### 教训
+- **内联帧退出是调用内联的真正难点**(路线图早有预判):零守卫叶子(自由函数)绕开它;一旦方法体带字段访问就必须面对\"被调方帧不存在\"。resume-at-SELF(重跑整条调用)对**纯读**是干净解;写需要更强的入口期守卫。
+- **\"实测永不触发\"≠正确**:字段守卫对稳定形状实例永不失败,但 latent in-callee 退出桩仍是地雷。**安全网把\"假设\"变\"校验\"**——这是本节最重要的正确性保证。
+- **慢但对 > 快但错**:宁可把写方法干净 abort(回退解释器),也不发一个\"几乎不触发但一触发就损坏\"的退出。窄而深、可证正确的子集优先固化。
+- **SLOAD 接收者 = 循环不变性的廉价证明**:要求接收者是裸 SLOAD,既保证循环不变(可入口校验一次),又自动拒绝\"对象列表\"等每次变化的接收者。
+
+## §10.47 每 trace 多方法内联:`a.foo(); a.bar()`(OP_SELF 身份列表,✅ 阶段达成)
+
+§10.46 的方法内联限**每 trace 一个方法**——入口守卫只钉一组身份(recv_slot/元表/key/proto),第二个不同方法即 abort。但真实 OOP 热循环常在一轮里调多个方法(`a.foo(); a.bar()`、`p.x(); p.y()`)。本节把单一身份升级为**身份列表**,让一条 trace 内联多个不同方法。**纯 recorder/入口守卫改动,无新 IR、无 codegen 改动**——每个方法仍各自 resume-at-SELF(§10.46),正确性面不变,只是入口逐一校验。
+
+### 缺口确认(数据驱动,先证缺失)
+`for j: s = s + p.sumx() + p.sumy()`(同接收者、两方法、一循环)实测 **compiled=0**,abort 落在第二个 `OP_SELF`(op21,pc_offset=36,录完第一个方法后撞上)——但 off==on 输出正确。即:第一个方法内联成功,第二个因 `method_proto != mcl->p` 触发单身份的 abort 分支。这正是 §3c.1 #2 点名的"真实 OOP 常见"缺口。
+
+### 实现(身份单例 → 身份列表)
+- **`SPTMethodId` 结构**(spt_jit_internal.h):`{recv_slot, class_mt, key, proto}` 四元组。`SPTTrace`/`SPTRecCtx` 各用 `SPTMethodId methods[SPT_JIT_MAX_METHODS]` + `int n_methods`(`SPT_JIT_MAX_METHODS=8`,真实循环极少在稳定接收者上调超过一把方法)。`pending_method_*`(SELF→CALL 交接)仍是单例——它天然顺序(SELF 武装、紧跟的 CALL 消费清零、下个 SELF 再武装),无需复数化。
+- **OP_SELF**(spt_jit.c):原"`method_recv_slot<0` 则设、否则与单一身份比对、不符即 abort"改为**查重 + 追加**:遍历 `methods[]` 找匹配三元组(recv_slot/class_mt/proto),命中则复用(同方法被调多次=dedup,如 `a.f()+a.f()`),未命中且未满则追加新条目,满了才 abort。`method_self_pc` 仍每个 SELF 现设、被该方法体内守卫即时取用,顺序无冲突。
+- **入口守卫 `trace_entry_guards_ok`**:原校验单一身份改为**遍历 `methods[]` 逐一校验**(每个 recv_slot 仍是 table、元表==钉住的类、key 重解析回同 proto)。同一 recv_slot 可在列表里重复(`a.f();a.g()` 两条目都查槽 S→元表 M,proto 各异),冗余但无害且正确。
+- init/copy-to-trace 相应改为清零 `n_methods` / 拷贝数组。
+
+### 为什么"无新正确性面"(关键论证)
+多方法只是把单条目验证复制成 N 条目验证,**每个方法的内联机理与 §10.46 逐字相同**:体内守卫仍 resume-at-SELF(纯读幂等)、退出 PC 仍设 caller 的该方法 SELF、入口前**安全网**(扫 live 守卫、退出 PC 出主 proto 范围即拒编译)仍对每个方法的 in-callee 退出桩兜底。两方法之间无共享可变状态:`pending_method_*` 顺序消费、`method_self_pc` 每 SELF 现设现用、身份列表只增不改。`proto_is_method_inlinable` 的纯读门(禁写/RMW)对每个方法独立生效。故正确性完全继承 §10.46,仅入口校验从"一组"变"一列表"。
+
+### 效果(全部正确)
+多方法循环 `s = s + p.fx() + p.fy(j)`(64M call-pair)**1.0×(此前 abort 回退解释器)→ 5.98×**。battery 全 compiled + off==on:两/三方法同接收者、双接收者(`a.f()+b.g()`,不同 recv_slot)、float 字段方法、dedup(同方法两次)、混参。varying-receiver(对象列表,接收者非 SLOAD)仍干净 abort 回退。`entries==exits`、`guard_fail=0`。§10.46 单方法 kernel 零回归。
+
+### 验证(完整门槛,全绿)
+**303 ctest**(+kernel `multi_method.spt`:六循环,五条多方法循环编译、varying-receiver 回退)· **89 kernel** · **300 全量差分** · 新生成器 `gen_multi_method`(同接收者 2/3 方法、双接收者、dedup、float、混参 六形)60 例 0 失配/100% 编译,**全 GENS(39 个)seeds 1-10 × 300 = 3000 例 0 失配** · **ASan+UBSan 全干净**(89 kernel difftest + 方法重案例 0 sanitizer 报告 + 600 例 fuzz;方法内联在热路径,重点复验)· entries==exits、guard_fail=0。
+
+**关键教训**:
+(1)**单例→列表是低风险扩展的范式**:当新能力 = "已验证的单元素机理 × N",且元素间无共享可变状态时,把标量身份换成列表 + 逐一校验即可,正确性直接继承,无需新机理(对照 §10.36→§10.38 主位置→链遍历、§10.44 顺 IR 解析的扩展手法)。
+(2)**先证缺失再动手**(§10.21 方法论延续):用最小 repro 确认 `a.foo();a.bar()` 确实 compiled=0 且 abort 落在第二个 SELF,再实现——避免对"以为缺的"特性空转。
+(3)**dedup 让同方法多次调用零成本**:查重逻辑使 `a.f()+a.f()` 只占一个身份条目,既省入口校验又自然正确。
+(4)安全网(§10.46)对每个新方法的 in-callee 退出桩**自动兜底**——多方法无需额外正确性设施,这是 §10.46 安全网设计的直接红利。
+
+## §10.48 带分支方法体内联:cond-return 纯读方法 if-conversion(OP_SELF + CALL,✅ 阶段达成)
+
+§10.46 的方法内联门 `proto_is_method_inlinable` 只收**直线体**(单 RETURN1、无分支)。但 clamp/abs/min/max 这类 getter 常写成**条件返回** `int clamp(){ if(this.v<0) return 0; return this.v; }`,此前 100% abort 回退解释器。本节把自由函数早有的 cond-return if-conversion(§10.27)接到方法路径上:识别 `if(c){return A}return B` 形状、内联、并把条件返回 **if-convert 成无分支 select**(无被调方中段守卫分支——§10.28 已证那在单入口 trace 里不可表示、会损坏)。**复用 §10.27 的 `rec_try_condreturn_ifconv`,无新 IR、无 codegen 改动。**
+
+### 缺口确认
+`for j: s = s + a.relu()`(`relu` 为 cond-return 方法)compiled=0,abort 落在方法体的比较处:方法门只认直线体,cond-return 形状不被内联 → OP_CALL abort。这正是 §3c.1 #3 点名的缺口。
+
+### 实现(三块,均小)
+1. **静态门 `proto_is_condreturn_method_inlinable`**(spt_jit.c):复制 `proto_is_condreturn_inlinable` 的形状匹配(比较+JMP、then 臂 RETURN1、else 臂 RETURN1、尾随死 boilerplate),但 prefix/两臂的 op 白名单用新 helper `condreturn_method_op_ok` = **ifconv-safe 整数 op + GETFIELD + LEN**(读 this 字段/数组长度)。
+2. **OP_CALL 方法路径**:`proto_is_method_inlinable` 失败时再试 `proto_is_condreturn_method_inlinable`,任一通过即用**同样的方式**切入被调方(切 frame_base、pc=callee code、武装 `method_resume_snap`)。cond-return 的 if-conversion 在录制器撞到比较时由 `rec_try_condreturn_ifconv`(frame_base≠0)接管。
+3. **放宽 `rec_try_condreturn_ifconv` 臂扫描**:原扫描只认 ifconv-safe,改用 `condreturn_method_op_ok`(超集,含 GETFIELD/LEN)。对自由函数 cond-return 无影响(其静态门 `proto_is_condreturn_inlinable` 已禁字段读,故臂里永不含 GETFIELD,超集扫描行为不变);只让**方法**的字段读臂不被误拒。臂的实际录制本就经 `rec_inst`(GETFIELD 在内联帧里走 `rec_eval_container` 解析 this,§10.44/§10.46 已就绪),故无需新录制逻辑。
+
+### 关键设计抉择:**排除变量下标 GETI/GETTABLE**(降负优化风险)
+`condreturn_method_op_ok` 放 GETFIELD/LEN 但**不放 GETI/GETTABLE**。原因:if-conversion **两臂都无条件求值**,而变量下标读带**边界守卫**。若 `if(i<n) return d[i]; return -1;`,编译后 trace 每轮都求 `d[i]`,当 `i>=n`(本该走 else)时边界守卫**每轮侧退出** → 负优化(违反"trace 不得慢于解释器")。GETFIELD/LEN 在**钉住的类**上守卫稳定(字段恒存在、类型不变)→ 稳态永不触发,故安全。变量下标 cond-return 列为后续(需"仅对实际取的臂求下标"或谓词化下标,更复杂)。
+
+### 正确性(完全继承 §10.46)
+- **无被调方中段守卫分支**:cond-return 唯一的比较被 if-convert 成无分支 select(CMPSET+SUB+MUL+ADD),不发任何"被调方 PC 退出"的守卫分支。这是 §10.28 的硬要求(被调方中段控制流分叉在单入口 trace 不可表示)。
+- **字段读守卫 resume-at-SELF**:两臂里 GETFIELD 的类型/键守卫经 `rec_snap`/`rec_guard_pc`(frame_base≠0 时返回 `method_resume_snap`/`method_self_pc`)退出到 caller 的 SELF、重跑整条调用——**仅纯读体幂等才成立**,故门禁写。
+- **入口前安全网**(§10.46)仍兜底:任一 live 守卫退出 PC 出主 proto 范围即拒编译。
+- **整数 select 位精确**:`rec_try_condreturn_ifconv` 录制后查 then/else 返回类型==INT,float 字段/返回**干净 abort**(走守卫分支→frame_base≠0→abort,与 §10.30 一致)。
+
+### 效果(全部正确)
+cond-return 方法 `s + a.relu() + a.clamp()`(64M call-pair)**1.0×(此前 abort 回退)→ 5.94×**。battery 全 compiled + off==on:relu/abs(ReLU、绝对值)、max/min(field,param)、两字段 select、clamp-hi、**与直线方法同接收者混用**(`c.dbl()+c.clamp()`,§10.47 多方法 × 本节 cond-return,一条 trace)。**float 字段 cond-return、变量下标 cond-return(GETI 臂)干净 abort 回退**(off==on,只是不编译)。`entries==exits`、`guard_fail=0`。§10.46 直线方法、§10.47 多方法零回归。
+
+### 验证(完整门槛,全绿)
+**304 ctest**(+kernel `condreturn_method.spt`:七循环,五条 cond-return 方法编译、float+变量下标两条回退)· **90 kernel** · **301 全量差分** · 新生成器 `gen_condreturn_method`(relu/abs/max/min/pick2/clamp_hi/混直线 + float/var-index 回退 九形)80 例 0 失配(61 编译 + 19 正确回退),**全 GENS(40 个)seeds 1-10 × 300 = 3000 例 0 失配** · **ASan+UBSan 全干净**(guard-heavy 15-kernel 子集含 condreturn_method/multi_method + cond-return 案例 0 报告 + 300 例 fuzz) · entries==exits、guard_fail=0。
+
+**关键教训**:
+(1)**接已验证的机理到新上下文**:cond-return if-conversion(§10.27)早为自由函数验证过,本节只把它的静态门 + 臂扫描放宽到允许字段读、并接到方法路径,**无新 IR/codegen**——又一例"已验证机理 × 新场景"的低风险扩展(对照 §10.47 单例→列表)。
+(2)**if-conversion 两臂都求值 → 带可触发守卫的 op 要慎入臂**:GETFIELD/LEN(钉住类上稳定守卫)安全,变量下标 GETI(边界守卫随下标触发)会在不取的臂里每轮侧退出 → 负优化,故排除。这是"做对≠做值"(§10.32)在 if-conversion 臂选择上的具体应用。
+(3)**被调方中段不发守卫分支**始终是内联帧的铁律(§10.28):cond-return 必须 if-convert 成无分支或干净 abort,绝不发被调方 PC 的守卫分支;float/不可转形状一律 abort。
+(4)安全网(§10.46)对任何遗漏的 in-callee 退出桩自动兜底,使每个新内联形态的引入都"先被拦住、再逐步放行"——本节字段读 cond-return 即按此法稳推。
+
+## §10.49 写方法内联:单尾写 void 方法(setter/累加器,resume-at-SELF 无需入口布局守卫,✅ 阶段达成)
+
+§10.46–§10.48 的方法内联都限**纯读**体(resume-at-SELF 仅幂等成立)。写方法 `void add(int x){ this.total = this.total + x; }`(累加器)、`void set(int x){ this.v = x; }`(setter)此前 100% abort。路线图 §3c.1 #1 把写方法标为"本项最大工作量",因**一般**情形需"入口期字段布局守卫 + 无守卫字段访问 codegen"(写后若还有守卫,resume-at-SELF 重跑会**双写**)。本节识别并拿下一个**无需那套机制的安全子集**:**单尾写 void 方法**——写是体内最后一个产生守卫的 op。
+
+### 安全论证(本节核心,决定可不动 codegen)
+写方法不安全的根源是"**写后还有守卫**":若已提交一次写之后某守卫失败、resume-at-SELF 重跑整条调用 → 双写。但若方法是 `<读 this 字段/参数 + 计算>; this.field = val; return`(**单次写、且写是最后一个产生守卫的 op**),则:
+- 体内所有守卫(字段读的键/类型守卫、SETFIELD 自身的键守卫——codegen 在**存值之前**用 gen_hash_find 找节点)**全在写之前**;
+- 写之后只有 void 返回(无守卫)。
+
+故任何守卫失败都在**写提交之前**侧退出,解释器重跑整条调用**恰好写一次**——无双写。**所以这个子集用现有 resume-at-SELF + SETFIELD codegen(§10.37)即可,零新 codegen、零入口布局守卫**。一般情形(多写 `this.a=..;this.b=..`、读改写后返回 `this.v=..;return this.v`——写后有守卫)仍走 §3c.1 #1 的入口布局守卫方案(未做),本节**精准 abort 它们**。
+
+### 实现(三块,均小;无新 IR、无 codegen 改动)
+1. **静态门 `proto_is_write_method_inlinable`**:体含**恰好一个 SETFIELD**(`method_read_op_ok` = §10.46 纯读集 校验写之前的读/算 op);写之后只允许 RETURN0/RETURN/EXTRAARG(**保证写后无产生守卫的 op**)。是 void(无 RETURN1)。
+2. **OP_CALL 方法路径**:`proto_is_method_inlinable`/`proto_is_condreturn_method_inlinable` 失败再试它;并把结果数检查从 `c!=2` 放宽到 **`c==1`(void,0 返回值)或 `c==2`(1 返回值)**——void 方法作语句调用编译成 `CALL ... C=1`(**起初 bug:`c!=2` 把所有 void 方法 abort 在 OP_CALL**,DEBUG 显示 abort@op69=OP_CALL,这是本节唯一的坑)。
+3. **内联帧 void 返回**:OP_RETURN0(及 OP_RETURN b==1)在 `frame_base!=0` 时原 abort,改为**恢复 caller 上下文、不绑结果**(镜像 OP_RETURN1 内联帧分支去掉绑定)。
+- OP_SETFIELD handler **本就**在内联帧工作(§10.46 把基址改 `rec_eval_container` 解析 this)且**本就**用 `rec_snap`→resume-at-SELF(§10.37 的快照),故写的键守卫自动 resume-at-SELF,无需改。
+- `has_table_write` 在含 SETFIELD 时**禁 GETFIELD CSE**(§10.37 既有),故累加器每轮 GETFIELD 真从内存重读上轮的写——累加正确(字段走内存,非寄存器驻留)。
+
+### 效果(全部正确,累加和精确=无双写)
+累加器 `a.add(j)`(64M call)**1.0×(此前 abort 回退)→ 3.80×**(字段走内存,慢于寄存器标量但远快于解释器全调用开销)。battery 全 compiled + off==on:累加器(和**逐位精确**,双写会翻倍——这是核心正确性判据)、双累加器一条 trace(§10.47 多方法写)、setter、scale、compute-write、float 字段累加。**多写方法 `bump()`、读改写 `addret()` 干净 abort 回退**(off==on)。`entries==exits`、`guard_fail=0`。§10.46–§10.48 零回归。
+
+### 验证(完整门槛,全绿)
+**305 ctest**(+kernel `write_method.spt`:八循环,四条安全写方法编译、多写+读改写两条回退)· **91 kernel** · **302 全量差分** · 新生成器 `gen_write_method`(累加/双累加/setter/scale/compute-write/float + 多写/读改写回退 八形)100 例 0 失配(75 编译 + 25 正确回退,累加和全精确)· **全 GENS(41 个)seeds 1-10 × 300 = 3000 例 0 失配** · **ASan+UBSan 全干净**(guard-heavy 16-kernel 子集含 write_method + 写案例 0 报告 + 300 例 fuzz;**写=内存改动,ASan 是双写/越界写的命门**) · entries==exits、guard_fail=0。
+
+**关键教训**:
+(1)**找"无需重武器的安全子集"**:写方法一般情形要入口布局守卫 + 无守卫 codegen(大工程),但**单尾写**子集靠"写是最后一个守卫 op ⇒ resume-at-SELF 只在写前触发 ⇒ 无双写"的论证,用**现有**机制即可拿下最常见的 setter/累加器——又一例 §10.47/§10.48 的"窄而可证子集优先固化",把最大工作量拆出一块零 codegen 的安全增量。
+(2)**写的正确性判据是"累加和逐位精确"**:双写不会被类型/越界检查抓到,只会让和翻倍/错位——fuzzer 必须用累加器(可验证的确定性和)而非随机表达式来压它。
+(3)**void 方法 = `CALL C=1`**:结果数检查必须放行 0 返回值,否则 void 方法全 abort 在 OP_CALL(本节唯一 bug,DEBUG 退出 op 一眼定位)。
+(4)SETFIELD codegen/快照在 §10.37/§10.46 早已为内联帧 + resume-at-SELF 铺好(rec_eval_container 基址、rec_snap 快照),故本节零 codegen——印证"先把底层语义铺完整、上层增量自然受益"的分层红利。
+
+## §10.50 浮点 cond-return if-conversion:float relu/clamp/min/max(方法 + 自由函数,接 §10.30 位精确浮点 select,✅ 阶段达成)
+
+§10.48 的 cond-return if-conversion(`if(c){return A}return B` → 无分支 select)是**整数版**:`rec_try_condreturn_ifconv` 遇浮点 reg_type 即 abort。故最常见的 ML 模式 **ReLU** `float relu(){ if(this.x<0.0) return 0.0; return this.x; }`、以及 float clamp/abs/min/max(方法与自由函数)全 abort 回退——§10.48 测试里 `float relu()` 方法正是被显式验证为 abort 的那个 fallback 用例。本节把 §10.30 早建好的**位精确浮点 select 机器**(`FCMPMASK` 浮点比较→掩码、`ICMPMASK` 整数比较→掩码、`FSELECT` 位精确掩码混合)接到 cond-return 路径,**无新 IR、无 codegen 改动**——纯粹复用条件赋值(§10.30 `rec_try_ifconv`)早验证过的浮点机器。同时惠及 cond-return **方法**(float 字段)与 cond-return **自由函数**(`float clampf(float x)`)。
+
+### 缺口确认 + 实现(三处小改)
+1. **`rec_try_condreturn_ifconv` 加浮点分支**:去掉 `at!=INT||bt!=INT` 早退(改 `sptt_isnum` 收浮点比较);录完两臂后取 `then_t`/`else_t`,按类型建 select:
+   - 两臂 INT + INT 比较 → 整数 select `else+(then-else)*cond`(原路径)。
+   - 两臂 FLT → **浮点 select**:`is_flt_cmp`(任一比较操作数浮点)时建 `FCMPMASK`(int 侧 TOFLT 提升、`>`/`>=` 换序成 `<`/`<=` 以保 Lua 的 NaN-为假语义),否则 `ICMPMASK`;再 `FSELECT` 位精确混合。**镜像 §10.30 `rec_try_ifconv` 的浮点 select 逐字**。
+   - 混合臂(一 int 一 float)或 int-臂-浮点-比较 → 干净 abort(不改值的类型)。
+2. **门放宽到 `opcode_is_ifconv_safe_any`**:`condreturn_method_op_ok`(方法门 + 录制器臂扫描)和 `proto_is_condreturn_inlinable`(自由函数门)原用 `opcode_is_ifconv_safe`(整数版,**无 LOADF/LOADK**)→ 返回浮点常量的臂(`return 0.0`)被拒。改用 `_any`(整数∪浮点安全集),放行 LOADF/LOADK(浮点常量)与 OP_DIV(`/`,Lua 里恒产 float、不陷)。**关键安全点**:陷阱整数除 `//`(OP_IDIV)不在任一集 → 仍被拒;`/`(OP_DIV)恒产 float → 用它的臂自动变浮点臂走浮点 select,无整数除零陷阱。
+3. 起初 bug 定位:relu 等返回浮点**常量**的形态 abort@op69=OP_CALL(门因 LOADF 拒),而 maxp/minf 返回**变量**的形态能编译——一眼锁定是常量加载 op 未入 ifconv 安全集。
+
+### 正确性(位精确 + NaN 语义,完全继承 §10.30 + §10.48)
+- **位精确**:浮点 select 用掩码混合 `(then&mask)|(else&~mask)`,**绝不**用整数 `else+(then-else)*cond`(会舍入)。§10.30 已证。
+- **NaN 为假**:`>`/`>=` 无"NaN 为假"的 CMPSD 谓词,故换序成 `<`/`<=`(`LT_OS`/`LE_OS`)。四谓词(`< > >= <=`)对 NaN/+inf/-inf 输入全与解释器逐位一致(kernel 专测 vnan/vinf/vninf 过四谓词,结果 `-nan` off==on)。
+- **resume-at-SELF 不变**:cond-return 方法的字段读守卫仍 resume-at-SELF(§10.48);浮点 select 本身无分支无守卫。安全网(§10.46)仍兜底。
+- 整数 cond-return **零回归**(门改 `_any` 只新增浮点/常量 op;`/` 产 float 故整数臂里出现 `/` 会让该臂变浮点 → 走浮点 select 或混合 abort,无整数陷阱)。
+
+### 效果(全部位精确)
+float cond-return `a.relu()+a.clamphi()`(64M call-pair)**1.0×(此前 abort 回退)→ 5.31×**。battery 全 compiled + off==on 位精确:relu(ReLU)、clamphi(`>` 换序)、ge0(`>=` 换序)、le1(`<=`)、absf(`0.0-this.x`)、maxp/minf(变量臂)、自由函数 clampf/minf、float DIV 臂、NaN/+inf/-inf。**混合臂、int-臂-浮点-比较 干净 abort**(off==on)。`entries==exits`、`guard_fail=0`。§10.46–§10.49 零回归。
+
+### 验证(完整门槛,全绿)
+**306 ctest**(+kernel `condreturn_float.spt`:九循环含 NaN/inf 过四谓词)· **92 kernel** · **303 全量差分** · 新生成器 `gen_condreturn_float`(relu/clamp/abs/max/min/ge/自由函数/NaN输入/混合回退 十形,随机注入 inf/nan/-inf)120 例 0 失配(108 编译 + 12 正确回退)· **全 GENS(42 个)seeds 1-10 × 300 = 3000 例 0 失配** · **ASan+UBSan 全干净**(guard-heavy 17-kernel 子集含 condreturn_float + 浮点案例 0 报告 + 300 例 fuzz) · entries==exits、guard_fail=0。
+
+**关键教训**:
+(1)**接已验证的浮点 select 机器到新上下文**:§10.30 早为条件赋值建好 FCMPMASK/ICMPMASK/FSELECT(位精确 + NaN 语义),本节只把它接到 cond-return、并把门放宽到允许浮点常量/除——**零新 codegen**。又一例"已验证机器 × 新场景"的低风险扩展(§10.47 单例→列表、§10.48 cond-return 接方法、§10.49 写方法子集 一脉相承)。
+(2)**整数 vs 浮点安全集的差异是真实的**:`opcode_is_ifconv_safe`(无 LOADF、无 DIV)vs `_flt`(有 LOADF/LOADK/DIV)——浮点 cond-return 必须用 `_any` 才能放行浮点常量;而陷阱整数除 `//`(IDIV)在两集都没有,故放宽到 `_any` 不引入整数除零风险(`/` 恒产 float 自动转浮点臂)。这处类型分析是本节正确性的关键。
+(3)**返回常量 vs 返回变量的 abort 差异**一眼定位缺口:同一形态因"是否需要加载常量"而编译/abort 分裂,直接指向常量加载 op 未入安全集——窄 repro + DEBUG 退出 op 的标准定位法(§10.21/§10.49 延续)。
+
+## §10.51 条件写方法 if-conversion:in-place clamp / 滑动最大最小跟踪器(接 §10.48 select × §10.49 单尾写,✅ 阶段达成)
+
+§10.49 落地了**单尾写 void 方法**(setter / 累加器,直线体)。但带分支的写方法——尤其是极常见的**滑动最大/最小跟踪器** `void track(int x){ if(x > this.peak) this.peak = x; }` 和 **in-place clamp** `void clampLow(){ if(this.peak < 0) this.peak = 0; }`——仍全 abort(分支 + 写,无门接收)。本节把这类 `if(c) this.f = A;`(if-only 条件字段写)**if-转换**成一条无条件尾写 `this.f = select(c, A, old)`,其中 old 是 this.f 的当前值。这是"**已验证机器 × 新场景**"的又一例:select 用 §10.30/§10.48 的位精确机器(int CMPSET、float FCMPMASK/FSELECT),单尾写安全性用 §10.49,**零新 codegen、零入口布局守卫**。
+
+### 缺口确认(字节码实测,/tmp/dump.c 探针)
+`void track(int x){ if(x>this.peak) this.peak=x; }`(numparams=2: this=R0, x=R1):
+`[0]GETFIELD R2=this["peak"](=old,比较里读) [1]LT R2<R1(this.peak<x) [2]JMP +1 [3]SETFIELD this["peak"]=R1(x;C=寄存器,k=0) [4]RETURN0`。
+`clampLow`:`[3]SETFIELD this["peak"]=K1(0;C=常量,k=32768)`。**关键观察**:被写字段在比较里作为操作数被读(=old),被写的值 = RK(C)(寄存器或常量),SETFIELD 是单条尾 op。
+
+### 实现(门 + 录制器 + 两处接线)
+1. **静态门 `proto_is_condwrite_method_inlinable`**(形状专一):恰一个 SETFIELD 且位于 then 臂末 op(`wi == t1-1`,排除 if-else 的尾 JMP)、比较 + 前向 JMP 到 merge、then 臂 compute 非陷阱(`condreturn_method_op_ok`,无条件求值)、merge 后只 void 返回、无 RETURN1。**纯形状**;"比较读被写字段"由录制器验证。接入 OP_CALL 方法门(第 4 个 `|| proto_is_condwrite_method_inlinable`)。
+2. **录制器 `rec_try_condwrite_ifconv`**(`rec_cond_branch` 第三个 if-conv 尝试,在 cond-return 后):
+   - `old_ref` = aref/bref 中、IR op 为 `SPTIR_GETFIELD` 且 aux(键指针)== SETFIELD 键者;否则干净 abort(无 old 来源)。**这是把"比较读被写字段"落实的关键**——免去单独发 GETFIELD。
+   - 录 then 臂 compute `[cmp+2, sf_pc)`(常为空或单条常量加载),`A_ref = rec_load_rkc(*sf_pc)`(寄存器或常量)。
+   - 建 `select(fop, A, old)`:int → CMPSET + `old+(A-old)*cond`;float → FCMPMASK(int 提升、`>`/`>=` 换序保 NaN 为假)/ICMPMASK + FSELECT。混合类型 abort。**复制 §10.50 的 select 逻辑**(~25 行,不重构在用代码,降风险)。
+   - **直接发 SETFIELD**(复制 OP_SETFIELD handler 核心:base 经 `rec_eval_container` 解析、键存在性链遍历、`rec_snap`、`SPTIRF_GUARD` 标志),但值用 `res` 而非 RK(C)——绕开"C 可能是常量"无法 override 寄存器的问题。
+   - `rc->pc = T1`(merge),返回 1。caller 续 merge → RETURN0 → void 返回(§10.49 已处理内联帧 RETURN0)。
+
+### 正确性论证(与 §10.49 同一安全类 + §10.30 位精确)
+- **无双写**:单条 SETFIELD 是最后发守卫的 op,所有守卫(字段读键/类型守卫、SETFIELD 自身键守卫——codegen 在存储前求值)都在写之前。任一守卫失败 → 写提交前侧退出 → 解释器重跑 SELF+CALL+方法恰写一次。**条件写求和字段值 = 双写探测器**:双写或选错值会改变滑动极值、使和与解释器发散。
+- **if-only 语义等价**:`if(c) this.f=A` ≡ `this.f = c ? A : old`(c 假时把 old 写回 = 原值无副作用的 raw 存储,类实例字段是 rawset 语义无 __newindex)。
+- **位精确 + NaN 为假**:float select 用掩码混合(绝不用整数 `else+(then-else)*cond` 会舍入);`>`/`>=` 换序成 `<`/`<=`。NaN/+inf/-inf 输入下滑动极值与解释器逐位一致。
+- **安全边界全 abort 且保持正确**:双写(>1 SETFIELD,门拒)、读后写/值返回(RETURN1,门拒)、比较读别的字段(录制器 old_ref 找不到)、if-else(`wi != t1-1`,门拒)——全 compiled=0、off==on。
+
+### 效果(全部位精确)
+滑动最大 `t.track(...)`(64M 条件写)**1.0×(此前 abort)→ 2.88×**。battery 全 compiled + off==on:track max/min(寄存器写值)、clampLow(常量写值 k-flag)、cap(参数比较)、float track(FSELECT)、NaN/-inf 起始。
+
+### 验证(完整门槛,全绿)
+**307 ctest**(+kernel `condwrite_method.spt`:七循环 int/float 滑动极值 + clamp/cap + NaN/-inf)· **93 kernel** · **304 全量差分** · 新生成器 `gen_condwrite_method`(max/min/clamp/cap/float×2 + 四类安全边界 十形)160 例 0 失配(89 编译 + 71 正确 abort)· **全 GENS(43 个)seeds 1-10 × 300 = 3000 例 0 失配** · **ASan+UBSan 全干净**(guard-heavy 18-kernel 子集含 condwrite_method + 写路径 0 报告 + 300 模糊)· entries==exits、guard_fail=0。§10.46–§10.50 零回归。
+
+**关键教训**:
+(1)**组合两个已验证机器**:§10.48 的 select(分支无关求值)+ §10.49 的单尾写安全性 = 条件写,无需任何新机器。又一例低风险扩展(§10.47→48→49→50→51 一脉:单例→列表、cond-return 接方法、写方法子集、浮点 cond-return、条件写)。
+(2)**从比较操作数取 old 是关键简化**:`if(c) this.f=A` 的 else 值是 this.f 当前值;常见形态(比较并更新同字段)里它恰是比较的一个操作数(被写字段的 GETFIELD)。匹配 IR op==GETFIELD && aux==键 即拿到 old,免去单独发字段读 + CSE 的复杂度,也顺带把适用范围收窄到安全且常见的"比较读被写字段"模式。
+(3)**直接发 SETFIELD 而非 R[C]-override**:被写值 RK(C) 可能是常量(clamp 写 0 时 k-flag),override 寄存器无效。直接复制 SETFIELD handler 核心、用 select 结果作值,既正确又避开常量/寄存器分支。
+(4)**通用多写仍是下一道坎**:本节是"单尾写 + 分支"的窄安全子集;通用多写(`this.a=..;this.b=..`、读改写)需入口期字段布局守卫让在体守卫冗余 + 可能的 NOGUARD 字段访问 codegen,是真正需要新写 codegen 的项,留作专项。

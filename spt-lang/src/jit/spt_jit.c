@@ -360,7 +360,33 @@ typedef struct {
      with a once-per-entry C guard (analogous to inline_fn). -1 slot = none. */
   int forin_iter_slot;      /* absolute slot of the iterator fn (ra+0); -1 = none */
   lua_CFunction forin_iter_fn; /* expected iterator (= luaB_next) */
+  /* Pending user-method call armed by an OP_SELF that resolved `obj.method` to a
+     Lua closure via the class metatable. The next CALL on this slot inlines the
+     method's proto with the receiver as callee slot 0. -1 slot = none. */
+  int pending_method_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  Proto *pending_method_proto; /* resolved method proto to inline */
+  void *pending_method_cl;     /* the method LClosure (callee_cl for the inline) */
+  /* Method entry-guard identities (copied onto the trace). A trace may inline
+     several distinct methods (`a.foo(); a.bar()`); each receiver is loop-
+     invariant, and at entry we pin its metatable (the class) and re-resolve the
+     method to the same proto. n_methods == 0 = not a method trace. */
+  SPTMethodId methods[SPT_JIT_MAX_METHODS];
+  int n_methods;
+  /* Resume-at-SELF for guards inside an inlined (pure-read) method body. Such a
+     guard, on failure, cannot resume at the callee PC (no callee frame exists);
+     instead it resumes at the SELF instruction in the caller and the interpreter
+     re-executes SELF+CALL+method. Safe only because pure-read method bodies have
+     no committed side effects, so re-execution is idempotent. method_self_pc is
+     the SELF instruction; method_resume_snap is the shared snapshot all in-method
+     guards point at (-1 outside a method body). */
+  const Instruction *method_self_pc;
+  int method_resume_snap;
 } SPTRecCtx;
+
+/* Get current type of a register from the actual stack value. */
+static int rec_snap(SPTRecCtx *rc);
+static const Instruction *rec_guard_pc(SPTRecCtx *rc);
+static int condreturn_method_op_ok(OpCode o);
 
 /* Get current type of a register from the actual stack value. */
 static SPTType rec_value_type(const TValue *v) {
@@ -425,7 +451,7 @@ static int rec_load_reg(SPTRecCtx *rc, int reg) {
 
   /* Emit type guard: the loaded value must have the expected type. */
   if (t != SPTT_ANY) {
-    sptir_guard(ir, SPTIR_GUARD_T, ref, (int64_t)t, rc->pc);
+    sptir_guard(ir, SPTIR_GUARD_T, ref, (int64_t)t, rec_guard_pc(rc));
   }
 
   if (reg > ir->maxslot) ir->maxslot = reg;
@@ -518,6 +544,28 @@ static Table *rec_eval_array(SPTRecCtx *rc, int ref) {
   TValue v;
   if (!rec_eval_container(rc, ref, &v)) return NULL;
   return ttisarray(&v) ? avalue(&v) : NULL;
+}
+
+/* Snapshot for a guard at the current PC, EXCEPT inside an inlined pure-read
+   method body (frame_base!=0 with method_resume_snap armed): there we reuse the
+   one resume snapshot whose exit PC is the caller's SELF instruction, so a guard
+   failure re-executes SELF+CALL+method in the interpreter rather than resuming at
+   a callee PC with no callee frame. Pure-read bodies have no committed side
+   effects, so re-execution is idempotent. Everywhere else: a fresh snapshot. */
+static int rec_snap(SPTRecCtx *rc) {
+  if (rc->frame_base != 0 && rc->method_resume_snap >= 0)
+    return rc->method_resume_snap;
+  return sptir_snapshot(rc->ir, rc->pc);
+}
+
+/* The exit PC a guard should resume at. Inside an inlined pure-read method body
+   it is the caller's SELF instruction (so a guard failure re-executes the call
+   in the interpreter); everywhere else it is the current PC. Used for guards
+   built via sptir_guard(), which create their own snapshot at the given PC. */
+static const Instruction *rec_guard_pc(SPTRecCtx *rc) {
+  if (rc->frame_base != 0 && rc->method_self_pc != NULL)
+    return rc->method_self_pc;
+  return rc->pc;
 }
 
 static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
@@ -944,16 +992,19 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
 
 /* When recording an inlined callee whose entire body is a conditional return
    `if(c){return A} return B`, if-convert it: record both return values against a
-   forked callee frame and bind the caller's result slot to a branchless select
-   (B + (A-B)*c), then resume in the caller -- exactly like an OP_RETURN1 but with
-   no side exit. Integer returns only (the static gate proto_is_condreturn_inlinable
-   already restricts the body to non-trapping integer ops). Returns 1 if it took
-   this path (caller returns 1 unless rc->aborted), 0 if not applicable (the caller
-   falls back to the guarded branch, which records one return path -- also correct). */
+   forked callee frame and bind the caller's result slot to a branchless select,
+   then resume in the caller -- exactly like an OP_RETURN1 but with no side exit.
+   Both arms INT (with an INT compare) -> integer select B+(A-B)*c. Both arms
+   FLOAT -> bit-exact masked blend (FCMPMASK/ICMPMASK + FSELECT, the same machinery
+   rec_try_ifconv uses for conditional assignment: the integer trick would round,
+   so it must NOT be used for floats; GT/GE compile as swapped LT/LE to keep Lua's
+   NaN-as-false sense). Mixed arms, or int arms under a float compare, abort
+   cleanly. Returns 1 if it took this path (caller returns 1 unless rc->aborted),
+   0 if not applicable (the caller falls back to the guarded branch). */
 static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
                                      SPTType at, SPTType bt) {
   if (rc->frame_base == 0) return 0;              /* only inside an inlined callee */
-  if (at != SPTT_INT || bt != SPTT_INT) return 0; /* integer compare only */
+  if (!sptt_isnum(at) || !sptt_isnum(bt)) return 0; /* numeric compare (int/float) */
   SPTIRBuilder *ir = rc->ir;
   int fb = rc->frame_base;
   const Instruction *cmp_pc = rc->pc;
@@ -965,16 +1016,16 @@ static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int b
   if (GET_OPCODE(T1[-1]) != OP_RETURN1) return 0; /* then-arm ends in a return */
   const Instruction *then_ret = T1 - 1;
   for (const Instruction *q = cmp_pc + 2; q < then_ret; q++) {
-    OpCode o = GET_OPCODE(*q);
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    /* condreturn_method_op_ok is the superset (ifconv-safe + GETFIELD/LEN); a
+       free-function callee was already gated to ifconv-safe-only by
+       proto_is_condreturn_inlinable, so it never carries a field read here. */
+    if (!condreturn_method_op_ok(GET_OPCODE(*q))) return 0;
   }
   const Instruction *else_ret = NULL;             /* else-arm: first return */
   for (const Instruction *q = T1; q < cend; q++) {
     OpCode o = GET_OPCODE(*q);
     if (o == OP_RETURN1) { else_ret = q; break; }
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!condreturn_method_op_ok(o)) return 0;
   }
   if (!else_ret) return 0;
   int then_reg = GETARG_A(*then_ret), else_reg = GETARG_A(*else_ret);
@@ -989,7 +1040,8 @@ static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int b
   while (rc->pc < then_ret) { if (!rec_inst(rc)) return 1; }
   if (rc->pc != then_ret) { rc->aborted = 1; return 1; }
   int then_ref = ir->reg_map[fb + then_reg];
-  if (then_ref < 0 || ir->reg_type[fb + then_reg] != SPTT_INT) { rc->aborted = 1; return 1; }
+  SPTType then_t = ir->reg_type[fb + then_reg];
+  if (then_ref < 0 || !sptt_isnum(then_t)) { rc->aborted = 1; return 1; }
   for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
 
   /* ---- record the else-arm's value computation */
@@ -997,22 +1049,161 @@ static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int b
   while (rc->pc < else_ret) { if (!rec_inst(rc)) return 1; }
   if (rc->pc != else_ret) { rc->aborted = 1; return 1; }
   int else_ref = ir->reg_map[fb + else_reg];
-  if (else_ref < 0 || ir->reg_type[fb + else_reg] != SPTT_INT) { rc->aborted = 1; return 1; }
+  SPTType else_t = ir->reg_type[fb + else_reg];
+  if (else_ref < 0 || !sptt_isnum(else_t)) { rc->aborted = 1; return 1; }
   for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
 
-  /* ---- result = else + (then-else)*cond, bind to caller, resume in caller */
-  int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
-  int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref, else_ref, 0);
-  int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
-  int res  = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref, prod, 0);
+  /* ---- branchless select, bind to caller, resume in caller */
+  int res; SPTType res_t;
+  if (then_t == SPTT_INT && else_t == SPTT_INT && at == SPTT_INT && bt == SPTT_INT) {
+    /* integer: result = else + (then-else)*cond, cond in {0,1} (one shared cmp) */
+    int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
+    int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref, else_ref, 0);
+    int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
+    res = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref, prod, 0);
+    res_t = SPTT_INT;
+  } else if (then_t == SPTT_FLT && else_t == SPTT_FLT) {
+    /* float: bit-exact masked blend = (then & mask) | (else & ~mask). The integer
+       else+(then-else)*cond trick would round, so it is NOT used here. Mask from a
+       float compare (FCMPMASK, int side promoted, GT/GE as swapped LT/LE to keep
+       Lua's NaN-as-false sense) when either operand is float, else an integer
+       compare (ICMPMASK). Mirrors rec_try_ifconv's float select. */
+    int is_flt_cmp = (at == SPTT_FLT || bt == SPTT_FLT);
+    int mask;
+    if (is_flt_cmp) {
+      int ca = aref, cb = bref;
+      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb; SPTIROp mop = fop;
+      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
+      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
+    } else {
+      mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
+    }
+    res = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT, then_ref, else_ref, (int64_t)mask);
+    res_t = SPTT_FLT;
+  } else {
+    rc->aborted = 1; return 1;            /* mixed arms / int-arms-under-float-cmp: fall back */
+  }
   ir->reg_map[rc->call_result_slot] = res;
-  ir->reg_type[rc->call_result_slot] = SPTT_INT;
+  ir->reg_type[rc->call_result_slot] = res_t;
   if (rc->call_result_slot > ir->maxslot) ir->maxslot = rc->call_result_slot;
   rc->p = rc->save_p;
   rc->k = rc->save_k;
   rc->cl = rc->save_cl;
   rc->frame_base = rc->save_frame_base;
   rc->pc = rc->save_pc;
+  return 1;
+}
+
+/* When recording an inlined VOID method whose body is an if-only conditional
+   field write `if(c) this.f = A;`, if-convert it to ONE unconditional trailing
+   write of a branchless select: this.f = select(c, A, old), where old is this.f's
+   current value -- which the comparison reads, so a compare operand IS the
+   GETFIELD of the written field. e.g. the running-max tracker
+   `if(x > this.peak) this.peak = x;` becomes this.peak = max(this.peak, x); the
+   in-place clamp `if(this.peak < 0) this.peak = 0;` becomes max(this.peak, 0).
+   Composes the §10.30/§10.48 bit-exact select with §10.49's single-trailing-write
+   safety: the SETFIELD is the last guard-emitting op, so resume-at-SELF (which is
+   idempotent for a pure-read body up to the write) never fires after the write
+   commits -- no double write, no new codegen, no entry-layout guard. Returns 1 if
+   it took this path (caller returns 1 unless rc->aborted), 0 if not applicable. */
+static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
+                                    SPTType at, SPTType bt) {
+  if (rc->frame_base == 0) return 0;              /* only inside an inlined method */
+  if (!sptt_isnum(at) || !sptt_isnum(bt)) return 0;
+  SPTIRBuilder *ir = rc->ir;
+  int fb = rc->frame_base;
+  const Instruction *cmp_pc = rc->pc;
+  const Instruction *jmp = cmp_pc + 1;
+  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
+  const Instruction *T1 = jmp + 1 + GETARG_sJ(*jmp);    /* JMP target = merge */
+  const Instruction *cend = rc->p->code + rc->p->sizecode;
+  if (T1 <= cmp_pc + 2 || T1 > cend) return 0;
+  const Instruction *sf_pc = T1 - 1;                    /* last then-arm op = the write */
+  if (GET_OPCODE(*sf_pc) != OP_SETFIELD) return 0;
+
+  int sf_a = GETARG_A(*sf_pc), sf_b = GETARG_B(*sf_pc);
+  const TValue *kc = &rc->k[sf_b];
+  if (ttypetag(kc) != LUA_VSHRSTR) return 0;
+  TString *key = tsvalue(kc);
+
+  /* old = this.f's current value: one of the compare operands must be a GETFIELD
+     of exactly this key (the compare reads the field it conditionally updates).
+     Otherwise abort cleanly -- we have no other source for the unchanged value. */
+  int old_ref;
+  if (aref >= 0 && ir->insts[aref].op == SPTIR_GETFIELD &&
+      (TString *)(intptr_t)ir->insts[aref].aux == key)      old_ref = aref;
+  else if (bref >= 0 && ir->insts[bref].op == SPTIR_GETFIELD &&
+      (TString *)(intptr_t)ir->insts[bref].aux == key)      old_ref = bref;
+  else return 0;
+  SPTType old_t = sptir_type(ir, old_ref);
+
+  /* record the then-arm's compute of A (ops before the SETFIELD; usually none for
+     `this.f = x`, or a single constant load for `this.f = 0`). These run
+     unconditionally after if-conversion, but the static gate restricted them to
+     non-trapping ops (condreturn_method_op_ok). */
+  rc->pc = cmp_pc + 2;
+  while (rc->pc < sf_pc) { if (!rec_inst(rc)) return 1; }
+  if (rc->pc != sf_pc) { rc->aborted = 1; return 1; }
+
+  int a_ref = rec_load_rkc(rc, *sf_pc);           /* A = the written value RK(C) */
+  if (rc->aborted) return 1;
+  SPTType a_t = sptir_type(ir, a_ref);
+
+  /* newval = select(fop, A, old): take A when the then-condition holds, else keep
+     old (the unchanged field). Identical bit-exact select to the cond-return path. */
+  int res; SPTType res_t;
+  if (a_t == SPTT_INT && old_t == SPTT_INT && at == SPTT_INT && bt == SPTT_INT) {
+    int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
+    int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, a_ref, old_ref, 0);
+    int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
+    res = sptir_emit(ir, SPTIR_ADD, SPTT_INT, old_ref, prod, 0);
+    res_t = SPTT_INT;
+  } else if (a_t == SPTT_FLT && old_t == SPTT_FLT) {
+    int is_flt_cmp = (at == SPTT_FLT || bt == SPTT_FLT);
+    int mask;
+    if (is_flt_cmp) {
+      int ca = aref, cb = bref;
+      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb; SPTIROp mop = fop;
+      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
+      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
+    } else {
+      mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
+    }
+    res = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT, a_ref, old_ref, (int64_t)mask);
+    res_t = SPTT_FLT;
+  } else {
+    rc->aborted = 1; return 1;                    /* mixed types: fall back */
+  }
+
+  /* emit ONE unconditional `this.f = newval` -- replicates the OP_SETFIELD handler
+     core (base resolution, key-exists chain walk, snapshot, guarded emit) but with
+     the selected value `res` in place of RK(C). */
+  int base_ref = rec_load_reg(rc, sf_a);
+  if (rc->aborted) return 1;
+  if (ir->reg_type[fb + sf_a] != SPTT_TAB) { rc->aborted = 1; return 1; }
+  if (res_t != SPTT_INT && res_t != SPTT_FLT) { rc->aborted = 1; return 1; }  /* no GC barrier */
+  TValue mapval;
+  if (!rec_eval_container(rc, base_ref, &mapval) || !ttistable(&mapval)) { rc->aborted = 1; return 1; }
+  Table *t = hvalue(&mapval);
+  Node *nd = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+  for (;;) {
+    if (keytt(nd) == ctb(LUA_VSHRSTR) && (void *)keyval(nd).gc == (void *)key) break;
+    int nx = (int)nd->u.next;
+    if (nx == 0) { rc->aborted = 1; return 1; }   /* key absent -> abort (would insert) */
+    nd += nx;
+  }
+  int snap = rec_snap(rc);
+  int sref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, base_ref, res, (int64_t)(intptr_t)key);
+  ir->insts[sref].snap_idx = snap;
+  ir->insts[sref].flags |= SPTIRF_GUARD;
+
+  rc->pc = T1;                                    /* continue at merge (RETURN0 -> void return) */
   return 1;
 }
 
@@ -1033,6 +1224,7 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
      to the guarded branch (below) when the shape isn't convertible. */
   if (rec_try_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   if (rec_try_condreturn_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
+  if (rec_try_condwrite_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   /* A comparison inside an inlined callee that couldn't be if-converted would need
      a guarded branch, i.e. a mid-callee control-flow split with a snapshot that
      restores the synthetic callee frame -- which a single-entry trace cannot
@@ -1194,7 +1386,7 @@ static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
     int ref = sptir_emit(ir, op, SPTT_TRUE, a_ref, b_ref, 0);
     /* Comparison is a guard: if it fails, take side exit. */
     ir->insts[ref].flags |= SPTIRF_GUARD;
-    int snap = sptir_snapshot(ir, rc->pc);
+    int snap = rec_snap(rc);
     ir->insts[ref].snap_idx = snap;
     return ref;
   }
@@ -1207,7 +1399,7 @@ static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
       (op == SPTIR_EQ || op == SPTIR_NE)) {
     int ref = sptir_emit(ir, op, SPTT_TRUE, a_ref, b_ref, 0);
     ir->insts[ref].flags |= SPTIRF_GUARD;
-    int snap = sptir_snapshot(ir, rc->pc);
+    int snap = rec_snap(rc);
     ir->insts[ref].snap_idx = snap;
     return ref;
   }
@@ -1297,6 +1489,55 @@ static int proto_is_inlinable(Proto *p, int *ret_reg) {
   return saw_return;
 }
 
+/* Like proto_is_inlinable, but for an inlined *pure-read* method body:
+   additionally permit straight-line field/element READS on `this` (and any
+   params/locals) -- GETFIELD/GETI/GETTABLE and LEN. Writes (SETFIELD/SETI/
+   SETTABLE) are deliberately excluded: a guard that fails after a committed
+   write could not be safely re-executed (see rec_snap / resume-at-SELF). A read
+   body has no committed side effects, so any in-method guard failure re-executes
+   SELF+CALL+method in the interpreter idempotently. Still a single RETURN1, no
+   branches/loops/calls, kept small. */
+static int proto_is_method_inlinable(Proto *p, int *ret_reg) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 1 || n > 48) return 0;
+  int saw_return = 0;
+  for (int i = 0; i < n; i++) {
+    Instruction ins = p->code[i];
+    OpCode o = GET_OPCODE(ins);
+    switch (o) {
+      case OP_MOVE:
+      case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
+      case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
+      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+      case OP_MOD: case OP_IDIV: case OP_POW:
+      case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
+      case OP_MODK: case OP_IDIVK: case OP_POWK:
+      case OP_ADDI:
+      case OP_BAND: case OP_BOR: case OP_BXOR:
+      case OP_BANDK: case OP_BORK: case OP_BXORK:
+      case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
+      case OP_BNOT: case OP_UNM: case OP_NOT:
+      case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
+      case OP_EXTRAARG:
+      /* read-only field / element access on this (and locals) */
+      case OP_GETFIELD: case OP_GETI: case OP_GETTABLE:
+      case OP_LEN:
+      case OP_RETURN0: case OP_RETURN:
+        break;
+      case OP_RETURN1:
+        if (saw_return) return 0;
+        *ret_reg = GETARG_A(ins);
+        saw_return = 1;
+        break;
+      default:
+        return 0;
+    }
+  }
+  return saw_return;
+}
+
 static int op_is_comparison(OpCode o) {
   return o == OP_EQ || o == OP_LT || o == OP_LE || o == OP_EQK ||
          o == OP_EQI || o == OP_LTI || o == OP_LEI || o == OP_GTI || o == OP_GEI;
@@ -1307,10 +1548,13 @@ static int op_is_comparison(OpCode o) {
    compare operands, a single comparison + JMP, a then-arm that computes A and
    ends in RETURN1, an else-arm that computes B and ends in RETURN1, and only
    dead return boilerplate afterwards. Every non-control op (prefix and both
-   arms) must be a non-trapping integer if-conversion op -- this both guarantees
-   the two returned values are integers (so the select arithmetic is bit-exact)
-   and forbids a second branch, a call, a loop, or any side effect. Such a callee
-   is inlined and its conditional return if-converted into a branchless select. */
+   arms) must be a non-trapping int- OR float-if-conversion op (opcode_is_
+   ifconv_safe_any). The trapping integer `//` (OP_IDIV) is in neither set, so
+   both arms stay trap-free; `/` (OP_DIV) is float-producing, so an arm using it
+   simply becomes a float arm and rec_try_condreturn_ifconv selects bit-exactly.
+   This forbids a second branch, a call, a loop, or any side effect. Such a
+   callee is inlined and its conditional return if-converted into a branchless
+   integer or float select (see rec_try_condreturn_ifconv). */
 static int proto_is_condreturn_inlinable(Proto *p) {
   if (isvararg(p)) return 0;
   if (p->sizep != 0) return 0;
@@ -1327,19 +1571,19 @@ static int proto_is_condreturn_inlinable(Proto *p) {
   for (int i = 0; i < ci; i++) {                 /* prefix */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!opcode_is_ifconv_safe_any(o)) return 0;
   }
   for (int i = ci + 2; i < t1 - 1; i++) {        /* then-arm compute */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!opcode_is_ifconv_safe_any(o)) return 0;
   }
   int e = -1;
   for (int i = t1; i < n; i++) {                 /* else-arm: first RETURN1 */
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_RETURN1) { e = i; break; }
     if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe(o)) return 0;
+    if (!opcode_is_ifconv_safe_any(o)) return 0;
   }
   if (e < 0) return 0;
   for (int i = e + 1; i < n; i++) {              /* only dead boilerplate after */
@@ -1348,6 +1592,180 @@ static int proto_is_condreturn_inlinable(Proto *p) {
   }
   return 1;
 }
+
+/* Ops permitted in a conditional-return *method* body (prefix and both arms):
+   the non-trapping integer if-conversion ops PLUS read-only field access on
+   `this` (GETFIELD) and array length (LEN). Bounds-guarded element reads
+   (GETI/GETTABLE) are deliberately EXCLUDED: if-conversion evaluates BOTH arms
+   unconditionally, so a variable-index read in the not-taken arm would side-exit
+   on every iteration whose index is out of that arm's intended range (a negative
+   optimization), whereas GETFIELD/LEN guards on a pinned class are stable and
+   never fire in steady state. Writes stay excluded (a committed side effect
+   breaks resume-at-SELF). */
+static int condreturn_method_op_ok(OpCode o) {
+  if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) return 1;
+  if (opcode_is_ifconv_safe_any(o)) return 1;   /* int- OR float-safe (float const loads, float DIV) */
+  return o == OP_GETFIELD || o == OP_LEN;
+}
+
+/* Like proto_is_condreturn_inlinable, but for an inlined pure-read METHOD body:
+   the `if (c) { return A } return B` shape where the prefix and arms may also
+   read `this` fields (GETFIELD/LEN), e.g. `int clamp(){ if(this.v<0) return 0;
+   return this.v; }`. The branch if-converts to a branchless select (no in-callee
+   guarded branch -- see rec_try_condreturn_ifconv), and field-read guards inside
+   resume at the caller's SELF (idempotent, since the body has no writes). Return
+   types are validated at record time (integer select must be bit-exact); a float
+   field/return cleanly aborts there. */
+static int proto_is_condreturn_method_inlinable(Proto *p) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 4 || n > 48) return 0;
+  int ci = -1;
+  for (int i = 0; i < n; i++)
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
+  if (ci < 0) return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);    /* JMP target = else-arm start */
+  if (t1 <= ci + 2 || t1 >= n) return 0;
+  if (GET_OPCODE(p->code[t1-1]) != OP_RETURN1) return 0;
+  for (int i = 0; i < ci; i++)                    /* prefix */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  for (int i = ci + 2; i < t1 - 1; i++)           /* then-arm compute */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  int e = -1;
+  for (int i = t1; i < n; i++) {                  /* else-arm: first RETURN1 */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_RETURN1) { e = i; break; }
+    if (!condreturn_method_op_ok(o)) return 0;
+  }
+  if (e < 0) return 0;
+  for (int i = e + 1; i < n; i++) {               /* only dead boilerplate after */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o != OP_RETURN0 && o != OP_RETURN) return 0;
+  }
+  return 1;
+}
+
+/* Ops permitted BEFORE the write in a single-trailing-write method body: the
+   pure-read method set (reads on `this`/params + non-control compute), i.e. the
+   same set proto_is_method_inlinable accepts minus the returns and the write
+   itself. A read's guard (field key/type, element bounds) sits before the write,
+   so a failure side-exits before the write commits -- safe with resume-at-SELF. */
+static int method_read_op_ok(OpCode o) {
+  switch (o) {
+    case OP_MOVE:
+    case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
+    case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
+    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+    case OP_MOD: case OP_IDIV: case OP_POW:
+    case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
+    case OP_MODK: case OP_IDIVK: case OP_POWK:
+    case OP_ADDI:
+    case OP_BAND: case OP_BOR: case OP_BXOR:
+    case OP_BANDK: case OP_BORK: case OP_BXORK:
+    case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
+    case OP_BNOT: case OP_UNM: case OP_NOT:
+    case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
+    case OP_EXTRAARG:
+    case OP_GETFIELD: case OP_GETI: case OP_GETTABLE:
+    case OP_LEN:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/* Decide whether `p` is an inlinable single-trailing-write VOID method: a
+   straight-line body that reads this-fields/params and computes a value, then
+   performs exactly ONE field write (SETFIELD) as its LAST guard-emitting op,
+   then returns void (RETURN0/RETURN). e.g. `void set(int x){ this.v = x; }` or
+   the accumulator `void add(int x){ this.total = this.total + x; }`.
+
+   This is the WRITE-method subset that is safe with resume-at-SELF WITHOUT the
+   entry-layout-guard + no-guard-field-access codegen the general case needs
+   (roadmap §3c.1 #1). Safety: the write is the last committing op, and every
+   in-body guard (field-read key/type guards, the SETFIELD's own key guard which
+   the codegen evaluates BEFORE the store) precedes it. So any guard failure
+   side-exits BEFORE the write commits, and re-executing SELF+CALL+method in the
+   interpreter writes exactly once -- no double write. A guard AFTER a committed
+   write (e.g. a second field access, as in `this.a=..; this.b=..`) would break
+   this, hence: at most one write, positioned last (only void-return boilerplate
+   after it). The written value must be int/float (the SETFIELD handler enforces
+   this at record time: non-collectable => no GC write barrier). The receiver is
+   loop-invariant (SLOAD) and its class/method/field layout is pinned by the
+   once-per-entry method guard, so the SETFIELD key guard holds in steady state. */
+static int proto_is_write_method_inlinable(Proto *p) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 1 || n > 48) return 0;
+  int wi = -1;                          /* index of the single SETFIELD */
+  for (int i = 0; i < n; i++) {
+    if (GET_OPCODE(p->code[i]) == OP_SETFIELD) {
+      if (wi >= 0) return 0;            /* more than one write -> not this subset */
+      wi = i;
+    }
+  }
+  if (wi < 0) return 0;                 /* no write -> not a write method */
+  for (int i = 0; i < wi; i++)          /* reads/compute before the write */
+    if (!method_read_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  for (int i = wi + 1; i < n; i++) {    /* after the write: void-return only */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG) return 0;
+  }
+  return 1;
+}
+
+/* Decide whether `p` is an inlinable conditional-WRITE void method of the if-only
+   shape `if (c) { <compute A> this.f = A } ` with nothing after the if but void-
+   return boilerplate -- e.g. the ubiquitous running-max/min tracker
+   `void track(int x){ if(x > this.peak) this.peak = x; }` or the in-place clamp
+   `void clampLow(){ if(this.peak < 0) this.peak = 0; }`. The conditional write is
+   if-converted (rec_try_condwrite_ifconv) to ONE unconditional trailing write of
+   a branchless select: `this.f = select(c, A, old)` where old is this.f's current
+   value. This composes the §10.30/§10.48 select with the §10.49 single-trailing-
+   write safety: the single SETFIELD is the last guard-emitting op, every guard
+   (the field-read guards, the SETFIELD's own key guard) precedes it, so a guard
+   failure side-exits BEFORE the write commits and the interpreter re-runs SELF+
+   CALL+method writing exactly once -- no double write, NO new codegen, NO entry-
+   layout guard. Shape only: exactly one SETFIELD positioned as the last then-arm
+   op (if-only, no else, no trailing JMP), a comparison + forward JMP whose target
+   is the merge, a non-trapping then-arm compute (evaluated unconditionally after
+   if-conversion), and void return. The recorder additionally requires that the
+   comparison reads the written field (so `old` is a compare operand); if not, it
+   aborts cleanly. */
+static int proto_is_condwrite_method_inlinable(Proto *p) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 4 || n > 48) return 0;
+  int wi = -1;                          /* the single SETFIELD */
+  for (int i = 0; i < n; i++) {
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_SETFIELD) { if (wi >= 0) return 0; wi = i; }
+    if (o == OP_RETURN1) return 0;      /* value return -> not a void conditional-write */
+  }
+  if (wi < 0) return 0;
+  int ci = -1;                          /* the comparison */
+  for (int i = 0; i < n; i++)
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
+  if (ci < 0) return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);   /* JMP target = merge */
+  if (t1 <= ci + 2 || t1 > n) return 0;
+  if (wi != t1 - 1) return 0;           /* single write is the LAST then-arm op (if-only) */
+  for (int i = 0; i < ci; i++)          /* prefix: reads + compute compare operands */
+    if (!method_read_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  for (int i = ci + 2; i < wi; i++)     /* then-arm compute A: non-trapping (eval'd unconditionally) */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  for (int i = t1; i < n; i++) {        /* after merge: void-return boilerplate only */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG) return 0;
+  }
+  return 1;
+}
+
 
 /* Decide whether `p` is an inlinable conditional-assignment-then-return leaf of
    the shape `if (c) { <assigns> } <straight-line> return slot` (if-only): a
@@ -1629,7 +2047,7 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
      captures the real init/limit/step. All-constant loops emit no guard and are
      byte-identical to the previous (constant-only) unroller. */
   if (!init_k || !limit_k || !step_k) {
-    int snap = sptir_snapshot(ir, rc->pc);
+    int snap = rec_snap(rc);
     if (!init_k)  emit_pin_guard(ir, init_ref,  init,  snap);
     if (!limit_k) emit_pin_guard(ir, limit_ref, limit, snap);
     if (!step_k)  emit_pin_guard(ir, step_ref,  step,  snap);
@@ -1814,7 +2232,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int upref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
       int ref = sptir_emit(ir, SPTIR_GETTABUP, et, upref, SPTIR_NULL,
                            (int64_t)(intptr_t)key);
-      int snap = sptir_snapshot(ir, rc->pc);
+      int snap = rec_snap(rc);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
       ir->reg_map[rc->frame_base + a] = ref;
@@ -1831,13 +2249,13 @@ static int rec_inst(SPTRecCtx *rc) {
          strings are loadable: the GETI codegen tag-guards then loads the 8-byte
          value (the TString* for a string), and exits restore any type. */
       SPTType et = rec_array_elem_type(rc, b, c);
-      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR) { rc->aborted = 1; return 0; }
+      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
       /* Bounds guard: 0 <= c < loglen (c is a constant here). */
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, c), (int64_t)lenref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, c), (int64_t)lenref, rec_guard_pc(rc));
       /* Type-guarded load. */
       int ref = sptir_emit(ir, SPTIR_GETI, et, bref, sptir_kint(ir, c), 0);
-      int snap = sptir_snapshot(ir, rc->pc);
+      int snap = rec_snap(rc);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
       ir->reg_map[rc->frame_base + a] = ref;
@@ -1888,7 +2306,7 @@ static int rec_inst(SPTRecCtx *rc) {
       if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR &&
           et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
       int ref = sptir_emit(ir, SPTIR_GETFIELD, et, bref, SPTIR_NULL, (int64_t)(intptr_t)key);
-      int snap = sptir_snapshot(ir, rc->pc);
+      int snap = rec_snap(rc);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
       ir->reg_map[rc->frame_base + a] = ref;
@@ -1913,14 +2331,14 @@ static int rec_inst(SPTRecCtx *rc) {
       TValue *idxtv = s2v(base + c);
       lua_Integer pidx = ttisinteger(idxtv) ? ivalue(idxtv) : 0;
       SPTType et = rec_array_elem_type(rc, b, pidx);
-      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR) { rc->aborted = 1; return 0; }
+      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
       /* Bounds guard: 0 <= idx < loglen. */
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)cref, rc->pc);
-      sptir_guard(ir, SPTIR_GUARD_LT, cref, (int64_t)lenref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)cref, rec_guard_pc(rc));
+      sptir_guard(ir, SPTIR_GUARD_LT, cref, (int64_t)lenref, rec_guard_pc(rc));
       /* Type-guarded load. */
       int ref = sptir_emit(ir, SPTIR_GETI, et, bref, cref, 0);
-      int snap = sptir_snapshot(ir, rc->pc);
+      int snap = rec_snap(rc);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
       ir->reg_map[rc->frame_base + a] = ref;
@@ -1938,7 +2356,7 @@ static int rec_inst(SPTRecCtx *rc) {
       if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }
       /* Bounds guard: 0 <= b < loglen (in-bounds write only; growth -> exit). */
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, b), (int64_t)lenref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, b), (int64_t)lenref, rec_guard_pc(rc));
       sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, sptir_kint(ir, b), (int64_t)cref);
       break;
     }
@@ -1955,8 +2373,8 @@ static int rec_inst(SPTRecCtx *rc) {
       if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }
       /* Bounds guard: 0 <= idx < loglen. */
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)bref, rc->pc);
-      sptir_guard(ir, SPTIR_GUARD_LT, bref, (int64_t)lenref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)bref, rec_guard_pc(rc));
+      sptir_guard(ir, SPTIR_GUARD_LT, bref, (int64_t)lenref, rec_guard_pc(rc));
       sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, bref, (int64_t)cref);
       break;
     }
@@ -1979,9 +2397,14 @@ static int rec_inst(SPTRecCtx *rc) {
       int cref = rec_load_rkc(rc, i);
       SPTType vt = sptir_type(ir, cref);
       if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }  /* no barrier */
-      TValue *atv = s2v((rc->ci->func.p + 1) + a);
-      if (!ttistable(atv)) { rc->aborted = 1; return 0; }
-      Table *t = hvalue(atv);
+      /* Resolve the base map by following the IR (SLOAD/GETI/GETFIELD), NOT the
+         raw stack slot `a`: inside an inlined method `a` is the callee-relative
+         slot (0 = this), whose absolute stack location is frame_base+a. The
+         receiver SLOAD resolves to the live instance table. (Mirrors GETFIELD's
+         §10.44 base resolution.) */
+      TValue mapval;
+      if (!rec_eval_container(rc, aref, &mapval) || !ttistable(&mapval)) { rc->aborted = 1; return 0; }
+      Table *t = hvalue(&mapval);
       /* Confirm the key EXISTS somewhere in its chain (we update, never insert;
          an absent key side-exits via the codegen chain-walk). Same walk as
          gen_hash_find / luaH_Hgetshortstr. */
@@ -1992,7 +2415,7 @@ static int rec_inst(SPTRecCtx *rc) {
         if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort (would insert) */
         n += nx;
       }
-      int snap = sptir_snapshot(ir, rc->pc);
+      int snap = rec_snap(rc);
       int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
@@ -2098,7 +2521,7 @@ static int rec_inst(SPTRecCtx *rc) {
          luaV_shiftl for counts outside [0,63] (Lua yields 0). Guard the count
          in range so the common case is correct; unusual counts side-exit. */
       if (op == OP_SHL || op == OP_SHR)
-        sptir_guard(ir, SPTIR_GUARD_ULT, cref, 64, rc->pc);
+        sptir_guard(ir, SPTIR_GUARD_ULT, cref, 64, rec_guard_pc(rc));
       int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
       ir->reg_map[rc->frame_base + a] = ref;
       ir->reg_type[rc->frame_base + a] = SPTT_INT;
@@ -2139,7 +2562,7 @@ static int rec_inst(SPTRecCtx *rc) {
         rc->aborted = 1; return 0;  /* non-int shift amount -> interpreter */
       }
       /* Guard amount in [0, 63] (unsigned < 64). */
-      sptir_guard(ir, SPTIR_GUARD_ULT, bref, 64, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_ULT, bref, 64, rec_guard_pc(rc));
       int cref = sptir_kint(ir, c);
       int ref = sptir_emit(ir, SPTIR_SHL, SPTT_INT, cref, bref, 0);
       ir->reg_map[rc->frame_base + a] = ref;
@@ -2429,7 +2852,7 @@ static int rec_inst(SPTRecCtx *rc) {
 
       /* Guard: count > 0 (continue loop). Use GUARD_LT with 0 < count. */
       int zero_ref = sptir_kint(ir, 0);
-      sptir_guard(ir, SPTIR_GUARD_LT, zero_ref, (int64_t)count_ref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LT, zero_ref, (int64_t)count_ref, rec_guard_pc(rc));
 
       /* new_count = count - 1 */
       int one_ref = sptir_kint(ir, 1);
@@ -2452,7 +2875,23 @@ static int rec_inst(SPTRecCtx *rc) {
 
     /* ---- Returns ---- */
     case OP_RETURN0: {
-      if (rc->frame_base != 0) { rc->aborted = 1; return 0; } /* inlined callee must RETURN1 */
+      if (rc->frame_base != 0) {
+        /* Void return from an inlined single-trailing-write method: restore the
+           caller's recording context with NO result to bind, and keep recording
+           the caller after the CALL. The method's only side effect -- its single
+           trailing field write -- is already emitted and resume-at-SELF
+           protected: the write is the last committing op, so any guard failure
+           side-exits before it commits and the interpreter re-runs the call
+           exactly once (no double write). See proto_is_write_method_inlinable. */
+        rc->p = rc->save_p;
+        rc->k = rc->save_k;
+        rc->cl = rc->save_cl;
+        rc->frame_base = rc->save_frame_base;
+        rc->pc = rc->save_pc;
+        rc->method_resume_snap = -1;
+        rc->method_self_pc = NULL;
+        return 1;
+      }
       sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
       return 0;
     }
@@ -2473,6 +2912,8 @@ static int rec_inst(SPTRecCtx *rc) {
         ir->reg_map[rc->call_result_slot] = aref;
         ir->reg_type[rc->call_result_slot] = rt;
         if (rc->call_result_slot > ir->maxslot) ir->maxslot = rc->call_result_slot;
+        rc->method_resume_snap = -1;            /* leaving method body */
+        rc->method_self_pc = NULL;
         return 1;
       }
       int aref = rec_load_reg(rc, a);
@@ -2481,7 +2922,20 @@ static int rec_inst(SPTRecCtx *rc) {
     }
     case OP_RETURN: {
       int a = GETARG_A(i), b = GETARG_B(i);
-      if (rc->frame_base != 0) { rc->aborted = 1; return 0; } /* inlined callee must RETURN1 */
+      if (rc->frame_base != 0) {
+        /* Inlined method void return (b==1): restore the caller like OP_RETURN0,
+           no result to bind. A value-returning OP_RETURN from an inlined method
+           is not supported here (write methods are void). */
+        if (b != 1) { rc->aborted = 1; return 0; }
+        rc->p = rc->save_p;
+        rc->k = rc->save_k;
+        rc->cl = rc->save_cl;
+        rc->frame_base = rc->save_frame_base;
+        rc->pc = rc->save_pc;
+        rc->method_resume_snap = -1;
+        rc->method_self_pc = NULL;
+        return 1;
+      }
       if (b == 1) {
         sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
       } else {
@@ -2523,9 +2977,50 @@ static int rec_inst(SPTRecCtx *rc) {
         break;
       }
 
-      /* Restrict to: a single fixed result (C==2), a fixed, known argument
-         count (B!=0), and depth-1 (not already inside an inlined callee). */
-      if (c != 2 || b < 1 || rc->frame_base != 0) { rc->aborted = 1; return 0; }
+      /* Pending user method armed by a preceding SELF (`obj.method`)? Inline the
+         resolved method proto, with the receiver already staged in R[A+1] as
+         callee slot 0 (this). Reuses the leaf-inline machinery below: same body
+         purity gate, frame-base switch, and depth-1 restriction. The method
+         identity is pinned by the once-per-entry C guard (method_recv_slot). */
+      if (rc->pending_method_slot == rc->frame_base + a) {
+        Proto *callee_p = rc->pending_method_proto;
+        LClosure *callee_cl = (LClosure *)rc->pending_method_cl;
+        rc->pending_method_slot = -1;
+        rc->pending_method_proto = NULL;
+        rc->pending_method_cl = NULL;
+        /* c == 2: one result (pure-read / cond-return method). c == 1: zero
+           results (void single-trailing-write method, e.g. a setter/accumulator
+           called as a statement). Both are valid; the RETURN handler binds a
+           result only for the value-returning case. */
+        if ((c != 1 && c != 2) || b < 1 || rc->frame_base != 0) { rc->aborted = 1; return 0; }
+        if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
+        int ret_reg = -1;
+        if (!proto_is_method_inlinable(callee_p, &ret_reg) &&
+            !proto_is_condreturn_method_inlinable(callee_p) &&
+            !proto_is_write_method_inlinable(callee_p) &&
+            !proto_is_condwrite_method_inlinable(callee_p)) { rc->aborted = 1; return 0; }
+        int new_fb = rc->frame_base + a + 1;
+        if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
+        /* Arm the shared resume snapshot for guards inside the method body. Its
+           exit PC is the SELF instruction (in the caller / main proto), so a
+           guard failure re-executes SELF+CALL+method in the interpreter. Taken
+           now, while still in the caller frame, so it captures the caller's live
+           state (loop vars, accumulator, receiver source). */
+        rc->method_resume_snap =
+            (rc->method_self_pc != NULL) ? sptir_snapshot(ir, rc->method_self_pc) : -1;
+        rc->save_p = rc->p;
+        rc->save_k = rc->k;
+        rc->save_cl = rc->cl;
+        rc->save_pc = rc->pc + 1;
+        rc->save_frame_base = rc->frame_base;
+        rc->call_result_slot = rc->frame_base + a;
+        rc->p = callee_p;
+        rc->k = callee_p->k;
+        rc->cl = callee_cl;
+        rc->frame_base = new_fb;
+        rc->pc = callee_p->code;
+        return 1;                                 /* keep recording in the method */
+      }
 
       /* The function value must be a plain SLOAD from a stable stack slot, i.e.
          a loop-invariant function. That tells us which proto to inline and lets
@@ -2644,7 +3139,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, sref, SPTIR_NULL, 0);
       /* Loop-continue guard: newkey < len. Snapshot = pre-update state at this
          PC; on failure the interpreter re-runs the real TFORCALL (next -> nil). */
-      sptir_guard(ir, SPTIR_GUARD_LT, newkey, (int64_t)lenref, rc->pc);
+      sptir_guard(ir, SPTIR_GUARD_LT, newkey, (int64_t)lenref, rec_guard_pc(rc));
 
       if (c >= 2) {
         /* value = state[newkey]. newkey >= 1 > 0 and < len (continue guard) so it
@@ -2655,11 +3150,11 @@ static int rec_inst(SPTRecCtx *rc) {
         TValue *ktv = s2v(base + a + 3);
         lua_Integer kpred = ttisinteger(ktv) ? ivalue(ktv) + 1 : 0;
         SPTType et = rec_array_elem_type(rc, a + 1, kpred);
-        if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR) {
+        if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) {
           rc->aborted = 1; return 0;
         }
         int vref = sptir_emit(ir, SPTIR_GETI, et, sref, newkey, 0);
-        int snap = sptir_snapshot(ir, rc->pc);
+        int snap = rec_snap(rc);
         ir->insts[vref].snap_idx = snap;
         ir->insts[vref].flags |= SPTIRF_GUARD;
         ir->reg_map[rc->frame_base + a + 4] = vref;
@@ -2717,7 +3212,55 @@ static int rec_inst(SPTRecCtx *rc) {
       int bref = rec_load_reg(rc, b);
       if (ir->reg_type[rc->frame_base + b] != SPTT_TAB) { rc->aborted = 1; return 0; }
       SPTIRInst *gi = sptir_get(ir, bref);
-      if (!gi || gi->op != SPTIR_GETTABUP) { rc->aborted = 1; return 0; }
+      if (!gi || gi->op != SPTIR_GETTABUP) {
+        /* Not a library/global table read -> try the user-method idiom:
+           `obj.method()` on a class instance held in a stable (loop-invariant)
+           slot. SPT classes are `setmetatable(inst, Class)` with
+           `Class.__index = Class`, so the method lives directly on the
+           receiver's metatable. Resolve it, stage the receiver into R[A+1]
+           (callee slot 0 = `this`), and arm the next CALL to inline the method
+           proto. The metatable + method identity is pinned by a once-per-entry C
+           guard (method_recv_slot), so a different class / reassigned method
+           declines. Requiring an SLOAD receiver also guarantees loop-invariance
+           (a receiver reassigned in the body would not be a bare SLOAD). */
+        if (gi && gi->op == SPTIR_SLOAD) {
+          int recv_slot = (int)gi->aux;
+          TValue *recv = s2v((rc->ci->func.p + 1) + b);
+          if (!ttistable(recv)) { rc->aborted = 1; return 0; }
+          Table *mt = hvalue(recv)->metatable;
+          if (!mt) { rc->aborted = 1; return 0; }
+          const TValue *mv = rec_table_getstr(mt, key);
+          if (!mv || !ttisLclosure(mv)) { rc->aborted = 1; return 0; }
+          LClosure *mcl = clLvalue(mv);
+          rc->method_self_pc = rc->pc;          /* resume point for in-method guards */
+          ir->reg_map[rc->frame_base + a + 1] = bref;        /* R[A+1] = receiver */
+          ir->reg_type[rc->frame_base + a + 1] = SPTT_TAB;
+          if (a + 1 > ir->maxslot) ir->maxslot = a + 1;
+          rc->pending_method_slot = rc->frame_base + a;       /* next CALL inlines it */
+          rc->pending_method_proto = mcl->p;
+          rc->pending_method_cl = mcl;
+          /* Register this method's identity for the once-per-entry guard.
+             Several distinct methods may be inlined into one trace
+             (`a.foo(); a.bar()`); each is re-validated independently at entry,
+             and a repeat call to the same method reuses its existing entry. */
+          int mfound = 0;
+          for (int mi = 0; mi < rc->n_methods; mi++) {
+            if (rc->methods[mi].recv_slot == recv_slot &&
+                rc->methods[mi].class_mt == mt &&
+                rc->methods[mi].proto == mcl->p) { mfound = 1; break; }
+          }
+          if (!mfound) {
+            if (rc->n_methods >= SPT_JIT_MAX_METHODS) { rc->aborted = 1; return 0; }
+            rc->methods[rc->n_methods].recv_slot = recv_slot;
+            rc->methods[rc->n_methods].class_mt = mt;
+            rc->methods[rc->n_methods].key = key;
+            rc->methods[rc->n_methods].proto = mcl->p;
+            rc->n_methods++;
+          }
+          break;
+        }
+        rc->aborted = 1; return 0;
+      }
       SPTIRInst *uli = sptir_get(ir, gi->op1);
       if (!uli || uli->op != SPTIR_ULOAD) { rc->aborted = 1; return 0; }
       int uvidx = (int)uli->aux;
@@ -2738,7 +3281,7 @@ static int rec_inst(SPTRecCtx *rc) {
       int kref = sptir_kptr(ir, (void *)key);
       int gref = sptir_emit(ir, SPTIR_GUARD_CFUNC, SPTT_NIL, bref, kref,
                             (int64_t)(intptr_t)fvalue(fv));
-      int snap = sptir_snapshot(ir, rc->pc);
+      int snap = rec_snap(rc);
       ir->insts[gref].snap_idx = snap;
       ir->insts[gref].flags |= SPTIRF_GUARD;
       rc->pending_cfn_libm = (void *)libm;
@@ -2805,6 +3348,12 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.pending_cfn_slot = -1;
   rc.forin_iter_slot = -1;
   rc.forin_iter_fn = NULL;
+  rc.pending_method_slot = -1;
+  rc.pending_method_proto = NULL;
+  rc.pending_method_cl = NULL;
+  rc.n_methods = 0;
+  rc.method_self_pc = NULL;
+  rc.method_resume_snap = -1;
 
   /* Mark loop start in IR. */
   t->ir.loop_start = t->ir.ninst;
@@ -2842,6 +3391,8 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   /* Carry the for-each iterator entry check (if any) onto the trace. */
   t->forin_iter_slot = rc.forin_iter_slot;
   t->forin_iter_fn = rc.forin_iter_fn;
+  t->n_methods = rc.n_methods;
+  for (int mi = 0; mi < rc.n_methods; mi++) t->methods[mi] = rc.methods[mi];
 
   if (js->debug >= 2) sptir_dump(&t->ir, "pre-opt");
 
@@ -2849,6 +3400,39 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   sptir_optimize(&t->ir);
 
   if (js->debug >= 2) sptir_dump(&t->ir, "post-opt");
+
+  /* Inlined-frame exit safety net. An exit stub sets ci->u.l.savedpc = exit_pc
+     and returns to the interpreter, which resumes in the CALLER's CallInfo (the
+     inline never pushed a callee frame). So a guard that survives optimization
+     with an exit PC pointing INTO an inlined callee's bytecode (outside the main
+     proto's [code, code+sizecode)) would resume callee bytecode under the caller
+     frame -> corruption. For a loop-invariant receiver, method-field guards are
+     loop-invariant and hoist/fold away, leaving only top-frame (loop-boundary)
+     exits; but a method body with a per-iteration in-callee guard (e.g. variable
+     index access) might not. Detect any surviving in-callee exit and refuse to
+     compile -- the trace then falls back to the interpreter, exactly like the
+     side-trace amortization gate below. (Free-function inlines have zero-guard
+     bodies, so this only ever fires for risky method bodies; non-inlined traces
+     keep all exit PCs in the main proto, so there are no false positives.) */
+  {
+    const Instruction *lo = p->code, *hi = p->code + p->sizecode;
+    for (int k = 0; k < t->ir.ninst; k++) {
+      SPTIRInst *gi = &t->ir.insts[k];
+      if (!(gi->flags & SPTIRF_GUARD) || (gi->flags & SPTIRF_DEAD)) continue;
+      int si = gi->snap_idx;
+      if (si < 0 || si >= t->ir.nsnaps) continue;
+      const Instruction *epc = t->ir.exit_pcs[si];
+      if (epc && (epc < lo || epc >= hi)) {
+        if (js->debug)
+          fprintf(stderr, "[JIT] trace has an un-hoisted in-callee guard (exit "
+                  "pc outside main proto); refusing to compile, fall back to "
+                  "interpreter\n");
+        sptir_free(&t->ir);
+        free(t);
+        return NULL;
+      }
+    }
+  }
 
   /* Precompute the compact live-in type-check list from the final IR: each
      GUARD_T whose operand is an SLOAD pins a stack slot to an SPTType. Dedupe by
@@ -2951,6 +3535,20 @@ static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
     TValue *fv = s2v(ci->func.p + 1 + t->forin_iter_slot);
     if (!ttislcf(fv) || fvalue(fv) != t->forin_iter_fn)
       return 0;
+  }
+  /* Method-call trace: every pinned method's receiver slot must still hold a
+     table whose metatable is the pinned class, and that class must still resolve
+     the method name to the same proto (re-resolved here, so reassigning the
+     class method side-steps a stale inline). The receiver itself may be any
+     instance of that class. A trace may pin several methods (`a.foo(); a.bar()`). */
+  for (int mi = 0; mi < t->n_methods; mi++) {
+    SPTMethodId *m = &t->methods[mi];
+    TValue *recv = s2v(ci->func.p + 1 + m->recv_slot);
+    if (!ttistable(recv)) return 0;
+    Table *mt = hvalue(recv)->metatable;
+    if (mt != (Table *)m->class_mt) return 0;
+    const TValue *mv = rec_table_getstr(mt, (TString *)m->key);
+    if (!mv || !ttisLclosure(mv) || clLvalue(mv)->p != m->proto) return 0;
   }
   if (t->n_livein >= 0) {
     for (int k = 0; k < t->n_livein; k++) {

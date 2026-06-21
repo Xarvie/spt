@@ -1,0 +1,6 @@
+float s = 0.0;
+float x = 2.0;
+for (int i = 0, 1000) {
+  s = s + math.sqrt(x);
+}
+print(s);

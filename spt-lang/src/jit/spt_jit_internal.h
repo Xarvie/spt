@@ -16,6 +16,17 @@
    pulling in the full VM headers. */
 typedef int (*lua_CFunction)(lua_State *L);
 
+/* One pinned inlined-method identity. A trace may inline several distinct
+   methods (e.g. `a.foo(); a.bar()`); each is re-validated once per entry. The
+   receiver is loop-invariant, so at entry we pin its metatable (the class) and
+   re-resolve the method name to the same proto. */
+typedef struct SPTMethodId {
+  int recv_slot;     /* absolute receiver slot (R[B] of SELF) */
+  void *class_mt;    /* Table* of the expected class metatable */
+  void *key;         /* TString* of the method name */
+  Proto *proto;      /* expected resolved method proto */
+} SPTMethodId;
+
 /* =====================================================================
 ** Trace structure
 ** ===================================================================== */
@@ -63,6 +74,14 @@ struct SPTTrace {
      (custom / over a map) would be wrong -> decline. -1 = not a for-each trace. */
   int forin_iter_slot;
   lua_CFunction forin_iter_fn;
+
+  /* Method-call (OP_SELF + CALL) inlining: the trace inlined one or more
+     `obj.method()` calls where obj is a class instance. Enter only while every
+     pinned method's receiver slot still holds a table whose metatable is the
+     pinned class and whose name re-resolves to the pinned proto. n_methods == 0
+     = not a method trace. */
+  SPTMethodId methods[SPT_JIT_MAX_METHODS];
+  int n_methods;
 
   /* Compact live-in type-check list, precomputed at record time from the IR's
      GUARD_T-on-SLOAD instructions (deduped by slot). The entry check in

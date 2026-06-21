@@ -1,0 +1,42 @@
+// Single-trailing-write VOID method inlining: a method that reads this-fields,
+// computes a value, and performs exactly ONE field write (SETFIELD) as its last
+// guard-emitting op (then returns void) is inlined into the hot loop -- e.g.
+// setters `void set(int x){ this.v = x; }` and accumulators
+// `void add(int x){ this.total = this.total + x; }`. Safe with resume-at-SELF
+// WITHOUT entry-layout guards or no-guard codegen: the write is last, so every
+// in-body guard precedes it; a guard failure side-exits before the write commits
+// and the interpreter re-runs the call exactly once (no double write). The exact
+// accumulator sums below are the real test -- any double write would inflate
+// them. Written values are int/float (no GC barrier). Methods with a guard AFTER
+// a write (multi-write `this.a=..;this.b=..`, or read-after-write
+// `this.v=..; return this.v`) deliberately fall back to the interpreter, not
+// diverge. Reuses the §10.47 multiple-methods-per-trace machinery (two
+// accumulators inline into one trace).
+class Acc { int total; void __init(){ this.total = 0; } void add(int x){ this.total = this.total + x; } int get(){ return this.total; } }
+class Box { int v; void __init(int x){ this.v = x; } void set(int x){ this.v = x; } void scale(int k){ this.v = this.v * k; } int get(){ return this.v; } }
+class FB  { float f; void __init(){ this.f = 0.0; } void addf(float x){ this.f = this.f + x; } float get(){ return this.f; } }
+class Two { int a; int b; void __init(){ this.a = 0; this.b = 0; } void bump(){ this.a = this.a + 1; this.b = this.b + 2; } int sum(){ return this.a + this.b; } } // multi-write: must fall back
+class RW  { int v; void __init(){ this.v = 0; } int addret(int x){ this.v = this.v + x; return this.v; } } // read-after-write: must fall back
+
+Acc a = Acc();   Acc a2 = Acc();
+Box b = Box(3);
+FB  fb = FB();
+Two t = Two();
+RW  rw = RW();
+
+int s = 0; int s2 = 0; int s3 = 0;
+float sf = 0.0;
+for (int r = 0, 100000) { for (int j = 0, 10) { a.add(j); a2.add(j); } }        // two accumulators in one trace (multi-method write)
+for (int r = 0, 100000) { for (int j = 0, 10) { a.add(1); s = s + a.get(); } }   // write method + read method, same object
+for (int r = 0, 100000) { for (int j = 0, 10) { fb.addf(1.5); } }                // float-field accumulator
+for (int r = 0, 50000)  { for (int j = 1, 4)  { b.set(j); b.scale(2); } }        // setter + scale (two writes across two methods, each single-write)
+for (int r = 0, 100000) { for (int j = 0, 10) { t.bump(); s2 = s2 + t.sum(); } } // multi-write method: fall back, stay correct
+for (int r = 0, 100000) { for (int j = 0, 10) { s3 = s3 + rw.addret(j); } }      // read-after-write method: fall back, stay correct
+print(a.get());
+print(a2.get());
+print(s);
+print(sf + fb.get());
+print(b.get());
+print(t.sum());
+print(s2);
+print(s3);

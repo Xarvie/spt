@@ -1,0 +1,6 @@
+string prefix = "ab";
+string suffix = "cd";
+string acc = "";
+for (int i = 0, 200) { acc = prefix .. suffix; }
+print(acc);
+print(#acc);

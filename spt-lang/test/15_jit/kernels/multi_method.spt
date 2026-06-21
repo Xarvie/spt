@@ -1,0 +1,30 @@
+// Multiple-methods-per-trace inlining: a hot loop that calls several DISTINCT
+// pure-read methods is inlined into ONE trace. Each OP_SELF pins its own
+// entry-guard identity (receiver slot + class metatable + resolved proto), all
+// re-validated once per entry; a repeat call to the same method reuses its
+// entry. This generalizes method_call.spt (which inlined one method per loop)
+// to the common OOP shape `a.foo(); a.bar()`. Bodies are pure reads (no
+// writes), so in-method guards resume at the caller's SELF and JIT must match
+// the interpreter byte-for-byte. A varying (per-iteration) receiver still falls
+// back, not diverges.
+class C  { int a; int b; void __init(int x, int y){ this.a = x; this.b = y; }
+           int f(){ return this.a + 1; } int g(int v){ return this.b * v; } int h(){ return this.a - this.b; } }
+class V2 { float x; float y; void __init(float p, float q){ this.x = p; this.y = q; }
+           float scale(float k){ return this.x * k; } float sumf(){ return this.x + this.y; } }
+class Ob { int v; void __init(int x){ this.v = x; } int g(int p){ return this.v + p; } int s(){ return this.v * 2; } }
+
+C  c  = C(3, 5);
+C  c2 = C(7, 2);
+V2 v  = V2(1.5, 2.5);
+list<Ob> objs = [Ob(1), Ob(2), Ob(3), Ob(4)];
+
+int si = 0;
+float sf = 0.0;
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + c.f() + c.g(j); } }           // two methods, same receiver
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + c.f() + c.g(j) + c.h(); } }    // three methods, same receiver
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + c.f() + c2.h(); } }            // two receivers, one method each
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + c.f() + c.f(); } }             // same method twice (dedup)
+for (int r = 0, 200000) { for (int j = 0, 15) { sf = sf + v.scale(2.0) + v.sumf(); } }   // two float-field methods
+for (int r = 0, 200000) { for (int j = 0, 3)  { si = si + objs[j].g(j) + objs[j].s(); } }// varying receiver: must fall back, stay correct
+print(si);
+print(sf);

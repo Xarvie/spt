@@ -1,0 +1,34 @@
+// Method-call inlining (OP_SELF + CALL) for pure-read methods: a class instance
+// whose method reads this-fields (and params) with no writes is inlined into the
+// hot loop. SPT classes are setmetatable(inst, Class) with Class.__index=Class,
+// so the method resolves on the receiver's metatable; the metatable+method
+// identity is pinned by a once-per-entry guard. Field/bounds guards inside the
+// inlined body resume at the caller's SELF instruction (re-executing the call in
+// the interpreter) -- safe only because the body has no committed side effects.
+// One method is inlined per trace, so each method is exercised in its own loop.
+// Every result must match the interpreter byte-for-byte; an out-of-bounds index
+// or a varying (per-iteration) receiver must fall back, not diverge.
+class Mul { int k; void __init(int kk){ this.k = kk; } int scale(int v){ return this.k * v; } }
+class Pt  { int x; int y; void __init(int a, int b){ this.x = a; this.y = b; } int sum(){ return this.x + this.y; } }
+class V2  { float x; float y; void __init(float a, float b){ this.x = a; this.y = b; } float dot(){ return this.x * this.x + this.y * this.y; } }
+class Buf { list<int> d; void __init(list<int> dd){ this.d = dd; } int at(int i){ return this.d[i] + i; } }
+class W   { int b; void __init(){ this.b = 10; } int f(int p, int q, int t){ return this.b + p * q - t; } }
+class C   { int v; void __init(int x){ this.v = x; } int g(int p){ return this.v + p; } }
+
+Mul m = Mul(3);
+Pt  p = Pt(3, 5);
+V2  v = V2(1.5, 2.5);
+Buf b = Buf([10, 20, 30, 40, 50, 60]);
+W   w = W();
+list<C> objs = [C(1), C(2), C(3), C(4)];
+
+int si = 0;
+float sf = 0.0;
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + m.scale(j); } }      // scalar method + arg
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + p.sum() + j; } }      // zero-arg getter, two fields
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + b.at(j % 6); } }      // list-field read, variable index
+for (int r = 0, 200000) { for (int j = 0, 15) { si = si + w.f(j, 2, 1); } }     // three-arg method
+for (int r = 0, 200000) { for (int j = 0, 15) { sf = sf + v.dot(); } }          // float-field computed value
+for (int r = 0, 200000) { for (int j = 0, 3)  { si = si + objs[j].g(j); } }     // varying receiver: must fall back, stay correct
+print(si);
+print(sf);

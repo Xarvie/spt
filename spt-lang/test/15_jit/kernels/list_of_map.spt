@@ -1,0 +1,22 @@
+// JIT kernel: List of Map element access (GETI/GETTABLE/for-each yielding a Map).
+//
+// A `list<map<...>>` stores Map values as List elements. Reading a[i] loads an
+// 8-byte Table* with a tag guard -- identical representation to a List (ARR)
+// element, and already valid as a GETFIELD value -- so GETI/GETTABLE (and the
+// for-each value load) accept a TAB element just like an ARR one. The map field
+// read/write that follows (a[i]["k"], a[i]["k"]=...) is the existing inline
+// hash-slot path (§10.36/§10.37), and the inner Map is resolved through the IR
+// (rec_eval_container, §10.44). No C call, no GC (int/float field values). This
+// mixes indexed read, indexed read-modify-write, and for-each over the list.
+list<map<string,int>> a = [{"v": 5}, {"v": 9}, {"v": 2}, {"v": 7}];
+list<map<string,int>> b = [{"n": 0}, {"n": 0}, {"n": 0}];
+int sr = 0;
+int sf = 0;
+for (int rep = 0, 50000) {
+  for (int i = 0, 3) { sr = sr + a[i]["v"]; }      // indexed read of a map element's field
+  for (int i = 0, 2) { b[i]["n"] = b[i]["n"] + 1; } // indexed RMW into a map element's field
+  for (k, mp : pairs(a)) { sf = sf + mp["v"]; }     // for-each yielding a Map value
+}
+print(sr);
+print(b[0]["n"]);
+print(sf);

@@ -907,7 +907,7 @@ def gen_nested_container(r):
     back-edge; the base map of a chained GETFIELD is likewise IR-resolved. All
     loads stay bounds/type-guarded at run time (prediction is never
     load-bearing); no C call, no GC."""
-    shape = r.choice(["mol_int", "mol_flt", "mom", "lol"])
+    shape = r.choice(["mol_int", "mol_flt", "mom", "lol", "lom_read", "lom_write"])
     rep = r.choice([20000, 50000])
     if shape == "mol_int":
         sz = r.randint(1, 8)
@@ -929,8 +929,365 @@ def gen_nested_container(r):
                 f'for (int rep = 0, {rep}) {{ for (int j = 0, {inner}) {{ s = s + m["{k1}"]["x"] {op} m["{k1}"]["y"]; }} }}\nprint(s);\n')
     rows = r.randint(1, 4); cols = r.randint(1, 4); op = r.choice(AOPS)
     rowstrs = ["[" + ", ".join(str(r.randint(-9, 20)) for _ in range(cols)) + "]" for _ in range(rows)]
-    return (f'list<list<int>> a = [{", ".join(rowstrs)}];\nint s = 0;\n'
-            f'for (int rep = 0, {rep}) {{ for (int i = 0, {rows-1}) {{ for (int j = 0, {cols-1}) {{ s = s {op} a[i][j]; }} }} }}\nprint(s);\n')
+    if shape == "lol":
+        return (f'list<list<int>> a = [{", ".join(rowstrs)}];\nint s = 0;\n'
+                f'for (int rep = 0, {rep}) {{ for (int i = 0, {rows-1}) {{ for (int j = 0, {cols-1}) {{ s = s {op} a[i][j]; }} }} }}\nprint(s);\n')
+    # list<map<string,int>> element access: a[i]["k"] read or RMW
+    n = r.randint(1, 5); key = r.choice(["v", "n", "k"])
+    elems = ", ".join('{"' + key + '": ' + str(r.randint(-9, 30)) + '}' for _ in range(n))
+    if shape == "lom_read":
+        return (f'list<map<string,int>> a = [{elems}];\nint s = 0;\n'
+                f'for (int rep = 0, {rep}) {{ for (int i = 0, {n-1}) {{ s = s {op} a[i]["{key}"]; }} }}\nprint(s);\n')
+    # lom_write: RMW into each map element's field
+    return (f'list<map<string,int>> a = [{elems}];\n'
+            f'for (int rep = 0, {rep}) {{ for (int i = 0, {n-1}) {{ a[i]["{key}"] = a[i]["{key}"] + 1; }} }}\nprint(a[0]["{key}"]);\n')
+
+def gen_method_call(r):
+    """A class instance whose pure-read method (a getter / computed value over
+    this-fields and params, no writes) is called in a hot loop -- exercises
+    method inlining (OP_SELF + CALL) with resume-at-SELF guards. Bodies have no
+    committed side effects, so interp and JIT must agree byte-for-byte; an
+    out-of-bounds index or a varying (per-iteration) receiver must fall back to
+    the interpreter rather than diverge. Ops are +/-/* (no div/mod), so no
+    divide-by-zero regardless of the params."""
+    shape = r.choice(["scalar_int", "scalar_float", "list_idx", "varying_recv",
+                      "multi_arg", "zero_arg"])
+    n = r.choice([100000, 400000])
+    inner = r.randint(7, 19)
+    o1, o2 = r.choice(AOPS), r.choice(AOPS)
+    if shape == "scalar_int":
+        a, b = r.randint(-9, 20), r.randint(1, 9)
+        return (f"class C {{ int a; int b; void __init(){{ this.a = {a}; this.b = {b}; }} "
+                f"int m(int v){{ return this.a {o1} v {o2} this.b; }} }}\n"
+                f"C c = C();\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(i); }} }}\nprint(s);\n")
+    if shape == "scalar_float":
+        a, b = r.randint(0, 40) / 10.0, r.randint(1, 20) / 10.0
+        return (f"class V {{ float a; float b; void __init(){{ this.a = {a}; this.b = {b}; }} "
+                f"float m(int v){{ return this.a * v + this.b; }} }}\n"
+                f"V v = V();\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + v.m(i); }} }}\nprint(s);\n")
+    if shape == "list_idx":
+        sz = r.randint(4, 9)
+        vals = ", ".join(str(r.randint(-9, 30)) for _ in range(sz))
+        return (f"class Buf {{ list<int> d; void __init(list<int> dd){{ this.d = dd; }} "
+                f"int at(int i){{ return this.d[i] {o1} i; }} }}\n"
+                f"Buf b = Buf([{vals}]);\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + b.at(i % {sz}); }} }}\nprint(s);\n")
+    if shape == "varying_recv":
+        k = r.randint(3, 6)
+        objs = ", ".join(f"C({r.randint(-9, 20)})" for _ in range(k))
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int g(int p){{ return this.v {o1} p; }} }}\n"
+                f"list<C> o = [{objs}];\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {k - 1}) {{ s = s + o[i].g(i); }} }}\nprint(s);\n")
+    if shape == "zero_arg":
+        a, b = r.randint(1, 12), r.randint(1, 12)
+        return (f"class K {{ int a; int b; void __init(){{ this.a = {a}; this.b = {b}; }} "
+                f"int g(){{ return this.a {o1} this.b; }} }}\n"
+                f"K k = K();\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + k.g() + i; }} }}\nprint(s);\n")
+    base = r.randint(1, 10)
+    return (f"class W {{ int b; void __init(){{ this.b = {base}; }} "
+            f"int f(int p, int q, int t){{ return this.b {o1} (p * q) {o2} t; }} }}\n"
+            f"W w = W();\nint s = 0;\n"
+            f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + w.f(i, 2, 1); }} }}\nprint(s);\n")
+
+def gen_multi_method(r):
+    """Several DISTINCT pure-read methods called on stable (loop-invariant)
+    receivers in one hot loop -- exercises multiple-methods-per-trace inlining
+    (each OP_SELF pins its own entry-guard identity; a repeat call to the same
+    method reuses its entry). Real OOP shape `a.foo(); a.bar()`. All bodies are
+    pure reads (no writes), so resume-at-SELF is valid and interp/JIT must agree
+    byte-for-byte. Ops are +/-/* only (no div/mod), so no divide-by-zero. Each
+    pattern calls 2-3 methods, optionally on 2 receivers, plus a dedup case."""
+    shape = r.choice(["same_recv_2", "same_recv_3", "two_recv", "dedup", "float_2", "mixed_arg"])
+    n = r.choice([100000, 300000])
+    inner = r.randint(7, 19)
+    o1, o2, o3 = r.choice(AOPS), r.choice(AOPS), r.choice(AOPS)
+    if shape == "same_recv_2":
+        a, b = r.randint(-9, 20), r.randint(1, 9)
+        return (f"class C {{ int a; int b; void __init(){{ this.a = {a}; this.b = {b}; }} "
+                f"int f(){{ return this.a {o1} 1; }} int g(int v){{ return this.b {o2} v; }} }}\n"
+                f"C c = C();\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.f() + c.g(i); }} }}\nprint(s);\n")
+    if shape == "same_recv_3":
+        a, b = r.randint(-9, 20), r.randint(1, 9)
+        return (f"class C {{ int a; int b; void __init(){{ this.a = {a}; this.b = {b}; }} "
+                f"int f(){{ return this.a {o1} 1; }} int g(int v){{ return this.b {o2} v; }} "
+                f"int h(){{ return this.a {o3} this.b; }} }}\n"
+                f"C c = C();\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.f() + c.g(i) + c.h(); }} }}\nprint(s);\n")
+    if shape == "two_recv":
+        a, b = r.randint(-9, 20), r.randint(1, 12)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int f(){{ return this.v {o1} 1; }} int g(int p){{ return this.v {o2} p; }} }}\n"
+                f"C a = C({a});\nC b = C({b});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + a.f() + b.g(i); }} }}\nprint(s);\n")
+    if shape == "dedup":
+        a = r.randint(-9, 20)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} int f(int p){{ return this.v {o1} p; }} }}\n"
+                f"C c = C({a});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.f(i) + c.f(i {o2} 1); }} }}\nprint(s);\n")
+    if shape == "float_2":
+        a, b = r.randint(0, 40) / 10.0, r.randint(1, 20) / 10.0
+        return (f"class V {{ float x; float y; void __init(float p, float q){{ this.x = p; this.y = q; }} "
+                f"float scale(float k){{ return this.x * k; }} float sumf(){{ return this.x + this.y; }} }}\n"
+                f"V v = V({a}, {b});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + v.scale(2.0) + v.sumf(); }} }}\nprint(s);\n")
+    base = r.randint(1, 10)
+    off = r.randint(1, 9)
+    return (f"class W {{ int b; void __init(){{ this.b = {base}; }} "
+            f"int f(int p, int q, int t){{ return this.b {o1} (p * q) {o2} t; }} int k(){{ return this.b {o3} {off}; }} }}\n"
+            f"W w = W();\nint s = 0;\n"
+            f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + w.f(i, 2, 1) + w.k(); }} }}\nprint(s);\n")
+
+
+def gen_condreturn_method(r):
+    """A pure-read METHOD of shape `if (c) { return A } return B` whose arms read
+    this-fields is inlined and its branch if-converted to a branchless select
+    (clamp/abs/max/min/select-of-two-fields). Stable field-read guards keep it
+    side-exit-free. Bodies have no writes, so any in-method guard resumes at SELF
+    idempotently and interp/JIT must agree byte-for-byte. Float-field and
+    variable-index variants must fall back (still correct), exercising the clean
+    abort path. Ops are +/-/* only (no div/mod)."""
+    shape = r.choice(["relu", "abs", "max_field", "min_field", "pick2",
+                      "clamp_hi", "with_straightline", "float_fallback", "varidx_fallback"])
+    n = r.choice([100000, 300000])
+    inner = r.randint(7, 19)
+    o1 = r.choice(AOPS)
+    if shape == "relu":
+        v = r.randint(-20, 20)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int m(){{ if(this.v < 0) return 0; return this.v; }} }}\n"
+                f"C c = C({v});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "abs":
+        v = r.randint(-20, 20)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int m(){{ if(this.v < 0) return 0 - this.v; return this.v; }} }}\n"
+                f"C c = C({v});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "max_field":
+        v = r.randint(-15, 15)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int m(int p){{ if(this.v > p) return this.v; return p; }} }}\n"
+                f"C c = C({v});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(i); }} }}\nprint(s);\n")
+    if shape == "min_field":
+        v = r.randint(-15, 15)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int m(int p){{ if(this.v < p) return this.v; return p; }} }}\n"
+                f"C c = C({v});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(i); }} }}\nprint(s);\n")
+    if shape == "pick2":
+        f0, a, b = r.randint(0, 1), r.randint(-30, 30), r.randint(-30, 30)
+        return (f"class C {{ int f; int a; int b; void __init(int ff, int x, int y){{ this.f = ff; this.a = x; this.b = y; }} "
+                f"int m(){{ if(this.f > 0) return this.a {o1} 1; return this.b; }} }}\n"
+                f"C c = C({f0}, {a}, {b});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "clamp_hi":
+        v, hi = r.randint(-5, 200), r.randint(10, 100)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int m(){{ if(this.v > {hi}) return {hi}; return this.v; }} }}\n"
+                f"C c = C({v});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "with_straightline":
+        v = r.randint(-20, 20)
+        return (f"class C {{ int v; void __init(int x){{ this.v = x; }} "
+                f"int d(){{ return this.v {o1} this.v; }} int m(){{ if(this.v < 0) return 0; return this.v; }} }}\n"
+                f"C c = C({v});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.d() + c.m(); }} }}\nprint(s);\n")
+    if shape == "float_fallback":
+        v = r.randint(-40, 40) / 10.0
+        return (f"class C {{ float x; void __init(float a){{ this.x = a; }} "
+                f"float m(){{ if(this.x < 0.0) return 0.0; return this.x; }} }}\n"
+                f"C c = C({v});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    sz = r.randint(4, 8)
+    vals = ", ".join(str(r.randint(-9, 30)) for _ in range(sz))
+    return (f"class C {{ list<int> d; int n; void __init(list<int> dd, int nn){{ this.d = dd; this.n = nn; }} "
+            f"int m(int i){{ if(i < this.n) return this.d[i]; return -1; }} }}\n"
+            f"C c = C([{vals}], {sz});\nint s = 0;\n"
+            f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(i % {sz}); }} }}\nprint(s);\n")
+
+
+def gen_write_method(r):
+    """A single-trailing-write VOID method (setter/accumulator) inlined into a
+    hot loop: reads this-fields, computes, then ONE field write as the last op,
+    returns void. The accumulator sums are exact iff there is no double write
+    (the core correctness property of resume-at-SELF with a trailing write).
+    Multi-write and read-after-write methods (a guard after a committed write)
+    must fall back to the interpreter, still correct. Ops are +/-/* (no div/mod);
+    written values are int/float (no GC barrier)."""
+    shape = r.choice(["accum", "accum_two", "setter", "scale", "compute_write",
+                      "float_accum", "multiwrite_fallback", "readafterwrite_fallback"])
+    n = r.choice([50000, 100000])
+    inner = r.randint(6, 14)
+    o1 = r.choice(AOPS)
+    if shape == "accum":
+        return ("class A { int t; void __init(){ this.t = 0; } void add(int x){ this.t = this.t + x; } int get(){ return this.t; } }\n"
+                "A a = A();\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ a.add(i); }} }}\nprint(a.get());\n")
+    if shape == "accum_two":
+        return ("class A { int t; void __init(){ this.t = 0; } void add(int x){ this.t = this.t + x; } int get(){ return this.t; } }\n"
+                "A a = A();\nA b = A();\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ a.add(i); b.add(i {o1} 1); }} }}\nprint(a.get());\nprint(b.get());\n")
+    if shape == "setter":
+        init = r.randint(-9, 9)
+        return (f"class B {{ int v; void __init(int x){{ this.v = x; }} void set(int x){{ this.v = x; }} int get(){{ return this.v; }} }}\n"
+                f"B b = B({init});\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ b.set(i); s = s + b.get(); }} }}\nprint(s);\nprint(b.get());\n")
+    if shape == "scale":
+        return ("class B { int v; void __init(){ this.v = 1; } void mul(int k){ this.v = this.v * k; } void reset(int x){ this.v = x; } int get(){ return this.v; } }\n"
+                "B b = B();\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 1, 3) {{ b.reset(i); b.mul(2); s = s + b.get(); }} }}\nprint(s);\n")
+    if shape == "compute_write":
+        c = r.randint(1, 5)
+        return (f"class B {{ int v; void __init(){{ this.v = 0; }} void step(int x){{ this.v = this.v {o1} (x {AOPS[r.randint(0,2)]} {c}); }} int get(){{ return this.v; }} }}\n"
+                f"B b = B();\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ b.step(i); }} }}\nprint(b.get());\n")
+    if shape == "float_accum":
+        d = r.randint(1, 30) / 10.0
+        return (f"class F {{ float f; void __init(){{ this.f = 0.0; }} void add(float x){{ this.f = this.f + x; }} float get(){{ return this.f; }} }}\n"
+                f"F f = F();\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ f.add({d}); }} }}\nprint(f.get());\n")
+    if shape == "multiwrite_fallback":
+        return ("class T { int a; int b; void __init(){ this.a = 0; this.b = 0; } void bump(){ this.a = this.a + 1; this.b = this.b + 2; } int sum(){ return this.a + this.b; } }\n"
+                "T t = T();\nint s = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ t.bump(); s = s + t.sum(); }} }}\nprint(s);\nprint(t.sum());\n")
+    return ("class W { int v; void __init(){ this.v = 0; } int addret(int x){ this.v = this.v + x; return this.v; } }\n"
+            "W w = W();\nint s = 0;\n"
+            f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + w.addret(i); }} }}\nprint(s);\n")
+
+
+def gen_condreturn_float(r):
+    """A FLOAT conditional-return leaf (method or free function) `if(c){return A}
+    return B` inlined and if-converted to a bit-exact branchless float select
+    (FCMPMASK/ICMPMASK + FSELECT). Covers relu/clamp/abs/min/max with all four
+    compare predicates (< > >= <=, the latter two compiled as swapped LT/LE so
+    NaN stays false). NaN/+inf/-inf inputs are exercised. Mixed-type arms and
+    int-arms-under-a-float-compare must fall back (still correct)."""
+    shape = r.choice(["relu", "clamp_hi", "abs", "max_p", "min_p", "ge_branch",
+                      "free_clamp", "free_min", "nan_inputs", "mixed_fallback"])
+    n = r.choice([50000, 100000])
+    inner = r.randint(6, 13)
+    # base values, occasionally special (inf/nan/-inf)
+    def fval():
+        pick = r.random()
+        if pick < 0.12:  return "(1.0e308 * 10.0)"         # +inf
+        if pick < 0.20:  return "(1.0e308 * 10.0 - 1.0e308 * 10.0)"  # NaN
+        if pick < 0.28:  return "(0.0 - 1.0e308 * 10.0)"   # -inf
+        return f"{r.randint(-40,40)/10.0}"
+    v = fval()
+    hi = r.randint(5, 30) / 10.0
+    if shape == "relu":
+        return (f"class C {{ float x; void __init(float a){{ this.x = a; }} float m(){{ if(this.x < 0.0) return 0.0; return this.x; }} }}\n"
+                f"C c = C({v});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "clamp_hi":
+        return (f"class C {{ float x; void __init(float a){{ this.x = a; }} float m(){{ if(this.x > {hi}) return {hi}; return this.x; }} }}\n"
+                f"C c = C({v});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "abs":
+        return (f"class C {{ float x; void __init(float a){{ this.x = a; }} float m(){{ if(this.x < 0.0) return 0.0 - this.x; return this.x; }} }}\n"
+                f"C c = C({v});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "max_p":
+        p = r.randint(-30, 30) / 10.0
+        return (f"class C {{ float x; void __init(float a){{ this.x = a; }} float m(float p){{ if(this.x > p) return this.x; return p; }} }}\n"
+                f"C c = C({v});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m({p}); }} }}\nprint(s);\n")
+    if shape == "min_p":
+        p = r.randint(-30, 30) / 10.0
+        return (f"class C {{ float x; void __init(float a){{ this.x = a; }} float m(float p){{ if(this.x < p) return this.x; return p; }} }}\n"
+                f"C c = C({v});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m({p}); }} }}\nprint(s);\n")
+    if shape == "ge_branch":
+        return (f"class C {{ float x; void __init(float a){{ this.x = a; }} float m(){{ if(this.x >= 0.0) return this.x; return 0.0; }} }}\n"
+                f"C c = C({v});\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+    if shape == "free_clamp":
+        return ("float clampf(float x){ if(x < 0.0) return 0.0; return x; }\n"
+                f"float v = {v};\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + clampf(v); }} }}\nprint(s);\n")
+    if shape == "free_min":
+        a, b = fval(), fval()
+        return ("float minf(float a, float b){ if(a < b) return a; return b; }\n"
+                f"float p = {a};\nfloat q = {b};\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + minf(p, q); }} }}\nprint(s);\n")
+    if shape == "nan_inputs":
+        return ("class C { float x; void __init(float a){ this.x = a; } "
+                "float relu(){ if(this.x < 0.0) return 0.0; return this.x; } "
+                "float clamphi(){ if(this.x > 1.0) return 1.0; return this.x; } "
+                "float le(){ if(this.x <= 0.0) return this.x; return 0.0; } }\n"
+                "float nan = 1.0e308 * 10.0 - 1.0e308 * 10.0;\nfloat inf = 1.0e308 * 10.0;\n"
+                "C a = C(nan); C b = C(inf); C d = C(0.0 - inf);\nfloat s = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + a.relu() + b.clamphi() + d.le(); }} }}\nprint(s);\n")
+    # mixed_fallback: int arm vs float arm -> must abort cleanly, stay correct
+    return (f"class C {{ float x; int n; void __init(float a, int b){{ this.x = a; this.n = b; }} "
+            f"float m(){{ if(this.n < 0) return 0; return this.x; }} }}\n"
+            f"C c = C({v}, {r.randint(-3,3)});\nfloat s = 0.0;\n"
+            f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ s = s + c.m(); }} }}\nprint(s);\n")
+
+
+def gen_condwrite_method(r):
+    """An if-only conditional field write `if(c) this.f = A;` inlined and if-
+    converted to one unconditional trailing write of a branchless select
+    this.f = select(c, A, old). Covers running max/min trackers, in-place clamp
+    (constant write), value cap (param), and float fields (FSELECT, NaN-as-false).
+    Also emits the safety boundary -- multi-write, value-returning (read-after-
+    write), compare-other-field, if-else -- which must abort cleanly yet stay
+    bit-exact. The summed field value is the double-write / wrong-select detector."""
+    shape = r.choice(["max", "min", "clamp_low", "cap", "float_max", "float_min",
+                      "two_writes", "read_after_write", "cmp_other", "if_else"])
+    n = r.choice([60000, 120000])
+    inner = r.randint(8, 22)
+    seed0 = r.randint(-30, 30)
+    if shape == "max":
+        return (f"class C {{ int peak; void __init(){{ this.peak = {seed0-50}; }} void track(int x){{ if(x > this.peak) this.peak = x; }} int get(){{ return this.peak; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.track((j * 3 + r) % 60 - 30); }} acc = acc + c.get(); }}\nprint(acc);\n")
+    if shape == "min":
+        return (f"class C {{ int low; void __init(){{ this.low = {seed0+50}; }} void track(int x){{ if(x < this.low) this.low = x; }} int get(){{ return this.low; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.track((j * 5 + r) % 60 - 30); }} acc = acc + c.get(); }}\nprint(acc);\n")
+    if shape == "clamp_low":
+        return (f"class C {{ int v; void __init(int a){{ this.v = a; }} void low(){{ if(this.v < 0) this.v = 0; }} int get(){{ return this.v; }} }}\n"
+                f"int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ C c = C({seed0} - (r % {r.randint(7,25)})); for (int j = 0, {inner}) {{ c.low(); }} acc = acc + c.get(); }}\nprint(acc);\n")
+    if shape == "cap":
+        m = r.randint(20, 80)
+        return (f"class C {{ int v; void __init(int a){{ this.v = a; }} void cap(int m){{ if(this.v > m) this.v = m; }} int get(){{ return this.v; }} }}\n"
+                f"int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ C c = C({m+50} - (r % {r.randint(10,40)})); for (int j = 0, {inner}) {{ c.cap({m}); }} acc = acc + c.get(); }}\nprint(acc);\n")
+    if shape == "float_max":
+        start = r.choice(["-1.0e30", "(1.0e308 * 10.0 - 1.0e308 * 10.0)", "(0.0 - 1.0e308 * 10.0)", "0.0"])
+        return (f"class C {{ float peak; void __init(float v){{ this.peak = v; }} void track(float x){{ if(x > this.peak) this.peak = x; }} float get(){{ return this.peak; }} }}\n"
+                f"C c = C({start}); float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.track(0.25 * j - 3.0); }} acc = acc + c.get(); }}\nprint(acc);\n")
+    if shape == "float_min":
+        start = r.choice(["1.0e30", "(1.0e308 * 10.0 - 1.0e308 * 10.0)", "(1.0e308 * 10.0)"])
+        return (f"class C {{ float low; void __init(float v){{ this.low = v; }} void track(float x){{ if(x < this.low) this.low = x; }} float get(){{ return this.low; }} }}\n"
+                f"C c = C({start}); float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.track(3.0 - 0.25 * j); }} acc = acc + c.get(); }}\nprint(acc);\n")
+    if shape == "two_writes":   # MUST abort (two SETFIELDs) -> still correct
+        return (f"class C {{ int a; int b; void __init(){{ this.a=0; this.b=0; }} void f(int x){{ if(x > this.a) {{ this.a = x; this.b = x; }} }} int g(){{ return this.a + this.b; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f((j + r) % 40); }} acc = acc + c.g(); }}\nprint(acc);\n")
+    if shape == "read_after_write":  # MUST abort (value return) -> still correct
+        return (f"class C {{ int v; void __init(){{ this.v=0; }} int f(int x){{ if(x > this.v) this.v = x; return this.v; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + c.f((j + r) % 40); }} }}\nprint(acc);\n")
+    if shape == "cmp_other":    # MUST abort (compare reads a different field) -> still correct
+        return (f"class C {{ int v; int g; void __init(){{ this.v=0; this.g={r.randint(3,20)}; }} void f(int x){{ if(x > this.g) this.v = x; }} int get(){{ return this.v; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(j); }} acc = acc + c.get(); }}\nprint(acc);\n")
+    # if_else: MUST abort (not if-only) -> still correct
+    return (f"class C {{ int v; void __init(){{ this.v=0; }} void f(int x){{ if(x > this.v) this.v = x; else this.v = 0; }} int get(){{ return this.v; }} }}\n"
+            f"C c = C(); int acc = 0;\n"
+            f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(j - {r.randint(1,8)}); }} acc = acc + c.get(); }}\nprint(acc);\n")
+
 
 GENS = [gen_scalar,
         lambda r: gen_array_reduce(r, "int"),
@@ -939,7 +1296,7 @@ GENS = [gen_scalar,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
         gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix,
-        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container]
+        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container, gen_method_call, gen_multi_method, gen_condreturn_method, gen_write_method, gen_condreturn_float, gen_condwrite_method]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:
