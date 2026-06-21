@@ -177,6 +177,15 @@ static int str_byte(lua_State *L) {
   return n;
 }
 
+/* JIT support: identify the file-static str_len / str_byte C functions so a trace
+   can lower `string.len(s)` / `string.byte(s,i)` to SLEN / SBYTE. Mirrors
+   lmathlib's spt_jit_unary_math. Returns 1 for str_len, 2 for str_byte, else 0. */
+int spt_jit_str_op(lua_CFunction f) {
+  if (f == (lua_CFunction)str_len)  return 1;
+  if (f == (lua_CFunction)str_byte) return 2;
+  return 0;
+}
+
 /* str_char - receiver is arg1, values start from arg2 */
 static int str_char(lua_State *L) {
   int n = lua_gettop(L) - 1; /* number of arguments (excluding receiver) */

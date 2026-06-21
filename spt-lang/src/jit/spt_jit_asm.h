@@ -224,6 +224,8 @@ void sptasm_test_rr(SPTAsm *a, SPTReg r1, SPTReg r2);
 void sptasm_setcc(SPTAsm *a, SPTCC cc, SPTReg r);
 /* MOVZX reg, reg8 (zero-extend byte to 64-bit) */
 void sptasm_movzx_r8(SPTAsm *a, SPTReg dst, SPTReg src);
+/* MOVZX reg, byte [base+disp] (zero-extend a memory byte to 64-bit) */
+void sptasm_movzx_rm8(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
 
 /* ---- Control flow ---- */
 

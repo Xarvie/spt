@@ -51,6 +51,8 @@
 #define OFF_TABLE_LOGLEN offsetof(Table, loglen)
 #define OFF_TABLE_ARRAY offsetof(Table, array)
 #define OFF_TABLE_MODE  offsetof(Table, mode)
+#define OFF_TSTRING_SHRLEN offsetof(TString, shrlen)
+#define OFF_TSTRING_CONTENTS offsetof(TString, contents)
 #define OFF_TABLE_NODE      offsetof(Table, node)
 #define OFF_TABLE_LSIZENODE offsetof(Table, lsizenode)
 /* Node (hash slot) internal offsets, used by the inline GETFIELD fast path. */
@@ -198,6 +200,7 @@ static int ra_op_is_safe(int op) {
     case SPTIR_GUARD: case SPTIR_GUARD_LT: case SPTIR_GUARD_LE:
     case SPTIR_GUARD_EQ: case SPTIR_GUARD_T: case SPTIR_GUARD_ULT:
     case SPTIR_GETI: case SPTIR_LEN: case SPTIR_SETI:
+    case SPTIR_SLEN: case SPTIR_SBYTE:
     case SPTIR_GETFIELD: case SPTIR_SETFIELD:
     case SPTIR_LOOP: case SPTIR_PHI: case SPTIR_NOP:
       return 1;
@@ -1219,6 +1222,44 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
          low bytes of the adjacent t->array pointer and make the value depend
          on the heap address (ASLR), breaking the signed bounds compare. */
       sptasm_mov_rm32(a, SPT_RAX, SPT_RAX, OFF_TABLE_LOGLEN);
+      gen_store(cg, idx, SPT_RAX);
+      break;
+    }
+
+    case SPTIR_SLEN: {
+      /* String length for SHORT strings. TString.shrlen is the length for a
+         short string (>=0, <= ~40) and NEGATIVE for a long string. Read it as
+         an unsigned byte: a short string gives 0..40 (high bit clear); a long
+         string gives 128..255 (high bit set). Guard short (cmp >= 0x80 -> side
+         exit), so long strings fall back to the interpreter, which is correct.
+         The guarded value IS the length. */
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_STR);
+      sptasm_movzx_rm8(a, SPT_RCX, SPT_RAX, OFF_TSTRING_SHRLEN);
+      sptasm_cmp_ri(a, SPT_RCX, 0x80);
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      sptasm_jcc(a, SPT_CC_NB, exlbl);   /* unsigned >= 0x80 -> long string -> exit */
+      gen_store(cg, idx, SPT_RCX);
+      break;
+    }
+
+    case SPTIR_SBYTE: {
+      /* string.byte(s, i) for SHORT strings, 0-based. RAX = TString*, RCX =
+         shrlen (unsigned byte). Guard short (>= 0x80 -> exit), then guard the
+         index in [0, len): an UNSIGNED compare i >= len catches both i<0 (huge
+         unsigned) and i>=len. Short-string content is inline AT &ts->contents
+         (rawgetshrstr), so lea the content base, add the index, and read the
+         byte zero-extended. */
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_STR);
+      sptasm_movzx_rm8(a, SPT_RCX, SPT_RAX, OFF_TSTRING_SHRLEN);
+      sptasm_cmp_ri(a, SPT_RCX, 0x80);
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      sptasm_jcc(a, SPT_CC_NB, exlbl);            /* long string -> exit */
+      gen_load(cg, SPT_RDX, inst->op2, SPTT_INT); /* RDX = index */
+      sptasm_cmp_rr(a, SPT_RDX, SPT_RCX);
+      sptasm_jcc(a, SPT_CC_NB, exlbl);            /* unsigned i >= len -> exit */
+      sptasm_lea(a, SPT_RAX, SPT_RAX, OFF_TSTRING_CONTENTS); /* RAX = content base */
+      sptasm_add_rr(a, SPT_RAX, SPT_RDX);                    /* RAX = content + i */
+      sptasm_movzx_rm8(a, SPT_RAX, SPT_RAX, 0);              /* RAX = byte */
       gen_store(cg, idx, SPT_RAX);
       break;
     }

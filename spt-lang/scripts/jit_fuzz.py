@@ -564,16 +564,27 @@ def gen_type_transition(r):
     return r.choice(forms)
 
 def gen_string(r):
-    """String ops in a hot loop: length (#s), compare (==), concat (..). The JIT
-    aborts these (string LEN reads an array length field, so it must not compile;
-    compare/concat are interpreter-only), so the JIT falls back and interp == jit.
-    Guards the string-LEN-reads-garbage class. Deterministic."""
+    """String ops in a hot loop: length (#s), compare (==), concat (..). SHORT
+    strings now compile #s to SLEN (§10.57, reads TString.shrlen + guards short);
+    LONG strings, and #s inside an inlined method body, abort and fall back to the
+    interpreter (the abort blacklists the PC -> bounded, never a compile thrash).
+    Compare/concat stay interpreter-only. interp == jit either way. Guards the
+    string-LEN class. Deterministic."""
     n = r.choice([100000, 1000000])
     strs = ['"hello"', '"hi"', '"abcdef"', '"x"', '"test123"', '"ab"']
     s = r.choice(strs)
-    op = r.choice(["len", "compare", "concat", "len_elem"])
+    op = r.choice(["len", "compare", "concat", "len_elem", "len_long", "len_cond"])
     if op == "len":
         return f'string s = {s};\nint t = 0;\nfor (int i = 0, {n}) {{ t = t + #s; }}\nprint(t);\n'
+    if op == "len_long":
+        # a >40-char string: SLEN guard would fail every iteration, so recording
+        # aborts (observably long) and blacklists -> interpreter, still bit-exact.
+        lng = '"this is a deliberately long string of more than forty characters yes"'
+        return f'string s = {lng};\nint t = 0;\nfor (int i = 0, {n}) {{ t = t + #s; }}\nprint(t);\n'
+    if op == "len_cond":
+        # #s used as a loop-relative bound / condition
+        return (f'string s = {s};\nint t = 0;\n'
+                f'for (int i = 0, {n}) {{ if (i % 16 < #s) {{ t = t + 1; }} }}\nprint(t);\n')
     if op == "compare":
         s2 = r.choice(strs)
         return (f'string s = {s};\nint c = 0;\nfor (int i = 0, {n}) '
@@ -584,6 +595,41 @@ def gen_string(r):
                 f'if (#b == {ln}) {{ c = c + 1; }} }}\nprint(c);\n')
     return (f'list<string> w = [{s}, "qq", "r"];\nint t = 0;\n'
             f'for (int i = 0, {n}) {{ t = t + #w[i % 3]; }}\nprint(t);\n')
+
+def gen_string_byte(r):
+    """string.byte(s,i) and string.len(s) on a SHORT loop-invariant string in a hot
+    loop (§10.58). string.byte lowers to SBYTE (reads TString content byte i, guards
+    short + bounds), string.len reuses SLEN. Indices are kept IN RANGE (j < len) so
+    the program never errors -- character hashing / byte summation / scanning, the
+    real value of string support. Also emits a LONG-string shape (observably long ->
+    recording aborts -> blacklist -> interpreter, still bit-exact, no thrash). The
+    accumulated byte value is the wrong-byte / divergence detector. Deterministic."""
+    shorts = ['"hello"', '"abcdef"', '"0123456789"', '"ABCDEFGH"', '"xyz"', '"Spt!"']
+    s = r.choice(shorts)
+    L = len(s) - 2                       # chars without the quotes
+    n = r.choice([60000, 120000])
+    shape = r.choice(["hash", "sum", "scan", "len", "stride", "long"])
+    if shape == "hash":                  # rolling hash over the bytes
+        k = r.choice([10, 11, 13, 31])
+        return (f'str s = {s};\nint h = 0;\n'
+                f'for (int rr = 0, {n}) {{ h = 0; for (int j = 0, {L-1}) {{ h = h * {k} + string.byte(s, j); }} }}\nprint(h);\n')
+    if shape == "sum":                   # sum of all bytes
+        return (f'str s = {s};\nint a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int j = 0, {L-1}) {{ a = a + string.byte(s, j); }} }}\nprint(a);\n')
+    if shape == "scan":                  # guarded scan with #s as the bound
+        return (f'str s = {s};\nint a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int j = 0, {L+3}) {{ if (j < #s) {{ a = a + string.byte(s, j) * (j + 1); }} }} }}\nprint(a);\n')
+    if shape == "len":                   # string.len module function (-> SLEN)
+        return (f'str s = {s};\nint a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int j = 0, 12) {{ a = a + string.len(s) + j; }} }}\nprint(a);\n')
+    if shape == "stride":                # in-range index (j capped < len)
+        m = max(1, (L - 1))
+        return (f'str s = {s};\nint a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int j = 0, {m}) {{ a = a + string.byte(s, j); }} }}\nprint(a);\n')
+    # long: a >40-char string -> SBYTE recording aborts (observably long) -> blacklist
+    lng = '"this is a deliberately long string of more than forty characters yes ok"'
+    return (f'str s = {lng};\nint a = 0;\n'
+            f'for (int rr = 0, {n}) {{ for (int j = 0, 9) {{ a = a + string.byte(s, j); }} }}\nprint(a);\n')
 
 def gen_array_len_mix(r):
     """Array element access combined with #v used as a VALUE in the same loop.
@@ -1241,14 +1287,18 @@ def gen_condwrite_method(r):
     (`if(x>0) this.sum=this.sum+x` -- sum-positives, conditional counters; §10.53).
     Covers int + float (FSELECT, NaN-as-false). Also handles if-ELSE conditional
     writes `if(c) this.f=A; else this.f=B` (both arms write the same field -> one
-    select(c,A,B); §10.54). Also emits the safety boundary -- multi-write,
-    value-returning (read-after-write), compare-other-field with no then-arm read,
-    if-else writing DIFFERENT fields -- which must abort cleanly yet stay bit-exact.
-    The summed field value is the double-write / wrong-select detector."""
+    select(c,A,B); §10.54), and conditional writes where `old` is read NOWHERE --
+    cross-field `if(c) this.a=this.b+x`, conditional constant `if(x>0) this.v=5`,
+    field copy `if(c) this.a=this.b` -- via a fresh guarded read of the written
+    field for old (§10.55). Also emits the safety boundary -- multi-write,
+    value-returning (read-after-write), if-else writing DIFFERENT fields -- which
+    must abort cleanly yet stay bit-exact. The summed field value is the
+    double-write / wrong-select detector."""
     shape = r.choice(["max", "min", "clamp_low", "cap", "float_max", "float_min",
                       "rmw_sum", "rmw_count", "rmw_scale", "float_rmw_sum",
                       "ifelse_sign", "ifelse_pick", "ifelse_compute", "ifelse_float", "ifelse_cmpfld",
-                      "two_writes", "read_after_write", "cmp_other", "ifelse_difffield"])
+                      "xfield_rmw", "constw_unrel", "fieldcpy", "float_xfield", "cmp_other",
+                      "two_writes", "read_after_write", "ifelse_difffield"])
     n = r.choice([60000, 120000])
     inner = r.randint(8, 22)
     seed0 = r.randint(-30, 30)
@@ -1318,6 +1368,27 @@ def gen_condwrite_method(r):
         return (f"class G {{ int v; void __init(){{ this.v = 50; }} void f(int x){{ if(this.v > x) this.v = x; else this.v = 0; }} int g(){{ return this.v; }} }}\n"
                 f"G gg = G(); int acc = 0;\n"
                 f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ gg.f((j + r) % 60); }} acc = acc + gg.g(); gg.f(999); }}\nprint(acc);\n")
+    if shape == "xfield_rmw":   # §10.55: cross-field RMW (this.a = this.b + x), old from fresh read
+        return (f"class C {{ int a; int b; void __init(){{ this.a = 0; this.b = {r.randint(1,9)}; }} void f(int x){{ if(x > 0) this.a = this.b + x; }} int g(){{ return this.a; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f((j * 3 + r) % 30 - 15); }} acc = acc + c.g(); }}\nprint(acc);\n")
+    if shape == "constw_unrel":  # §10.55: conditional constant write, unrelated condition
+        v = r.randint(2, 40)
+        return (f"class C {{ int v; void __init(){{ this.v = 0; }} void f(int x){{ if(x > 0) this.v = {v}; }} int g(){{ return this.v; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f((j + r) % 12 - 6); acc = acc + c.g(); }} }}\nprint(acc);\n")
+    if shape == "fieldcpy":     # §10.55: conditional field copy (this.a = this.b)
+        return (f"class C {{ int a; int b; void __init(){{ this.a = 0; this.b = {r.randint(3,30)}; }} void f(int x){{ if(x > 0) this.a = this.b; }} int g(){{ return this.a; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f((j + r) % 10 - 5); acc = acc + c.g(); }} }}\nprint(acc);\n")
+    if shape == "float_xfield":  # §10.55: float cross-field RMW (FSELECT, old from fresh read)
+        return (f"class C {{ float a; float b; void __init(){{ this.a = 0.0; this.b = 2.5; }} void f(float x){{ if(x > 0.0) this.a = this.b + x; }} float g(){{ return this.a; }} }}\n"
+                f"C c = C(); float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(0.5 * j - 4.0); }} acc = acc + c.g(); }}\nprint(acc);\n")
+    if shape == "cmp_other":    # §10.55: condition reads a DIFFERENT field, then-arm writes param -> old from fresh read
+        return (f"class C {{ int v; int g; void __init(){{ this.v=0; this.g={r.randint(3,20)}; }} void f(int x){{ if(x > this.g) this.v = x; }} int get(){{ return this.v; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(j); }} acc = acc + c.get(); }}\nprint(acc);\n")
     if shape == "two_writes":   # MUST abort (two SETFIELDs, if-only) -> still correct
         return (f"class C {{ int a; int b; void __init(){{ this.a=0; this.b=0; }} void f(int x){{ if(x > this.a) {{ this.a = x; this.b = x; }} }} int g(){{ return this.a + this.b; }} }}\n"
                 f"C c = C(); int acc = 0;\n"
@@ -1326,14 +1397,50 @@ def gen_condwrite_method(r):
         return (f"class C {{ int v; void __init(){{ this.v=0; }} int f(int x){{ if(x > this.v) this.v = x; return this.v; }} }}\n"
                 f"C c = C(); int acc = 0;\n"
                 f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + c.f((j + r) % 40); }} }}\nprint(acc);\n")
-    if shape == "cmp_other":    # MUST abort (compare reads a different field) -> still correct
-        return (f"class C {{ int v; int g; void __init(){{ this.v=0; this.g={r.randint(3,20)}; }} void f(int x){{ if(x > this.g) this.v = x; }} int get(){{ return this.v; }} }}\n"
-                f"C c = C(); int acc = 0;\n"
-                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(j); }} acc = acc + c.get(); }}\nprint(acc);\n")
     # ifelse_difffield: MUST abort (if-else writing DIFFERENT fields) -> still correct
     return (f"class C {{ int a; int b; void __init(){{ this.a=0; this.b=0; }} void f(int x){{ if(x > 0) this.a = 1; else this.b = 2; }} int get(){{ return this.a + this.b; }} }}\n"
             f"C c = C(); int acc = 0;\n"
             f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(j - {r.randint(1,8)}); }} acc = acc + c.get(); }}\nprint(acc);\n")
+
+
+def gen_chained_condreturn(r):
+    """Chained conditional-return (>=2 cond-returns + a final return) -- the
+    double-sided clamp `if(x<lo) return lo; if(x>hi) return hi; return x`, inlined
+    and folded to a NESTED branchless select (§10.56). Covers free-function and
+    method forms, register and immediate (LTI/GTI) bounds, int (rounding-free
+    integer select) and float (FSELECT) arms, and >2-deep chains. Also emits a
+    mixed-type chain that MUST abort cleanly (one int arm + one float arm) yet stay
+    bit-exact. The summed clamped value is the wrong-fold detector."""
+    shape = r.choice(["free_reg", "method", "imm", "float", "triple", "mixed_abort"])
+    n = r.choice([60000, 120000])
+    inner = r.randint(10, 22)
+    lo = r.randint(-5, 5); hi = lo + r.randint(5, 30)
+    if shape == "free_reg":     # free-fn clamp, register bounds (OP_LT both sides)
+        return (f"int clamp(int x, int lo, int hi){{ if(x < lo) return lo; if(x > hi) return hi; return x; }}\n"
+                f"int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + clamp(j * {r.randint(1,4)} - {r.randint(5,20)}, {lo}, {hi}); }} }}\nprint(acc);\n")
+    if shape == "method":       # method clamp reading this.lo/this.hi
+        return (f"class C {{ int lo; int hi; void __init(int l, int h){{ this.lo = l; this.hi = h; }} int clamp(int x){{ if(x < this.lo) return this.lo; if(x > this.hi) return this.hi; return x; }} }}\n"
+                f"C c = C({lo}, {hi}); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + c.clamp(j * {r.randint(1,4)} - {r.randint(5,20)}); }} }}\nprint(acc);\n")
+    if shape == "imm":          # immediate bounds (LTI/GTI)
+        a = r.randint(1, 6); b = a + r.randint(4, 20)
+        return (f"int clamp(int x){{ if(x < {a}) return {a}; if(x > {b}) return {b}; return x; }}\n"
+                f"int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + clamp(j * {r.randint(1,3)} - {r.randint(0,8)}); }} }}\nprint(acc);\n")
+    if shape == "float":        # float clamp (FSELECT)
+        return (f"float clampf(float x, float lo, float hi){{ if(x < lo) return lo; if(x > hi) return hi; return x; }}\n"
+                f"float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + clampf(0.5 * j - {r.randint(1,5)}.0, 0.0, {r.randint(3,8)}.0); }} }}\nprint(acc);\n")
+    if shape == "triple":       # 3 cond-returns + final
+        a = r.randint(-2, 2); b = a + r.randint(20, 40); m = a + r.randint(8, 15)
+        return (f"int f(int x){{ if(x < {a}) return {a}; if(x > {b}) return {b}; if(x > {m}) return {m}; return x; }}\n"
+                f"int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + f(j * {r.randint(2,5)} - {r.randint(2,10)}); }} }}\nprint(acc);\n")
+    # mixed_abort: int arm + float arm in one chain -> must abort, stay correct
+    return (f"float g(int x){{ if(x < 0) return 0; if(x > 10) return 1.0; return 0.5; }}\n"
+            f"float acc = 0.0;\n"
+            f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ acc = acc + g(j - {r.randint(1,6)}); }} }}\nprint(acc);\n")
 
 
 def gen_writeret_method(r):
@@ -1404,7 +1511,7 @@ GENS = [gen_scalar,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
         gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix,
-        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container, gen_method_call, gen_multi_method, gen_condreturn_method, gen_write_method, gen_condreturn_float, gen_condwrite_method, gen_writeret_method]
+        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container, gen_method_call, gen_multi_method, gen_condreturn_method, gen_write_method, gen_condreturn_float, gen_condwrite_method, gen_writeret_method, gen_chained_condreturn, gen_string_byte]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:

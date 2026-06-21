@@ -102,6 +102,8 @@ typedef enum {
   SPTIR_SETFIELD,     /* map[str] = val: op1 = map, aux = key, op2 = value ref */
   SPTIR_GETTABUP,     /* upvalue[str]: op1 = upval ref, aux = key */
   SPTIR_LEN,          /* #op1 (length) */
+  SPTIR_SLEN,         /* string length (SHORT strings): op1 = string. Guards short (else side-exit). */
+  SPTIR_SBYTE,        /* string.byte (SHORT strings): op1 = string, op2 = index. Guards short + bounds. */
 
   /* Type conversions */
   SPTIR_TOFLT,        /* int -> float */

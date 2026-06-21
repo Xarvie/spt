@@ -1,0 +1,27 @@
+// String length '#s' for SHORT strings, compiled to SLEN (§10.57). The op reads
+// TString.shrlen as an unsigned byte and guards short (long strings would fail the
+// guard every iteration and thrash, so recording aborts when the live string is
+// observably long -- the abort blacklists the PC and the interpreter takes over,
+// bounded and bit-exact). SLEN is emitted only at root, where the live string at
+// R[B] can be read to confirm short. This kernel exercises: #s as a value, #s in a
+// condition, #s mixed with arithmetic, #s of an empty string, a LONG string (must
+// stay bit-exact via the blacklist fall-back), and #s of strings read from a list
+// (computed operand -> conservative interpreter fall-back). The summed length is
+// the divergence detector.
+
+str sh  = "hello world";       // 11, short
+str em  = "";                  // 0, short (empty)
+str lng = "this is a deliberately long string of more than forty characters yes ok";  // >40, long
+
+int t = 0;
+for (int r = 0, 200000) { for (int j = 0, 15) { t = t + #sh; } }                 // #s as a value (compiles)
+for (int r = 0, 200000) { for (int j = 0, 15) { if (j < #sh) t = t + j; } }      // #s as a bound (compiles)
+for (int r = 0, 200000) { for (int j = 0, 15) { t = t + #sh * 2 - j; } }         // #s in arithmetic (compiles)
+for (int r = 0, 200000) { for (int j = 0, 15) { t = t + #em + 1; } }             // empty string length (compiles)
+for (int r = 0, 200000) { for (int j = 0, 15) { t = t + #lng; } }                // LONG string -> blacklist fall-back, still exact
+print(t);
+
+list<str> ws = ["a", "bb", "ccc", "dddd", "ee"];
+int u = 0;
+for (int r = 0, 200000) { for (int j = 0, 4) { u = u + #(ws[j]); } }             // computed operand -> interpreter fall-back, exact
+print(u);

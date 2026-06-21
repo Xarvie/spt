@@ -425,6 +425,15 @@ void sptasm_movzx_r8(SPTAsm *a, SPTReg dst, SPTReg src) {
   emit_modrm(a, 3, dst, src);
 }
 
+void sptasm_movzx_rm8(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  /* MOVZX r32, byte [base+disp]: 0F B6 /r. No REX.W -> 32-bit dst, which
+     zero-extends to the full 64-bit register (the byte is 0..255). */
+  emit_rex_rm(a, 0, dst, base);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0xB6);
+  emit_mem(a, dst, base, disp);
+}
+
 /* =====================================================================
 ** Control flow
 ** ===================================================================== */

@@ -1,0 +1,36 @@
+// Chained conditional-return (>=2 cond-returns + a final return) inlining, the
+// double-sided clamp `if(x<lo) return lo; if(x>hi) return hi; return x` (§10.56).
+// A single cond-return if-converts to one select (§10.48/§10.50); a CHAIN folds
+// inside-out to a NESTED branchless select select(c1,A1,select(c2,A2,...,Afinal)),
+// with NO branches and NO side exits. This covers free-function and method forms,
+// register and immediate (LTI/GTI) bounds, int (rounding-free integer select) and
+// float (FSELECT) arms, and a >2-deep chain. The summed clamped value is the
+// wrong-fold / divergence detector -- any mis-folded select would change the sum
+// and diverge from the interpreter. The single cond-return path is left untouched
+// (a single one never reaches the chained recorder), so single_m below also guards
+// against a regression in that direction.
+
+int clamp(int x, int lo, int hi) { if (x < lo) return lo; if (x > hi) return hi; return x; }    // free-fn, register bounds
+int clampi(int x)                { if (x < 3) return 3;   if (x > 17) return 17;  return x; }    // free-fn, immediate bounds (LTI/GTI)
+int ladder(int x) { if (x < 0) return 0; if (x > 100) return 100; if (x > 50) return 50; return x; }  // 3 cond-returns
+
+float clampf(float x, float lo, float hi) { if (x < lo) return lo; if (x > hi) return hi; return x; }  // float chain (FSELECT)
+
+class Bound { int lo; int hi;
+              void __init(int l, int h) { this.lo = l; this.hi = h; }
+              int clamp(int x) { if (x < this.lo) return this.lo; if (x > this.hi) return this.hi; return x; }  // method, reads this.lo/this.hi
+              int single(int x) { if (x < this.lo) return this.lo; return x; } }                  // §10.48 single cond-return (untouched path)
+
+int iacc = 0;
+for (int r = 0, 200000) { for (int j = 0, 25) { iacc = iacc + clamp(j * 3 - 30, 0, 25); } }       // free-fn register clamp
+for (int r = 0, 200000) { for (int j = 0, 25) { iacc = iacc + clampi(j * 2 - 8); } }              // free-fn immediate clamp
+for (int r = 0, 200000) { for (int j = 0, 25) { iacc = iacc + ladder(j * 7 - 20); } }             // triple chain
+
+Bound b = Bound(0, 25);
+for (int r = 0, 200000) { for (int j = 0, 25) { iacc = iacc + b.clamp(j * 3 - 30); } }            // method clamp
+for (int r = 0, 200000) { for (int j = 0, 25) { iacc = iacc + b.single(j - 12); } }               // single cond-return method
+print(iacc);
+
+float facc = 0.0;
+for (int r = 0, 200000) { for (int j = 0, 25) { facc = facc + clampf(0.5 * j - 4.0, 0.0, 6.0); } } // float clamp
+print(facc);

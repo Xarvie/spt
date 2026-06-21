@@ -1,0 +1,42 @@
+// string.byte(s, i) and string.len(s) on SHORT strings, compiled to SBYTE / SLEN
+// (§10.58). string.byte / string.len are dot-calls (SELF + CALL on the string
+// module); the SELF resolves the file-static str_byte / str_len C function (via
+// lstrlib's spt_jit_str_op accessor, mirroring math.* / spt_jit_unary_math) and
+// the CALL lowers to SBYTE / SLEN -- str_byte reads arg2 = s, arg3 = i (0-based).
+// SBYTE reads the inline content byte of a short string (content lives at
+// &ts->contents), guarding short (long strings side-exit) and the index in
+// [0, len) (unsigned compare catches <0 and >=len). As with '#s', a long string
+// would fail the short guard every iteration and thrash, so recording aborts when
+// the live string is observably long (blacklist -> interpreter, bit-exact). An
+// out-of-range string.byte returns no value -> the interpreter errors the same way
+// the side-exit does, so indices are kept in range here. This exercises character
+// hashing, byte summation, guarded scanning, string.len, a LONG-string fall-back,
+// and a fixed index. The accumulated value is the wrong-byte / divergence detector.
+
+str s   = "Hello, Spt!";       // 11 chars, short
+str dig = "0123456789";        // 10 chars, short
+str lng = "this is a deliberately long string of more than forty characters ok";  // >40, long
+
+int h = 0;
+for (int r = 0, 200000) { h = 0; for (int j = 0, 10) { h = h * 31 + string.byte(s, j); } }   // rolling hash
+print(h);
+
+int sum = 0;
+for (int r = 0, 200000) { for (int j = 0, 9) { sum = sum + string.byte(dig, j); } }           // byte sum
+print(sum);
+
+int sc = 0;
+for (int r = 0, 200000) { for (int j = 0, 14) { if (j < #s) { sc = sc + string.byte(s, j) * (j + 1); } } }  // guarded scan with #s
+print(sc);
+
+int ln = 0;
+for (int r = 0, 200000) { for (int j = 0, 12) { ln = ln + string.len(s) + j; } }              // string.len -> SLEN
+print(ln);
+
+int lb = 0;
+for (int r = 0, 200000) { for (int j = 0, 9) { lb = lb + string.byte(lng, j); } }             // LONG string -> blacklist fall-back, exact
+print(lb);
+
+int fx = 0;
+for (int r = 0, 200000) { for (int j = 0, 9) { fx = fx + string.byte(dig, 3); } }             // fixed index
+print(fx);

@@ -16,9 +16,10 @@
 // NaN-as-false) fields, register and constant written values, conditional
 // accumulation (old from then-arm), if-ELSE conditional writes
 // `if(c) this.f=A; else this.f=B` (both arms same field -> select(c,A,B); §10.54),
-// and the safety boundary (multi-write / read-after-write / compare-other-field
-// with no then-arm read / if-else writing DIFFERENT fields all abort cleanly and
-// stay correct -- exercised in the fuzzer).
+// conditional writes where `old` is read nowhere -- cross-field `this.a=this.b+x`,
+// conditional constant, field copy -- via a fresh guarded read of the field for
+// old (§10.55), and the safety boundary (multi-write / read-after-write / if-else
+// writing DIFFERENT fields all abort cleanly and stay correct -- in the fuzzer).
 class IMax { int peak; void __init(){ this.peak = -1000000; }
              void track(int x){ if(x > this.peak) this.peak = x; }       // running max (x > field)
              int get(){ return this.peak; } }
@@ -50,6 +51,12 @@ class Pick { int v; void __init(){ this.v = 0; }
 class FAbs { float v; void __init(){ this.v = 0.0; }
              void f(float x){ if(x > 0.0) this.v = x; else this.v = 0.0 - x; } // §10.54 if-else: float (abs, FSELECT)
              float get(){ return this.v; } }
+class XF   { int a; int b; void __init(){ this.a = 0; this.b = 4; }
+             void f(int x){ if(x > 0) this.a = this.b + x; }                 // §10.55: cross-field RMW (old from fresh read)
+             int get(){ return this.a; } }
+class Cpy  { int a; int b; void __init(){ this.a = 0; this.b = 9; }
+             void f(int x){ if(x > 0) this.a = this.b; }                     // §10.55: conditional field copy
+             void rst(){ this.a = 0; } int get(){ return this.a; } }
 
 float big = 1.0e308 * 10.0; float nan = big - big; float ninf = 0.0 - big;
 
@@ -68,6 +75,10 @@ Sign sg = Sign();
 for (int r = 0, 200000) { for (int j = 0, 15) { sg.cls((j + r) % 21 - 10); iacc = iacc + sg.get(); } }         // §10.54 if-else sign
 Pick pk = Pick();
 for (int r = 0, 200000) { for (int j = 0, 15) { pk.pick((j * 3 + r) % 20); iacc = iacc + pk.get(); } }         // §10.54 if-else max-like
+XF xf = XF();
+for (int r = 0, 200000) { for (int j = 0, 15) { xf.f((j * 3 + r) % 30 - 15); } iacc = iacc + xf.get(); }       // §10.55 cross-field RMW
+Cpy cp = Cpy();
+for (int r = 0, 200000) { cp.rst(); for (int j = 0, 15) { cp.f((j + r) % 10 - 5); } iacc = iacc + cp.get(); }  // §10.55 conditional field copy
 print(iacc);
 
 float facc = 0.0;
