@@ -7,11 +7,13 @@
 // in-body guard precedes it; a guard failure side-exits before the write commits
 // and the interpreter re-runs the call exactly once (no double write). The exact
 // accumulator sums below are the real test -- any double write would inflate
-// them. Written values are int/float (no GC barrier). Methods with a guard AFTER
-// a write (multi-write `this.a=..;this.b=..`, or read-after-write
-// `this.v=..; return this.v`) deliberately fall back to the interpreter, not
-// diverge. Reuses the §10.47 multiple-methods-per-trace machinery (two
-// accumulators inline into one trace).
+// them. Written values are int/float (no GC barrier). A method with a guard
+// AFTER a write that is NOT a forwardable re-read (multi-write
+// `this.a=..;this.b=..`) deliberately falls back to the interpreter, not
+// diverge. (Read-after-write that returns the WRITTEN field --
+// `this.v=..; return this.v` -- is now inlined via store-to-load forwarding,
+// §10.52; the RW case below stays correct either way.) Reuses the §10.47
+// multiple-methods-per-trace machinery (two accumulators inline into one trace).
 class Acc { int total; void __init(){ this.total = 0; } void add(int x){ this.total = this.total + x; } int get(){ return this.total; } }
 class Box { int v; void __init(int x){ this.v = x; } void set(int x){ this.v = x; } void scale(int k){ this.v = this.v * k; } int get(){ return this.v; } }
 class FB  { float f; void __init(){ this.f = 0.0; } void addf(float x){ this.f = this.f + x; } float get(){ return this.f; } }

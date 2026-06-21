@@ -1234,13 +1234,21 @@ def gen_condreturn_float(r):
 def gen_condwrite_method(r):
     """An if-only conditional field write `if(c) this.f = A;` inlined and if-
     converted to one unconditional trailing write of a branchless select
-    this.f = select(c, A, old). Covers running max/min trackers, in-place clamp
-    (constant write), value cap (param), and float fields (FSELECT, NaN-as-false).
-    Also emits the safety boundary -- multi-write, value-returning (read-after-
-    write), compare-other-field, if-else -- which must abort cleanly yet stay
-    bit-exact. The summed field value is the double-write / wrong-select detector."""
+    this.f = select(c, A, old). The unchanged value `old` is sourced either from a
+    COMPARE operand (`if(x>this.peak) this.peak=x` -- running max/min, in-place
+    clamp, cap) or, for conditional accumulation where the condition is on a
+    different value, from the THEN-ARM's own read of the field
+    (`if(x>0) this.sum=this.sum+x` -- sum-positives, conditional counters; §10.53).
+    Covers int + float (FSELECT, NaN-as-false). Also handles if-ELSE conditional
+    writes `if(c) this.f=A; else this.f=B` (both arms write the same field -> one
+    select(c,A,B); §10.54). Also emits the safety boundary -- multi-write,
+    value-returning (read-after-write), compare-other-field with no then-arm read,
+    if-else writing DIFFERENT fields -- which must abort cleanly yet stay bit-exact.
+    The summed field value is the double-write / wrong-select detector."""
     shape = r.choice(["max", "min", "clamp_low", "cap", "float_max", "float_min",
-                      "two_writes", "read_after_write", "cmp_other", "if_else"])
+                      "rmw_sum", "rmw_count", "rmw_scale", "float_rmw_sum",
+                      "ifelse_sign", "ifelse_pick", "ifelse_compute", "ifelse_float", "ifelse_cmpfld",
+                      "two_writes", "read_after_write", "cmp_other", "ifelse_difffield"])
     n = r.choice([60000, 120000])
     inner = r.randint(8, 22)
     seed0 = r.randint(-30, 30)
@@ -1271,7 +1279,46 @@ def gen_condwrite_method(r):
         return (f"class C {{ float low; void __init(float v){{ this.low = v; }} void track(float x){{ if(x < this.low) this.low = x; }} float get(){{ return this.low; }} }}\n"
                 f"C c = C({start}); float acc = 0.0;\n"
                 f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.track(3.0 - 0.25 * j); }} acc = acc + c.get(); }}\nprint(acc);\n")
-    if shape == "two_writes":   # MUST abort (two SETFIELDs) -> still correct
+    if shape == "rmw_sum":      # §10.53: conditional accumulation, old from then-arm read
+        thr = r.randint(-5, 5)
+        return (f"class S {{ int sum; void __init(){{ this.sum = 0; }} void add(int x){{ if(x > {thr}) this.sum = this.sum + x; }} int g(){{ return this.sum; }} }}\n"
+                f"S s = S(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ s.add((j * 3 + r) % 40 - 20); }} acc = acc + s.g(); }}\nprint(acc);\n")
+    if shape == "rmw_count":    # §10.53: conditional counter (this.n += 1 under a condition)
+        k = r.randint(2, 12)
+        return (f"class C {{ int n; void __init(){{ this.n = 0; }} void see(int x){{ if(x >= {k}) this.n = this.n + 1; }} int g(){{ return this.n; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.see((j + r) % 20); }} acc = acc + c.g(); }}\nprint(acc);\n")
+    if shape == "rmw_scale":    # §10.53: conditional multiply (old from then-arm read), reset to bound growth
+        return (f"class V {{ int v; void __init(){{ this.v = 1; }} void grow(int x){{ if(x > 0) this.v = this.v + x; }} void rst(int a){{ this.v = a; }} int g(){{ return this.v; }} }}\n"
+                f"V v = V(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ v.rst(1); for (int j = 0, {inner}) {{ v.grow(j % 3 - 1); }} acc = acc + v.g(); }}\nprint(acc);\n")
+    if shape == "float_rmw_sum":  # §10.53: float conditional accumulation (FSELECT, old from then-arm)
+        return (f"class S {{ float sum; void __init(){{ this.sum = 0.0; }} void add(float x){{ if(x > 0.0) this.sum = this.sum + x; }} float g(){{ return this.sum; }} }}\n"
+                f"S s = S(); float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ s.add(0.5 * j - 3.0); }} acc = acc + s.g(); }}\nprint(acc);\n")
+    if shape == "ifelse_sign":   # §10.54 if-else: constant/constant (sign)
+        return (f"class C {{ int sign; void __init(){{ this.sign = 0; }} void cls(int x){{ if(x > 0) this.sign = 1; else this.sign = 0 - 1; }} int g(){{ return this.sign; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.cls((j + r) % 21 - 10); acc = acc + c.g(); }} }}\nprint(acc);\n")
+    if shape == "ifelse_pick":   # §10.54 if-else: register/constant (max-like)
+        k = r.randint(2, 9)
+        return (f"class D {{ int v; void __init(){{ this.v = 0; }} void pick(int x){{ if(x > {k}) this.v = x; else this.v = {k}; }} int g(){{ return this.v; }} }}\n"
+                f"D d = D(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ d.pick((j * 3 + r) % 20); acc = acc + d.g(); }} }}\nprint(acc);\n")
+    if shape == "ifelse_compute":  # §10.54 if-else: both arms compute
+        return (f"class E {{ int v; void __init(){{ this.v = 0; }} void f(int x){{ if(x > 3) this.v = x + 1; else this.v = x - 1; }} int g(){{ return this.v; }} }}\n"
+                f"E e = E(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ e.f((j + r) % 12); acc = acc + e.g(); }} }}\nprint(acc);\n")
+    if shape == "ifelse_float":  # §10.54 if-else: float (abs-like, FSELECT)
+        return (f"class F {{ float v; void __init(){{ this.v = 0.0; }} void f(float x){{ if(x > 0.0) this.v = x; else this.v = 0.0 - x; }} float g(){{ return this.v; }} }}\n"
+                f"F f = F(); float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ f.f(0.5 * j - 4.0); acc = acc + f.g(); }} }}\nprint(acc);\n")
+    if shape == "ifelse_cmpfld":  # §10.54 if-else: condition reads the written field
+        return (f"class G {{ int v; void __init(){{ this.v = 50; }} void f(int x){{ if(this.v > x) this.v = x; else this.v = 0; }} int g(){{ return this.v; }} }}\n"
+                f"G gg = G(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ gg.f((j + r) % 60); }} acc = acc + gg.g(); gg.f(999); }}\nprint(acc);\n")
+    if shape == "two_writes":   # MUST abort (two SETFIELDs, if-only) -> still correct
         return (f"class C {{ int a; int b; void __init(){{ this.a=0; this.b=0; }} void f(int x){{ if(x > this.a) {{ this.a = x; this.b = x; }} }} int g(){{ return this.a + this.b; }} }}\n"
                 f"C c = C(); int acc = 0;\n"
                 f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f((j + r) % 40); }} acc = acc + c.g(); }}\nprint(acc);\n")
@@ -1283,10 +1330,71 @@ def gen_condwrite_method(r):
         return (f"class C {{ int v; int g; void __init(){{ this.v=0; this.g={r.randint(3,20)}; }} void f(int x){{ if(x > this.g) this.v = x; }} int get(){{ return this.v; }} }}\n"
                 f"C c = C(); int acc = 0;\n"
                 f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(j); }} acc = acc + c.get(); }}\nprint(acc);\n")
-    # if_else: MUST abort (not if-only) -> still correct
-    return (f"class C {{ int v; void __init(){{ this.v=0; }} void f(int x){{ if(x > this.v) this.v = x; else this.v = 0; }} int get(){{ return this.v; }} }}\n"
+    # ifelse_difffield: MUST abort (if-else writing DIFFERENT fields) -> still correct
+    return (f"class C {{ int a; int b; void __init(){{ this.a=0; this.b=0; }} void f(int x){{ if(x > 0) this.a = 1; else this.b = 2; }} int get(){{ return this.a + this.b; }} }}\n"
             f"C c = C(); int acc = 0;\n"
             f"for (int r = 0, {n}) {{ for (int j = 0, {inner}) {{ c.f(j - {r.randint(1,8)}); }} acc = acc + c.get(); }}\nprint(acc);\n")
+
+
+def gen_writeret_method(r):
+    """A method that writes ONE field then returns that SAME field
+    (`int inc(){ this.v = this.v + 1; return this.v; }`) -- the increment/
+    accumulate/set-and-return-new-value pattern (counters, ID generators, running
+    totals). The post-write re-read of the written field is store-to-load
+    forwarded to the written value (guard-free), so the SETFIELD stays the last
+    guard-emitting op and resume-at-SELF never double-writes. The accumulated sum
+    of the RETURNED values is exact iff forwarding returns the right value AND
+    there is no double write -- both are what we check. Safety boundaries that
+    MUST fall back (a guard would follow the write): writing one field then
+    returning a DIFFERENT field, and multi-write. All stay bit-exact."""
+    shape = r.choice(["inc", "addret", "nextid", "setret", "compute_ret",
+                      "cross_field", "float_addret",
+                      "readother_fallback", "multiwrite_fallback"])
+    n = r.choice([50000, 100000])
+    inner = r.randint(6, 14)
+    o1 = r.choice(AOPS)
+    if shape == "inc":          # counter: return ++this.v
+        init = r.randint(-5, 5)
+        return (f"class A {{ int v; void __init(int x){{ this.v = x; }} int inc(){{ this.v = this.v + 1; return this.v; }} }}\n"
+                f"A a = A({init}); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + a.inc(); }} }}\nprint(acc);\nprint(a.inc());\n")
+    if shape == "addret":       # running total: this.v += x; return this.v
+        d = r.randint(1, 4)
+        return (f"class A {{ int v; void __init(){{ this.v = 0; }} int add(int x){{ this.v = this.v + x; return this.v; }} }}\n"
+                f"A a = A(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + a.add({d}); }} }}\nprint(acc);\n")
+    if shape == "nextid":       # ID generator: this.id += 1; return this.id
+        return (f"class G {{ int id; void __init(){{ this.id = 0; }} int next(){{ this.id = this.id + 1; return this.id; }} }}\n"
+                f"G g = G(); int last = 0; int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ last = g.next(); acc = acc {o1} last; }} }}\nprint(last);\nprint(acc);\n")
+    if shape == "setret":       # set a param, return it: this.v = x; return this.v
+        return (f"class A {{ int v; void __init(){{ this.v = 0; }} int set(int x){{ this.v = x; return this.v; }} }}\n"
+                f"A a = A(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + a.set(i {o1} 1); }} }}\nprint(acc);\nprint(a.set(7));\n")
+    if shape == "compute_ret":  # this.v = this.v OP (x OP c); return this.v
+        c = r.randint(1, 5)
+        return (f"class A {{ int v; void __init(){{ this.v = 0; }} int step(int x){{ this.v = this.v {o1} (x {AOPS[r.randint(0,2)]} {c}); return this.v; }} }}\n"
+                f"A a = A(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + a.step(i); }} }}\nprint(acc);\n")
+    if shape == "cross_field":  # write a from b, return a (forward across fields)
+        b0 = r.randint(1, 6)
+        return (f"class C {{ int a; int b; void __init(){{ this.a = 0; this.b = {b0}; }} int f(){{ this.a = this.b + 1; return this.a; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + c.f(); }} }}\nprint(acc);\n")
+    if shape == "float_addret": # float running total: this.f += x; return this.f
+        d = r.randint(1, 30) / 10.0
+        return (f"class F {{ float f; void __init(){{ this.f = 0.0; }} float add(float x){{ this.f = this.f + x; return this.f; }} }}\n"
+                f"F f = F(); float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + f.add({d}); }} }}\nprint(acc);\n")
+    if shape == "readother_fallback":  # write a, return DIFFERENT field b -> MUST abort, still correct
+        b0 = r.randint(2, 9)
+        return (f"class C {{ int a; int b; void __init(){{ this.a = 0; this.b = {b0}; }} int f(int x){{ this.a = x; return this.b; }} }}\n"
+                f"C c = C(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + c.f(i); }} }}\nprint(acc);\nprint(c.a);\n")
+    # multiwrite_fallback: two writes then return -> MUST abort, still correct
+    return (f"class T {{ int a; int b; void __init(){{ this.a = 0; this.b = 0; }} int bump(){{ this.a = this.a + 1; this.b = this.b + 2; return this.a; }} }}\n"
+            f"T t = T(); int acc = 0;\n"
+            f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + t.bump(); }} }}\nprint(acc);\nprint(t.b);\n")
 
 
 GENS = [gen_scalar,
@@ -1296,7 +1404,7 @@ GENS = [gen_scalar,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
         gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix,
-        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container, gen_method_call, gen_multi_method, gen_condreturn_method, gen_write_method, gen_condreturn_float, gen_condwrite_method]
+        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container, gen_method_call, gen_multi_method, gen_condreturn_method, gen_write_method, gen_condreturn_float, gen_condwrite_method, gen_writeret_method]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:

@@ -1,17 +1,24 @@
 // CONDITIONAL-WRITE methods: an if-only conditional field write `if(c) this.f=A;`
 // (the ubiquitous running-max/min tracker, in-place clamp, value cap) is inlined
 // and if-converted to ONE unconditional trailing write of a branchless select,
-// this.f = select(c, A, old), where old is this.f's current value (a compare
-// operand). Composes the §10.30/§10.48 select with §10.49's single-trailing-write
-// safety: the SETFIELD is the last guard-emitting op, so resume-at-SELF never
-// fires after the write commits -- no double write, no new codegen.
+// this.f = select(c, A, old), where old is this.f's current value. `old` comes
+// either from a COMPARE operand (`if(x>this.peak)...` -- the compare reads the
+// field it updates) or, when the condition is on a DIFFERENT value, from the
+// THEN-ARM's own read of the field: conditional accumulation
+// `if(x>0) this.sum=this.sum+x` (sum-positives, conditional counters; §10.53).
+// Composes the §10.30/§10.48 select with §10.49's single-trailing-write safety:
+// the SETFIELD is the last guard-emitting op, so resume-at-SELF never fires after
+// the write commits -- no double write, no new codegen.
 //
 // The summed field values below are the correctness AND double-write detector: a
-// double write or a wrong select would change the running max/min and diverge the
-// sum from the interpreter. Covers int (CMPSET select) and float (FSELECT,
-// NaN-as-false) fields, register and constant written values, and the safety
-// boundary (multi-write / read-after-write / compare-other-field / if-else all
-// abort cleanly and stay correct -- exercised in the fuzzer).
+// double write or a wrong select would change the running max/min/sum and diverge
+// the sum from the interpreter. Covers int (CMPSET select) and float (FSELECT,
+// NaN-as-false) fields, register and constant written values, conditional
+// accumulation (old from then-arm), if-ELSE conditional writes
+// `if(c) this.f=A; else this.f=B` (both arms same field -> select(c,A,B); §10.54),
+// and the safety boundary (multi-write / read-after-write / compare-other-field
+// with no then-arm read / if-else writing DIFFERENT fields all abort cleanly and
+// stay correct -- exercised in the fuzzer).
 class IMax { int peak; void __init(){ this.peak = -1000000; }
              void track(int x){ if(x > this.peak) this.peak = x; }       // running max (x > field)
              int get(){ return this.peak; } }
@@ -25,6 +32,24 @@ class Clamp { int v; void __init(int a){ this.v = a; }
 class FMax { float peak; void __init(float v){ this.peak = v; }
              void track(float x){ if(x > this.peak) this.peak = x; }     // float running max (FSELECT)
              float get(){ return this.peak; } }
+class Sum  { int sum; void __init(){ this.sum = 0; }
+             void add(int x){ if(x > 0) this.sum = this.sum + x; }        // §10.53: sum positives (old from then-arm read)
+             int get(){ return this.sum; } }
+class Cnt  { int n; void __init(){ this.n = 0; }
+             void see(int x){ if(x >= 5) this.n = this.n + 1; }           // §10.53: conditional counter
+             int get(){ return this.n; } }
+class FSum { float sum; void __init(){ this.sum = 0.0; }
+             void add(float x){ if(x > 0.0) this.sum = this.sum + x; }    // §10.53: float conditional accumulation
+             float get(){ return this.sum; } }
+class Sign { int s; void __init(){ this.s = 0; }
+             void cls(int x){ if(x > 0) this.s = 1; else this.s = 0 - 1; }  // §10.54 if-else: const/const
+             int get(){ return this.s; } }
+class Pick { int v; void __init(){ this.v = 0; }
+             void pick(int x){ if(x > 5) this.v = x; else this.v = 5; }     // §10.54 if-else: reg/const (max-like)
+             int get(){ return this.v; } }
+class FAbs { float v; void __init(){ this.v = 0.0; }
+             void f(float x){ if(x > 0.0) this.v = x; else this.v = 0.0 - x; } // §10.54 if-else: float (abs, FSELECT)
+             float get(){ return this.v; } }
 
 float big = 1.0e308 * 10.0; float nan = big - big; float ninf = 0.0 - big;
 
@@ -35,6 +60,14 @@ IMin mn = IMin();
 for (int r = 0, 200000) { for (int j = 0, 25) { mn.track((j * 5 + r) % 40 - 20); } iacc = iacc + mn.get(); }   // running min
 for (int r = 0, 200000) { Clamp c = Clamp(8 - (r % 17)); for (int j = 0, 10) { c.low(); } iacc = iacc + c.get(); }   // clamp low
 for (int r = 0, 200000) { Clamp c = Clamp(100 - (r % 30)); for (int j = 0, 10) { c.cap(60); } iacc = iacc + c.get(); } // cap high
+Sum sm = Sum();
+for (int r = 0, 200000) { for (int j = 0, 15) { sm.add((j * 3 + r) % 40 - 20); } iacc = iacc + sm.get(); }     // §10.53 sum positives
+Cnt cn = Cnt();
+for (int r = 0, 200000) { for (int j = 0, 15) { cn.see((j + r) % 20); } iacc = iacc + cn.get(); }              // §10.53 conditional counter
+Sign sg = Sign();
+for (int r = 0, 200000) { for (int j = 0, 15) { sg.cls((j + r) % 21 - 10); iacc = iacc + sg.get(); } }         // §10.54 if-else sign
+Pick pk = Pick();
+for (int r = 0, 200000) { for (int j = 0, 15) { pk.pick((j * 3 + r) % 20); iacc = iacc + pk.get(); } }         // §10.54 if-else max-like
 print(iacc);
 
 float facc = 0.0;
@@ -44,4 +77,8 @@ FMax fn = FMax(nan);
 for (int r = 0, 150000) { for (int j = 0, 12) { fn.track(0.5 * j); } facc = facc + fn.get(); }                 // NaN start: NaN-as-false
 FMax fi = FMax(ninf);
 for (int r = 0, 150000) { for (int j = 0, 12) { fi.track(0.5 * j - 4.0); } facc = facc + fi.get(); }           // -inf start
+FSum fs = FSum();
+for (int r = 0, 200000) { for (int j = 0, 15) { fs.add(0.5 * j - 3.0); } facc = facc + fs.get(); }             // §10.53 float conditional accumulation
+FAbs fa = FAbs();
+for (int r = 0, 200000) { for (int j = 0, 15) { fa.f(0.5 * j - 4.0); facc = facc + fa.get(); } }               // §10.54 if-else float abs
 print(facc);

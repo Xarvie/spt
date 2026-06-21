@@ -381,6 +381,19 @@ typedef struct {
      guards point at (-1 outside a method body). */
   const Instruction *method_self_pc;
   int method_resume_snap;
+  /* Targeted store-to-load forwarding, active ONLY inside an inlined method body
+     (frame_base != 0). After a SETFIELD to (base_ref, key), a GETFIELD of the
+     SAME base ref + key forwards to the written value with NO emit and NO guard --
+     this makes `int inc(){ this.v = this.v + 1; return this.v; }` (write then
+     return the written field) a guard-free single-trailing-write (§10.49 safety:
+     the SETFIELD stays the last guard-emitting op, so resume-at-SELF never fires
+     after the write commits). Reset to -1 at trace start and at each method-inline
+     entry; invalidated by any call / array-or-generic write that could alias.
+     A non-forwardable GETFIELD after a write in a method body aborts (it would be
+     a guard after the write -> double-write risk). */
+  int fwd_base;             /* IR ref of the last SETFIELD's base table; -1 = none */
+  void *fwd_key;            /* TString* key of the last SETFIELD */
+  int fwd_val;              /* IR ref of the last SETFIELD's written value */
 } SPTRecCtx;
 
 /* Get current type of a register from the actual stack value. */
@@ -1132,18 +1145,27 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
   /* old = this.f's current value: one of the compare operands must be a GETFIELD
      of exactly this key (the compare reads the field it conditionally updates).
      Otherwise abort cleanly -- we have no other source for the unchanged value. */
-  int old_ref;
+  /* old = this.f's current value. No write has committed yet (the conditional
+     write is the only SETFIELD and is emitted last), so any read of this.f in the
+     method yields the unchanged value. Two sources:
+       (§10.51) a COMPARE operand is a GETFIELD of this exact key -- the compare
+                reads the field it conditionally updates (`if(x>this.peak)...`); OR
+       (§10.53) the THEN-ARM itself reads this.f, as in conditional accumulation
+                `if(cond) this.sum = this.sum + x` (the compare is on x, but the
+                compute `this.sum + x` loads this.sum). We pick that GETFIELD up
+                after recording the then-arm, scoped to the ops it emitted and
+                matched by key. */
+  int old_ref = -1;
   if (aref >= 0 && ir->insts[aref].op == SPTIR_GETFIELD &&
       (TString *)(intptr_t)ir->insts[aref].aux == key)      old_ref = aref;
   else if (bref >= 0 && ir->insts[bref].op == SPTIR_GETFIELD &&
       (TString *)(intptr_t)ir->insts[bref].aux == key)      old_ref = bref;
-  else return 0;
-  SPTType old_t = sptir_type(ir, old_ref);
 
   /* record the then-arm's compute of A (ops before the SETFIELD; usually none for
-     `this.f = x`, or a single constant load for `this.f = 0`). These run
-     unconditionally after if-conversion, but the static gate restricted them to
-     non-trapping ops (condreturn_method_op_ok). */
+     `this.f = x`, a constant load for `this.f = 0`, or a field read + arithmetic
+     for `this.f = this.f + x`). These run unconditionally after if-conversion, but
+     the static gate restricted them to non-trapping ops (condreturn_method_op_ok). */
+  int thenarm_ir0 = rc->ir->ninst;                /* watermark: ops the then-arm emits */
   rc->pc = cmp_pc + 2;
   while (rc->pc < sf_pc) { if (!rec_inst(rc)) return 1; }
   if (rc->pc != sf_pc) { rc->aborted = 1; return 1; }
@@ -1151,6 +1173,14 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
   int a_ref = rec_load_rkc(rc, *sf_pc);           /* A = the written value RK(C) */
   if (rc->aborted) return 1;
   SPTType a_t = sptir_type(ir, a_ref);
+
+  if (old_ref < 0) {                              /* conditional RMW: old from then-arm read */
+    for (int k = thenarm_ir0; k < rc->ir->ninst; k++)
+      if (ir->insts[k].op == SPTIR_GETFIELD &&
+          (TString *)(intptr_t)ir->insts[k].aux == key) { old_ref = k; break; }
+    if (old_ref < 0) { rc->aborted = 1; return 1; }  /* no source for old -> fall back */
+  }
+  SPTType old_t = sptir_type(ir, old_ref);
 
   /* newval = select(fop, A, old): take A when the then-condition holds, else keep
      old (the unchanged field). Identical bit-exact select to the cond-return path. */
@@ -1207,6 +1237,117 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
   return 1;
 }
 
+/* If-ELSE conditional field write: `if(c) this.g = A; else this.g = B;` (both arms
+   write the SAME field) -> one unconditional trailing write this.g = select(c,A,B).
+   Distinguished from the if-only path by T1-1 being the skip-else JMP. No `old` is
+   needed -- A and B are explicit. Records each arm's compute against a forked frame
+   (so the arms' temporaries don't interfere), then the identical bit-exact select +
+   single guarded SETFIELD as the if-only path. Same single-trailing-write safety:
+   the SETFIELD is the only write and is emitted last. */
+static int rec_try_condwrite_ifelse_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
+                                           SPTType at, SPTType bt) {
+  if (rc->frame_base == 0) return 0;              /* only inside an inlined method */
+  if (!sptt_isnum(at) || !sptt_isnum(bt)) return 0;
+  SPTIRBuilder *ir = rc->ir;
+  int fb = rc->frame_base;
+  const Instruction *cmp_pc = rc->pc;
+  const Instruction *jmp = cmp_pc + 1;
+  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
+  const Instruction *else_start = jmp + 1 + GETARG_sJ(*jmp);    /* else-arm start */
+  const Instruction *cend = rc->p->code + rc->p->sizecode;
+  if (else_start <= cmp_pc + 2 || else_start >= cend) return 0;
+  const Instruction *then_jmp = else_start - 1;                 /* then-arm skip-else JMP */
+  if (GET_OPCODE(*then_jmp) != OP_JMP) return 0;
+  const Instruction *then_sf = then_jmp - 1;                    /* then-arm SETFIELD */
+  if (then_sf < cmp_pc + 2 || GET_OPCODE(*then_sf) != OP_SETFIELD) return 0;
+  const Instruction *merge = then_jmp + 1 + GETARG_sJ(*then_jmp);  /* skip-else target = merge */
+  if (merge <= else_start || merge > cend) return 0;
+  const Instruction *else_sf = merge - 1;                      /* else-arm SETFIELD */
+  if (else_sf < else_start || GET_OPCODE(*else_sf) != OP_SETFIELD) return 0;
+
+  int sf_a = GETARG_A(*then_sf);
+  const TValue *kc = &rc->k[GETARG_B(*then_sf)];
+  if (ttypetag(kc) != LUA_VSHRSTR) return 0;
+  TString *key = tsvalue(kc);
+  const TValue *kc2 = &rc->k[GETARG_B(*else_sf)];               /* both write the same field */
+  if (ttypetag(kc2) != LUA_VSHRSTR || tsvalue(kc2) != key) return 0;
+  if (GETARG_A(*else_sf) != sf_a) return 0;                    /* ... on the same receiver */
+
+  int cmax = rc->p->maxstacksize;
+  if (cmax > 64) return 0;
+  int save_map[64]; SPTType save_type[64];
+  for (int k = 0; k < cmax; k++) { save_map[k] = ir->reg_map[fb+k]; save_type[k] = ir->reg_type[fb+k]; }
+
+  /* ---- record then-arm's compute of A (forked frame), A = the written value RK(C) */
+  rc->pc = cmp_pc + 2;
+  while (rc->pc < then_sf) { if (!rec_inst(rc)) return 1; }
+  if (rc->pc != then_sf) { rc->aborted = 1; return 1; }
+  int a_ref = rec_load_rkc(rc, *then_sf);
+  if (rc->aborted) return 1;
+  SPTType a_t = sptir_type(ir, a_ref);
+  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+
+  /* ---- record else-arm's compute of B (forked frame), B = the written value RK(C) */
+  rc->pc = else_start;
+  while (rc->pc < else_sf) { if (!rec_inst(rc)) return 1; }
+  if (rc->pc != else_sf) { rc->aborted = 1; return 1; }
+  int b_ref = rec_load_rkc(rc, *else_sf);
+  if (rc->aborted) return 1;
+  SPTType b_t = sptir_type(ir, b_ref);
+  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+
+  /* newval = select(fop, A, B): A when the then-condition holds, else B. */
+  int res; SPTType res_t;
+  if (a_t == SPTT_INT && b_t == SPTT_INT && at == SPTT_INT && bt == SPTT_INT) {
+    int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
+    int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, a_ref, b_ref, 0);
+    int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
+    res = sptir_emit(ir, SPTIR_ADD, SPTT_INT, b_ref, prod, 0);
+    res_t = SPTT_INT;
+  } else if (a_t == SPTT_FLT && b_t == SPTT_FLT) {
+    int is_flt_cmp = (at == SPTT_FLT || bt == SPTT_FLT);
+    int mask;
+    if (is_flt_cmp) {
+      int ca = aref, cb = bref;
+      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb; SPTIROp mop = fop;
+      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
+      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
+    } else {
+      mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
+    }
+    res = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT, a_ref, b_ref, (int64_t)mask);
+    res_t = SPTT_FLT;
+  } else {
+    rc->aborted = 1; return 1;                    /* mixed types: fall back */
+  }
+
+  /* emit ONE unconditional `this.f = newval` (replicates the OP_SETFIELD core) */
+  int base_ref = rec_load_reg(rc, sf_a);
+  if (rc->aborted) return 1;
+  if (ir->reg_type[fb + sf_a] != SPTT_TAB) { rc->aborted = 1; return 1; }
+  if (res_t != SPTT_INT && res_t != SPTT_FLT) { rc->aborted = 1; return 1; }
+  TValue mapval;
+  if (!rec_eval_container(rc, base_ref, &mapval) || !ttistable(&mapval)) { rc->aborted = 1; return 1; }
+  Table *t = hvalue(&mapval);
+  Node *nd = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+  for (;;) {
+    if (keytt(nd) == ctb(LUA_VSHRSTR) && (void *)keyval(nd).gc == (void *)key) break;
+    int nx = (int)nd->u.next;
+    if (nx == 0) { rc->aborted = 1; return 1; }
+    nd += nx;
+  }
+  int snap = rec_snap(rc);
+  int sref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, base_ref, res, (int64_t)(intptr_t)key);
+  ir->insts[sref].snap_idx = snap;
+  ir->insts[sref].flags |= SPTIRF_GUARD;
+
+  rc->pc = merge;                                 /* continue at merge (RETURN0 -> void return) */
+  return 1;
+}
+
 /* Record a comparison + its trailing conditional JMP, following the branch the
    program actually takes at record time. 'fop' is the condition under which the
    bytecode falls through to the next instruction (the THEN block). We evaluate
@@ -1225,6 +1366,7 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   if (rec_try_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   if (rec_try_condreturn_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   if (rec_try_condwrite_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
+  if (rec_try_condwrite_ifelse_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   /* A comparison inside an inlined callee that couldn't be if-converted would need
      a guarded branch, i.e. a mid-callee control-flow split with a snapshot that
      restores the synthetic callee frame -- which a single-entry trace cannot
@@ -1710,9 +1852,25 @@ static int proto_is_write_method_inlinable(Proto *p) {
   if (wi < 0) return 0;                 /* no write -> not a write method */
   for (int i = 0; i < wi; i++)          /* reads/compute before the write */
     if (!method_read_op_ok(GET_OPCODE(p->code[i]))) return 0;
-  for (int i = wi + 1; i < n; i++) {    /* after the write: void-return only */
+  /* After the write, two safe tails are allowed:
+       (a) void return: only RETURN0/RETURN/EXTRAARG; OR
+       (b) return the JUST-WRITTEN field: GETFIELD of the SAME key (store-to-load
+           forwarded => guard-free) + MOVE + RETURN1. e.g. the increment/accumulate
+           -and-return-new-value pattern `int inc(){ this.v=this.v+1; return this.v; }`.
+     Any OTHER op after the write (a different-field read, an array index, more
+     arithmetic) would emit a guard after the write and is rejected. */
+  const TValue *wkc = &p->k[GETARG_B(p->code[wi])];          /* the written field's key */
+  TString *wkey = (ttypetag(wkc) == LUA_VSHRSTR) ? tsvalue(wkc) : NULL;
+  for (int i = wi + 1; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG) return 0;
+    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_EXTRAARG ||
+        o == OP_RETURN1 || o == OP_MOVE) continue;
+    if (o == OP_GETFIELD) {            /* must re-read the written field (forwardable) */
+      const TValue *gkc = &p->k[GETARG_C(p->code[i])];
+      if (!wkey || ttypetag(gkc) != LUA_VSHRSTR || tsvalue(gkc) != wkey) return 0;
+      continue;
+    }
+    return 0;
   }
   return 1;
 }
@@ -1766,6 +1924,57 @@ static int proto_is_condwrite_method_inlinable(Proto *p) {
   return 1;
 }
 
+/* If-ELSE conditional field write: `void f(...){ if(c) this.g = A; else this.g = B; }`
+   -- both arms write the SAME field, so it if-converts to one unconditional trailing
+   write this.g = select(c, A, B). Bytecode shape:
+       <prefix>; CMP; JMP->else; <thenA>; SETFIELD this.g=A; JMP->merge;
+       else: <elseB>; SETFIELD this.g=B; merge: RETURN0.
+   Distinguished from the if-only gate by T1-1 being the skip-else JMP (not the
+   SETFIELD). No `old` is needed (both A and B are explicit). Composes the §10.30
+   select with §10.49's single-trailing-write safety (one SETFIELD, emitted last). */
+static int proto_is_condwrite_ifelse_method_inlinable(Proto *p) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 5 || n > 48) return 0;
+  int sf1 = -1, sf2 = -1;               /* exactly two SETFIELDs, no value return */
+  for (int i = 0; i < n; i++) {
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_SETFIELD) { if (sf1 < 0) sf1 = i; else if (sf2 < 0) sf2 = i; else return 0; }
+    if (o == OP_RETURN1) return 0;
+  }
+  if (sf2 < 0) return 0;
+  int ci = -1;                          /* the comparison */
+  for (int i = 0; i < n; i++)
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
+  if (ci < 0) return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
+  int else_start = ci + 2 + GETARG_sJ(p->code[ci+1]);   /* JMP target = else-arm start */
+  if (else_start <= ci + 2 || else_start >= n) return 0;
+  int then_jmp = else_start - 1;                         /* then-arm's skip-else JMP */
+  if (then_jmp < ci + 2 || GET_OPCODE(p->code[then_jmp]) != OP_JMP) return 0;
+  int then_sf = then_jmp - 1;                            /* then-arm SETFIELD (= sf1) */
+  if (then_sf < ci + 2 || then_sf != sf1) return 0;
+  int merge = then_jmp + 1 + GETARG_sJ(p->code[then_jmp]);  /* skip-else target = merge */
+  if (merge <= else_start || merge > n) return 0;
+  int else_sf = merge - 1;                              /* else-arm SETFIELD (= sf2) */
+  if (else_sf < else_start || else_sf != sf2) return 0;
+  const TValue *k1 = &p->k[GETARG_B(p->code[then_sf])];  /* both write the SAME field */
+  const TValue *k2 = &p->k[GETARG_B(p->code[else_sf])];
+  if (ttypetag(k1) != LUA_VSHRSTR || ttypetag(k2) != LUA_VSHRSTR) return 0;
+  if (tsvalue(k1) != tsvalue(k2)) return 0;
+  for (int i = 0; i < ci; i++)          /* prefix: reads + compute compare operands */
+    if (!method_read_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  for (int i = ci + 2; i < then_sf; i++)  /* then-arm compute A: non-trapping */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  for (int i = else_start; i < else_sf; i++)  /* else-arm compute B: non-trapping */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  for (int i = merge; i < n; i++) {     /* after merge: void-return boilerplate only */
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG) return 0;
+  }
+  return 1;
+}
 
 /* Decide whether `p` is an inlinable conditional-assignment-then-return leaf of
    the shape `if (c) { <assigns> } <straight-line> return slot` (if-only): a
@@ -2277,6 +2486,25 @@ static int rec_inst(SPTRecCtx *rc) {
       const TValue *kc = &rc->k[c];
       if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
       TString *key = tsvalue(kc);
+      /* Store-to-load forwarding, inlined method bodies only (frame_base != 0):
+         a read of the field just written by the preceding SETFIELD (same base IR
+         ref + key) resolves to the written value with NO emit and NO guard. This
+         keeps `int inc(){ this.v = this.v + 1; return this.v; }` (write then
+         return the written field) a guard-free single-trailing-write -- the
+         SETFIELD stays the last guard-emitting op (§10.49 safety). A read after a
+         write that does NOT forward would emit a GETFIELD guard AFTER the write;
+         on failure resume-at-SELF re-runs the whole method, double-writing -- so
+         abort instead. (No existing inlinable shape reads a field after a write,
+         so this only ever fires for the write-and-return shape or aborts.) */
+      if (rc->frame_base != 0 && rc->fwd_base >= 0) {
+        if (bref == rc->fwd_base && rc->fwd_key == (void *)key) {
+          ir->reg_map[rc->frame_base + a] = rc->fwd_val;
+          ir->reg_type[rc->frame_base + a] = sptir_type(ir, rc->fwd_val);
+          if (a > ir->maxslot) ir->maxslot = a;
+          break;
+        }
+        rc->aborted = 1; return 0;
+      }
       /* Resolve the base Map through the IR when possible: for a chained
          m["k1"]["k2"] the intermediate map is produced earlier in THIS trace, so
          its live stack slot is stale (holds the previous iteration's value --
@@ -2347,6 +2575,7 @@ static int rec_inst(SPTRecCtx *rc) {
       break;
     }
     case OP_SETI: {
+      rc->fwd_base = -1;   /* array write may alias: drop store-to-load forwarding */
       /* R[A][B] = RK(C), B is a constant index. */
       int a = GETARG_A(i), b = GETARG_B(i);
       int aref = rec_load_reg(rc, a);
@@ -2361,6 +2590,7 @@ static int rec_inst(SPTRecCtx *rc) {
       break;
     }
     case OP_SETTABLE: {
+      rc->fwd_base = -1;   /* generic write may alias: drop store-to-load forwarding */
       /* R[A][R[B]] = RK(C), variable index. */
       int a = GETARG_A(i), b = GETARG_B(i);
       int aref = rec_load_reg(rc, a);
@@ -2419,6 +2649,9 @@ static int rec_inst(SPTRecCtx *rc) {
       int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
+      /* arm store-to-load forwarding: a later GETFIELD of this exact base+key in
+         the same inlined method body forwards to the written value, guard-free. */
+      rc->fwd_base = aref; rc->fwd_key = (void *)key; rc->fwd_val = cref;
       break;
     }
 
@@ -2947,6 +3180,7 @@ static int rec_inst(SPTRecCtx *rc) {
 
     /* ---- Call inlining (pure straight-line leaf functions) ---- */
     case OP_CALL: {
+      rc->fwd_base = -1;   /* a call may mutate: drop store-to-load forwarding (re-armed on method inline) */
       /* CALL A B C : R[A](R[A+1..A+B-1]) -> R[A..A+C-2].
          SPT uses a slot-0 receiver, so R[A+1] is the (nil) receiver and
          R[A+2..] are the actual arguments. */
@@ -2998,7 +3232,8 @@ static int rec_inst(SPTRecCtx *rc) {
         if (!proto_is_method_inlinable(callee_p, &ret_reg) &&
             !proto_is_condreturn_method_inlinable(callee_p) &&
             !proto_is_write_method_inlinable(callee_p) &&
-            !proto_is_condwrite_method_inlinable(callee_p)) { rc->aborted = 1; return 0; }
+            !proto_is_condwrite_method_inlinable(callee_p) &&
+            !proto_is_condwrite_ifelse_method_inlinable(callee_p)) { rc->aborted = 1; return 0; }
         int new_fb = rc->frame_base + a + 1;
         if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
         /* Arm the shared resume snapshot for guards inside the method body. Its
@@ -3018,6 +3253,7 @@ static int rec_inst(SPTRecCtx *rc) {
         rc->k = callee_p->k;
         rc->cl = callee_cl;
         rc->frame_base = new_fb;
+        rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
         rc->pc = callee_p->code;
         return 1;                                 /* keep recording in the method */
       }
@@ -3073,6 +3309,7 @@ static int rec_inst(SPTRecCtx *rc) {
       rc->k = callee_p->k;
       rc->cl = callee_cl;
       rc->frame_base = new_fb;
+      rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
       rc->pc = callee_p->code;
       return 1;                                  /* keep recording in the callee */
     }
@@ -3342,6 +3579,7 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.ir = &t->ir;
   rc.frame_base = 0;
   rc.is_side_trace = is_side;
+  rc.fwd_base = -1;            /* store-to-load forwarding: none pending */
   rc.inline_fn_slot = -1;
   rc.inline_fn_proto = NULL;
   rc.pending_cfn_libm = NULL;

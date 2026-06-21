@@ -1,0 +1,63 @@
+// Write-and-return-field method inlining (§10.52): a method that writes exactly
+// ONE field and then returns that SAME field is inlined into the hot loop --
+// e.g. the increment/accumulate/set-and-return-new-value pattern
+// `int inc(){ this.v = this.v + 1; return this.v; }` (counters, ID generators,
+// running totals that hand back the new value). In bytecode `return this.v`
+// after `this.v = ...` emits a SECOND, post-write GETFIELD re-reading the field;
+// that read is store-to-load forwarded to the just-written value, so it emits NO
+// guard. The SETFIELD therefore stays the LAST guard-emitting op, exactly the
+// §10.49 single-trailing-write safety: every in-body guard precedes the write, a
+// guard failure side-exits before the write commits, and the interpreter re-runs
+// the call exactly once -- no double write. The accumulated sum of the RETURNED
+// values below is the real test: it is exact iff forwarding returns the correct
+// value AND nothing double-writes. Forwarding is confined to inlined method
+// bodies and to an EXACT base-ref + key match, so no existing shape is affected.
+//
+// Safety boundaries that MUST fall back to the interpreter (a guard would follow
+// the committed write): writing one field then returning a DIFFERENT field
+// (`this.a = x; return this.b`), and multi-write (`this.a=..; this.b=..`). These
+// abort cleanly and stay bit-exact -- they are included below as live checks.
+class Ctr { int v; void __init(int x){ this.v = x; } int inc(){ this.v = this.v + 1; return this.v; } }
+class Tot { int v; void __init(){ this.v = 0; } int add(int x){ this.v = this.v + x; return this.v; } }
+class Gen { int id; void __init(){ this.id = 0; } int next(){ this.id = this.id + 1; return this.id; } }
+class Set { int v; void __init(){ this.v = 0; } int set(int x){ this.v = x; return this.v; } }
+class FT  { float f; void __init(){ this.f = 0.0; } float add(float x){ this.f = this.f + x; return this.f; } }
+class Cr  { int a; int b; void __init(){ this.a = 0; this.b = 5; } int f(){ this.a = this.b + 1; return this.a; } } // cross-field write+return: inlines
+class RO  { int a; int b; void __init(){ this.a = 0; this.b = 9; } int f(int x){ this.a = x; return this.b; } }      // write a, return DIFFERENT field b: MUST fall back
+class MW  { int a; int b; void __init(){ this.a = 0; this.b = 0; } int bump(){ this.a = this.a + 1; this.b = this.b + 2; return this.a; } } // multi-write: MUST fall back
+
+Ctr c  = Ctr(0);
+Tot t  = Tot();
+Gen g  = Gen();
+Set st = Set();
+FT  ft = FT();
+Cr  cr = Cr();
+RO  ro = RO();
+MW  mw = MW();
+
+int s_inc = 0; int s_add = 0; int s_next = 0; int last_id = 0; int s_set = 0;
+int s_cross = 0; int s_ro = 0; int s_mw = 0;
+float s_ft = 0.0;
+
+for (int r = 0, 100000) { for (int j = 0, 10) { s_inc  = s_inc  + c.inc(); } }                 // counter, returns the new value
+for (int r = 0, 100000) { for (int j = 0, 10) { s_add  = s_add  + t.add(2); } }                // running total, returns it
+for (int r = 0, 100000) { for (int j = 0, 10) { last_id = g.next(); s_next = s_next + last_id; } } // ID generator
+for (int r = 0, 100000) { for (int j = 0, 10) { s_set  = s_set  + st.set(j); } }               // set param + return it
+for (int r = 0, 100000) { for (int j = 0, 10) { s_ft   = s_ft   + ft.add(0.5); } }             // float running total
+for (int r = 0, 100000) { for (int j = 0, 10) { s_cross = s_cross + cr.f(); } }                // cross-field write+return (forward across fields)
+for (int r = 0, 100000) { for (int j = 0, 10) { s_ro   = s_ro   + ro.f(j); } }                 // write a, return b: falls back, stays correct
+for (int r = 0, 100000) { for (int j = 0, 10) { s_mw   = s_mw   + mw.bump(); } }               // multi-write: falls back, stays correct
+
+print(s_inc);
+print(c.inc());
+print(s_add);
+print(t.add(0));
+print(s_next);
+print(last_id);
+print(s_set);
+print(s_ft + ft.add(0.0));
+print(s_cross);
+print(s_ro);
+print(ro.a);
+print(s_mw);
+print(mw.b);
