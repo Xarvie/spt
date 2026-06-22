@@ -1,6 +1,6 @@
 // 验证 B3: dofile 返回值多 fname
 // b3_chunk.spt 内容为 "return 42;"，预创建
-vars a, b = dofile("test/vm_bug_verify/b3_chunk.spt");
+vars a, b = dofile("b3_chunk.spt");
 print("B3 first return = " .. tostring(a));
 print("B3 second return = " .. tostring(b));
 print("B3 expected: a=42, b=null");

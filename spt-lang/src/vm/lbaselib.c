@@ -435,7 +435,7 @@ static int dofilecont(lua_State *L, int d1, lua_KContext d2) {
 /* luaB_dofile - receiver is arg1, fname is arg2 */
 static int luaB_dofile(lua_State *L) {
   const char *fname = luaL_optstring(L, 2, NULL);
-  lua_settop(L, 2);
+  lua_settop(L, 1);  /* keep only receiver; fname already captured as C string */
   if (l_unlikely(luaL_loadfile(L, fname) != LUA_OK))
     return lua_error(L);
   lua_callk(L, 0, LUA_MULTRET, 0, dofilecont);
