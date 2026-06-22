@@ -1561,13 +1561,17 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
          A direct C call to a leaf libm function (no GC, no Lua callback). The
          trace runs with RA disabled (FMATH is not in ra_op_is_safe), so the
          infra registers (L/ci/base/k, callee-saved) survive the call and no
-         caller-saved loop value is live across it. The trace body keeps
-         RSP == 8 (mod 16), so one `sub rsp,8` aligns to 16 for the call. */
+         caller-saved loop value is live across it. The prologue's frame already
+         includes SPT_ABI_SHADOW (32 bytes on Windows) and leaves RSP == 0
+         (mod 16) -- both required for a direct CALL -- so no RSP adjustment is
+         needed here. (Previously a `sub rsp,8` was emitted for alignment, but
+         that was stale: the frame_size `+= 8` already aligns RSP to 0 mod 16,
+         so the extra sub misaligned RSP to 8 mod 16 before the CALL and shifted
+         the callee's shadow space below the allocated frame, crashing libm
+         functions that use aligned SSE or write to shadow space, e.g. tan.) */
       gen_load_xmm(cg, SPT_XMM0, inst->op1);                 /* XMM0 = arg */
-      sptasm_sub_rsp(a, 8);                                  /* 16-byte align */
       sptasm_mov_ri64(a, SPT_RAX, (int64_t)inst->aux);       /* RAX = libm fn */
       sptasm_call_r(a, SPT_RAX);
-      sptasm_add_rsp(a, 8);
       gen_store_xmm(cg, idx, SPT_XMM0);                      /* result in XMM0 */
       break;
     }
