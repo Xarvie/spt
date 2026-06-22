@@ -1,0 +1,83 @@
+/* Value-RETURNING multi-write method inlining (§10.65): extends §10.64 (general
+   multi-write VOID methods) to methods that ALSO return a value. The §10.64 gate
+   excluded OP_RETURN1; §10.65 lifts that.
+
+   Safety is unchanged from §10.64 -- a ZERO-in-body-guard body. The returned
+   value is computed guard-free: a returned this.<field> is a guard-free GETFIELD
+   whose type the entry field-layout guard already pins, a returned param/computed
+   value is pinned by the caller-level guards on its inputs. The existing OP_RETURN1
+   inline handler binds the returned register's IR ref into the caller's result
+   slot, so NO new codegen and NO new entry guard are needed. To keep the body
+   strictly guard-free when there is a value return, the gate forbids the still-
+   guarded reads (GETI/GETTABLE/LEN); such methods abort cleanly to the interpreter.
+
+   The accumulated sum of returns is a double-write / wrong-value probe: any double
+   write on a resume-at-SELF or any wrong returned value would diverge from the
+   interpreter. JIT on/off output MUST match exactly. */
+
+class Box {
+    int a; int b;
+    void __init(){ this.a = 0; this.b = 0; }
+    int update(int x, int y){ this.a = x; this.b = y; return this.a + this.b; }   /* return computed from 2 written fields */
+    int next(){ this.a = this.a + 1; this.b = this.b + 2; return this.a; }        /* RMW two fields, return one (read-after-write) */
+    int set2(int x, int y){ this.a = x; this.b = y; return this.b; }              /* return one written field */
+    int store(int x){ this.a = x; this.b = x * 2; return x; }                     /* return a param */
+    int reset(){ this.a = 0; this.b = 0; return 0; }                              /* 2 writes, return constant */
+    int sum(){ return this.a + this.b; }
+}
+
+class FBox {
+    float a; float b;
+    void __init(){ this.a = 0.0; this.b = 0.0; }
+    float upd(float x){ this.a = x; this.b = x + 1.0; return this.a + this.b; }    /* float multi-write + return */
+    float sum(){ return this.a + this.b; }
+}
+
+/* Negative: a value-returning multi-write method with a GETI after a write must
+   be REJECTED (guard-free-body rule) and fall back to the interpreter -- off==on
+   regardless, but it should NOT compile a trace. */
+class LBox {
+    int a; int b;
+    void __init(){ this.a = 0; this.b = 0; }
+    int load(list<int> arr, int j){ this.a = this.a + 1; this.b = arr[j]; return this.a; }
+    int sum(){ return this.a + this.b; }
+}
+
+Box bx = Box();
+FBox fb = FBox();
+LBox lb = LBox();
+list<int> data = [10, 20, 30, 40, 50];
+int acc = 0;
+
+for (int r = 0, 200000) { acc = acc + bx.update(r % 7, r % 5); }   /* return = (r%7)+(r%5) */
+print(acc);
+print(bx.sum());
+
+acc = 0;
+for (int r = 0, 200000) { acc = acc + bx.next(); }                 /* return this.a, monotonic; double-write would over-grow */
+print(acc);
+print(bx.sum());
+
+acc = 0;
+for (int r = 0, 200000) { acc = acc + bx.set2(r % 9, r % 4); }     /* return this.b = r%4 */
+print(acc);
+
+acc = 0;
+for (int r = 0, 200000) { acc = acc + bx.store(r % 11); }          /* return param r%11 */
+print(acc);
+print(bx.sum());
+
+acc = 0;
+for (int r = 0, 100000) { acc = acc + bx.reset(); }                /* return 0 */
+print(acc);
+print(bx.sum());
+
+float facc = 0.0;
+for (int r = 0, 200000) { facc = facc + fb.upd((r % 6) * 1.0); }   /* return (r%6)+((r%6)+1.0) */
+print(facc);
+print(fb.sum());
+
+acc = 0;
+for (int r = 0, 100000) { acc = acc + lb.load(data, r % 5); }      /* REJECTED (GETI) -- interpreter, off==on */
+print(acc);
+print(lb.sum());

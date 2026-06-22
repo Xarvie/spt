@@ -2261,18 +2261,31 @@ static int proto_is_multiwrite_method_inlinable(Proto *p) {
   if (p->sizep != 0) return 0;
   int n = p->sizecode;
   if (n < 2 || n > 64) return 0;
-  int n_writes = 0;
+  int n_writes = 0, has_value_return = 0;
   for (int i = 0; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_SETFIELD) n_writes++;
-    if (o == OP_RETURN1) return 0;            /* value return not supported */
+    if (o == OP_RETURN1) has_value_return = 1; /* §10.65: value return now supported */
   }
   if (n_writes < 2) return 0;                 /* single write -> use §10.49 path */
-  /* straight-line body: only reads + SETFIELD + void return */
+  /* Straight-line body: only reads + SETFIELD + return. Since §10.65 a VALUE
+     return (OP_RETURN1) is allowed: the returned value is computed guard-free in
+     multi-write mode -- a returned this.<field> is a guard-free GETFIELD whose
+     type the entry field-layout guard already pins, and a returned param/computed
+     value is pinned by the caller-level guards on its inputs. So adding a value
+     return keeps the body zero-in-body-guard, and the existing OP_RETURN1 inline
+     handler binds the result into the caller's result slot (rec_load_reg of the
+     returned register, already in reg_map). GETI/GETTABLE/LEN are NOT made guard-
+     free in multi-write mode (they still emit bounds/type guards); a guard AFTER a
+     committed write could, in a value-returning method, resume-at-SELF and double-
+     write a non-idempotent field. So when there IS a value return we forbid those
+     guarded reads, guaranteeing a strictly guard-free body. (The void path keeps
+     the §10.64 gate unchanged -- zero regression.) */
   for (int i = 0; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
     if (o == OP_SETFIELD) continue;
-    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_EXTRAARG) continue;
+    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_RETURN1 || o == OP_EXTRAARG) continue;
+    if (has_value_return && (o == OP_GETI || o == OP_GETTABLE || o == OP_LEN)) return 0;
     if (method_read_op_ok(o)) continue;
     return 0;
   }

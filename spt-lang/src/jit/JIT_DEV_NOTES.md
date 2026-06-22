@@ -2635,3 +2635,42 @@ JIT on/off 输出**完全一致**(整数累加 + 浮点累加 + 交叉更新)。
 (2) **入口校验 + 体内无守卫是通用模式**:此模式可推广到任何"录制期可观测不变量"——如数组长度不变(录 `arr.len`,入口校验)、字段集不变(本节)、类型不变(已有类型守卫)。把不变量上提到入口,体内发无守卫变体,既安全又快(省掉每次访问的守卫开销)。
 (3) **`ud2` 兜底优于静默错误**:无守卫变体在键缺失时发 `ud2`(非法指令异常)而非静默读随机内存。入口校验是"应该不会失败",ud2 是"若失败则立即可见崩溃"——比 silent corruption 易调试得多。生产环境若 ud2 触发,说明入口校验逻辑有 bug,而非"运行期偶发"。
 (4) **方法门保守准入**:本节方法门排除 RETURN1(值返回)、CALL(嵌套调用)、CONCAT(字符串拼接)等可能产生守卫的 op。这些场景的扩展需要额外设计(如 RETURN1 的值类型守卫如何上提),不宜在本节一并解决。保守准入确保已支持场景的确定性安全。
+
+## §10.65 值返回多写方法内联（放宽 §10.64 的 RETURN1 排除，值返回靠入口字段布局守卫，✅ 阶段达成）
+
+§10.64 落地**通用多写 VOID 方法**(≥2 SETFIELD,入口期字段布局守卫 + 体内无守卫字段访问),但其方法门 `proto_is_multiwrite_method_inlinable` **保守排除了 OP_RETURN1**(值返回),`int sum(){...}` 这类"改多个字段并返一个值"的极常见形态(更新器、ID/版本生成、事务式更新、改后返新状态)全 abort。本节放宽该排除,让值返回多写方法内联。**安全性与 §10.64 完全相同——零体内守卫体**;返回值的类型守卫**已被既有守卫覆盖**(字段返回靠入口字段布局守卫,参数/计算返回靠 caller 层输入守卫),故**零新 codegen、零新入口守卫**,复用 §10.64 的字段布局机器 + 早已存在的 OP_RETURN1 内联返回 handler。
+
+### 缺口确认(§10.64 lesson 4 预告)
+§10.64 lesson(4) 明记:"方法门排除 RETURN1(值返回)…这些场景的扩展需要额外设计(如 RETURN1 的值类型守卫如何上提)"。画像:`int update(int x,int y){ this.a=x; this.b=y; return this.a+this.b; }`(2 写 + 返两字段之和)在 OP_CALL 方法门处 abort——`proto_is_multiwrite_method_inlinable` 第一循环 `if (o == OP_RETURN1) return 0;`,其余 6 个方法门也都拒(纯读有写、单尾写≠2 写、cond-* 无 if 形)。**关键观察**:OP_RETURN1 的内联返回接线**早已存在**(§10.46 纯读 / §10.48 cond-return / §10.52 写后返字段都在用),只是多写门把带 RETURN1 的方法挡在门外。
+
+### 实现(只动门;值返回机器复用,零新 codegen)
+改动集中在 `proto_is_multiwrite_method_inlinable` 一处 + 一个回归 kernel + 一个模糊生成器。**recorder/codegen 主体一字未改**。
+1. **方法门放宽**:第一循环把 `if (o == OP_RETURN1) return 0;` 改为置 `has_value_return = 1`;第二循环(体内 op 白名单)放行 OP_RETURN1。这样 ≥2 SETFIELD + RETURN1 的方法不再被多写门拒。
+2. **值返回机器复用**:OP_CALL 方法分派(`pending_method_slot` 路径)早已允许 `c == 2`(一个结果),且对所有方法内联都设 `rc->call_result_slot = rc->frame_base + a`、按门设 `rc->multiwrite_mode = proto_is_multiwrite_method_inlinable(callee_p)`。OP_RETURN1 的内联分支(`frame_base != 0`)`rec_load_reg` 取返回寄存器的 IR ref(已在 reg_map 里——由体内的无守卫 GETFIELD/MOVE/ARITH 算出)、恢复 caller 上下文、`ir->reg_map[rc->call_result_slot] = aref` 把 ref 绑到 caller 结果槽。**这套接线对多写方法零改动即正确**——它不关心 `multiwrite_mode`。
+3. **保证体内严格零守卫(值返回路径)**:多写模式只把 **GETFIELD/SETFIELD** 改无守卫(§10.64 的 2899/3092 两分支),**GETI/GETTABLE/LEN 仍发守卫**(它们不在 §10.64 的无守卫化范围内)。对**值返回**方法,体内"写后再 GETI"的守卫若失败会 resume-at-SELF 重跑 → 双写非幂等字段。故门在 `has_value_return` 时额外禁止 GETI/GETTABLE/LEN——保证值返回多写方法体**严格零守卫**(§10.64 安全论证的根基)。**VOID 路径门保持 §10.64 原样**(`has_value_return==0`,该禁令不触发)→ **零回归**。
+
+### 正确性论证(与 §10.64 同一安全类 + 值返回类型已被既有守卫覆盖)
+- **写安全(零体内守卫 → 无内联帧退出)**:值返回路径体内 GETFIELD/SETFIELD 无守卫(多写模式)、ARITH/MOVE/LOADK 本就无守卫、GETI/GETTABLE/LEN 经门禁止。**全体零守卫 ⟹ 无 in-callee 退出桩 ⟹ 任意写次数都不会 resume-at-SELF 双写**。这与 §10.64 VOID 的安全论证逐字相同,只是体内多了"算返回值"的无守卫 op + 一条 RETURN1。
+- **值返回类型已被既有守卫覆盖(本节关键)**:§10.64 lesson(4) 担心的"值类型守卫如何上提",**其实早已被字段布局守卫解决**:
+  - **返字段** `return this.b`:体内发**无守卫 GETFIELD**(多写分支),同时把 `(b, 类型)` 注册进 `field_layouts[]`。入口 `trace_entry_guards_ok` 校验 this.b **存在 + 类型匹配**录制观测。故运行期 this.b 必为录制类型 → GETFIELD 产该类型值 → 结果槽类型 `rt` 正确,caller 据 `rt` 用结果类型安全。**入口字段布局守卫 = 字段返回的值类型守卫**,无需新上提。
+  - **返参数** `return x`:x 是 caller 在 CALL 前装入 R[A+2] 的实参,其 IR ref 的类型由 **caller 层(frame_base==0)的实参守卫**钉死。结果槽 `rt` = x 类型,正确。
+  - **返计算值** `return x + this.a`:输入 x(caller 守卫)+ this.a(入口字段布局守卫)类型都已钉 → 计算结果类型确定。正确。
+  - **返常量** `return 0`:LOADI 常量,类型自明,无守卫。
+  故所有返回值形态的类型都已被"入口字段布局守卫 ∪ caller 层实参守卫"覆盖,**体内无需任何返回值守卫**,§10.64 的零体内守卫不变。
+- **写后返同字段位精确**:`this.a=x; …; return this.a`——`return this.a` 的 GETFIELD 命中多写分支(在 §10.52 前推分支**之前**检查),发无守卫 re-read。录制时 VM 已执行 SETFIELD(节点已是 x),故类型预测读到 x 的类型(一致);运行期 SETFIELD 的 store 在 IR 顺序上先于该 GETFIELD 的 load 且同节点(gen_hash_find 同键),故 load 读回已写值。位精确。
+- **返回值之和 = 双写 + 错值双重探测器**:回归 kernel 与模糊器都累加 RETURNED 值;任一 resume-at-SELF 双写或返错值都会使和与解释器发散,被逐字节差分立刻抓住。
+- **GETI 值返回正确 abort 且保持正确**:`int load(list a,int j){ this.a=this.a+1; this.b=a[j]; return this.a; }`(写后 GETI)经门禁止 → compiled=0 → 解释器,off==on 验证。
+- **单写 + 返回仍走 §10.52**:多写门要 `n_writes >= 2`,故 `int inc(){ this.v=this.v+1; return this.v; }`(1 写 + 返同字段)仍由 §10.52 存转载前推处理,本节不接管。边界清晰、互不干扰。
+
+### 效果(位精确)
+值返回多写方法 `b.update(x,y)`(2 写 + 返两字段之和,2.8M 次)由 abort 变为编译进 trace;同 §10.64 的 VOID 多写,提速来自免去每次调用的解释器重入 + 入口一次性字段校验(对比解释器每次方法调用都要建帧/解析)。回归 kernel `multiwrite_ret_method.spt` 6 形全编译(update/next/set2/store/reset/float upd)、负向 GETI 形正确 abort、off==on 位精确、entries==exits(=6)、guard_fail=0。
+
+### 验证(完整门槛,全绿)
+构建 0 err。**362/362 ctest 全通过**(新增 `multiwrite_ret_method.spt`,Test #300)· **kernel 差分 pass=128 fail=1**(唯一 fail = `foreach_map_str.spt`,map 哈希迭代顺序非确定性、**预存且与 JIT 无关**:compiled=0 即 JIT 完全没参与,OFF/ON 差异纯来自字符串哈希种子,HOT=40 全量差分里它又匹配——种子 flakiness 实锤)· **全量差分 match=359 mismatch=0 timeout=0**(HOT=40)· **模糊器 seeds 1-10 × 250 = 2500 例 0 失配**(新增生成器 `gen_multiwrite_ret_method`:update2/rmw2_ret/ret_b/ret_param/ret_const/triple_ret/float_update/geti_ret 八形,含负向 geti_ret;并修正 `gen_writeret_method` 的 `multiwrite_fallback` 过时注释——它本是"2 写+返回"的"MUST abort"例,自 §10.65 起改为内联)· **ASan+UBSan 全干净**(新 kernel JIT-on + 现有 multiwrite_method/writeret_method + 值返回微例 + seed 777×60 模糊,rc=0、0 issue)· entries==exits、guard_fail=0。§10.42–§10.64 零回归(multiwrite_method=5/writeret_method=7/method_call=5/multi_method=5/condwrite_method=15/condreturn_method=6/write_method=6 编译数与基线一致)。
+
+**关键教训**:
+(1) **值返回的值类型守卫"早已上提"**:§10.64 lesson(4) 把 RETURN1 当成"需额外设计值类型守卫上提"的待办,但本节发现——**入口字段布局守卫(字段返回)+ caller 层实参守卫(参数/计算返回)已经覆盖了所有返回值形态的类型**。体内本就零守卫,加一条 RETURN1 不引入任何新守卫。所谓"上提"在 §10.64 已隐式完成,本节只是放开门并复用早已存在的 OP_RETURN1 内联返回 handler。又一例"已验证机器 × 新场景"(§10.47→…→§10.64→§10.65 一脉)。
+(2) **零回归靠"只在值返回时收紧体内白名单"**:多写模式只无守卫化 GETFIELD/SETFIELD,GETI/GETTABLE/LEN 仍带守卫。为保证值返回路径"严格零守卫",门在 `has_value_return` 时额外禁 GETI/GETTABLE/LEN;VOID 路径门一字未改 → 对 §10.64 零回归。把新约束**条件化到新形态**,是给共享门加形态而不动既有行为的范式(同 §10.54 if-else 与 if-only 的并列)。
+(3) **写后返同字段命中多写分支即对**:多写分支在 §10.52 前推分支**之前**检查,故值返回多写方法里的写后读直接走无守卫 re-read(录制时 VM 已写、运行期 store 先于 load 同节点),不依赖前推、位精确。前推(§10.52)仍只服务**单写**+返同字段(`n_writes==1`)。
+(4) **保守门的代价是"漏优化但不错"**:门在值返回时禁 GETI/GETTABLE/LEN,会让"GETI 在写**之前**"这种其实安全的形态(如 `int load(list a,int i){ this.x=a[i]; this.hits=this.hits+1; return this.x; }`,GETI 在所有写之前 → 无写后守卫)也被拒。精确做法是"只禁出现在 SETFIELD **之后**的 GETI/GETTABLE/LEN"(需按写位置扫描),可作后续小扩展;当前保守门下这些形态干净 abort 回解释器(正确、仅不加速),符合"慢但对>快但错"。
+(5) **HANDOFF.md 曾严重滞后,本节一并校正**:接手时 HANDOFF.md 停在 §10.62,把 §10.63(运行期守卫黑名单)、§10.64(通用多写)列为"待办",而 ROADMAP/DEV_NOTES 已到 §10.64。本节把 HANDOFF.md 全面更新到 §10.65,与 ROADMAP/DEV_NOTES 对齐——交接文档的真实基线必须随代码同步,否则误导接手者。
