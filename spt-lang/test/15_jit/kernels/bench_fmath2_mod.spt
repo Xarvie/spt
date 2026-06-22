@@ -1,0 +1,9 @@
+/* §10.66 FMATH2 perf bench: float % via spt_jit_luamodf wrapper.
+   JIT off = interpreter luai_nummod per iteration; JIT on = FMATH2 C call. */
+float s = 0.0;
+for (int r = 0, 200) {
+  for (int i = 0, 1000000) {
+    s = s + (i * 0.1) % 3.0;
+  }
+}
+print(s);
