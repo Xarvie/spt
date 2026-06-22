@@ -38,6 +38,17 @@ extern spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f);
 /* Identify string.len / string.byte for SLEN / SBYTE lowering (defined in
    lstrlib.c where str_len/str_byte are file-static). 1 = str_len, 2 = str_byte. */
 extern int spt_jit_str_op(lua_CFunction f);
+/* Identify math.min / math.max for branchless-select lowering (defined in
+   lmathlib.c where math_min/math_max are file-static). 1 = min, 2 = max. */
+extern int spt_jit_math_minmax(lua_CFunction f);
+/* Identify math.abs for branchless-select (int) / FMATH-fabs (float) lowering
+   (defined in lmathlib.c where math_abs is file-static). Returns the libm fabs
+   pointer when f is math_abs, else NULL. */
+extern spt_unary_libm_fn spt_jit_math_abs(lua_CFunction f);
+/* Identify math.floor / math.ceil for rounding-convert lowering (SPTIR_TOINT)
+   (defined in lmathlib.c where math_floor/math_ceil are file-static). 1 = floor,
+   2 = ceil, else 0. */
+extern int spt_jit_math_floorceil(lua_CFunction f);
 /* Address of luaB_next (the pairs() iterator); used to pin a for-each trace's
    iterator with an entry guard. See lbaselib.c. */
 extern lua_CFunction spt_jit_pairs_next(void);
@@ -364,6 +375,61 @@ typedef struct {
      2 = SBYTE (string.byte(s,i)). -1 slot = none. */
   int pending_str_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
   int pending_str_op;       /* 1 = str_len -> SLEN, 2 = str_byte -> SBYTE */
+  /* SELF instruction PC, so the SLEN/SBYTE short-string (and SBYTE bounds) guard
+     resumes at the SELF -- the interpreter re-executes SELF+CALL and runs the
+     real string.len/byte for a long string (or errors identically for an out-of-
+     range byte). Without this, a long string at runtime side-exits to the CALL
+     PC where R[A] lacks the C function -> 'attempt to call a table value'. Same
+     resume-at-SELF idea as math.floor/ceil (§10.61) and inlined methods (§10.47);
+     idempotent because length/byte reads have no side effects. */
+  const Instruction *pending_str_self_pc;
+  /* While recording the args of a math/string library call -- the window from
+     the SELF that arms the pending op to the CALL that consumes it -- any guard
+     (e.g. the arg's SLOAD type / short-string guard) must resume at the SELF,
+     not mid-arg-load: the SELF is folded into the lowered op and never
+     materializes the resolved function, so reg_map still maps R[A] to the
+     module table. Resuming after the SELF would then CALL that table
+     ('attempt to call a table value'). Set when arming, cleared at the CALL.
+     NULL = not in such a window. (Root only; the inlined-method path at
+     frame_base != 0 uses method_self_pc / method_resume_snap instead.) */
+  const Instruction *call_arg_self_pc;
+  /* Pending math.min / math.max armed by an OP_SELF. The next CALL on a pending
+     slot lowers to a branchless select instead of a real call (1 = min, 2 = max).
+     A STACK, not a single slot: a clamp `math.max(lo, math.min(hi, x))` arms the
+     outer max, then the inner min, before either CALL -- the inner CALL must not
+     strand the outer. CALLs pop in LIFO order (well-nested). */
+  int pending_minmax_slot[8];
+  int pending_minmax_op[8];
+  int pending_minmax_top;   /* number of live entries; 0 = none */
+  /* When a min/max CALL has its result consumed as the trailing argument of an
+     enclosing call (a nested clamp), Lua emits the inner call with c == 0
+     (multiret: 1 result left on the stack) and the outer call with b == 0 (args
+     run to the stack top). This records the slot the last such inner result
+     landed in, so the very next CALL can recover that its trailing arg count is
+     exactly one. Valid for ONE following CALL only; -1 = none. */
+  int minmax_multiret_top;
+  /* Pending math.abs armed by an OP_SELF. The next CALL on this slot lowers to
+     abs(x) without a real call: INT -> branchless select (x<0)?-x:x (reusing
+     emit_select; INT64_MIN self-maps as Lua's 0u-n wraparound does), FLOAT ->
+     SPTIR_FMATH(fabs) (a select would keep -0.0's bit pattern; fabs returns
+     +0.0 and is also correct for NaN). Composes with min/max via the shared
+     minmax_multiret_top (abs of a nested clamp, or abs feeding min/max).
+     -1 slot = none. */
+  int pending_abs_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  void *pending_abs_fabs;   /* libm fabs double(*)(double), for the float path */
+  /* Pending math.floor / math.ceil armed by an OP_SELF. The next CALL on this
+     slot lowers to a rounding convert: INT arg -> identity (integer is its own
+     floor/ceil), FLOAT arg -> SPTIR_TOINT (roundsd + range guard; out-of-range
+     side-exits and the interpreter returns the float, as Lua does). Composes
+     with min/max/abs via the shared minmax_multiret_top. mode 1 = floor, 2 =
+     ceil. -1 slot = none. */
+  int pending_floorceil_slot;
+  int pending_floorceil_mode;
+  /* SELF instruction PC, so the FLOAT-path range guard resumes at the SELF
+     (re-executing SELF+CALL in the interpreter, which returns the float when
+     out of range). Safe because floor/ceil is side-effect-free -- the same
+     resume-at-SELF idea the inlined pure-read method path uses. */
+  const Instruction *pending_floorceil_self_pc;
   /* for-each over a List specialized to a native index loop (OP_TFORCALL).
      The iterator function is loop-invariant; the trace pins it to luaB_next
      with a once-per-entry C guard (analogous to inline_fn). -1 slot = none. */
@@ -403,6 +469,9 @@ typedef struct {
   int fwd_base;             /* IR ref of the last SETFIELD's base table; -1 = none */
   void *fwd_key;            /* TString* key of the last SETFIELD */
   int fwd_val;              /* IR ref of the last SETFIELD's written value */
+  /* Snapshot index of the FORLOOP "count > 0" guard (loop-continuation guard).
+     Copied to SPTTrace.loop_end_snap after recording. -1 = none. */
+  int loop_end_snap;
 } SPTRecCtx;
 
 /* Get current type of a register from the actual stack value. */
@@ -577,6 +646,8 @@ static Table *rec_eval_array(SPTRecCtx *rc, int ref) {
 static int rec_snap(SPTRecCtx *rc) {
   if (rc->frame_base != 0 && rc->method_resume_snap >= 0)
     return rc->method_resume_snap;
+  if (rc->call_arg_self_pc != NULL)            /* arg-load window: resume at the SELF */
+    return sptir_snapshot(rc->ir, rc->call_arg_self_pc);
   return sptir_snapshot(rc->ir, rc->pc);
 }
 
@@ -587,6 +658,8 @@ static int rec_snap(SPTRecCtx *rc) {
 static const Instruction *rec_guard_pc(SPTRecCtx *rc) {
   if (rc->frame_base != 0 && rc->method_self_pc != NULL)
     return rc->method_self_pc;
+  if (rc->call_arg_self_pc != NULL)            /* arg-load window: resume at the SELF */
+    return rc->call_arg_self_pc;
   return rc->pc;
 }
 
@@ -3400,7 +3473,10 @@ static int rec_inst(SPTRecCtx *rc) {
 
       /* Guard: count > 0 (continue loop). Use GUARD_LT with 0 < count. */
       int zero_ref = sptir_kint(ir, 0);
-      sptir_guard(ir, SPTIR_GUARD_LT, zero_ref, (int64_t)count_ref, rec_guard_pc(rc));
+      int guard_ref = sptir_guard(ir, SPTIR_GUARD_LT, zero_ref,
+                                  (int64_t)count_ref, rec_guard_pc(rc));
+      if (guard_ref >= 0)
+        rc->loop_end_snap = ir->insts[guard_ref].snap_idx;
 
       /* new_count = count - 1 */
       int one_ref = sptir_kint(ir, 1);
@@ -3496,10 +3572,17 @@ static int rec_inst(SPTRecCtx *rc) {
     /* ---- Call inlining (pure straight-line leaf functions) ---- */
     case OP_CALL: {
       rc->fwd_base = -1;   /* a call may mutate: drop store-to-load forwarding (re-armed on method inline) */
+      rc->call_arg_self_pc = NULL;  /* close the SELF->CALL arg-load window */
       /* CALL A B C : R[A](R[A+1..A+B-1]) -> R[A..A+C-2].
          SPT uses a slot-0 receiver, so R[A+1] is the (nil) receiver and
          R[A+2..] are the actual arguments. */
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+
+      /* A multiret arg slot (set by a nested min/max whose result this CALL may
+         consume) is valid for exactly this one CALL. Capture and clear it now so
+         it never leaks to a later CALL. */
+      int incoming_mm_top = rc->minmax_multiret_top;
+      rc->minmax_multiret_top = -1;
 
       /* Pending unary-math call armed by a preceding SELF (e.g. math.sqrt)?
          The SPT convention puts the receiver at R[A+1] and the single real
@@ -3538,6 +3621,7 @@ static int rec_inst(SPTRecCtx *rc) {
          interpreter on the same error (it never loops gracefully). */
       if (rc->pending_str_slot == rc->frame_base + a) {
         int sop = rc->pending_str_op;
+        const Instruction *str_self_pc = rc->pending_str_self_pc;
         rc->pending_str_slot = -1; rc->pending_str_op = 0;
         if (rc->frame_base != 0 || c != 2) { rc->aborted = 1; return 0; }
         int sref = ir->reg_map[rc->frame_base + a + 2];
@@ -3547,7 +3631,10 @@ static int rec_inst(SPTRecCtx *rc) {
         if (sop == 1) {                          /* string.len(s) -> SLEN */
           if (b != 3) { rc->aborted = 1; return 0; }
           int ref = sptir_emit(ir, SPTIR_SLEN, SPTT_INT, sref, SPTIR_NULL, 0);
-          int snap = rec_snap(rc);
+          /* Resume the short-string guard at the SELF (not this CALL): the
+             interpreter re-executes SELF+CALL and runs string.len for a long
+             string. Idempotent: a length read has no side effects. */
+          int snap = sptir_snapshot(ir, str_self_pc);
           ir->insts[ref].snap_idx = snap; ir->insts[ref].flags |= SPTIRF_GUARD;
           ir->reg_map[rc->frame_base + a] = ref;
           ir->reg_type[rc->frame_base + a] = SPTT_INT;
@@ -3558,13 +3645,165 @@ static int rec_inst(SPTRecCtx *rc) {
           int iref = ir->reg_map[rc->frame_base + a + 3];
           if (iref < 0 || ir->reg_type[rc->frame_base + a + 3] != SPTT_INT) { rc->aborted = 1; return 0; }
           int ref = sptir_emit(ir, SPTIR_SBYTE, SPTT_INT, sref, iref, 0);
-          int snap = rec_snap(rc);
+          /* Resume the short-string / bounds guard at the SELF (not this CALL):
+             the interpreter re-executes SELF+CALL and runs the real string.byte
+             for a long string, or errors identically for an out-of-range index.
+             Idempotent: a byte read has no side effects. */
+          int snap = sptir_snapshot(ir, str_self_pc);
           ir->insts[ref].snap_idx = snap; ir->insts[ref].flags |= SPTIRF_GUARD;
           ir->reg_map[rc->frame_base + a] = ref;
           ir->reg_type[rc->frame_base + a] = SPTT_INT;
           if (a > ir->maxslot) ir->maxslot = a;
           break;
         }
+      }
+
+      /* Pending math.min / math.max armed by a preceding SELF? Lower to a
+         branchless select (reusing emit_select). SPT puts the receiver (math
+         module) at R[A+1] and the two values at R[A+2], R[A+3]. Requires exactly
+         two args (b == 4) and one result (c == 2). Lua's math.max(a,b) =
+         (b > a) ? b : a = (a < b) ? b : a; math.min(a,b) = (b < a) ? b : a =
+         (a > b) ? b : a -- so out = (a FOP b) ? b : a with FOP = LT for max,
+         GT for min. emit_select's compare-false -> else (= a) matches Lua's
+         "keep the current arg unless strictly beaten" exactly (ties and NaN both
+         fall to a). Matches the LIFO top of the pending stack so a nested clamp
+         pops the inner min before the outer max. Mixed int/float args are
+         promoted to float first (Lua promotes); result type follows emit_select. */
+      if (rc->pending_minmax_top > 0 &&
+          rc->pending_minmax_slot[rc->pending_minmax_top - 1] == rc->frame_base + a) {
+        rc->pending_minmax_top--;
+        int mmop = rc->pending_minmax_op[rc->pending_minmax_top];
+        /* Two values at R[A+2], R[A+3]. Normally b == 4 (fn + receiver + 2). When
+           the trailing arg is itself a (just-lowered) nested min/max, Lua emits
+           this CALL with b == 0 (args to top); that inner result is the single
+           value at minmax_multiret_top, which must be exactly R[A+3] (i.e. exactly
+           2 args). c == 2 for one result, or c == 0 when THIS result in turn feeds
+           an enclosing call (still a single value). */
+        if (b != 4 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 3)) { rc->aborted = 1; return 0; }
+        if (c != 2 && c != 0) { rc->aborted = 1; return 0; }
+        int aref = ir->reg_map[rc->frame_base + a + 2];
+        int bref = ir->reg_map[rc->frame_base + a + 3];
+        if (aref < 0 || bref < 0) { rc->aborted = 1; return 0; }
+        SPTType at = ir->reg_type[rc->frame_base + a + 2];
+        SPTType bt = ir->reg_type[rc->frame_base + a + 3];
+        if (!sptt_isnum(at) || !sptt_isnum(bt)) { rc->aborted = 1; return 0; }
+        /* Promote a mixed pair to float so emit_select's both-float path applies
+           and the result is float, as Lua does for a mixed min/max. */
+        if (at == SPTT_INT && bt == SPTT_FLT) {
+          aref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, SPTIR_NULL, 0); at = SPTT_FLT;
+        } else if (at == SPTT_FLT && bt == SPTT_INT) {
+          bref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, SPTIR_NULL, 0); bt = SPTT_FLT;
+        }
+        SPTIROp fop = (mmop == 2) ? SPTIR_LT : SPTIR_GT;   /* 2 = max -> LT, 1 = min -> GT */
+        int out_ref; SPTType out_t;
+        /* out = (a FOP b) ? then(=b) : else(=a) */
+        if (!emit_select(rc, fop, aref, bref, at, bt, bref, bt, aref, at, &out_ref, &out_t)) {
+          rc->aborted = 1; return 0;
+        }
+        ir->reg_map[rc->frame_base + a] = out_ref;
+        ir->reg_type[rc->frame_base + a] = out_t;
+        if (a > ir->maxslot) ir->maxslot = a;
+        /* If this result is itself a trailing arg (c == 0), record its slot so the
+           enclosing CALL can confirm its arg count. */
+        if (c == 0) rc->minmax_multiret_top = rc->frame_base + a;
+        break;
+      }
+
+      /* Pending math.abs armed by a preceding SELF? Lower abs(x) with no real
+         call. SPT puts the receiver (math module) at R[A+1] and the single value
+         at R[A+2]. Normally b == 3 (fn + receiver + 1 arg); when that arg is a
+         just-lowered nested min/max, Lua emits this CALL with b == 0 (args to
+         top) and the lone value is at minmax_multiret_top, which must be exactly
+         R[A+2]. c == 2 for one result, or c == 0 when this result in turn feeds
+         an enclosing call. INT: branchless select (x<0)?(0-x):x via emit_select
+         -- bit-exact incl. INT64_MIN (SPTIR_SUB wraps as Lua's 0u-n). FLOAT:
+         SPTIR_FMATH(fabs) -- not a select, so -0.0 -> +0.0 and NaN are correct. */
+      if (rc->pending_abs_slot == rc->frame_base + a) {
+        void *absfn = rc->pending_abs_fabs;
+        rc->pending_abs_slot = -1; rc->pending_abs_fabs = NULL;
+        if (b != 3 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 2)) { rc->aborted = 1; return 0; }
+        if (c != 2 && c != 0) { rc->aborted = 1; return 0; }
+        int xref = ir->reg_map[rc->frame_base + a + 2];
+        if (xref < 0) { rc->aborted = 1; return 0; }
+        SPTType xt = ir->reg_type[rc->frame_base + a + 2];
+        int out_ref; SPTType out_t;
+        if (xt == SPTT_INT) {
+          int zero = sptir_kint(ir, 0);
+          int neg = sptir_emit(ir, SPTIR_SUB, SPTT_INT, zero, xref, 0);   /* 0 - x */
+          /* out = (x < 0) ? (0 - x) : x */
+          if (!emit_select(rc, SPTIR_LT, xref, zero, SPTT_INT, SPTT_INT,
+                           neg, SPTT_INT, xref, SPTT_INT, &out_ref, &out_t)) {
+            rc->aborted = 1; return 0;
+          }
+        } else if (xt == SPTT_FLT) {
+          out_ref = sptir_emit(ir, SPTIR_FMATH, SPTT_FLT, xref, SPTIR_NULL,
+                               (int64_t)(intptr_t)absfn);
+          out_t = SPTT_FLT;
+        } else {
+          rc->aborted = 1; return 0;            /* non-numeric arg */
+        }
+        ir->reg_map[rc->frame_base + a] = out_ref;
+        ir->reg_type[rc->frame_base + a] = out_t;
+        if (a > ir->maxslot) ir->maxslot = a;
+        /* If this result is itself a trailing arg (c == 0), record its slot so the
+           enclosing CALL can confirm its arg count (abs feeding min/max/abs). */
+        if (c == 0) rc->minmax_multiret_top = rc->frame_base + a;
+        break;
+      }
+
+      /* Pending math.floor / math.ceil armed by a preceding SELF? Lower with no
+         real call. Arg at R[A+2]. b == 3 (fn + receiver + 1), or b == 0 when the
+         arg is a just-lowered nested min/max/abs (multiret; the lone value at
+         minmax_multiret_top must be R[A+2]). c == 2 for one result, or c == 0
+         when this result feeds an enclosing call. INT arg: floor/ceil is identity
+         (an integer is its own floor/ceil) -> pass the ref through. FLOAT arg:
+         SPTIR_TOINT (roundsd + range guard); out-of-range/NaN side-exits and the
+         interpreter returns the float, exactly as Lua's pushnumint does. */
+      if (rc->pending_floorceil_slot == rc->frame_base + a) {
+        int mode = rc->pending_floorceil_mode;
+        const Instruction *fc_self_pc = rc->pending_floorceil_self_pc;
+        rc->pending_floorceil_slot = -1; rc->pending_floorceil_mode = 0;
+        if (b != 3 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 2)) { rc->aborted = 1; return 0; }
+        if (c != 2 && c != 0) { rc->aborted = 1; return 0; }
+        int xref = ir->reg_map[rc->frame_base + a + 2];
+        if (xref < 0) { rc->aborted = 1; return 0; }
+        SPTType xt = ir->reg_type[rc->frame_base + a + 2];
+        int out_ref; SPTType out_t;
+        if (xt == SPTT_INT) {
+          out_ref = xref; out_t = SPTT_INT;          /* integer is its own floor/ceil */
+        } else if (xt == SPTT_FLT) {
+          /* Record-time range observation at root (cf. SLEN/SBYTE's short-string
+             check): if the live argument already lies outside lua_Integer range,
+             the guard would side-exit on every iteration, so abort and let the
+             interpreter run the loop rather than compile an always-exiting trace
+             (the abort blacklists the PC -> bounded). Only at frame_base==0, where
+             the arg's live slot is addressable; an in-range value still compiles,
+             and a later out-of-range value side-exits correctly via resume-at-SELF. */
+          if (rc->frame_base == 0) {
+            TValue *av = s2v((rc->ci->func.p + 1) + (a + 2));
+            if (ttisfloat(av)) {
+              double xv = fltvalue(av);
+              if (!(xv >= -9223372036854775808.0 && xv < 9223372036854775808.0)) {
+                rc->aborted = 1; return 0;
+              }
+            }
+          }
+          out_ref = sptir_emit(ir, SPTIR_TOINT, SPTT_INT, xref, SPTIR_NULL, (int64_t)mode);
+          /* Resume the range guard at the SELF (not this CALL): the interpreter
+             re-executes SELF+CALL and returns the float for out-of-range inputs,
+             matching Lua's pushnumint. Idempotent: floor/ceil has no side effects. */
+          int snap = sptir_snapshot(ir, fc_self_pc);
+          ir->insts[out_ref].snap_idx = snap;
+          ir->insts[out_ref].flags |= SPTIRF_GUARD;
+          out_t = SPTT_INT;
+        } else {
+          rc->aborted = 1; return 0;                 /* non-numeric arg */
+        }
+        ir->reg_map[rc->frame_base + a] = out_ref;
+        ir->reg_type[rc->frame_base + a] = out_t;
+        if (a > ir->maxslot) ir->maxslot = a;
+        if (c == 0) rc->minmax_multiret_top = rc->frame_base + a;
+        break;
       }
 
       /* Pending user method armed by a preceding SELF (`obj.method`)? Inline the
@@ -3873,19 +4112,37 @@ static int rec_inst(SPTRecCtx *rc) {
       if (!ttislcf(fv)) { rc->aborted = 1; return 0; }
       spt_unary_libm_fn libm = spt_jit_unary_math(fvalue(fv));
       int strop = libm ? 0 : spt_jit_str_op(fvalue(fv));
-      if (!libm && !strop) { rc->aborted = 1; return 0; }
+      int mmop = (libm || strop) ? 0 : spt_jit_math_minmax(fvalue(fv));
+      spt_unary_libm_fn absfn = (libm || strop || mmop) ? NULL : spt_jit_math_abs(fvalue(fv));
+      int fcop = (libm || strop || mmop || absfn) ? 0 : spt_jit_math_floorceil(fvalue(fv));
+      if (!libm && !strop && !mmop && !absfn && !fcop) { rc->aborted = 1; return 0; }
       int kref = sptir_kptr(ir, (void *)key);
       int gref = sptir_emit(ir, SPTIR_GUARD_CFUNC, SPTT_NIL, bref, kref,
                             (int64_t)(intptr_t)fvalue(fv));
       int snap = rec_snap(rc);
       ir->insts[gref].snap_idx = snap;
       ir->insts[gref].flags |= SPTIRF_GUARD;
+      /* Open the arg-load window: until the CALL, guards resume at this SELF. */
+      rc->call_arg_self_pc = rc->pc;
       if (libm) {
         rc->pending_cfn_libm = (void *)libm;
         rc->pending_cfn_slot = rc->frame_base + a;
-      } else {                                /* string.len (1) / string.byte (2) */
+      } else if (strop) {                     /* string.len (1) / string.byte (2) */
         rc->pending_str_op = strop;
         rc->pending_str_slot = rc->frame_base + a;
+        rc->pending_str_self_pc = rc->pc;  /* resume point for the SLEN/SBYTE guard */
+      } else if (mmop) {                      /* math.min (1) / math.max (2) */
+        if (rc->pending_minmax_top >= 8) { rc->aborted = 1; return 0; }
+        rc->pending_minmax_slot[rc->pending_minmax_top] = rc->frame_base + a;
+        rc->pending_minmax_op[rc->pending_minmax_top] = mmop;
+        rc->pending_minmax_top++;
+      } else if (absfn) {                     /* math.abs */
+        rc->pending_abs_slot = rc->frame_base + a;
+        rc->pending_abs_fabs = (void *)absfn;
+      } else {                                /* math.floor (1) / math.ceil (2) */
+        rc->pending_floorceil_slot = rc->frame_base + a;
+        rc->pending_floorceil_mode = fcop;
+        rc->pending_floorceil_self_pc = rc->pc;  /* resume point for range guard */
       }
       break;
     }
@@ -3950,6 +4207,15 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.pending_cfn_slot = -1;
   rc.pending_str_slot = -1;
   rc.pending_str_op = 0;
+  rc.pending_str_self_pc = NULL;
+  rc.call_arg_self_pc = NULL;
+  rc.pending_minmax_top = 0;
+  rc.minmax_multiret_top = -1;
+  rc.pending_abs_slot = -1;
+  rc.pending_abs_fabs = NULL;
+  rc.pending_floorceil_slot = -1;
+  rc.pending_floorceil_mode = 0;
+  rc.pending_floorceil_self_pc = NULL;
   rc.forin_iter_slot = -1;
   rc.forin_iter_fn = NULL;
   rc.pending_method_slot = -1;
@@ -3958,6 +4224,7 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.n_methods = 0;
   rc.method_self_pc = NULL;
   rc.method_resume_snap = -1;
+  rc.loop_end_snap = -1;
 
   /* Mark loop start in IR. */
   t->ir.loop_start = t->ir.ninst;
@@ -3997,6 +4264,11 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   t->forin_iter_fn = rc.forin_iter_fn;
   t->n_methods = rc.n_methods;
   for (int mi = 0; mi < rc.n_methods; mi++) t->methods[mi] = rc.methods[mi];
+
+  /* Snapshot index of the loop-continuation guard (FORLOOP "count > 0").
+     Used by the runtime guard-failure blacklist to exclude normal loop-end
+     exits from the side-exit tally. */
+  t->loop_end_snap = rc.loop_end_snap;
 
   if (js->debug >= 2) sptir_dump(&t->ir, "pre-opt");
 
@@ -4276,6 +4548,7 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
   SPTTrace *t = e->trace;
   for (int hops = 0; hops < SPT_JIT_MAX_LINK_HOPS; hops++) {
     js->stats.trace_entries++;
+    t->entry_count++;
     SPTTraceEntry entry = (SPTTraceEntry)t->code;
     entry(L, ci);
 
@@ -4314,6 +4587,44 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
 
   /* If trace already exists, enter it. */
   if (e->trace && e->trace->code) {
+    /* Runtime guard-failure blacklist: periodically check whether this trace's
+       side exits (guard failures, excluding normal loop-end termination) have
+       become excessive. A trace that fails a guard on every iteration is a net
+       loss -- the prologue + exit-stub flush costs more than interpreting. The
+       existing abort blacklist can't catch this (recording succeeded). We
+       discard the trace and bump runtime_fails; after MAX_RUNTIME_FAILS
+       discards the entry is fully blacklisted (aborts = MAX_ABORTS). */
+    SPTTrace *t = e->trace;
+    if (t->entry_count > 0 &&
+        (t->entry_count & (SPT_JIT_BLACKLIST_CHECK_INTERVAL - 1)) == 0) {
+      uint64_t side_exits = 0;
+      int nsnaps = t->ir.nsnaps;
+      if (nsnaps > SPT_JIT_MAX_SNAPSHOTS) nsnaps = SPT_JIT_MAX_SNAPSHOTS;
+      for (int i = 0; i < nsnaps; i++) {
+        if (i != t->loop_end_snap)
+          side_exits += t->exit_count[i];
+      }
+      if (side_exits > SPT_JIT_BLACKLIST_SIDE_EXITS) {
+        if (js->debug) {
+          fprintf(stderr,
+                  "[JIT] runtime blacklist: proto=%p pc_offset=%d "
+                  "side_exits=%llu entry_count=%u runtime_fails=%d\n",
+                  (void *)p, pc_offset,
+                  (unsigned long long)side_exits, t->entry_count,
+                  e->runtime_fails + 1);
+        }
+        sptir_free(&t->ir);
+        free(t);
+        e->trace = NULL;
+        if (e->runtime_fails < 0xFFFF) e->runtime_fails++;
+        if (e->runtime_fails >= SPT_JIT_MAX_RUNTIME_FAILS) {
+          e->aborts = SPT_JIT_MAX_ABORTS;  /* full blacklist */
+        } else {
+          e->counter = e->aborts + e->runtime_fails;  /* phase-shift retry */
+        }
+        return 0;
+      }
+    }
     return sptjit_trace_enter(L, ci, pc);
   }
 

@@ -104,6 +104,19 @@ typedef l_uint32 Instruction;
    the recording/linking path on small kernels). */
 #define SPT_JIT_SIDE_MIN_IR 28
 
+/* Runtime guard-failure blacklist: a successfully-compiled trace whose guards
+   fail on every iteration (e.g. a short-string guard on a long string) is a
+   net loss -- the trace prologue + exit-stub flush costs more than simply
+   interpreting the loop. The existing abort blacklist cannot catch this
+   (recording succeeded). We periodically sum the per-snapshot exit counters
+   EXCLUDING the loop-end snapshot (normal loop termination); if side exits
+   dominate, the trace is discarded and the hot entry's runtime_fails counter
+   incremented. After MAX_RUNTIME_FAILS discards the entry is fully blacklisted.
+   CHECK_INTERVAL amortizes the O(nsnaps) scan; SIDE_EXITS is the threshold. */
+#define SPT_JIT_BLACKLIST_CHECK_INTERVAL 256
+#define SPT_JIT_BLACKLIST_SIDE_EXITS   10000
+#define SPT_JIT_MAX_RUNTIME_FAILS         3
+
 /* Maximum distinct live-in slots tracked for the per-entry type recheck.
    Loops rarely carry more than a handful of typed live-ins; a trace exceeding
    this falls back to a full-IR scan at entry (correct, just slower). */

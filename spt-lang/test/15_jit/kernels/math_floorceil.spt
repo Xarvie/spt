@@ -1,0 +1,47 @@
+// math.floor / math.ceil in hot loops (§10.61). Both are dot-calls (SELF + CALL on
+// the math module); the SELF resolves the file-static math_floor / math_ceil C
+// function (via lmathlib's spt_jit_math_floorceil accessor). The CALL lowers by
+// argument type: an INTEGER argument is its own floor/ceil, so the result ref is
+// the argument ref unchanged (no op); a FLOAT argument lowers to SPTIR_TOINT, which
+// emits roundsd (mode 0x09 floor / 0x0A ceil) to round to an integral double, then
+// a convert-round-trip range guard (cvtsd2si; cvtsi2sd; ucomisd) -- in lua_Integer
+// range [-2^63, 2^63) the round-trip is exact (including the boundary -2^63), out of
+// range cvtsd2si saturates so the round-trip differs, and a NaN is unordered; either
+// failure side-exits. The guard resumes at the SELF (not the CALL): the interpreter
+// re-executes SELF+CALL and returns the float for out-of-range / NaN inputs, exactly
+// as Lua's pushnumint does (idempotent -- floor/ceil has no side effects). A record-
+// time observation aborts the trace when the live argument is already out of range,
+// so an always-out-of-range loop runs in the interpreter rather than compiling an
+// always-side-exiting trace. floor/ceil nests with min/max/abs through the multiret
+// machinery (an inner result feeds the floor arg, or floor feeds an enclosing min).
+// Covers float floor/ceil (positive and negative), integer identity, floor feeding
+// min, floor of a nested min, ceil of a difference, and floor + ceil combined. The
+// accumulated values are the divergence detectors.
+
+int a = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { float y = x * 0.7 - 35.0; a = a + math.floor(y); } }       // float floor (pos+neg)
+print(a);
+
+int b = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { float y = x * 0.7 - 35.0; b = b + math.ceil(y); } }        // float ceil (pos+neg)
+print(b);
+
+int c = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { c = c + math.floor(x) + math.ceil(x - 50); } }             // integer identity (floor & ceil)
+print(c);
+
+int d = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { d = d + math.min(40, math.floor(x * 0.9)); } }             // floor feeding min (multiret)
+print(d);
+
+int e = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { float lo = x * 0.5; e = e + math.floor(math.min(lo, 20.0)); } }  // floor of nested min (multiret)
+print(e);
+
+int f = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { f = f + math.ceil((x - 50) * 0.5); } }                     // ceil of a scaled difference
+print(f);
+
+int g = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { float y = x * 1.3 - 60.0; g = g + math.floor(y) + math.ceil(y); } }  // floor + ceil together
+print(g);

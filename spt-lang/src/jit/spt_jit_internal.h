@@ -55,6 +55,16 @@ struct SPTTrace {
      *side* exit (type/bounds guard) is the signal for side-trace chaining. */
   uint64_t exit_count[SPT_JIT_MAX_SNAPSHOTS];
 
+  /* Snapshot index of the FORLOOP "count > 0" guard (the loop-continuation
+     guard). Exits from this snapshot are normal loop termination and are
+     excluded from the runtime guard-failure blacklist check. -1 = none (e.g.
+     side traces closed with sptir_exit). */
+  int loop_end_snap;
+
+  /* Number of times this trace has been entered (incremented in
+     sptjit_trace_enter). Used to amortize the runtime blacklist check. */
+  uint32_t entry_count;
+
   /* Link info: which trace does each exit link to? -1 = no link */
   int exit_links[SPT_JIT_MAX_EXITS];
 
@@ -104,6 +114,8 @@ typedef struct {
   int pc_offset;
   uint16_t counter;
   uint16_t aborts;  /* times recording aborted here; blacklist once it's high */
+  uint16_t runtime_fails; /* times a compiled trace was discarded for excessive
+                              runtime guard failures; contributes to blacklist */
   SPTTrace *trace;  /* compiled trace, if any */
 } SPTHotEntry;
 

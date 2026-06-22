@@ -278,6 +278,8 @@ void sptasm_ucomisd(SPTAsm *a, SPTXmmReg r1, SPTXmmReg r2);
 void sptasm_cvtsi2sd(SPTAsm *a, SPTXmmReg dst, SPTReg src);
 /* CVTSD2SI reg, xmm (float to int, truncation) */
 void sptasm_cvtsd2si(SPTAsm *a, SPTReg dst, SPTXmmReg src);
+/* ROUNDSD xmm, xmm, imm8 (round double to integral double; 0x09=floor, 0x0A=ceil) */
+void sptasm_roundsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src, uint8_t imm8);
 void sptasm_movq_xmm_to_gpr(SPTAsm *a, SPTReg dst, SPTXmmReg src);
 void sptasm_movq_gpr_to_xmm(SPTAsm *a, SPTXmmReg dst, SPTReg src);
 /* CVTSS2SD / CVTSD2SS not needed; we use double everywhere */

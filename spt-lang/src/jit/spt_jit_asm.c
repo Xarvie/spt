@@ -618,6 +618,19 @@ void sptasm_cvtsd2si(SPTAsm *a, SPTReg dst, SPTXmmReg src) {
   emit_modrm(a, 3, dst, src);
 }
 
+/* ROUNDSD xmm, xmm, imm8 (SSE4.1): round a double to an integral double using
+   the imm8 rounding mode. imm8 = 0x09 -> floor (toward -inf, inexact masked),
+   0x0A -> ceil (toward +inf). Encoding: 66 0F 3A 0B /r ib. */
+void sptasm_roundsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src, uint8_t imm8) {
+  sptasm_byte(a, 0x66);
+  emit_rex_xmm_xmm(a, dst, src);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0x3A);
+  sptasm_byte(a, 0x0B);
+  emit_modrm(a, 3, dst, src);
+  sptasm_byte(a, imm8);
+}
+
 /* =====================================================================
 ** Executable memory management
 ** ===================================================================== */

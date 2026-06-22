@@ -1215,6 +1215,29 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
       break;
     }
 
+    case SPTIR_TOINT: {
+      /* Float -> integer with rounding (math.floor / math.ceil). aux = rounding
+         mode (1 = floor, 2 = ceil). roundsd produces an integral double; we then
+         guard that it fits a lua_Integer exactly -- Lua's lua_numbertointeger
+         range is [-2^63, 2^63). The guard is a convert-round-trip: cvtsd2si then
+         cvtsi2sd, and ucomisd the result against the rounded value. In range the
+         round-trip is exact (== holds, including the boundary -2^63); out of
+         range cvtsd2si saturates to INT64_MIN so the round-trip differs (and a
+         NaN input is unordered) -> side-exit, where the interpreter returns the
+         float, matching Lua. The integer result is the cvtsd2si value. */
+      gen_load_xmm(cg, SPT_XMM0, inst->op1);              /* XMM0 = x (float) */
+      uint8_t rmode = ((int)inst->aux == 2) ? 0x0A : 0x09; /* ceil : floor */
+      sptasm_roundsd(a, SPT_XMM0, SPT_XMM0, rmode);       /* XMM0 = round(x) */
+      sptasm_cvtsd2si(a, SPT_RAX, SPT_XMM0);              /* RAX = (int64)round(x) */
+      sptasm_cvtsi2sd(a, SPT_XMM1, SPT_RAX);              /* XMM1 = (double)RAX */
+      sptasm_ucomisd(a, SPT_XMM0, SPT_XMM1);              /* compare round-trip */
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      sptasm_jcc(a, SPT_CC_NE, exlbl);   /* not equal -> out of integer range */
+      sptasm_jcc(a, SPT_CC_P, exlbl);    /* unordered (NaN) -> out of range */
+      gen_store(cg, idx, SPT_RAX);
+      break;
+    }
+
     case SPTIR_LEN: {
       /* Get array length: Table->loglen */
       gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);

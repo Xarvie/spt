@@ -1,0 +1,45 @@
+// math.abs in hot loops (§10.60). math.abs is a dot-call (SELF + CALL on the math
+// module); the SELF resolves the file-static math_abs C function (via lmathlib's
+// spt_jit_math_abs accessor, which also hands back the libm fabs pointer for the
+// float case). The CALL lowers by argument type: INTEGER abs to a branchless
+// select (x<0) ? -x : x via emit_select -- exact, including the INT64_MIN
+// wraparound (NEG wraps as Lua's 0u-n does); FLOAT abs to FMATH(fabs) -- a select
+// would mishandle -0.0 (it compares equal to +0.0, keeping the -0.0 bit pattern,
+// but Lua's fabs returns +0.0), and fabs is also correct for NaN. abs nests with
+// min/max through the multiret machinery (inner result feeds the abs arg, or abs
+// feeds an enclosing min/max). Covers int/float abs, abs of a difference, two abs
+// in one expression, the -0.0 case, abs of a nested min, abs of a clamp, and abs
+// feeding min. The accumulated value is the wrong-sign / divergence detector.
+
+int a = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { int y = x - 50; a = a + math.abs(y); } }       // int abs
+print(a);
+
+float fa = 0.0;
+for (int r = 0, 200000) { for (int x = 0, 100) { float y = x * 1.0 - 50.0; fa = fa + math.abs(y); } }  // float abs (fabs)
+print(fa);
+
+int td = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { td = td + math.abs(x - 30) + math.abs(60 - x); } }  // two abs in one expr
+print(td);
+
+float nz = 0.0;
+for (int r = 0, 200000) { for (int x = 0, 100) { float y = 0.0 - (x * 0.0); nz = nz + math.abs(y); } }  // -0.0 case (must be +0.0)
+print(nz);
+
+int am = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { am = am + math.abs(math.min(x - 50, 10)); } }   // abs of nested min (multiret)
+print(am);
+
+int lo = 5; int hi = 90;
+int ac = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { ac = ac + math.abs(math.max(lo, math.min(hi, x - 20))); } }  // abs of clamp
+print(ac);
+
+int ma = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { ma = ma + math.min(40, math.abs(x - 50)); } }   // abs feeding min
+print(ma);
+
+float fs = 0.0;
+for (int r = 1, 200000) { for (int x = 1, 100) { fs = fs + math.abs(math.sqrt(x * 1.0) - 5.0); } }  // abs of sqrt diff
+print(fs);

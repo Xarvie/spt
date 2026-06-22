@@ -1,0 +1,17 @@
+/* Runtime guard-failure blacklist test.
+   The if-arms contain array writes (GETI/SETI), which if-conversion can't
+   handle, so the recorder falls back to a guarded branch. The profiler samples
+   64 iterations (i=8..71), all < 100, so the trace records the true arm with a
+   "i < 100" guard. Every iteration with i >= 100 fails that guard -- a net loss
+   trace. The runtime blacklist must discard it after side_exits exceeds the
+   threshold, then blacklist the entry after MAX_RUNTIME_FAILS discards.
+   Output must match the interpreter exactly. */
+list<int> arr = [0];
+for (int i = 0, 60000) {
+    if (i < 100) {
+        arr[0] = arr[0] + 1;
+    } else {
+        arr[0] = arr[0] + 2;
+    }
+}
+print(arr[0]);

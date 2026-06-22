@@ -1,0 +1,46 @@
+// math.min(a,b) / math.max(a,b) in hot loops, lowered to a branchless select
+// (§10.59). math.min/math.max are dot-calls (SELF + CALL on the math module); the
+// SELF resolves the file-static math_min/math_max C function (via lmathlib's
+// spt_jit_math_minmax accessor, mirroring spt_jit_unary_math) and the CALL lowers
+// to emit_select: math.max(a,b) = (a<b)?b:a, math.min(a,b) = (a>b)?b:a, which
+// matches Lua exactly including ties (->a) and NaN (compare-false ->else ->a). No
+// new IR op or codegen -- the existing int (CMPSET/SUB/MUL/ADD) and float
+// (FCMPMASK/FSELECT, NaN-safe) select machinery is reused. The canonical nested
+// clamp math.max(lo, math.min(hi, x)) is multiret (inner c==0, outer b==0), handled
+// by tracking the trailing-arg slot. Covers single min/max, int/float clamp, both
+// clamp orders, deep 3-level nesting, mixed int/float (promoted), and negative
+// bounds. The accumulated value is the wrong-branch / divergence detector.
+
+int lo = 5; int hi = 90;
+int a = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { a = a + math.max(lo, math.min(hi, x)); } }   // int clamp (nested)
+print(a);
+
+float flo = 10.0; float fhi = 40.0;
+float fa = 0.0;
+for (int r = 0, 200000) { for (int x = 0, 100) { float xf = x * 1.0; fa = fa + math.max(flo, math.min(fhi, xf)); } }  // float clamp
+print(fa);
+
+int mn = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { mn = mn + math.min(x, 50); } }                // single min
+print(mn);
+
+int mx = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { mx = mx + math.max(x, 50); } }                // single max
+print(mx);
+
+int dn = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { dn = dn + math.max(0, math.min(80, math.max(20, x))); } }  // deep 3-level nest
+print(dn);
+
+int co = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { co = co + math.min(hi, math.max(lo, x)); } }  // clamp, min outer
+print(co);
+
+float mxd = 0.0;
+for (int r = 0, 200000) { for (int x = 0, 100) { mxd = mxd + math.min(x, 50.5); } }            // mixed int/float -> float
+print(mxd);
+
+int ng = 0;
+for (int r = 0, 200000) { for (int x = 0, 100) { int y = x - 50; ng = ng + math.max(-10, math.min(10, y)); } }  // negative bounds
+print(ng);

@@ -693,6 +693,34 @@ spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f) {
   return NULL;
 }
 
+/* JIT support: identify the file-static math_min / math_max so a trace can lower
+   `math.min(a,b)` / `math.max(a,b)` to a branchless select. Mirrors
+   spt_jit_unary_math. Returns 1 for math_min, 2 for math_max, else 0. */
+int spt_jit_math_minmax(lua_CFunction f) {
+  if (f == math_min) return 1;
+  if (f == math_max) return 2;
+  return 0;
+}
+
+/* JIT support: identify the file-static math_abs so a trace can lower
+   `math.abs(x)` without a real call. Returns the libm fabs pointer (used for
+   the float path's SPTIR_FMATH) when f is math_abs, else NULL. Mirrors
+   spt_jit_unary_math; the integer path is lowered to a branchless select. */
+spt_unary_libm_fn spt_jit_math_abs(lua_CFunction f) {
+  if (f == math_abs) return fabs;
+  return NULL;
+}
+
+/* JIT support: identify the file-static math_floor / math_ceil so a trace can
+   lower `math.floor(x)` / `math.ceil(x)` to a rounding convert (SPTIR_TOINT).
+   Mirrors spt_jit_math_minmax. Returns 1 for math_floor, 2 for math_ceil,
+   else 0. */
+int spt_jit_math_floorceil(lua_CFunction f) {
+  if (f == math_floor) return 1;
+  if (f == math_ceil)  return 2;
+  return 0;
+}
+
 static const luaL_Reg mathlib[] = {{"abs", math_abs},
                                    {"acos", math_acos},
                                    {"asin", math_asin},
