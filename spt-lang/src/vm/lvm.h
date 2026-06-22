@@ -113,6 +113,7 @@ LUAI_FUNC void luaV_concat(lua_State *L, int total);
 LUAI_FUNC lua_Integer luaV_idiv(lua_State *L, lua_Integer x, lua_Integer y);
 LUAI_FUNC lua_Integer luaV_mod(lua_State *L, lua_Integer x, lua_Integer y);
 LUAI_FUNC lua_Number luaV_modf(lua_State *L, lua_Number x, lua_Number y);
+LUAI_FUNC double spt_jit_luamodf(double x, double y);  /* JIT: bit-exact float % wrapper */
 LUAI_FUNC lua_Integer luaV_shiftl(lua_Integer x, lua_Integer y);
 LUAI_FUNC void luaV_objlen(lua_State *L, StkId ra, const TValue *rb);
 

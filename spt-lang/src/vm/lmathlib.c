@@ -693,6 +693,21 @@ spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f) {
   return NULL;
 }
 
+/* For the SPT JIT: map a math-library C function to its underlying BINARY libm
+   function (double(double,double)), or NULL. Mirrors spt_jit_unary_math.
+   Only math.pow is currently mapped (always float, reads arg2/arg3, trivially
+   clean). math.fmod has an integer fast path and is deferred.
+   NOTE: math_pow is file-static AND inside LUA_COMPAT_MATHLIB, so this function
+   must also be inside that #if -- when LUA_COMPAT_MATHLIB is undefined,
+   math.pow does not exist and the JIT does not need to lower it. */
+#if defined(LUA_COMPAT_MATHLIB)
+typedef double (*spt_binary_libm_fn)(double, double);
+spt_binary_libm_fn spt_jit_binary_math(lua_CFunction f) {
+  if (f == math_pow) return pow;
+  return NULL;
+}
+#endif
+
 /* JIT support: identify the file-static math_min / math_max so a trace can lower
    `math.min(a,b)` / `math.max(a,b)` to a branchless select. Mirrors
    spt_jit_unary_math. Returns 1 for math_min, 2 for math_max, else 0. */

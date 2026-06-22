@@ -35,6 +35,18 @@
    (the math_* functions are file-static there). */
 typedef double (*spt_unary_libm_fn)(double);
 extern spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f);
+/* Identify math.pow for binary-libm FMATH2 lowering (defined in lmathlib.c
+   where math_pow is file-static). Returns the libm pow pointer or NULL.
+   math_pow lives inside LUA_COMPAT_MATHLIB; when that is undefined, math.pow
+   does not exist, so provide a NULL fallback to keep the caller simple. */
+typedef double (*spt_binary_libm_fn)(double, double);
+#if defined(LUA_COMPAT_MATHLIB)
+extern spt_binary_libm_fn spt_jit_binary_math(lua_CFunction f);
+#else
+static spt_binary_libm_fn spt_jit_binary_math(lua_CFunction f) { (void)f; return NULL; }
+#endif
+/* Bit-exact float % wrapper (defined in lvm.c, reuses luai_nummod). */
+extern double spt_jit_luamodf(double x, double y);
 /* Identify string.len / string.byte for SLEN / SBYTE lowering (defined in
    lstrlib.c where str_len/str_byte are file-static). 1 = str_len, 2 = str_byte. */
 extern int spt_jit_str_op(lua_CFunction f);
@@ -369,6 +381,10 @@ typedef struct {
      slot is lowered to an SPTIR_FMATH instead of a real call. -1 slot = none. */
   void *pending_cfn_libm;   /* libm double(*)(double), baked into the FMATH */
   int pending_cfn_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  /* Pending binary-math call armed by a preceding SELF (e.g. math.pow): the
+     next OP_CALL on this slot is lowered to SPTIR_FMATH2. -1 slot = none. */
+  void *pending_cfn2_libm;  /* libm double(*)(double,double), baked into FMATH2 */
+  int pending_cfn2_slot;    /* absolute slot R[A] of the SELF/CALL; -1 = none */
   /* Pending string-module call armed by an OP_SELF that resolved string.len /
      string.byte to its C function. The next CALL on this slot lowers to SLEN /
      SBYTE instead of a real call. pending_str_op: 1 = SLEN (string.len(s)),
@@ -1793,12 +1809,28 @@ static int rec_arith(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_
     return SPTIR_NULL;
   }
 
-  /* MOD ('%') and IDIV ('~/') stay integer-only here. Float mod/idiv need a
-     libm fmod/floor plus Lua's sign correction and are not handled in codegen
-     (emitting them as a float op produced garbage), so abort and let the
-     interpreter -- which is correct -- run them. Integer mod/idiv fall through
-     to the both-int path below, where codegen applies the floored correction. */
-  if ((op == SPTIR_MOD || op == SPTIR_IDIV) &&
+  /* MOD ('%') with float operands: emit FMATH2 with the bit-exact spt_jit_luamodf
+     wrapper (the interpreter's own luai_nummod, so -0.0/NaN/denormal edge cases
+     are identical). Integer MOD falls through to the both-int path below.
+     IDIV ('~/') float is NOT handled (would need floor() + sign correction in
+     codegen) -- abort and let the interpreter run it. */
+  if (op == SPTIR_MOD && !(a_type == SPTT_INT && b_type == SPTT_INT)) {
+    if (a_type == SPTT_INT) {
+      a_ref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, a_ref, SPTIR_NULL, 0);
+      a_type = SPTT_FLT;
+    } else if (a_type != SPTT_FLT) {
+      rc->aborted = 1; return SPTIR_NULL;
+    }
+    if (b_type == SPTT_INT) {
+      b_ref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, b_ref, SPTIR_NULL, 0);
+      b_type = SPTT_FLT;
+    } else if (b_type != SPTT_FLT) {
+      rc->aborted = 1; return SPTIR_NULL;
+    }
+    return sptir_emit(ir, SPTIR_FMATH2, SPTT_FLT, a_ref, b_ref,
+                      (int64_t)(intptr_t)spt_jit_luamodf);
+  }
+  if ((op == SPTIR_IDIV) &&
       !(a_type == SPTT_INT && b_type == SPTT_INT)) {
     rc->aborted = 1;
     return SPTIR_NULL;
@@ -3724,6 +3756,39 @@ static int rec_inst(SPTRecCtx *rc) {
         break;
       }
 
+      /* Pending binary-math call armed by a preceding SELF (e.g. math.pow)?
+         The SPT convention puts the receiver at R[A+1] and the two real
+         arguments at R[A+2] and R[A+3]; math_pow reads luaL_checknumber(L,2)
+         and luaL_checknumber(L,3). Lower to SPTIR_FMATH2. Requires exactly
+         two real args (B == 4: function + receiver + arg1 + arg2) and one
+         result (C == 2). */
+      if (rc->pending_cfn2_slot == rc->frame_base + a) {
+        void *libm2 = rc->pending_cfn2_libm;
+        rc->pending_cfn2_slot = -1; rc->pending_cfn2_libm = NULL;
+        if (b != 4 || c != 2) { rc->aborted = 1; return 0; }
+        int arg1 = ir->reg_map[rc->frame_base + a + 2];
+        int arg2 = ir->reg_map[rc->frame_base + a + 3];
+        if (arg1 < 0 || arg2 < 0) { rc->aborted = 1; return 0; }
+        SPTType at1 = ir->reg_type[rc->frame_base + a + 2];
+        SPTType at2 = ir->reg_type[rc->frame_base + a + 3];
+        if (at1 == SPTT_INT) {
+          arg1 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg1, SPTIR_NULL, 0);
+        } else if (at1 != SPTT_FLT) {
+          rc->aborted = 1; return 0;       /* non-numeric arg1 */
+        }
+        if (at2 == SPTT_INT) {
+          arg2 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg2, SPTIR_NULL, 0);
+        } else if (at2 != SPTT_FLT) {
+          rc->aborted = 1; return 0;       /* non-numeric arg2 */
+        }
+        int fref = sptir_emit(ir, SPTIR_FMATH2, SPTT_FLT, arg1, arg2,
+                              (int64_t)(intptr_t)libm2);
+        ir->reg_map[rc->frame_base + a] = fref;
+        ir->reg_type[rc->frame_base + a] = SPTT_FLT;
+        if (a > ir->maxslot) ir->maxslot = a;
+        break;
+      }
+
       /* Pending string.len / string.byte armed by a preceding SELF? Lower to
          SLEN / SBYTE. SPT puts the receiver (string module) at R[A+1], s at
          R[A+2], and (for byte) i at R[A+3] -- str_* read arg2 = s, arg3 = i.
@@ -4229,11 +4294,12 @@ static int rec_inst(SPTRecCtx *rc) {
          (LUA_VLCF), so the value is the lua_CFunction directly. */
       if (!ttislcf(fv)) { rc->aborted = 1; return 0; }
       spt_unary_libm_fn libm = spt_jit_unary_math(fvalue(fv));
-      int strop = libm ? 0 : spt_jit_str_op(fvalue(fv));
-      int mmop = (libm || strop) ? 0 : spt_jit_math_minmax(fvalue(fv));
-      spt_unary_libm_fn absfn = (libm || strop || mmop) ? NULL : spt_jit_math_abs(fvalue(fv));
-      int fcop = (libm || strop || mmop || absfn) ? 0 : spt_jit_math_floorceil(fvalue(fv));
-      if (!libm && !strop && !mmop && !absfn && !fcop) { rc->aborted = 1; return 0; }
+      spt_binary_libm_fn libm2 = libm ? NULL : spt_jit_binary_math(fvalue(fv));
+      int strop = (libm || libm2) ? 0 : spt_jit_str_op(fvalue(fv));
+      int mmop = (libm || libm2 || strop) ? 0 : spt_jit_math_minmax(fvalue(fv));
+      spt_unary_libm_fn absfn = (libm || libm2 || strop || mmop) ? NULL : spt_jit_math_abs(fvalue(fv));
+      int fcop = (libm || libm2 || strop || mmop || absfn) ? 0 : spt_jit_math_floorceil(fvalue(fv));
+      if (!libm && !libm2 && !strop && !mmop && !absfn && !fcop) { rc->aborted = 1; return 0; }
       int kref = sptir_kptr(ir, (void *)key);
       int gref = sptir_emit(ir, SPTIR_GUARD_CFUNC, SPTT_NIL, bref, kref,
                             (int64_t)(intptr_t)fvalue(fv));
@@ -4245,6 +4311,9 @@ static int rec_inst(SPTRecCtx *rc) {
       if (libm) {
         rc->pending_cfn_libm = (void *)libm;
         rc->pending_cfn_slot = rc->frame_base + a;
+      } else if (libm2) {
+        rc->pending_cfn2_libm = (void *)libm2;
+        rc->pending_cfn2_slot = rc->frame_base + a;
       } else if (strop) {                     /* string.len (1) / string.byte (2) */
         rc->pending_str_op = strop;
         rc->pending_str_slot = rc->frame_base + a;
@@ -4325,6 +4394,8 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.inline_fn_proto = NULL;
   rc.pending_cfn_libm = NULL;
   rc.pending_cfn_slot = -1;
+  rc.pending_cfn2_libm = NULL;
+  rc.pending_cfn2_slot = -1;
   rc.pending_str_slot = -1;
   rc.pending_str_op = 0;
   rc.pending_str_self_pc = NULL;

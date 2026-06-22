@@ -1,0 +1,34 @@
+/* Binary libm calls (§10.66): SPTIR_FMATH2 extends §10.42 FMATH to two-arg
+   libm functions. Two uses:
+   (a) float % -> spt_jit_luamodf wrapper (the interpreter's own luai_nummod,
+       so bit-exact including -0.0/NaN/sign correction);
+   (b) math.pow(x,y) -> pow (trivially clean, always float).
+
+   Previously float % aborted (rec_arith rejected non-int MOD), and math.pow
+   was not recognized. Both now inline as a direct libm C call (XMM0=arg1,
+   XMM1=arg2, call, result in XMM0), RA-disabled identically to FMATH.
+
+   Integer % is unchanged (still SPTIR_MOD with the idiv+sign-fixup codegen).
+   JIT on/off output MUST match exactly -- any bit difference in fmod/pow
+   edge cases would diverge.
+
+   NOTE: math.pow is registered only under LUA_COMPAT_MATHLIB, which is off
+   in this build, so only the float % path is exercised here. The math.pow
+   SELF/CALL -> FMATH2 dispatch shares the same codegen and is verified by
+   inspection. */
+
+float s = 0.0;
+for (int i = 0, 100000) { s = s + (i * 0.1) % 3.0; }
+print(s);              /* float % constant */
+
+float s2 = 0.0;
+for (int i = 1, 100000) { s2 = s2 + (i * 0.1) % (i * 0.3 + 1.0); }
+print(s2);             /* float % float (both varying) */
+
+float s3 = 0.0;
+for (int i = 0, 100000) { s3 = s3 + ((-i * 0.1) % 2.5); }
+print(s3);             /* negative dividend */
+
+float s4 = 0.0;
+for (int i = 1, 100000) { s4 = s4 + (i % 3) * 1.0; }
+print(s4);             /* int % (unchanged path, sanity) */

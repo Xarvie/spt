@@ -2674,3 +2674,30 @@ JIT on/off 输出**完全一致**(整数累加 + 浮点累加 + 交叉更新)。
 (3) **写后返同字段命中多写分支即对**:多写分支在 §10.52 前推分支**之前**检查,故值返回多写方法里的写后读直接走无守卫 re-read(录制时 VM 已写、运行期 store 先于 load 同节点),不依赖前推、位精确。前推(§10.52)仍只服务**单写**+返同字段(`n_writes==1`)。
 (4) **保守门的代价是"漏优化但不错"**:门在值返回时禁 GETI/GETTABLE/LEN,会让"GETI 在写**之前**"这种其实安全的形态(如 `int load(list a,int i){ this.x=a[i]; this.hits=this.hits+1; return this.x; }`,GETI 在所有写之前 → 无写后守卫)也被拒。精确做法是"只禁出现在 SETFIELD **之后**的 GETI/GETTABLE/LEN"(需按写位置扫描),可作后续小扩展;当前保守门下这些形态干净 abort 回解释器(正确、仅不加速),符合"慢但对>快但错"。
 (5) **HANDOFF.md 曾严重滞后,本节一并校正**:接手时 HANDOFF.md 停在 §10.62,把 §10.63(运行期守卫黑名单)、§10.64(通用多写)列为"待办",而 ROADMAP/DEV_NOTES 已到 §10.64。本节把 HANDOFF.md 全面更新到 §10.65,与 ROADMAP/DEV_NOTES 对齐——交接文档的真实基线必须随代码同步,否则误导接手者。
+
+## §10.66 FMATH2:二元 libm C 调用(float % + math.pow,镜像 §10.42 FMATH,✅ 阶段达成)
+
+§10.42 的 FMATH 是 JIT **首个 C 调用机制**,但只覆盖**一元** libm(math.sqrt/sin/...)。本节加 **SPTIR_FMATH2**——二元 libm C 调用,拿下两个此前 abort 的场景:
+1. **float %**:`(i * 0.1) % 3.0` 此前在 `rec_arith` 里因"float MOD/IDIV need libm fmod + sign correction"而 abort。本节通过 `spt_jit_luamodf` wrapper(直接复用解释器自己的 `luai_nummod`)emit FMATH2,**位精确**(包括 -0.0/NaN/符号修正)。
+2. **math.pow(x,y)**:此前 OP_SELF 不识别 math.pow。本节加 `spt_jit_binary_math` 映射 math_pow→pow,OP_SELF 设 `pending_cfn2_{libm,slot}`,OP_CALL emit FMATH2。
+
+### 实现(4 部件,镜像 §10.42 + 1 wrapper)
+1. **SPTIR_FMATH2**(op1=float arg1, op2=float arg2, aux=double(*)(double,double) libm 指针, 结果 float):codegen 与 FMATH 完全对称,只多一条 `gen_load_xmm XMM1=arg2`(x64 SysV + Windows fastcall ABI:浮点前两参在 XMM0/XMM1)。不在 `ra_op_is_safe` → 自动禁 RA,与 FMATH 一致。
+2. **spt_jit_luamodf wrapper**(lvm.c):`luai_nummod(NULL, x, y, r)` 的 L 参数是 `(void)L`(unused),故 NULL 安全。这是**解释器自己的 modulo 代码**,所以结果与解释器逐位相同——无需手写 branchless lowering、无需担心 fmod vs remainder 差异、无需复现 Lua 的符号修正(`m=fmod(a,b); if ((m>0)?(b<0):(m<0&&b>0)) m+=b;`)。wrapper 是 leaf 函数(无 lua_State 接触),C call ABI 安全。
+3. **spt_jit_binary_math**(lmathlib.c,`#if defined(LUA_COMPAT_MATHLIB)` 内):映射 `math_pow → pow`。math_pow 是 file-static 且住在 LUA_COMPAT_MATHLIB 块内,故此函数也必须在同一 `#if` 内;spt_jit.c 的 extern 声明提供 `#else` NULL fallback,使 recorder 在 LUA_COMPAT_MATHLIB 未定义时也能编译(只是 math.pow 路径变成 dead code)。
+4. **recorder 两处**:
+   - **rec_arith float MOD**:原 `if ((MOD||IDIV) && !int-int) abort` 改为 `if (MOD && !int-int) { promote both to float; emit FMATH2(luamodf) }`。IDIV float 仍 abort(需 floor+符号修正,未做)。
+   - **OP_SELF/OP_CALL**:SELF handler 新增 `libm2 = spt_jit_binary_math(f)` 检查(与既有 libm/strop/mmop/absfn/fcop 互斥链),命中则设 `pending_cfn2_{libm,slot}`;CALL handler 新增 FMATH2 分支(b==4 即 2 真参 + 接收者 + 函数,c==2 即 1 结果,取 R[A+2]/R[A+3],int 参插 TOFLT,emit FMATH2)。
+
+### 关键设计决策
+- **luamodf wrapper 而非直接 fmod**:Lua 的 `%` 不是 C 的 `%` 也不是裸 fmod——`luai_nummod` 在 fmod 之上加了符号修正使结果与除数同号。直接 emit `fmod` 会产生符号差异(如 `(-0.1)%2.5` 在 Lua 是 `2.4`,在 C fmod 是 `-0.1`)。wrapper 复用解释器代码 = **零差异保证**,且 wrapper 是 leaf(不触 GC、不触 lua_State),C call ABI 干净。
+- **math.fmod 延迟**:math.fmod 有整数快速路径(`lua_isinteger` → `lua_pushinteger`),若 JIT 把 int 参 promote to float 再 fmod 会返回 float 而非 int → 语义错。故 `spt_jit_binary_math` 只映射 math_pow(恒 float),math_fmod 留待后续(需在 CALL handler 检查两参类型分派 int/float 路径)。
+- **LUA_COMPAT_MATHLIB 现状**:ltests.h:14 定义了它,但 ltests.h 从未被任何 .c include → 当前构建中 LUA_COMPAT_MATHLIB **未定义** → math.pow 不存在。float % 路径(经 luamodf)已由差分测试验证;math.pow 路径(SELF/CALL→FMATH2)共享同一 codegen,由代码审查验证。
+
+### 验证(完整门槛,全绿)
+构建 0 err。**363/363 ctest 全通过**(新增 `fmath2_mod_pow.spt`,Test #363)· **kernel 差分 pass=129 fail=1**(唯一 fail = `foreach_map_str.spt` 预存 mismatch,map 哈希迭代顺序非确定性,与 FMATH2 无关)· **模糊器 200 例 0 失配**(seed=42)· **float if-conv 模糊器 200 例 0 失配**(seed=42)· `fmath2_mod_pow.spt` 4 条 trace 全编译(float % constant/varying/negative + int % sanity),off==on 位精确,entries==exits、guard_fail=0。§10.42–§10.65 零回归。
+
+**关键教训**:
+(1) **复用解释器代码 = 位精确的最短路径**:float % 的符号修正、NaN/-0.0 边界、denormal 处理都在 `luai_nummod` 里。手写 branchless lowering 不仅工作量大,还容易在边界 case 出错。用一个 leaf wrapper 直接调解释器自己的宏,**零差异保证 + 零新边界分析**。这是"已验证机器 × 新场景"的又一例(§10.42 FMATH 的 libm 调用机器 × luamodf wrapper)。
+(2) **二元 libm 的 codegen 增量极小**:FMATH2 vs FMATH 只多一条 `gen_load_xmm XMM1=arg2`——x64 ABI 把浮点前两参放 XMM0/XMM1,其余(帧对齐、RSP 调整、RAX=fn、call、存 XMM0)完全相同。RA-disabled 也相同(FMATH/FMATH2 都不在 `ra_op_is_safe`)。这使二元扩展的风险极低。
+(3) **LUA_COMPAT_MATHLIB 的条件编译陷阱**:math_pow 是 file-static 且在 `#if LUA_COMPAT_MATHLIB` 内,故 `spt_jit_binary_math` 也必须在同一 `#if` 内(否则引用不到 math_pow)。但 spt_jit.c 的 extern 声明在块外,需要 `#else` NULL fallback 保持链接。这是 C 条件编译跨翻译单元的典型坑。

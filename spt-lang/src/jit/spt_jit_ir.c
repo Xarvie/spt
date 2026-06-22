@@ -528,6 +528,7 @@ static const char *iropname(int op) {
     case SPTIR_MOD: return "MOD"; case SPTIR_IDIV: return "IDIV";
     case SPTIR_POW: return "POW"; case SPTIR_NEG: return "NEG";
     case SPTIR_FMATH: return "FMATH";
+    case SPTIR_FMATH2: return "FMATH2";
     case SPTIR_BAND: return "BAND"; case SPTIR_BOR: return "BOR";
     case SPTIR_BXOR: return "BXOR"; case SPTIR_BNOT: return "BNOT";
     case SPTIR_SHL: return "SHL"; case SPTIR_SHR: return "SHR";

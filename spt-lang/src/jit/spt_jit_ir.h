@@ -75,6 +75,10 @@ typedef enum {
   SPTIR_FMATH,        /* libm unary math call: op1 = float arg, aux = double(*)(double)
                          libm function pointer. Result is float. Emits a C call
                          (disables RA for the trace). Used for math.sqrt/sin/... */
+  SPTIR_FMATH2,       /* libm binary math call: op1 = float arg1, op2 = float arg2,
+                         aux = double(*)(double,double) libm function pointer.
+                         Result is float. Emits a C call (disables RA). Used for
+                         math.pow and float % (via luamodf wrapper). */
 
   /* Bitwise (integer) */
   SPTIR_BAND,         /* op1 & op2 */

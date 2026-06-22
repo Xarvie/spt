@@ -1612,6 +1612,19 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
       gen_store_xmm(cg, idx, SPT_XMM0);                      /* result in XMM0 */
       break;
     }
+    case SPTIR_FMATH2: {
+      /* result = libm_fn(arg1, arg2). op1 = float arg1, op2 = float arg2,
+         aux = double(*)(double,double). Same RA-disabled / frame-alignment
+         reasoning as FMATH (§10.42); the only difference is a second XMM load
+         (XMM1 = arg2 per x64 SysV + Windows fastcall ABI). Used for math.pow
+         and float % (via the bit-exact spt_jit_luamodf wrapper). */
+      gen_load_xmm(cg, SPT_XMM0, inst->op1);                 /* XMM0 = arg1 */
+      gen_load_xmm(cg, SPT_XMM1, inst->op2);                 /* XMM1 = arg2 */
+      sptasm_mov_ri64(a, SPT_RAX, (int64_t)inst->aux);       /* RAX = libm fn */
+      sptasm_call_r(a, SPT_RAX);
+      gen_store_xmm(cg, idx, SPT_XMM0);                      /* result in XMM0 */
+      break;
+    }
 
     case SPTIR_SETFIELD: {
       /* map[K] = val  for a constant short-string key, val an int/float.

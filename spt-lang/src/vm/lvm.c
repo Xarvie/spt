@@ -791,6 +791,16 @@ lua_Number luaV_modf(lua_State *L, lua_Number m, lua_Number n) {
   return r;
 }
 
+/* JIT wrapper: bit-exact float % for SPTIR_FMATH2. luai_nummod's L is unused
+   (void)L, so NULL is safe. This is the interpreter's own modulo code, so the
+   result is identical to running float % in the interpreter -- including all
+   -0.0/NaN/denormal edge cases -- without hand-rolling a branchless lowering. */
+double spt_jit_luamodf(double x, double y) {
+  lua_Number r;
+  luai_nummod(NULL, x, y, r);
+  return (double)r;
+}
+
 /* number of bits in an integer */
 #define NBITS l_numbits(lua_Integer)
 
