@@ -1,0 +1,72 @@
+/* Multi-write VOID method inlining (§10.64): a straight-line method with TWO
+   OR MORE SETFIELDs is inlined by hoisting ALL field-access guards to the trace
+   entry (each this.<field> verified once per entry: key present + value type
+   matches), so the body emits guard-free GETFIELD/SETFIELD. Zero in-body field
+   guards -> no in-callee exits -> write-safe regardless of write count. This
+   lifts the §10.49 single-trailing-write restriction.
+
+   Covers: independent multi-write, write-after-read (swap), read-after-write of
+   a DIFFERENT field (the §10.52 abort case, now inlined), float fields. Output
+   must match the interpreter exactly -- any double-write or stale-read would
+   diverge. */
+class Pair {
+    int a; int b;
+    void __init(){ this.a = 0; this.b = 0; }
+    void update(int x){ this.a = x; this.b = x + 1; }           /* independent multi-write */
+    void swap(){ int t = this.a; this.a = this.b; this.b = t; } /* read-then-write-both */
+    void cross(){ this.a = this.b + 1; this.b = this.a + 1; }   /* write-then-read-different-field */
+    int sum(){ return this.a + this.b; }
+}
+
+class FPair {
+    float a; float b;
+    void __init(){ this.a = 0.0; this.b = 0.0; }
+    void update(float x){ this.a = x; this.b = x + 1.5; }       /* float multi-write */
+    float sum(){ return this.a + this.b; }
+}
+
+class Triple {
+    int a; int b; int c;
+    void __init(){ this.a = 0; this.b = 0; this.c = 0; }
+    void bump(int x){ this.a = this.a + x; this.b = this.b + x; this.c = this.c + x; } /* 3 writes */
+    int total(){ return this.a + this.b + this.c; }
+}
+
+Pair p = Pair();
+FPair fp = FPair();
+Triple tp = Triple();
+
+for (int r = 0, 100000) {
+    for (int j = 0, 10) {
+        p.update(j);
+    }
+}
+print(p.sum());    /* a=9 b=10 -> 19 */
+
+for (int r = 0, 50000) {
+    for (int j = 0, 10) {
+        p.swap();
+    }
+}
+print(p.sum());    /* swap preserves sum -> 19 */
+
+for (int r = 0, 100000) {
+    for (int j = 0, 10) {
+        p.cross();
+    }
+}
+print(p.sum());    /* cross: a=b+1, b=a+1 -> grows; deterministic final state */
+
+for (int r = 0, 100000) {
+    for (int j = 0, 10) {
+        fp.update(j * 1.0);
+    }
+}
+print(fp.sum());   /* a=9.0 b=10.5 -> 19.5 */
+
+for (int r = 0, 100000) {
+    for (int j = 1, 5) {
+        tp.bump(j);
+    }
+}
+print(tp.total()); /* each iter adds (j+j+j)=3j; 100000*5 iters of j=1..5 -> 100000*3*15=4500000 */

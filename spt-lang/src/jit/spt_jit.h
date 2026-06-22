@@ -131,6 +131,12 @@ typedef l_uint32 Instruction;
    just not inlined). Each pinned method is re-validated once per entry. */
 #define SPT_JIT_MAX_METHODS 8
 
+/* Maximum distinct this.<field> accesses verified by entry field-layout guards
+   in a multi-write method trace. Each accessed field is checked once per trace
+   entry (key present + value type matches), so the body emits guard-free
+   GETFIELD/SETFIELD. */
+#define SPT_JIT_MAX_FIELD_LAYOUTS 16
+
 /* Trace cache size (must be power of 2). */
 #define SPT_JIT_CACHE_SIZE 256
 

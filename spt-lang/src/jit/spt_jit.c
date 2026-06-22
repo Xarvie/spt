@@ -469,6 +469,12 @@ typedef struct {
   int fwd_base;             /* IR ref of the last SETFIELD's base table; -1 = none */
   void *fwd_key;            /* TString* key of the last SETFIELD */
   int fwd_val;              /* IR ref of the last SETFIELD's written value */
+  /* Multi-write method mode: when set, GETFIELD/SETFIELD in the current inlined
+     method body emit guard-free (entry field-layout guards verify key + type).
+     Set at method-inline entry if proto_is_multiwrite_method_inlinable. */
+  int multiwrite_mode;
+  SPTFieldLayout field_layouts[SPT_JIT_MAX_FIELD_LAYOUTS];
+  int n_field_layouts;
   /* Snapshot index of the FORLOOP "count > 0" guard (loop-continuation guard).
      Copied to SPTTrace.loop_end_snap after recording. -1 = none. */
   int loop_end_snap;
@@ -2238,6 +2244,41 @@ static int proto_is_write_method_inlinable(Proto *p) {
   return 1;
 }
 
+/* Decide whether `p` is an inlinable MULTI-write void method: a straight-line
+   body with TWO OR MORE SETFIELDs (e.g. `void update(int x){ this.a=x; this.b=x+1; }`
+   or `void swap(){ int t=this.a; this.a=this.b; this.b=t; }`). The §10.49 single-
+   trailing-write safety does NOT hold (the 2nd SETFIELD's key-existence guard
+   would fire after the 1st write commits -> resume-at-SELF double-writes), so
+   instead we hoist ALL field-access guards to the trace entry: each accessed
+   this.<field> is verified once per entry (key present + value type matches),
+   and the body emits guard-free GETFIELD/SETFIELD. Zero in-body field guards
+   -> no in-callee exits from field access -> write-safe regardless of write
+   count. Body shape: straight-line (no branches), only method_read_op_ok ops
+   + SETFIELD + void return. Value-returning multi-write is NOT supported
+   (would need exit-safe read-after-write of the returned field). */
+static int proto_is_multiwrite_method_inlinable(Proto *p) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 2 || n > 64) return 0;
+  int n_writes = 0;
+  for (int i = 0; i < n; i++) {
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_SETFIELD) n_writes++;
+    if (o == OP_RETURN1) return 0;            /* value return not supported */
+  }
+  if (n_writes < 2) return 0;                 /* single write -> use §10.49 path */
+  /* straight-line body: only reads + SETFIELD + void return */
+  for (int i = 0; i < n; i++) {
+    OpCode o = GET_OPCODE(p->code[i]);
+    if (o == OP_SETFIELD) continue;
+    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_EXTRAARG) continue;
+    if (method_read_op_ok(o)) continue;
+    return 0;
+  }
+  return 1;
+}
+
 /* Decide whether `p` is an inlinable conditional-WRITE void method of the if-only
    shape `if (c) { <compute A> this.f = A } ` with nothing after the if but void-
    return boilerplate -- e.g. the ubiquitous running-max/min tracker
@@ -2849,6 +2890,46 @@ static int rec_inst(SPTRecCtx *rc) {
       const TValue *kc = &rc->k[c];
       if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
       TString *key = tsvalue(kc);
+      /* Multi-write method mode: guard-free field read. The entry field-layout
+         guard already verified the key exists + value type matches, so we emit
+         GETFIELD without SPTIRF_GUARD (no snapshot, no exit stub). This lifts
+         the §10.49 single-trailing-write restriction: a read after a write no
+         longer risks double-write on resume-at-SELF because there is no
+         in-body guard to resume from. */
+      if (rc->frame_base != 0 && rc->multiwrite_mode) {
+        TValue mapval;
+        if (!rec_eval_container(rc, bref, &mapval))
+          mapval = *s2v((rc->ci->func.p + 1) + b);
+        if (!ttistable(&mapval)) { rc->aborted = 1; return 0; }
+        Table *t = hvalue(&mapval);
+        Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+        for (;;) {
+          if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
+          int nx = (int)n->u.next;
+          if (nx == 0) { rc->aborted = 1; return 0; }
+          n += nx;
+        }
+        SPTType et = rec_value_type(&n->i_val);
+        if (et != SPTT_INT && et != SPTT_FLT) { rc->aborted = 1; return 0; }
+        int ref = sptir_emit(ir, SPTIR_GETFIELD, et, bref, SPTIR_NULL, (int64_t)(intptr_t)key);
+        /* NO snap, NO SPTIRF_GUARD -- entry field-layout guard covers it */
+        ir->reg_map[rc->frame_base + a] = ref;
+        ir->reg_type[rc->frame_base + a] = et;
+        if (a > ir->maxslot) ir->maxslot = a;
+        /* register field for entry layout guard (dedup by key, update type) */
+        for (int fi = 0; fi < rc->n_field_layouts; fi++) {
+          if (rc->field_layouts[fi].key == (void *)key) {
+            rc->field_layouts[fi].value_type = (uint8_t)et;
+            goto getfield_mw_done;
+          }
+        }
+        if (rc->n_field_layouts >= SPT_JIT_MAX_FIELD_LAYOUTS) { rc->aborted = 1; return 0; }
+        rc->field_layouts[rc->n_field_layouts].key = (void *)key;
+        rc->field_layouts[rc->n_field_layouts].value_type = (uint8_t)et;
+        rc->n_field_layouts++;
+        getfield_mw_done:
+        break;
+      }
       /* Store-to-load forwarding, inlined method bodies only (frame_base != 0):
          a read of the field just written by the preceding SETFIELD (same base IR
          ref + key) resolves to the written value with NO emit and NO guard. This
@@ -3007,6 +3088,27 @@ static int rec_inst(SPTRecCtx *rc) {
         int nx = (int)n->u.next;
         if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort (would insert) */
         n += nx;
+      }
+      if (rc->frame_base != 0 && rc->multiwrite_mode) {
+        /* Multi-write mode: guard-free field write. Entry field-layout guard
+           verified the key exists, so no in-body guard needed. No snapshot,
+           no exit stub -> no in-callee exit -> write-safe regardless of how
+           many SETFIELDs precede this one. */
+        int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
+        /* NO snap, NO SPTIRF_GUARD */
+        /* register field for entry layout guard (dedup by key, update type) */
+        for (int fi = 0; fi < rc->n_field_layouts; fi++) {
+          if (rc->field_layouts[fi].key == (void *)key) {
+            rc->field_layouts[fi].value_type = (uint8_t)vt;
+            goto setfield_mw_done;
+          }
+        }
+        if (rc->n_field_layouts >= SPT_JIT_MAX_FIELD_LAYOUTS) { rc->aborted = 1; return 0; }
+        rc->field_layouts[rc->n_field_layouts].key = (void *)key;
+        rc->field_layouts[rc->n_field_layouts].value_type = (uint8_t)vt;
+        rc->n_field_layouts++;
+        setfield_mw_done:
+        break;
       }
       int snap = rec_snap(rc);
       int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
@@ -3829,7 +3931,8 @@ static int rec_inst(SPTRecCtx *rc) {
             !proto_is_chained_condreturn(callee_p, 1) &&
             !proto_is_write_method_inlinable(callee_p) &&
             !proto_is_condwrite_method_inlinable(callee_p) &&
-            !proto_is_condwrite_ifelse_method_inlinable(callee_p)) { rc->aborted = 1; return 0; }
+            !proto_is_condwrite_ifelse_method_inlinable(callee_p) &&
+            !proto_is_multiwrite_method_inlinable(callee_p)) { rc->aborted = 1; return 0; }
         int new_fb = rc->frame_base + a + 1;
         if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
         /* Arm the shared resume snapshot for guards inside the method body. Its
@@ -3850,6 +3953,7 @@ static int rec_inst(SPTRecCtx *rc) {
         rc->cl = callee_cl;
         rc->frame_base = new_fb;
         rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
+        rc->multiwrite_mode = proto_is_multiwrite_method_inlinable(callee_p);
         rc->pc = callee_p->code;
         return 1;                                 /* keep recording in the method */
       }
@@ -3907,6 +4011,7 @@ static int rec_inst(SPTRecCtx *rc) {
       rc->cl = callee_cl;
       rc->frame_base = new_fb;
       rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
+      rc->multiwrite_mode = 0;      /* multi-write only applies to method inlining */
       rc->pc = callee_p->code;
       return 1;                                  /* keep recording in the callee */
     }
@@ -4201,6 +4306,8 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.frame_base = 0;
   rc.is_side_trace = is_side;
   rc.fwd_base = -1;            /* store-to-load forwarding: none pending */
+  rc.multiwrite_mode = 0;
+  rc.n_field_layouts = 0;
   rc.inline_fn_slot = -1;
   rc.inline_fn_proto = NULL;
   rc.pending_cfn_libm = NULL;
@@ -4264,6 +4371,11 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   t->forin_iter_fn = rc.forin_iter_fn;
   t->n_methods = rc.n_methods;
   for (int mi = 0; mi < rc.n_methods; mi++) t->methods[mi] = rc.methods[mi];
+
+  /* Carry the multi-write field-layout entry guards (if any). */
+  t->n_field_layouts = rc.n_field_layouts;
+  for (int fi = 0; fi < rc.n_field_layouts; fi++)
+    t->field_layouts[fi] = rc.field_layouts[fi];
 
   /* Snapshot index of the loop-continuation guard (FORLOOP "count > 0").
      Used by the runtime guard-failure blacklist to exclude normal loop-end
@@ -4425,6 +4537,24 @@ static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
     if (mt != (Table *)m->class_mt) return 0;
     const TValue *mv = rec_table_getstr(mt, (TString *)m->key);
     if (!mv || !ttisLclosure(mv) || clLvalue(mv)->p != m->proto) return 0;
+  }
+  /* Multi-write field-layout guards: each this.<field> accessed in the inlined
+     body is verified at entry (key present in the receiver table + value type
+     matches the recorded type). This lets the body emit guard-free GETFIELD/
+     SETFIELD. The receiver is methods[0] (multi-write traces are single-
+     method). */
+  if (t->n_field_layouts > 0) {
+    if (t->n_methods < 1) return 0;
+    SPTMethodId *m = &t->methods[0];
+    TValue *recv = s2v(ci->func.p + 1 + m->recv_slot);
+    if (!ttistable(recv)) return 0;
+    Table *tbl = hvalue(recv);
+    for (int fi = 0; fi < t->n_field_layouts; fi++) {
+      const TValue *v = rec_table_getstr(tbl, (TString *)t->field_layouts[fi].key);
+      if (!v) return 0;                             /* key absent -> decline */
+      if (rec_value_type(v) != (SPTType)t->field_layouts[fi].value_type)
+        return 0;                                   /* type changed -> decline */
+    }
   }
   if (t->n_livein >= 0) {
     for (int k = 0; k < t->n_livein; k++) {

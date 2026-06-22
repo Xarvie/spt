@@ -932,10 +932,17 @@ static void gen_hash_find(SPTCodeGen *cg, int table_ref, TString *key,
   sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
   sptasm_jcc(a, SPT_CC_E, found);
   sptasm_place(a, advance);
-  /* nx = (int32)node->u.next; nx==0 -> not found -> side-exit; else n += nx */
+  /* nx = (int32)node->u.next; nx==0 -> not found. With a guard (exlbl >= 0)
+     side-exit; without a guard (exlbl < 0, multi-write mode: entry field-layout
+     guard already verified the key) emit ud2 -- key absence is a fatal
+     invariant violation that should never happen. */
   sptasm_mov_rm32(a, SPT_RAX, SPT_RDX, OFF_NODE_NEXT);   /* eax = nx (signed) */
   sptasm_test_rr(a, SPT_RAX, SPT_RAX);
-  sptasm_jcc(a, SPT_CC_E, exlbl);
+  if (exlbl >= 0) {
+    sptasm_jcc(a, SPT_CC_E, exlbl);
+  } else {
+    sptasm_byte(a, 0x0F); sptasm_byte(a, 0x0B);          /* ud2 */
+  }
   sptasm_byte(a, 0x48); sptasm_byte(a, 0x63); sptasm_byte(a, 0xC0); /* movsxd rax, eax */
   sptasm_imul_rri(a, SPT_RAX, SPT_RAX, SZ_NODE);
   sptasm_add_rr(a, SPT_RDX, SPT_RAX);                    /* RDX = next node */
@@ -1525,15 +1532,22 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
          search the key's main position and its collision chain (gen_hash_find),
          then type-guard and load the found node's value. A key that is absent at
          run time side-exits (gen_hash_find jumps to exlbl on chain end). No C
-         call; RA-safe (RAX/RCX/RDX scratch only). */
+         call; RA-safe (RAX/RCX/RDX scratch only).
+         Multi-write mode (SPTIRF_GUARD cleared): entry field-layout guard
+         already verified key + type, so no in-body guard/exit. gen_hash_find
+         with exlbl=-1 emits ud2 on key absence (fatal invariant violation). */
       TString *key = (TString *)(intptr_t)inst->aux;
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
-      /* value type guard: node->i_val.tt_ == recorded type */
-      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+val_tt] */
-      sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
-      sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag(inst->type));
-      sptasm_jcc(a, SPT_CC_NE, exlbl);
+      if (inst->flags & SPTIRF_GUARD) {
+        int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+        gen_hash_find(cg, inst->op1, key, exlbl);           /* RDX = &found node */
+        /* value type guard: node->i_val.tt_ == recorded type */
+        sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);          /* movzx eax, byte[rdx+val_tt] */
+        sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
+        sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag(inst->type));
+        sptasm_jcc(a, SPT_CC_NE, exlbl);
+      } else {
+        gen_hash_find(cg, inst->op1, key, -1);              /* guard-free, ud2 on miss */
+      }
       /* load value bits */
       sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL);      /* RAX = value bits   */
       gen_store(cg, idx, SPT_RAX);
@@ -1607,10 +1621,16 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
          only emits this for a key that EXISTS (an insert isn't handled here, so
          an absent key side-exits via gen_hash_find's chain-end). The value is
          non-collectable (int/float, enforced at record time), so NO GC write
-         barrier is needed. Scratch RAX/RCX/RDX only -> RA-safe. */
+         barrier is needed. Scratch RAX/RCX/RDX only -> RA-safe.
+         Multi-write mode (SPTIRF_GUARD cleared): entry field-layout guard
+         verified key exists, so no in-body guard/exit. */
       TString *key = (TString *)(intptr_t)inst->aux;
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
+      if (inst->flags & SPTIRF_GUARD) {
+        int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+        gen_hash_find(cg, inst->op1, key, exlbl);           /* RDX = &found node */
+      } else {
+        gen_hash_find(cg, inst->op1, key, -1);              /* guard-free, ud2 on miss */
+      }
       /* store value bits then tag (value is int/float -> no GC barrier) */
       gen_load(cg, SPT_RAX, inst->op2, SPTT_ANY);            /* RAX = value bits */
       sptasm_mov_mr(a, SPT_RDX, OFF_NODE_VAL, SPT_RAX);      /* node->i_val.value_ = RAX */

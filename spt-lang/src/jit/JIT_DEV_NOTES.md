@@ -2581,3 +2581,57 @@ print(arr[0]);
 (2) **相位后移重试而非立即拉黑**:第一次丢弃后不直接拉黑,而是 `counter = aborts + runtime_fails` 让热点冷却一段再试。剖析阶段可能采样到不同分支(第二次录到 false 臂),从而**自愈**——这是正确行为,不是 bug。
 (3) **通用机制优于特例补丁**:§10.57 的 record-time 短串观测、§10.61 的 record-time 值域观测都是"每个守卫各自补丁"。本节给所有运行期守卫一个统一的兜底,新守卫(如将来 string.sub 的 GC 守卫)无需再各自加观测——即便 record-time 漏判,运行期黑名单也会在几次丢弃后拉黑。
 (4) **阈值取舍**:CHECK_INTERVAL=256 摊销 O(nsnaps) 扫描(每次进入都扫会拖慢热路径);SIDE_EXITS=10000 足够高以避免偶发侧出的误判,又足够低以在 ~40 次进入/侧出比时触发(恒失败 trace 几千次进入即触发)。MAX_RUNTIME_FAILS=3 给自愈机会(剖析可能换分支)又不过度容忍颠簸。
+
+## §10.64 通用多写方法内联（入口期字段布局守卫 + 体内无守卫字段访问，✅ 阶段达成）
+
+§10.49 的"单尾写安全"只覆盖**体内最后一个产生守卫的 op 是 SETFIELD** 的简单情形:守卫失败发生在写提交之前,resume-at-SELF 重跑恰好写一次。但实际方法体常见**多写**(`this.a=..;this.b=..`)和**写后非前推读**(`this.a=x; return this.b`——写后那条对**别的**字段的 GETFIELD 是真守卫,存转载前推不适用)。这类"写后有真守卫"若直接内联,守卫失败时 resume-at-SELF 重跑会让**第一个 SETFIELD 双写**——破坏写幂等性。
+
+### 根因：写后守卫失败 → 重跑 → 双写
+```
+SETFIELD this.a, x        /* 写 1 提交 */
+GETFIELD this.b           /* 真守卫:键缺失/类型不符 → 侧出 */
+SETFIELD this.c, y        /* 写 2 未执行 */
+```
+守卫在 GETFIELD 处失败 → resume-at-SELF 重跑整段 → SETFIELD this.a 再写一次。**写幂等性破坏**(对引用语义值尤甚,如累加、链表 push)。
+
+### 方案：把字段存在性/类型守卫上提到入口 + 体内发无守卫字段访问
+关键洞察:**零体内守卫 → 无内联帧退出 → 写安全(与写次数无关)**。把所有 `this.<field>` 的存在性 + 值类型校验**上提到 trace 入口**,体内 GETFIELD/SETFIELD 全部发**无守卫**变体——入口已校验过,运行期不可能失败。
+
+#### 1. 入口期字段布局守卫（录制期收集 + 入口 C 校验）
+- **录制期**:`SPTRecCtx.multiwrite_mode` 标志(仅方法内联路径设置,自由函数内联恒为 0)。GETFIELD/SETFIELD handler 在多写模式下,emit 指令但**不发 snap、不设 `SPTIRF_GUARD`**,同时把 `(TString* key, SPTType value_type)` 注册到 `rc.field_layouts[]`(按 key 去重,后写更新类型)。
+- **复制到 trace**:`SPTTrace.field_layouts[16]` + `n_field_layouts`,上限 `SPT_JIT_MAX_FIELD_LAYOUTS=16`。
+- **入口校验**(`trace_entry_guards_ok`):若 `n_field_layouts > 0`,取 `methods[0].recv_slot` 的 receiver,必须 `ttistable`;对每个 layout,`luaH_getstr` 查字段——**键必须存在**且**值类型必须匹配**录制期观测。任一不符 → 返回 0(走解释器,不进 trace)。
+
+#### 2. 体内无守卫字段访问（GETFIELD/SETFIELD codegen 分支）
+- **IR flag**:`SPTIRF_GUARD` 已有(§10.42 引入)。多写模式下录制期清掉此 flag。
+- **GETFIELD codegen**:若 `SPTIRF_GUARD` 置位 → 走原路径(`gen_hash_find` 跳 exlbl + 类型守卫 jcc);若清掉 → `gen_hash_find(..., exlbl=-1)`,键缺失发 `ud2`(0F 0B)而非跳转——**入口已校验过,运行期不可能缺失**,ud2 是兜底断言(若触发说明入口校验有 bug)。
+- **SETFIELD codegen**:同样按 flag 分支。无守卫变体省掉键存在性检查(直接 `gen_hash_find` + 写入),`ud2` 兜底。
+
+#### 3. 方法门 `proto_is_multiwrite_method_inlinable`
+保守准入,确保入口校验后体内确实零守卫:
+- 非变参、无嵌套 proto、`sizecode` ∈ [2, 64]
+- **至少 2 个 SETFIELD**(单写走 §10.49 路径)
+- **无 RETURN1**(值返回不支持,只允许 RETURN0/RETURN/EXTRAARG)
+- 除 SETFIELD 外,其余 op 必须是 `method_read_op_ok` 认可的"安全读"(GETFIELD/GETI/LOADK/MOVE/ARITH 等),不允许 CALL/CONCAT/FORLOOP 等可能产生守卫的 op
+
+#### 4. 安全网（§10.42 既有）
+`sptir_optimize` 后扫描所有 `SPTIRF_GUARD` 指令,exit PC 落在主 proto 之外则拒绝编译。多写模式下体内 GETFIELD/SETFIELD 无 GUARD flag → 不会被误判;入口期字段布局守卫不产生 IR 指令(纯 C 校验) → 不影响此安全网。
+
+### 测试（multiwrite_method.spt）
+5 个 kernel 覆盖典型多写场景:
+- **Pair.update**:`this.a=x; this.b=y`(独立多写,最简)
+- **Pair.swap**:`tmp=this.a; this.a=this.b; this.b=tmp`(读后写两字段,GETFIELD 在 SETFIELD 之前)
+- **Pair.cross**:`this.a=this.b; this.b=this.a+1`(写后读**别的**字段——§10.52 写后非前推读问题)
+- **FPair.update**:浮点多写(验证类型守卫匹配 float)
+- **Triple.bump**:3 写(验证上限内多写)
+
+JIT on/off 输出**完全一致**(整数累加 + 浮点累加 + 交叉更新)。
+
+### 验证（完整门槛,全绿）
+构建 0 err。**356/356 ctest 全通过** · **300/300 模糊测试全通过** · 124 kernel 差分 1 mismatch(`foreach_map_str.spt` —— map 哈希迭代顺序非确定性,**预存问题**,stash 多写改动后仍 mismatch,与本节无关)· §10.42–§10.63 零回归。
+
+**关键教训**:
+(1) **写幂等性是内联安全的充要条件**:不是"单尾写"而是"零体内守卫"。单尾写(§10.49)是零体内守卫的特例——最后一个产生守卫的 op 是 SETFIELD,等价于"写后无守卫"。多写只要把所有字段守卫上提到入口,体内零守卫,任意写次数都安全。
+(2) **入口校验 + 体内无守卫是通用模式**:此模式可推广到任何"录制期可观测不变量"——如数组长度不变(录 `arr.len`,入口校验)、字段集不变(本节)、类型不变(已有类型守卫)。把不变量上提到入口,体内发无守卫变体,既安全又快(省掉每次访问的守卫开销)。
+(3) **`ud2` 兜底优于静默错误**:无守卫变体在键缺失时发 `ud2`(非法指令异常)而非静默读随机内存。入口校验是"应该不会失败",ud2 是"若失败则立即可见崩溃"——比 silent corruption 易调试得多。生产环境若 ud2 触发,说明入口校验逻辑有 bug,而非"运行期偶发"。
+(4) **方法门保守准入**:本节方法门排除 RETURN1(值返回)、CALL(嵌套调用)、CONCAT(字符串拼接)等可能产生守卫的 op。这些场景的扩展需要额外设计(如 RETURN1 的值类型守卫如何上提),不宜在本节一并解决。保守准入确保已支持场景的确定性安全。

@@ -27,6 +27,18 @@ typedef struct SPTMethodId {
   Proto *proto;      /* expected resolved method proto */
 } SPTMethodId;
 
+/* Field layout entry for multi-write method traces: each this.<field> accessed
+   in the inlined body is verified at trace entry (key present in the receiver
+   table + value type matches the recorded type), so the body emits guard-free
+   GETFIELD/SETFIELD. Zero in-body field guards -> no in-callee exits from field
+   access -> write-safe regardless of write count (the §10.49 single-trailing-
+   write restriction is lifted). The receiver is identified by methods[0]
+   (multi-write traces are single-method). */
+typedef struct {
+  void *key;            /* TString* field name */
+  uint8_t value_type;   /* expected SPTType at trace entry */
+} SPTFieldLayout;
+
 /* =====================================================================
 ** Trace structure
 ** ===================================================================== */
@@ -92,6 +104,13 @@ struct SPTTrace {
      = not a method trace. */
   SPTMethodId methods[SPT_JIT_MAX_METHODS];
   int n_methods;
+
+  /* Multi-write method field-layout guards: each this.<field> accessed in the
+     inlined body is verified at entry (key present + value type), so the body
+     emits guard-free GETFIELD/SETFIELD. n_field_layouts == 0 = not a multi-
+     write trace (normal guarded field access). */
+  SPTFieldLayout field_layouts[SPT_JIT_MAX_FIELD_LAYOUTS];
+  int n_field_layouts;
 
   /* Compact live-in type-check list, precomputed at record time from the IR's
      GUARD_T-on-SLOAD instructions (deduped by slot). The entry check in
