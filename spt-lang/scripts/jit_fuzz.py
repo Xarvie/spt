@@ -631,6 +631,109 @@ def gen_string_byte(r):
     return (f'str s = {lng};\nint a = 0;\n'
             f'for (int rr = 0, {n}) {{ for (int j = 0, 9) {{ a = a + string.byte(s, j); }} }}\nprint(a);\n')
 
+def gen_minmax(r):
+    """math.min / math.max in a hot loop (§10.59), lowered to a branchless select
+    (reusing emit_select). Covers single min/max, the canonical nested clamp
+    math.max(lo, math.min(hi, x)) (which is multiret: inner c==0 / outer b==0),
+    both clamp orders, deep 3-level nesting, and mixed int/float (promoted to
+    float). Any numeric input is valid (no errors). The accumulated value is the
+    wrong-branch / divergence detector. Deterministic."""
+    n = r.choice([60000, 120000])
+    shape = r.choice(["imin", "imax", "iclamp", "fclamp", "mixed", "deep", "clamp2", "negclamp"])
+    if shape == "imin":
+        k = r.choice([10, 50, 80])
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.min(x, {k}); }} }}\nprint(a);\n'
+    if shape == "imax":
+        k = r.choice([10, 50, 80])
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.max(x, {k}); }} }}\nprint(a);\n'
+    if shape == "iclamp":
+        lo, hi = r.choice([(5, 90), (20, 70), (0, 50)])
+        return (f'int lo = {lo}; int hi = {hi};\nint a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.max(lo, math.min(hi, x)); }} }}\nprint(a);\n')
+    if shape == "fclamp":
+        lo, hi = r.choice([(10.0, 40.0), (5.5, 60.5), (0.0, 25.0)])
+        return (f'float lo = {lo}; float hi = {hi};\nfloat a = 0.0;\n'
+                f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ float xf = x * 1.0; a = a + math.max(lo, math.min(hi, xf)); }} }}\nprint(a);\n')
+    if shape == "mixed":
+        k = r.choice(["50.5", "20.25", "75.5"])
+        return (f'float a = 0.0;\n'
+                f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.min(x, {k}); }} }}\nprint(a);\n')
+    if shape == "deep":
+        return (f'int a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.max(0, math.min(80, math.max(20, x))); }} }}\nprint(a);\n')
+    if shape == "clamp2":          # min outer, max inner
+        lo, hi = r.choice([(5, 90), (15, 85)])
+        return (f'int lo = {lo}; int hi = {hi};\nint a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.min(hi, math.max(lo, x)); }} }}\nprint(a);\n')
+    # negclamp: negative bounds via a shifted value
+    return (f'int a = 0;\n'
+            f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ int y = x - 50; a = a + math.max(-10, math.min(10, y)); }} }}\nprint(a);\n')
+
+def gen_abs(r):
+    """math.abs in a hot loop (§10.60). Integer abs lowers to a branchless select
+    (x<0)?-x:x (exact, incl INT64_MIN wraparound); float abs uses FMATH(fabs)
+    (correct for -0.0, which a select would mishandle, and NaN). Covers int/float
+    abs, abs of a difference, two abs in one expression, abs nested in min/max
+    (multiret), and abs feeding min/max. Any numeric input is valid (no errors).
+    The accumulated value is the wrong-sign / divergence detector. Deterministic."""
+    n = r.choice([60000, 120000])
+    shape = r.choice(["iabs", "fabs", "idiff", "two", "abs_min", "abs_clamp", "min_abs", "fdiff"])
+    if shape == "iabs":
+        k = r.choice([30, 50, 70])
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ int y = x - {k}; a = a + math.abs(y); }} }}\nprint(a);\n'
+    if shape == "fabs":
+        k = r.choice(["50.0", "25.5", "70.5"])
+        return f'float a = 0.0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ float y = x * 1.0 - {k}; a = a + math.abs(y); }} }}\nprint(a);\n'
+    if shape == "idiff":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.abs(x - 40); }} }}\nprint(a);\n'
+    if shape == "two":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.abs(x - 30) + math.abs(60 - x); }} }}\nprint(a);\n'
+    if shape == "abs_min":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.abs(math.min(x - 50, 10)); }} }}\nprint(a);\n'
+    if shape == "abs_clamp":
+        return (f'int lo = 5; int hi = 90;\nint a = 0;\n'
+                f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.abs(math.max(lo, math.min(hi, x - 20))); }} }}\nprint(a);\n')
+    if shape == "min_abs":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.min(40, math.abs(x - 50)); }} }}\nprint(a);\n'
+    # fdiff: float abs of a difference of two scaled values
+    return (f'float a = 0.0;\n'
+            f'for (int rr = 0, {n}) {{ for (int x = 0, 100) {{ float p = x * 0.5; float q = (100 - x) * 0.5; a = a + math.abs(p - q); }} }}\nprint(a);\n')
+
+def gen_floorceil(r):
+    """math.floor / math.ceil in a hot loop (10.61). An integer argument is its
+    own floor/ceil (identity, no op); a float argument lowers to SPTIR_TOINT
+    (roundsd + a convert-round-trip range guard that resumes at the SELF, so an
+    out-of-range / NaN input side-exits and the interpreter returns the float, as
+    Lua does). A record-time observation aborts an already-out-of-range loop.
+    floor/ceil nests with min/max via multiret. Covers float floor/ceil (pos+neg),
+    integer identity, floor feeding min, floor of a nested min, ceil of a scaled
+    difference, floor+ceil together, and a values-crossing-2^63 case that exercises
+    the runtime range guard. All inputs are valid (no errors); off must equal on.
+    The accumulated value is the divergence detector. Deterministic."""
+    n = r.choice([40000, 80000])
+    shape = r.choice(["ffloor", "fceil", "iident", "floor_min", "floor_nmin",
+                      "ceil_diff", "floor_ceil", "cross"])
+    if shape == "ffloor":
+        k = r.choice(["35.0", "20.5", "50.0"])
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ float y = x * 0.7 - {k}; a = a + math.floor(y); }} }}\nprint(a);\n'
+    if shape == "fceil":
+        k = r.choice(["35.0", "20.5", "50.0"])
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ float y = x * 0.7 - {k}; a = a + math.ceil(y); }} }}\nprint(a);\n'
+    if shape == "iident":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.floor(x) + math.ceil(x - 50); }} }}\nprint(a);\n'
+    if shape == "floor_min":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.min(40, math.floor(x * 0.9)); }} }}\nprint(a);\n'
+    if shape == "floor_nmin":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ float lo = x * 0.5; a = a + math.floor(math.min(lo, 20.0)); }} }}\nprint(a);\n'
+    if shape == "ceil_diff":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ a = a + math.ceil((x - 50) * 0.5); }} }}\nprint(a);\n'
+    if shape == "floor_ceil":
+        return f'int a = 0;\nfor (int rr = 0, {n}) {{ for (int x = 0, 100) {{ float y = x * 1.3 - 60.0; a = a + math.floor(y) + math.ceil(y); }} }}\nprint(a);\n'
+    # cross: x * 1e15 crosses 2^63 (~9.22e18) mid-loop -> in range early (compiles),
+    # out of range late (runtime range guard -> resume-at-SELF -> interpreter float).
+    m = r.choice([20000, 40000])
+    return f'float a = 0.0;\nfor (int rr = 0, {m}) {{ float x = rr * 1.0e15; a = a + math.floor(x + 0.5); }}\nprint(a);\n'
+
 def gen_array_len_mix(r):
     """Array element access combined with #v used as a VALUE in the same loop.
     This makes the compiler reuse the index register for the accumulator, so the
@@ -1498,10 +1601,66 @@ def gen_writeret_method(r):
         return (f"class C {{ int a; int b; void __init(){{ this.a = 0; this.b = {b0}; }} int f(int x){{ this.a = x; return this.b; }} }}\n"
                 f"C c = C(); int acc = 0;\n"
                 f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + c.f(i); }} }}\nprint(acc);\nprint(c.a);\n")
-    # multiwrite_fallback: two writes then return -> MUST abort, still correct
+    # multiwrite_ret: two writes then return -> since §10.65 this INLINES
+    # (value-returning multi-write); pre-§10.65 it aborted. Either way off==on.
     return (f"class T {{ int a; int b; void __init(){{ this.a = 0; this.b = 0; }} int bump(){{ this.a = this.a + 1; this.b = this.b + 2; return this.a; }} }}\n"
             f"T t = T(); int acc = 0;\n"
             f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + t.bump(); }} }}\nprint(acc);\nprint(t.b);\n")
+
+
+def gen_multiwrite_ret_method(r):
+    """A multi-write method (>=2 SETFIELDs) that ALSO returns a value (§10.65,
+    extends §10.64 which only did void multi-write). The returned value is
+    computed guard-free in multi-write mode -- a returned this.<field> is a
+    guard-free GETFIELD pinned by the entry field-layout guard, a returned
+    param/computed value is pinned by the caller's input guards -- so the body
+    stays zero-in-body-guard and the existing OP_RETURN1 inline handler binds the
+    result. The accumulated sum of RETURNED values is a double-write / wrong-value
+    probe: any resume-at-SELF double write or wrong return diverges from the
+    interpreter. Negative shape (geti_ret) has a guarded read (GETI) after a write
+    and MUST fall back to the interpreter (off==on, no compile)."""
+    shape = r.choice(["update2", "rmw2_ret", "ret_b", "ret_param", "ret_const",
+                      "triple_ret", "float_update", "geti_ret"])
+    n = r.choice([50000, 100000])
+    inner = r.randint(6, 14)
+    o1 = r.choice(AOPS)
+    if shape == "update2":      # write a,b from params; return computed from both
+        return (f"class B {{ int a; int b; void __init(){{ this.a = 0; this.b = 0; }} int upd(int x, int y){{ this.a = x; this.b = y; return this.a {o1} this.b; }} }}\n"
+                f"B b = B(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + b.upd(i % 7, i % 5); }} }}\nprint(acc);\nprint(b.upd(3, 4));\n")
+    if shape == "rmw2_ret":     # RMW two fields, return one (read-after-write of returned field)
+        d1 = r.randint(1, 3); d2 = r.randint(1, 3)
+        return (f"class B {{ int a; int b; void __init(){{ this.a = 0; this.b = 0; }} int step(){{ this.a = this.a + {d1}; this.b = this.b + {d2}; return this.a; }} }}\n"
+                f"B b = B(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc {o1} b.step(); }} }}\nprint(acc);\nprint(b.b);\n")
+    if shape == "ret_b":        # write a,b; return the LAST-written field b
+        return (f"class B {{ int a; int b; void __init(){{ this.a = 0; this.b = 0; }} int set2(int x, int y){{ this.a = x; this.b = y; return this.b; }} }}\n"
+                f"B b = B(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + b.set2(i % 9, i % 6); }} }}\nprint(acc);\n")
+    if shape == "ret_param":    # write a,b; return a PARAM (not a field)
+        c = r.randint(1, 5)
+        return (f"class B {{ int a; int b; void __init(){{ this.a = 0; this.b = 0; }} int store(int x){{ this.a = x; this.b = x {o1} {c}; return x; }} }}\n"
+                f"B b = B(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + b.store(i % 11); }} }}\nprint(acc);\nprint(b.b);\n")
+    if shape == "ret_const":    # write a,b; return a CONSTANT
+        k = r.randint(0, 9)
+        return (f"class B {{ int a; int b; void __init(){{ this.a = 1; this.b = 2; }} int reset(){{ this.a = 0; this.b = 0; return {k}; }} }}\n"
+                f"B b = B(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + b.reset(); }} }}\nprint(acc);\nprint(b.a + b.b);\n")
+    if shape == "triple_ret":   # THREE writes + return (3+ writes within field limit)
+        return (f"class T {{ int a; int b; int c; void __init(){{ this.a = 0; this.b = 0; this.c = 0; }} int bump(int x){{ this.a = this.a + x; this.b = this.b + x; this.c = this.c + x; return this.a + this.c; }} }}\n"
+                f"T t = T(); int acc = 0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 1, 5) {{ acc = acc + t.bump(i); }} }}\nprint(acc);\nprint(t.b);\n")
+    if shape == "float_update": # float multi-write + return
+        d = r.randint(1, 30) / 10.0
+        return (f"class F {{ float a; float b; void __init(){{ this.a = 0.0; this.b = 0.0; }} float upd(float x){{ this.a = x; this.b = x + {d}; return this.a + this.b; }} }}\n"
+                f"F f = F(); float acc = 0.0;\n"
+                f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + f.upd((i % 6) * 1.0); }} }}\nprint(acc);\nprint(f.b);\n")
+    # geti_ret: value return with a GETI after a write -> MUST fall back (no compile), off==on
+    return (f"class L {{ int a; int b; void __init(){{ this.a = 0; this.b = 0; }} int load(list<int> arr, int j){{ this.a = this.a + 1; this.b = arr[j]; return this.a; }} }}\n"
+            f"list<int> data = [10, 20, 30, 40, 50];\n"
+            f"L l = L(); int acc = 0;\n"
+            f"for (int r = 0, {n}) {{ for (int i = 0, {inner}) {{ acc = acc + l.load(data, i % 5); }} }}\nprint(acc);\nprint(l.b);\n")
 
 
 GENS = [gen_scalar,
@@ -1511,7 +1670,7 @@ GENS = [gen_scalar,
         gen_moddiv, gen_float_moddiv,
         gen_multi_accum, gen_nested3, gen_bitwise_neg, gen_mixed_cmp,
         gen_inline_call, gen_swap, gen_copy_carry, gen_for_while, gen_const_fold, gen_float_bitwise, gen_type_transition, gen_string, gen_array_len_mix,
-        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container, gen_method_call, gen_multi_method, gen_condreturn_method, gen_write_method, gen_condreturn_float, gen_condwrite_method, gen_writeret_method, gen_chained_condreturn, gen_string_byte]
+        gen_running_minmax, gen_ifconv, gen_condreturn, gen_condassign, gen_side_store, gen_unroll_nest, gen_recursive_nest, gen_speculative_nest, gen_map_access, gen_map_write, gen_global_read, gen_math_call, gen_for_each, gen_nested_container, gen_method_call, gen_multi_method, gen_condreturn_method, gen_write_method, gen_condreturn_float, gen_condwrite_method, gen_writeret_method, gen_chained_condreturn, gen_string_byte, gen_minmax, gen_abs, gen_floorceil, gen_multiwrite_ret_method]
 
 def run(bin_, src, env):
     with tempfile.NamedTemporaryFile("w", suffix=".spt", delete=False) as f:
