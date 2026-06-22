@@ -1,0 +1,10 @@
+class C {
+    int v;
+    void __init(){ this.v = 0; }
+    void set(int x){ this.v = x; }
+    int get(){ return this.v; }
+}
+C c = C();
+int j = 0;
+for (int i = 0, 1000000000) { c.set(j); j = j + 1; if (j == 1000) { j = 0; } }
+print(c.get());

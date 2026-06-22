@@ -1,0 +1,10 @@
+class Pair {
+    int a; int b;
+    void __init(){ this.a = 0; this.b = 0; }
+    void update(int x){ this.a = x; this.b = x + 1; }
+    int sum(){ return this.a + this.b; }
+}
+Pair p = Pair();
+int j = 0;
+for (int i = 0, 1000000000) { p.update(j); j = j + 1; if (j == 1000) { j = 0; } }
+print(p.sum());

@@ -1,0 +1,9 @@
+class C {
+    int v;
+    void __init(){ this.v = 0; }
+    int get(){ return this.v; }
+}
+C c = C();
+int s = 0;
+for (int i = 0, 1000000000) { s = s + c.get(); }
+print(s);
