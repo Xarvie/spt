@@ -2849,3 +2849,70 @@ SETLIST/CLOSURE/VARARG 仍在嵌套帧里 abort，只有 OP_SELF 放开。
 
 ### 验证（完整门槛，全绿）
 构建 0 err。**367/367 ctest 全通过** · **134/134 kernel 差分全通过** · **模糊器 250+150×4=850 例 0 失配**。零回归（前瞻性改动，安全网保证正确性）。
+
+## §10.68c 嵌套内联多帧 阶段 3：通用 resume-at-call（带分支 callee 内联，exit stub 重建 callee CI，✅ 阶段达成）
+
+### 背景
+阶段 2 放开了 `frame_base != 0` 的 abort，但现有 callee 纯度检查不允许方法体里有 CALL/SELF，也没有场景能触发嵌套帧里的内联。阶段 3 实现**通用 resume-at-call**：当内联 callee 体内的守卫失败时，exit stub 重建 callee 的 CallInfo 帧（压帧、设 base、savedpc），让解释器在 callee PC 恢复执行。
+
+### 核心机制
+**resume-at-call**：exit stub 对 in-callee exit PC 调用 C helper `sptjit_exit_resume`，该函数：
+1. 推送真正的 callee CI 帧（设 func/top/savedpc/callstatus）
+2. 设 caller CI 的 savedpc 为 CALL 后的 PC
+3. 设 `L->ci = callee CI`
+
+**安全网修改**：post-optimization 扫描所有 surviving guard 的 exit PC，如果 exit PC 在主 proto 外但在 callee proto 的 code 范围内**且有 resume info**（`callee_proto != NULL`），允许编译。
+
+### 实现（8 处改动）
+
+**(1) SPTResumeInfo 结构 + exit_resume 数组**（`spt_jit_internal.h`）：
+```c
+typedef struct {
+  Proto *callee_proto;       /* NULL = no resume-at-call */
+  int callee_frame_base;     /* frame_base at inline push */
+  const Instruction *caller_resume_pc; /* caller PC after CALL */
+  int nresults;              /* C operand - 1 */
+} SPTResumeInfo;
+```
+`SPTTrace` 增加 `exit_resume[SPT_JIT_MAX_SNAPSHOTS]`；`SPTInlineFrame` 增加 `callee_proto` / `nresults` 字段。
+
+**(2) `sptjit_exit_resume` C helper**（`spt_jit.c`）：推送 callee CI（`next_ci` 复用或 `luaE_extendCI`），设 func/top/savedpc/callstatus，设 caller CI savedpc，设 `L->ci = callee CI`。
+
+**(3) exit stub 调用 C helper**（`spt_jit_codegen.c`）：`gen_exit_stub` 对 in-callee exit PC（`exit_resume[si].callee_proto != NULL`）调用 `sptjit_exit_resume`，传 callee_proto/callee_frame_base/caller_resume_pc/nresults。
+
+**(4) `sptjit_hot_check` 宏更新**（`lvm.c`）：
+```c
+#define sptjit_hot_check(ci, target_pc) \
+  (savepc(ci), sptjit_trace_hot(L, ci, (target_pc)) && \
+   (ci = L->ci, pc = ci->u.l.savedpc, cl = ci_func(ci), k = cl->p->k, \
+    updatebase(ci), updatetrap(ci), 1))
+```
+trace 返回后 `sptjit_exit_resume` 已将 `L->ci` 切到 callee CI，宏必须更新 `ci/cl/k` 否则解释器用 caller 的常量表。
+
+**(5) `sptjit_trace_enter` CI 检查**（`spt_jit.c`）：`if (L->ci != ci) break`——trace 在 in-callee guard 退出后 `L->ci` 已切到 callee CI，入口校验不能继续。
+
+**(6) 录制时存储 resume info**（`spt_jit.c`）：
+- inline push（method + free-function）处存 `callee_proto` / `nresults` 到 `SPTInlineFrame`
+- `rec_snap` 对 free-function inlined callee 体内的 guard 填充 `snap_resume[snap]`
+- 录制后复制 `snap_resume` → `t->exit_resume`
+
+**(7) 安全网允许有 resume info 的 in-callee exit PC**（`spt_jit.c`）：
+```c
+if (epc && (epc < lo || epc >= hi)) {
+  SPTResumeInfo *ri = &t->exit_resume[si];
+  if (ri->callee_proto) {
+    /* check epc in callee proto's code range */
+    if (epc >= clo && epc < chi) continue;  /* valid in-callee exit */
+  }
+  /* else: refuse to compile */
+}
+```
+
+**(8) `proto_is_branch_inlinable` + 放宽 `rec_cond_branch` abort**（`spt_jit.c`）：
+- 新函数 `proto_is_branch_inlinable`：允许 forward conditional branches（OP_LT/LE/EQ + OP_JMP）+ 多个 RETURN1 + straight-line ops
+- `rec_cond_branch` abort 放宽：仅对 method inline（`method_self_pc != NULL`）abort，允许 free-function inline 的 guarded branch
+
+### 验证（完整门槛，全绿）
+构建 0 err。**368/368 ctest 全通过** · **134/135 kernel 差分通过**（唯一 fail=`foreach_map_str` 为预存 map 哈希顺序 flakiness，stash 验证确认与本次改动无关）· **模糊器 200+200=400 例 0 失配**。零回归。
+
+新增测试 kernel `inline_branch_multi.spt`：`classify(int x)` 函数有两个条件返回路径 + 一个默认返回，验证多返回路径 callee 的内联正确性。

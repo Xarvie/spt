@@ -1,0 +1,4 @@
+int classify(int x) { if (x < 100) { return 0; } if (x < 200) { return 1; } return 2; }
+int c0 = 0; int c1 = 0; int c2 = 0;
+for (int rep = 0, 99999) { c0 = 0; c1 = 0; c2 = 0; for (int i = 0, 300) { int c = classify(i); if (c == 0) { c0 = c0 + 1; } else if (c == 1) { c1 = c1 + 1; } else { c2 = c2 + 1; } } }
+print(c0); print(c1); print(c2);

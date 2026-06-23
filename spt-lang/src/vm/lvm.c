@@ -1213,7 +1213,8 @@ void luaV_finishOp(lua_State *L) {
 
 #define sptjit_hot_check(ci, target_pc) \
   (savepc(ci), sptjit_trace_hot(L, ci, (target_pc)) && \
-   (pc = ci->u.l.savedpc, updatebase(ci), updatetrap(ci), 1))
+   (ci = L->ci, pc = ci->u.l.savedpc, cl = ci_func(ci), k = cl->p->k, \
+    updatebase(ci), updatetrap(ci), 1))
 
 /* fetch an instruction and prepare its execution */
 #define vmfetch()                                                                                  \

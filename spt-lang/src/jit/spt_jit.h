@@ -208,6 +208,14 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc);
 int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc);
 
 /*
+** Called from JIT exit stubs when a guard inside an inlined callee body fails.
+** If the snapshot has resume-at-call info (callee_proto != NULL), pushes a real
+** callee CallInfo frame so the interpreter resumes at the in-callee exit PC.
+** Otherwise (root-frame exit), sets the caller CI's savedpc directly.
+*/
+void sptjit_exit_resume(lua_State *L, CallInfo *ci, SPTTrace *t, int snap_idx);
+
+/*
 ** Branch-direction profiling. Before recording a loop, the JIT briefly profiles
 ** which way each conditional branch goes so it records the *majority* direction
 ** (instead of whichever way the one recording iteration happened to go -- a

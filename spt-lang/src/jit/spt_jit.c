@@ -490,6 +490,11 @@ typedef struct {
   /* Snapshot index of the FORLOOP "count > 0" guard (loop-continuation guard).
      Copied to SPTTrace.loop_end_snap after recording. -1 = none. */
   int loop_end_snap;
+  /* §10.68c: per-snapshot resume-at-call info. Filled by rec_snap when a guard
+     inside a free-function inlined callee body creates a snapshot whose exit PC
+     is in the callee proto. Copied to SPTTrace.exit_resume after recording.
+     callee_proto == NULL (zero, from memset) means no resume-at-call. */
+  SPTResumeInfo snap_resume[SPT_JIT_MAX_SNAPSHOTS];
 } SPTRecCtx;
 
 /* Get current type of a register from the actual stack value. */
@@ -669,7 +674,22 @@ static int rec_snap(SPTRecCtx *rc) {
   }
   if (rc->call_arg_self_pc != NULL)            /* arg-load window: resume at the SELF */
     return sptir_snapshot(rc->ir, rc->call_arg_self_pc);
-  return sptir_snapshot(rc->ir, rc->pc);
+  int snap = sptir_snapshot(rc->ir, rc->pc);
+  /* §10.68c: if this snapshot is inside a free-function inlined callee body
+     (inline_depth > 0, no method_resume_snap), the exit PC is in the callee
+     proto. Record resume-at-call info so the exit stub can push a real callee
+     CI and the interpreter resumes at the in-callee exit PC. */
+  if (snap >= 0 && rc->inline_depth > 0) {
+    SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+    if (f->callee_proto) {
+      SPTResumeInfo *ri = &rc->snap_resume[snap];
+      ri->callee_proto = f->callee_proto;
+      ri->callee_frame_base = rc->frame_base;
+      ri->caller_resume_pc = f->pc;
+      ri->nresults = f->nresults;
+    }
+  }
+  return snap;
 }
 
 /* The exit PC a guard should resume at. Inside an inlined pure-read method body
@@ -1716,10 +1736,17 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   if (rec_try_condwrite_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   if (rec_try_condwrite_ifelse_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   /* A comparison inside an inlined callee that couldn't be if-converted would need
-     a guarded branch, i.e. a mid-callee control-flow split with a snapshot that
-     restores the synthetic callee frame -- which a single-entry trace cannot
-     represent. Abort instead (the call simply isn't inlined; never incorrect). */
-  if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
+     a guarded branch, i.e. a mid-callee control-flow split with a snapshot. For
+     method inlines (method_self_pc != NULL), the resume is at the caller's SELF
+     (re-execute CALL), which is unsafe if the method body has committed side
+     effects before the guard -- abort. For free-function inlines (§10.68c), the
+     resume-at-call mechanism pushes a real callee CI so the interpreter resumes
+     at the in-callee exit PC (no re-execution), which is safe. */
+  if (rc->frame_base != 0) {
+    SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+    if (f->method_self_pc != NULL) { rc->aborted = 1; return 0; }
+    /* Free-function inline: proceed with guarded branch (resume-at-call). */
+  }
   const Instruction *jmp = rc->pc + 1; /* the JMP following the comparison */
   double xv, yv;
   int fall_through = 1; /* default: static fall-through (correct, maybe cold) */
@@ -1993,6 +2020,67 @@ static int proto_is_inlinable(Proto *p, int *ret_reg) {
     }
   }
   return saw_return;
+}
+
+/* §10.68c: Like proto_is_inlinable, but additionally permits forward conditional
+   branches (OP_LT/LE/EQ + OP_JMP) and multiple RETURN1 points. This lets the
+   JIT inline leaf functions like:
+       fn classify(x) { if x < 0 { return -1 } if x > 10 { return 2 } return 0 }
+   The branches are recorded as guarded branches (rec_cond_branch); on guard
+   failure, the exit stub pushes a real callee CI via resume-at-call so the
+   interpreter resumes at the in-callee exit PC. No side effects, no calls, no
+   loops (all JMPs forward), no field/array writes. ret_reg is set to the A of
+   the FIRST RETURN1 (all return slots should be the same local; the recorder
+   validates this at record time). */
+static int proto_is_branch_inlinable(Proto *p, int *ret_reg) {
+  if (isvararg(p)) return 0;
+  if (p->sizep != 0) return 0;
+  int n = p->sizecode;
+  if (n < 1 || n > 64) return 0;
+  int saw_return = 0;
+  for (int i = 0; i < n; i++) {
+    Instruction ins = p->code[i];
+    OpCode o = GET_OPCODE(ins);
+    switch (o) {
+      /* value-producing, side-effect-free, straight-line ops (same as
+         proto_is_inlinable) */
+      case OP_MOVE:
+      case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
+      case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
+      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+      case OP_MOD: case OP_IDIV: case OP_POW:
+      case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
+      case OP_MODK: case OP_IDIVK: case OP_POWK:
+      case OP_ADDI:
+      case OP_BAND: case OP_BOR: case OP_BXOR:
+      case OP_BANDK: case OP_BORK: case OP_BXORK:
+      case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
+      case OP_BNOT: case OP_UNM: case OP_NOT:
+      case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
+      case OP_EXTRAARG:
+      case OP_RETURN0: case OP_RETURN:
+        break;
+      case OP_RETURN1:
+        if (!saw_return) *ret_reg = GETARG_A(ins);
+        saw_return++;
+        break;
+      /* conditional branches */
+      case OP_EQ: case OP_LT: case OP_LE:
+      case OP_EQK: case OP_EQI:
+      case OP_LTI: case OP_LEI: case OP_GTI: case OP_GEI:
+        break;
+      case OP_JMP: {
+        int sj = GETARG_sJ(ins);
+        if (sj < 0) return 0;           /* backward jump = loop: not inlinable */
+        int target = i + 1 + sj;
+        if (target >= n) return 0;      /* jump out of function: not inlinable */
+        break;
+      }
+      default:
+        return 0;                       /* anything else: not inlinable */
+    }
+  }
+  return saw_return >= 1;
 }
 
 /* Like proto_is_inlinable, but for an inlined *pure-read* method body:
@@ -4044,6 +4132,8 @@ static int rec_inst(SPTRecCtx *rc) {
         f->frame_base = rc->frame_base;
         f->call_result_slot = rc->frame_base + a;
         f->multiwrite_mode = proto_is_multiwrite_method_inlinable(callee_p);
+        f->callee_proto = callee_p;        /* §10.68c: for resume-at-call */
+        f->nresults = c - 1;               /* C operand encodes nresults+1 */
         rc->inline_depth++;
         rc->pending_method_self_pc = NULL;  /* consumed */
         rc->p = callee_p;
@@ -4072,13 +4162,16 @@ static int rec_inst(SPTRecCtx *rc) {
       if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
 
       /* Callee must be a pure straight-line leaf, a conditional-return leaf
-         `if(c){return A}return B`, or a conditional-assignment-then-return leaf
-         `if(c){slot=A}return slot` (the latter two get their branch if-converted). */
+         `if(c){return A}return B`, a conditional-assignment-then-return leaf
+         `if(c){slot=A}return slot` (the latter two get their branch if-converted),
+         or a branch-inlinable leaf with forward conditional branches and multiple
+         RETURN1 points (§10.68c: guarded branches with resume-at-call). */
       int ret_reg = -1;
       int straight = proto_is_inlinable(callee_p, &ret_reg);
       if (!straight && !proto_is_condreturn_inlinable(callee_p) &&
           !proto_is_chained_condreturn(callee_p, 0) &&
-          !proto_is_condassign_inlinable(callee_p)) { rc->aborted = 1; return 0; }
+          !proto_is_condassign_inlinable(callee_p) &&
+          !proto_is_branch_inlinable(callee_p, &ret_reg)) { rc->aborted = 1; return 0; }
 
       /* New frame base = A+1 (the slot after the function). Keep the callee's
          whole frame inside the fixed-size backing reg_map array. */
@@ -4107,6 +4200,8 @@ static int rec_inst(SPTRecCtx *rc) {
       ff->method_self_pc = NULL;            /* free-function inline: no SELF resume */
       ff->method_resume_snap = -1;
       ff->multiwrite_mode = 0;              /* multi-write only applies to method inlining */
+      ff->callee_proto = callee_p;          /* §10.68c: for resume-at-call */
+      ff->nresults = c - 1;                 /* C operand encodes nresults+1 */
       rc->inline_depth++;
 
       rc->p = callee_p;
@@ -4478,6 +4573,12 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   for (int i = 0; i < t->ir.nsnaps && i < SPT_JIT_MAX_SNAPSHOTS; i++)
     t->exit_pcs[i] = t->ir.exit_pcs[i];
 
+  /* §10.68c: copy per-snapshot resume-at-call info. For snapshots inside a
+     free-function inlined callee body, this tells the exit stub to push a real
+     callee CI so the interpreter resumes at the in-callee exit PC. */
+  for (int i = 0; i < t->ir.nsnaps && i < SPT_JIT_MAX_SNAPSHOTS; i++)
+    t->exit_resume[i] = rc.snap_resume[i];
+
   /* Carry the inlined-call entry check (if any) onto the trace. */
   t->inline_fn_slot = rc.inline_fn_slot;
   t->inline_fn_proto = rc.inline_fn_proto;
@@ -4510,14 +4611,14 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
      inline never pushed a callee frame). So a guard that survives optimization
      with an exit PC pointing INTO an inlined callee's bytecode (outside the main
      proto's [code, code+sizecode)) would resume callee bytecode under the caller
-     frame -> corruption. For a loop-invariant receiver, method-field guards are
-     loop-invariant and hoist/fold away, leaving only top-frame (loop-boundary)
-     exits; but a method body with a per-iteration in-callee guard (e.g. variable
-     index access) might not. Detect any surviving in-callee exit and refuse to
-     compile -- the trace then falls back to the interpreter, exactly like the
-     side-trace amortization gate below. (Free-function inlines have zero-guard
-     bodies, so this only ever fires for risky method bodies; non-inlined traces
-     keep all exit PCs in the main proto, so there are no false positives.) */
+     frame -> corruption -- UNLESS the snapshot has resume-at-call info
+     (§10.68c): then the exit stub calls sptjit_exit_resume, which pushes a real
+     callee CI so the interpreter resumes correctly at the in-callee exit PC.
+     For a loop-invariant receiver, method-field guards are loop-invariant and
+     hoist/fold away, leaving only top-frame (loop-boundary) exits; but a method
+     body with a per-iteration in-callee guard (e.g. variable index access) might
+     not. Detect any surviving in-callee exit WITHOUT resume info and refuse to
+     compile -- the trace then falls back to the interpreter. */
   {
     const Instruction *lo = p->code, *hi = p->code + p->sizecode;
     for (int k = 0; k < t->ir.ninst; k++) {
@@ -4527,10 +4628,19 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
       if (si < 0 || si >= t->ir.nsnaps) continue;
       const Instruction *epc = t->ir.exit_pcs[si];
       if (epc && (epc < lo || epc >= hi)) {
+        /* In-callee exit. Allow only if resume-at-call info is present and the
+           exit PC is within the callee proto's code range. */
+        SPTResumeInfo *ri = &t->exit_resume[si];
+        if (ri->callee_proto) {
+          const Instruction *clo = ri->callee_proto->code;
+          const Instruction *chi = clo + ri->callee_proto->sizecode;
+          if (epc >= clo && epc < chi)
+            continue;  /* valid in-callee exit with resume-at-call */
+        }
         if (js->debug)
           fprintf(stderr, "[JIT] trace has an un-hoisted in-callee guard (exit "
-                  "pc outside main proto); refusing to compile, fall back to "
-                  "interpreter\n");
+                  "pc outside main proto, no resume info); refusing to compile, "
+                  "fall back to interpreter\n");
         sptir_free(&t->ir);
         free(t);
         return NULL;
@@ -4758,6 +4868,49 @@ static void maybe_record_side_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   }
 }
 
+/* §10.68c resume-at-call: called from JIT exit stubs when a guard inside an
+   inlined free-function callee body fails. The exit PC is in the callee proto,
+   so we must push a real callee CallInfo frame for the interpreter to resume
+   correctly. Sets caller CI's savedpc to the resume point (after CALL), pushes
+   callee CI with savedpc = exit_pc, and updates L->ci. For root-frame exits
+   (callee_proto == NULL), just sets the caller CI's savedpc (the existing
+   behavior, done in C instead of machine code). */
+void sptjit_exit_resume(lua_State *L, CallInfo *ci, SPTTrace *t, int snap_idx) {
+  SPTResumeInfo *ri = &t->exit_resume[snap_idx];
+  const Instruction *exit_pc = t->exit_pcs[snap_idx];
+  if (!ri->callee_proto) {
+    /* Root-frame exit: set caller CI's savedpc directly. */
+    if (exit_pc)
+      ci->u.l.savedpc = exit_pc;
+    return;
+  }
+  /* Resume-at-call: set caller CI's savedpc to resume after CALL, then push a
+     new callee CI so the interpreter resumes at the in-callee exit PC. */
+  ci->u.l.savedpc = ri->caller_resume_pc;
+  /* Get a new CI (reuse ci->next if available, else extend). */
+  CallInfo *nci;
+  if (ci->next != NULL) {
+    nci = ci->next;
+    nci->u.l.trap = 0;
+  } else {
+    nci = luaE_extendCI(L);  /* links after L->ci (= ci), sets nci->previous */
+  }
+  /* Callee's func = root_base + callee_frame_base (see §10.68c derivation).
+     root_base = ci->func.p + 1, so callee func = ci->func.p + callee_frame_base. */
+  StkId callee_func = ci->func.p + ri->callee_frame_base;
+  nci->func.p = callee_func;
+  nci->top.p = callee_func + 1 + ri->callee_proto->maxstacksize;
+  nci->u.l.savedpc = exit_pc;
+  nci->u.l.nextraargs = 0;
+  nci->callstatus = cast_uint(ri->nresults + 1);  /* nresults encoded as +1 */
+  /* Link into CI chain (if reused, already linked; if new, extendCI linked). */
+  nci->previous = ci;
+  ci->next = nci;
+  L->ci = nci;
+  /* Set L->top to a safe value for the callee frame (avoids assert failures). */
+  L->top.p = nci->top.p;
+}
+
 int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
   global_State *g = G(L);
   SPTJitState *js = (SPTJitState *)g->jit_state; /* will be added */
@@ -4797,6 +4950,12 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
     t->entry_count++;
     SPTTraceEntry entry = (SPTTraceEntry)t->code;
     entry(L, ci);
+
+    /* §10.68c: if the trace exited at an in-callee guard, sptjit_exit_resume
+       pushed a callee CI and set L->ci != ci. Stop linking — the interpreter
+       must resume in the callee, not at a caller PC. sptjit_hot_check will
+       pick up L->ci and update the local ci/pc/base/cl/k. */
+    if (L->ci != ci) break;
 
     const Instruction *next_pc = ci->u.l.savedpc;
     if (next_pc == entered_pc) break;       /* no forward progress */

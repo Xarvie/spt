@@ -42,7 +42,10 @@ typedef struct {
 /* One saved caller frame for nested inlining. Pushed at OP_CALL inline entry,
    popped at OP_RETURN. The method_self_pc / method_resume_snap / multiwrite_mode
    fields belong to the *callee* frame (set at push, read while recording the
-   callee body). */
+   callee body). callee_proto / nresults are stored at push for resume-at-call
+   (§10.68c): when a guard inside a free-function callee body fails, the exit
+   stub pushes a real callee CI so the interpreter resumes at the in-callee exit
+   PC without re-executing the call. */
 typedef struct SPTInlineFrame {
   Proto *p;                        /* caller proto */
   const TValue *k;                 /* caller constant table */
@@ -53,7 +56,20 @@ typedef struct SPTInlineFrame {
   const Instruction *method_self_pc;  /* SELF PC for resume-at-SELF (callee) */
   int method_resume_snap;          /* shared snapshot for in-method guards */
   int multiwrite_mode;             /* multi-write mode for callee body */
+  Proto *callee_proto;             /* callee proto (for resume-at-call) */
+  int nresults;                    /* nresults from CALL (C operand - 1) */
 } SPTInlineFrame;
+
+/* Per-snapshot resume-at-call info. When a guard inside an inlined callee body
+   fails, the exit stub needs to push a real callee CallInfo frame so the
+   interpreter resumes at the in-callee exit PC. callee_proto == NULL means no
+   resume-at-call (root-frame exit, or resume-at-SELF method inline). */
+typedef struct {
+  Proto *callee_proto;        /* NULL = no resume-at-call */
+  int callee_frame_base;      /* absolute slot offset of callee's base (func+1) */
+  const Instruction *caller_resume_pc;  /* caller PC after CALL */
+  int nresults;               /* expected return values from CALL */
+} SPTResumeInfo;
 
 /* =====================================================================
 ** Trace structure
@@ -75,6 +91,11 @@ struct SPTTrace {
 
   /* Exit PC for each snapshot (where to resume in interpreter) */
   const Instruction *exit_pcs[SPT_JIT_MAX_SNAPSHOTS];
+
+  /* Per-snapshot resume-at-call info (§10.68c). For guards inside an inlined
+     free-function callee body, the exit PC is in the callee proto; the exit
+     stub pushes a real callee CI so the interpreter resumes correctly. */
+  SPTResumeInfo exit_resume[SPT_JIT_MAX_SNAPSHOTS];
 
   /* Per-snapshot exit counter: how many times each exit (snapshot) was taken
      back to the interpreter. Incremented by the exit stub. Zeroed at alloc

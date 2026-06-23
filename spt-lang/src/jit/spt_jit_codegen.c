@@ -824,12 +824,27 @@ static void gen_exit_stub(SPTCodeGen *cg, int snap_idx) {
     gen_write_tag(cg, slot, spt_type_to_tag(type));
   }
 
-  /* Set ci->u.l.savedpc = exit_pc.
-     The exit PC is stored in the trace's exit_pcs array, indexed by snapshot. */
+  /* Set ci->u.l.savedpc = exit_pc, or call sptjit_exit_resume for in-callee exits.
+     The exit PC is stored in the trace's exit_pcs array, indexed by snapshot.
+     §10.68c: if exit_resume[snap_idx].callee_proto is set, the exit PC is inside
+     an inlined callee proto; the C helper pushes a real callee CI and sets
+     L->ci, so the interpreter resumes in the callee. Otherwise, set the caller
+     CI's savedpc directly in machine code (the fast common path). */
   const Instruction *exit_pc = t->exit_pcs[snap_idx];
-  if (exit_pc) {
-    /* We need to compute the PC offset from proto->code.
-       For simplicity, store the absolute pointer. */
+  if (t->exit_resume[snap_idx].callee_proto) {
+    /* In-callee exit: call sptjit_exit_resume(L, ci, t, snap_idx).
+       R12=L, R13=ci are preserved across the exit stub (never clobbered by
+       flushes). Load args, load function address, call, then go to epilogue.
+       Stack is 16-byte aligned (JIT prologue guarantees it); the JIT frame's
+       32-byte shadow space is available for the callee. Spill slots are dead
+       (all live values already flushed to the interpreter stack). */
+    sptasm_mov_rr(a, SPT_ABI_ARG0, SPT_R12);   /* L */
+    sptasm_mov_rr(a, SPT_ABI_ARG1, SPT_R13);   /* ci */
+    sptasm_mov_ri64(a, SPT_ABI_ARG2, (int64_t)t);         /* trace */
+    sptasm_mov_ri32(a, SPT_ABI_ARG3, snap_idx);           /* snap_idx */
+    sptasm_mov_ri64(a, SPT_RAX, (int64_t)(uintptr_t)&sptjit_exit_resume);
+    sptasm_call_r(a, SPT_RAX);
+  } else if (exit_pc) {
     sptasm_mov_ri64(a, SPT_RAX, (int64_t)exit_pc);
     sptasm_mov_mr(a, SPT_R13, OFF_CI_SAVEDPC, SPT_RAX);
   }
