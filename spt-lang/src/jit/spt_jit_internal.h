@@ -69,6 +69,9 @@ typedef struct {
   int callee_frame_base;      /* absolute slot offset of callee's base (func+1) */
   const Instruction *caller_resume_pc;  /* caller PC after CALL */
   int nresults;               /* expected return values from CALL */
+  LClosure *callee_cl;        /* callee closure to write to func slot (the CALL's
+                                 A register may have been overwritten by the
+                                 inlined result in the snapshot) */
 } SPTResumeInfo;
 
 /* =====================================================================

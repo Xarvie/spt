@@ -1,0 +1,35 @@
+// Method with guarded branches — tests method inline with conditional
+// branches and field reads. The `clamp` and `grade` methods are if-convertible
+// (cond-return chains → branchless select). The `rem` method uses `%` (MOD)
+// in the branch body, which is NOT if-convertible (trapping op), so it
+// exercises the guarded-branch path with resume-at-call.
+class Box {
+  int val;
+  int min;
+  int max;
+  void __init(int v, int lo, int hi) { this.val = v; this.min = lo; this.max = hi; }
+  int clamp() {
+    if (this.val < this.min) { return this.min; }
+    if (this.val > this.max) { return this.max; }
+    return this.val;
+  }
+  int grade() {
+    if (this.val < 0) { return -1; }
+    if (this.val > 100) { return 2; }
+    return 0;
+  }
+  int rem(int x) {
+    if (x > 0) { return this.val % x; }
+    return this.val;
+  }
+}
+
+Box b = Box(0, 10, 90);
+int total = 0;
+for (int i = 0, 1000000) {
+  b.val = i % 200;
+  total = total + b.clamp();
+  total = total + b.grade();
+  total = total + b.rem(i % 20 - 10);
+}
+print(total);

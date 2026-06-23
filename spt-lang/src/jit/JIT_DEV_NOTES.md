@@ -2952,3 +2952,92 @@ case OP_FORLOOP:
 构建 0 err。**369/369 ctest 全通过** · **136/136 kernel 差分通过**（含新增 `inline_loop.spt`）· **模糊器 40 例 0 失配**。零回归。
 
 新增测试 kernel `inline_loop.spt`：`sum_range(int n)` 含 numeric for-loop，外层循环调用 100 万次，验证带循环 callee 的内联 + 展开 + 常量折叠正确性。
+
+## §10.70 嵌套方法内联（带 guarded branch 的方法内联，resume-at-SELF → resume-at-call 切换，✅ 阶段达成）
+
+### 背景
+§10.68c 落地了**自由函数**带分支 callee 的内联（通用 resume-at-call），但方法内联（OP_SELF + CALL）仍走 resume-at-SELF：guard 失败时重执行 SELF+CALL。这对**幂等体**（纯读方法）成立，但带 guarded branch 的方法体（如 `if (this.val < this.min) return this.min;`）非幂等——重执行会双写非幂等字段。本节放开方法内联的 guarded branch 路径，切换到 resume-at-call。
+
+### 核心改动（5 处）
+
+**(1) 扩展 `proto_is_branch_inlinable` 允许 GETFIELD/GETI/GETTABLE/LEN**（行 ~2077）：
+```c
+case OP_GETFIELD: case OP_GETI: case OP_GETTABLE:
+case OP_LEN:
+  break;
+```
+理由：方法体内 `this.field` 读取（GETFIELD）和数组/表元素读取（GETI/GETTABLE/LEN）是带分支方法体的常见 op。这些 op 发守卫，但守卫失败时由 resume-at-call 重建 callee CI 安全回退，不再需要 resume-at-SELF 的幂等性保证。
+
+**(2) 将 `proto_is_branch_inlinable` 加入方法内联纯度门**（行 ~4139）：
+```c
+if (!proto_is_method_inlinable(callee_p, &ret_reg) &&
+    !proto_is_condreturn_method_inlinable(callee_p) &&
+    !proto_is_chained_condreturn(callee_p, 1) &&
+    !proto_is_write_method_inlinable(callee_p) &&
+    !proto_is_condwrite_method_inlinable(callee_p) &&
+    !proto_is_condwrite_ifelse_method_inlinable(callee_p) &&
+    !proto_is_multiwrite_method_inlinable(callee_p) &&
+    !proto_is_branch_inlinable(callee_p, &ret_reg)) { rc->aborted = 1; return 0; }
+```
+
+**(3) 修改 `rec_cond_branch`：方法内联切换 resume-at-SELF → resume-at-call**（行 ~1729）：
+```c
+if (rc->frame_base != 0) {
+  SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+  if (f->method_self_pc != NULL) {
+    f->method_self_pc = NULL;
+    f->method_resume_snap = -1;
+  }
+  /* Free-function inline: proceed with guarded branch (resume-at-call). */
+}
+```
+清除 `method_self_pc` / `method_resume_snap` 后，后续 guard 走 in-callee 快照 + resume-at-call info（与自由函数内联路径相同）。
+
+**(4) `rec_snap` 存储 callee_cl**（行 ~686）：
+```c
+if (f->callee_proto) {
+  SPTResumeInfo *ri = &rc->snap_resume[snap];
+  ri->callee_proto = f->callee_proto;
+  ri->callee_frame_base = rc->frame_base;
+  ri->caller_resume_pc = f->pc;
+  ri->nresults = f->nresults;
+  ri->callee_cl = rc->cl;  /* callee closure (rc->cl is callee's after push) */
+}
+```
+
+**(5) `sptjit_exit_resume` 恢复函数值**（行 ~4937）——**核心修复**：
+```c
+StkId callee_func = ci->func.p + ri->callee_frame_base;
+/* The exit stub may have written the inlined CALL's result (an integer) to
+   this slot, overwriting the function value. Restore the callee closure so
+   ci_func(nci) reads a valid LClosure. The inlined result is stale (the
+   guard failed, so the interpreter re-executes the callee). */
+if (ri->callee_cl)
+  setclLvalue2s(L, callee_func, ri->callee_cl);
+nci->func.p = callee_func;
+```
+
+### 关键 BUG 与修复
+**症状**：`inline_method_branch.spt` 运行时 ACCESS_VIOLATION (0xC0000005)，trace 编译成功但 guard 失败时 crash。
+
+**根因**：exit stub 将 CALL 结果（整数，ref 50 = `this.val % x`）写入 slot A（CALL 的 A 寄存器 = root slot 6），覆盖了原来的函数值（LClosure）。`sptjit_exit_resume` 设 `nci->func.p = ci->func.p + callee_frame_base` 指向该 slot，解释器 `ci_func(nci)` 读整数当 closure → crash。
+
+**发现过程**：
+1. 读取 `luaE_extendCI` 实现，确认 CI 复用是 VM 正常模式（`next_ci` 宏复用 `ci->next`）
+2. 分析 CI 链管理，排除 CI 复用损坏假说
+3. 构建+运行测试，获取 IR dump 和 debug 输出
+4. 分析 reg_map: `[6]=50` — slot 6（CALL A 寄存器）存储的是 ref 50（int MOD = CALL 结果），不是函数值
+5. 确认 `callee_frame_base=7` → `nci->func.p = ci->func.p + 7` = root slot 6 → 指向 CALL 结果而非函数
+
+**修复**：`SPTResumeInfo` 增加 `LClosure *callee_cl` 字段；`rec_snap` 中存储 `ri->callee_cl = rc->cl`（rc->cl 在 inline push 后是 callee 的 closure）；`sptjit_exit_resume` 中用 `setclLvalue2s(L, callee_func, ri->callee_cl)` 恢复函数值。
+
+### 效果
+`inline_method_branch.spt` 的 `Box.clamp()` / `Box.grade()` / `Box.rem()` 三个方法均被内联到外层循环 trace：
+- `clamp` 和 `grade` 是 if-convertible（cond-return chains → CMPSET），53 insts
+- `rem` 用 `%`（MOD）在 branch body 中，MOD 不是 ifconv-safe，走 guarded branch 路径（resume-at-call）
+- JIT 输出 `123820010`，解释器输出 `123820010`，一致 ✓
+
+### 验证（完整门槛，全绿）
+构建 0 err。**370/370 ctest 全通过** · **模糊器 300+150 例 0 失配**。零回归。
+
+新增测试 kernel `inline_method_branch.spt`：`Box` 类含 `clamp`/`grade`/`rem` 三个带分支方法，外层循环调用 100 万次，验证带 guarded branch 的方法内联 + resume-at-call 正确性。

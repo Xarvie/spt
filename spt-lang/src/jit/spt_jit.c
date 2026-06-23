@@ -687,6 +687,7 @@ static int rec_snap(SPTRecCtx *rc) {
       ri->callee_frame_base = rc->frame_base;
       ri->caller_resume_pc = f->pc;
       ri->nresults = f->nresults;
+      ri->callee_cl = rc->cl;  /* callee closure (rc->cl is callee's after push) */
     }
   }
   return snap;
@@ -1735,18 +1736,34 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   if (rec_try_condreturn_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   if (rec_try_condwrite_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
   if (rec_try_condwrite_ifelse_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
-  /* A comparison inside an inlined callee that couldn't be if-converted would need
-     a guarded branch, i.e. a mid-callee control-flow split with a snapshot. For
-     method inlines (method_self_pc != NULL), the resume is at the caller's SELF
-     (re-execute CALL), which is unsafe if the method body has committed side
-     effects before the guard -- abort. For free-function inlines (§10.68c), the
-     resume-at-call mechanism pushes a real callee CI so the interpreter resumes
-     at the in-callee exit PC (no re-execution), which is safe. */
+  /* A comparison inside an inlined callee that couldn't be if-converted needs
+     a guarded branch, i.e. a mid-callee control-flow split with a snapshot.
+     For method inlines (method_self_pc != NULL), the resume is at the caller's
+     SELF (re-execute CALL). This is safe for guards in the pure-read prefix
+     before any branch (no writes, idempotent re-execution). But a guarded
+     branch itself needs resume-at-call: if the guard fails after the branch,
+     re-executing from SELF could re-run side effects (field reads with type
+     guards that already passed). Switch to resume-at-call by clearing
+     method_self_pc / method_resume_snap. Subsequent guards (including this
+     branch's) will create in-callee snapshots with resume-at-call info, so
+     the exit stub pushes a real callee CI and the interpreter resumes at the
+     in-callee exit PC (no re-execution). Guards emitted before this switch
+     already captured the SELF snapshot and remain resume-at-SELF (safe: the
+     prefix is pure-read, no committed writes to double-apply).
+     For free-function inlines (§10.68c), resume-at-call is already active. */
   if (rc->frame_base != 0) {
     SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
-    if (f->method_self_pc != NULL) { rc->aborted = 1; return 0; }
+    if (f->method_self_pc != NULL) {
+      /* Switch from resume-at-SELF to resume-at-call for this and future
+         guards. The SELF snapshot (method_resume_snap) remains in the
+         snapshot array for guards already emitted; new guards get fresh
+         in-callee snapshots with resume-at-call info. */
+      f->method_self_pc = NULL;
+      f->method_resume_snap = -1;
+    }
     /* Free-function inline: proceed with guarded branch (resume-at-call). */
   }
+  if (rc->js->debug) fprintf(stderr, "[JIT] guarded branch: fb=%d depth=%d fop=%d\n", rc->frame_base, rc->inline_depth, (int)fop);
   const Instruction *jmp = rc->pc + 1; /* the JMP following the comparison */
   double xv, yv;
   int fall_through = 1; /* default: static fall-through (correct, maybe cold) */
@@ -2058,6 +2075,10 @@ static int proto_is_branch_inlinable(Proto *p, int *ret_reg) {
       case OP_BNOT: case OP_UNM: case OP_NOT:
       case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
       case OP_EXTRAARG:
+      /* read-only field / element access (for methods reading this.field,
+         and free functions reading table fields with branches) */
+      case OP_GETFIELD: case OP_GETI: case OP_GETTABLE:
+      case OP_LEN:
       case OP_RETURN0: case OP_RETURN:
         break;
       case OP_RETURN1:
@@ -4122,7 +4143,8 @@ static int rec_inst(SPTRecCtx *rc) {
             !proto_is_write_method_inlinable(callee_p) &&
             !proto_is_condwrite_method_inlinable(callee_p) &&
             !proto_is_condwrite_ifelse_method_inlinable(callee_p) &&
-            !proto_is_multiwrite_method_inlinable(callee_p)) { rc->aborted = 1; return 0; }
+            !proto_is_multiwrite_method_inlinable(callee_p) &&
+            !proto_is_branch_inlinable(callee_p, &ret_reg)) { rc->aborted = 1; return 0; }
         int new_fb = rc->frame_base + a + 1;
         if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
         if (rc->inline_depth >= SPT_JIT_MAX_INLINE_DEPTH) { rc->aborted = 1; return 0; }
@@ -4642,8 +4664,9 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
         if (ri->callee_proto) {
           const Instruction *clo = ri->callee_proto->code;
           const Instruction *chi = clo + ri->callee_proto->sizecode;
-          if (epc >= clo && epc < chi)
+          if (epc >= clo && epc < chi) {
             continue;  /* valid in-callee exit with resume-at-call */
+          }
         }
         if (js->debug)
           fprintf(stderr, "[JIT] trace has an un-hoisted in-callee guard (exit "
@@ -4906,6 +4929,12 @@ void sptjit_exit_resume(lua_State *L, CallInfo *ci, SPTTrace *t, int snap_idx) {
   /* Callee's func = root_base + callee_frame_base (see §10.68c derivation).
      root_base = ci->func.p + 1, so callee func = ci->func.p + callee_frame_base. */
   StkId callee_func = ci->func.p + ri->callee_frame_base;
+  /* The exit stub may have written the inlined CALL's result (an integer) to
+     this slot, overwriting the function value. Restore the callee closure so
+     ci_func(nci) reads a valid LClosure. The inlined result is stale (the
+     guard failed, so the interpreter re-executes the callee). */
+  if (ri->callee_cl)
+    setclLvalue2s(L, callee_func, ri->callee_cl);
   nci->func.p = callee_func;
   nci->top.p = callee_func + 1 + ri->callee_proto->maxstacksize;
   nci->u.l.savedpc = exit_pc;

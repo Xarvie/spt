@@ -96,11 +96,10 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 5. 之后的路线（优先级，各自专项）
 
-> 嵌套内联多帧 3 阶段（§10.68a/b/c）均已落地，已从本清单移除。§10.69 带循环 callee 内联已落地。
+> 嵌套内联多帧 3 阶段（§10.68a/b/c）均已落地，已从本清单移除。§10.69 带循环 callee 内联已落地。§10.70 嵌套方法内联（带 guarded branch 的方法内联）已落地。
 
-1. **嵌套方法内联**：§10.68c 的 `rec_cond_branch` abort 放宽为仅对 method inline abort。要放开 method inline 的 guarded branch，需处理 method 的 resume-at-SELF 与 resume-at-call 的交互。
-2. **值返回多写的精确门扩展（小项）**：当前值返回路径保守地禁了所有 GETI/GETTABLE/LEN，连"GETI 在所有写**之前**"这种其实安全的形态也拒。精确做法是只禁出现在 SETFIELD **之后**的 GETI/GETTABLE/LEN（按写位置扫描），解锁"先读数组再写多字段并返值"。低险、低价值，按需。
-3. 路线 §4（循环展开 / 强度削减）、§5（寄存器中介的 trace 链接，高风险）。详见 `JIT_ROADMAP.md`。
+1. **值返回多写的精确门扩展（小项）**：当前值返回路径保守地禁了所有 GETI/GETTABLE/LEN，连"GETI 在所有写**之前**"这种其实安全的形态也拒。精确做法是只禁出现在 SETFIELD **之后**的 GETI/GETTABLE/LEN（按写位置扫描），解锁"先读数组再写多字段并返值"。低险、低价值，按需。
+2. 路线 §4（循环展开 / 强度削减）、§5（寄存器中介的 trace 链接，高风险）。详见 `JIT_ROADMAP.md`。
 
 ---
 
@@ -120,4 +119,4 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 7. 一句话状态
 
-**基线 = §10.69 带循环 callee 内联完成（扩展 proto_is_branch_inlinable 允许 OP_FORPREP/OP_FORLOOP + 修复 try_unroll_inner_loop 和 OP_FORLOOP 的 maxslot 偏移 bug），全门槛绿（369 ctest、kernel 差分 136 pass/0 fail、模糊 40 例 0 失配）。下一步：嵌套方法内联。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。
+**基线 = §10.70 嵌套方法内联完成（带 guarded branch 的方法内联：rec_cond_branch 清除 method_self_pc/method_resume_snap 切换 resume-at-SELF → resume-at-call + proto_is_branch_inlinable 扩展允许 GETFIELD/GETI/GETTABLE/LEN + SPTResumeInfo 增加 callee_cl 字段修复 exit stub 覆盖函数值导致的 crash），全门槛绿（370 ctest、模糊 300+150 例 0 失配）。下一步：值返回多写精确门扩展（小项）或路线 §4/§5。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。
