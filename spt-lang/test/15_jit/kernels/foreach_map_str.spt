@@ -1,8 +1,11 @@
-string s = "";
+// Sum string lengths instead of concatenating — addition is commutative,
+// so the result doesn't depend on pairs() iteration order (which varies
+// with the per-process hash seed).
+int total = 0;
 for (int i = 0, 100) {
   map<string, string> m = {"a": "hello", "b": "world"};
   for (string k, string v : pairs(m)) {
-    s = s .. v;
+    total = total + string.len(v);
   }
 }
-print(s);
+print(total);

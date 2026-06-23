@@ -71,11 +71,11 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 - **§10.59–§10.62 math 库内联 + SLEN/SBYTE resume-at-SELF**：min/max/abs/floor/ceil/string.len/byte。
 
 该状态**全门槛绿**：
-- **368/368 ctest**、**kernel 差分 pass=134 fail=1**（唯一 fail=`foreach_map_str`，见下方"已知非问题"）、**模糊 seeds 42+99×200=400 例 0 失配**、entries==exits、guard_fail=0。
+- **368/368 ctest**、**kernel 差分 pass=135 fail=0**、**模糊 seeds 42+99×200=400 例 0 失配**、entries==exits、guard_fail=0。
 - 加速表与各特性细节见 `JIT_ROADMAP.md` 与 `JIT_DEV_NOTES.md §10.x`。
 
-### 已知非问题：`foreach_map_str.spt` 的 kernel 差分 fail（与改动无关）
-`scripts/jit_difftest.sh`（HOT=8）会报 `foreach_map_str.spt` 一个 fail。**这不是 JIT bug**：`SPT_JIT_DEBUG=2` 显示 `compiled=0`（JIT 在构造 map 处 abort、完全没参与计算）；OFF/ON 的差异纯来自 `pairs(map)` 的**迭代顺序**对字符串哈希种子的敏感（种子在 on/off 两进程内存布局不同下取值不同，而 map 迭代顺序在语义上未指定）。其他 map-foreach kernel 求和（加法可交换）看不出，只有这个字符串拼接 kernel 暴露。**实锤**：全量差分 `jit_difftest_all.sh`（HOT=40）里它又匹配（同一二进制，仅运行间种子不同）。保留 kernel 不动（改测试去掩盖会埋雷）；接手者见 `fail=foreach_map_str` 即知是种子 flakiness、与改动无关。
+### 已知非问题：`foreach_map_str.spt` 的 map 迭代顺序（已修复）
+`pairs(map)` 的迭代顺序依赖 per-process 哈希种子（`luai_makeseed` 混合 `time(NULL)` + 栈地址 ASLR），JIT on/off 两次进程的种子不同 → 字符串键的哈希不同 → 迭代顺序不同。原测试用字符串拼接（`..`，不可交换）暴露了这个差异。**已修复**：改为求字符串长度之和（`string.len(v)`，加法可交换），不再依赖迭代顺序。
 
 > 当前基线 = **§10.68c 完成**。可直接构建（`cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build`）。
 
@@ -119,4 +119,4 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 7. 一句话状态
 
-**基线 = §10.68c 通用 resume-at-call 完成（嵌套内联多帧 3 阶段最后一步：带分支 callee 内联、exit stub 调用 sptjit_exit_resume 重建 callee CI、sptjit_hot_check 宏更新 ci/cl/k、安全网允许有 resume info 的 in-callee exit PC、proto_is_branch_inlinable 允许 forward conditional branches + 多 RETURN1、rec_cond_branch abort 放宽为仅对 method inline），全门槛绿（368 ctest、kernel 差分 134 pass/1 pre-existing fail、模糊 400 例 0 失配）。下一步：带循环 callee 内联 / 嵌套方法内联。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。
+**基线 = §10.68c 通用 resume-at-call 完成（嵌套内联多帧 3 阶段最后一步：带分支 callee 内联、exit stub 调用 sptjit_exit_resume 重建 callee CI、sptjit_hot_check 宏更新 ci/cl/k、安全网允许有 resume info 的 in-callee exit PC、proto_is_branch_inlinable 允许 forward conditional branches + 多 RETURN1、rec_cond_branch abort 放宽为仅对 method inline），全门槛绿（368 ctest、kernel 差分 135 pass/0 fail、模糊 400 例 0 失配）。下一步：带循环 callee 内联 / 嵌套方法内联。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。
