@@ -35,16 +35,12 @@
    (the math_* functions are file-static there). */
 typedef double (*spt_unary_libm_fn)(double);
 extern spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f);
-/* Identify math.pow for binary-libm FMATH2 lowering (defined in lmathlib.c
-   where math_pow is file-static). Returns the libm pow pointer or NULL.
-   math_pow lives inside LUA_COMPAT_MATHLIB; when that is undefined, math.pow
-   does not exist, so provide a NULL fallback to keep the caller simple. */
+/* Identify math.pow / math.atan for binary-libm FMATH2 lowering (defined in
+   lmathlib.c where math_pow/math_atan are file-static). Returns the libm
+   pointer or NULL. math_pow lives inside LUA_COMPAT_MATHLIB but math_atan is
+   unconditional, so the function is always defined. */
 typedef double (*spt_binary_libm_fn)(double, double);
-#if defined(LUA_COMPAT_MATHLIB)
 extern spt_binary_libm_fn spt_jit_binary_math(lua_CFunction f);
-#else
-static spt_binary_libm_fn spt_jit_binary_math(lua_CFunction f) { (void)f; return NULL; }
-#endif
 /* Bit-exact float % wrapper (defined in lvm.c, reuses luai_nummod). */
 extern double spt_jit_luamodf(double x, double y);
 /* Identify string.len / string.byte for SLEN / SBYTE lowering (defined in
@@ -3756,30 +3752,43 @@ static int rec_inst(SPTRecCtx *rc) {
         break;
       }
 
-      /* Pending binary-math call armed by a preceding SELF (e.g. math.pow)?
-         The SPT convention puts the receiver at R[A+1] and the two real
-         arguments at R[A+2] and R[A+3]; math_pow reads luaL_checknumber(L,2)
-         and luaL_checknumber(L,3). Lower to SPTIR_FMATH2. Requires exactly
-         two real args (B == 4: function + receiver + arg1 + arg2) and one
-         result (C == 2). */
+      /* Pending binary-math call armed by a preceding SELF (e.g. math.pow,
+         math.atan)? The SPT convention puts the receiver at R[A+1] and the
+         real arguments at R[A+2] (and R[A+3] for two-arg forms). Lower to
+         SPTIR_FMATH2. Two forms:
+           - B == 4 (two real args, e.g. math.pow(x,y), math.atan(y,x)):
+             arg1 = R[A+2], arg2 = R[A+3].
+           - B == 3 (one real arg, e.g. math.atan(y) → atan2(y,1)):
+             arg1 = R[A+2], arg2 = kflt(1.0). Only atan2 has a single-arg form;
+             math.pow with B==3 would be a user error (caught by the interpreter).
+         C == 2 (one result) is always required. */
       if (rc->pending_cfn2_slot == rc->frame_base + a) {
         void *libm2 = rc->pending_cfn2_libm;
         rc->pending_cfn2_slot = -1; rc->pending_cfn2_libm = NULL;
-        if (b != 4 || c != 2) { rc->aborted = 1; return 0; }
+        if (c != 2) { rc->aborted = 1; return 0; }
         int arg1 = ir->reg_map[rc->frame_base + a + 2];
-        int arg2 = ir->reg_map[rc->frame_base + a + 3];
-        if (arg1 < 0 || arg2 < 0) { rc->aborted = 1; return 0; }
+        if (arg1 < 0) { rc->aborted = 1; return 0; }
         SPTType at1 = ir->reg_type[rc->frame_base + a + 2];
-        SPTType at2 = ir->reg_type[rc->frame_base + a + 3];
         if (at1 == SPTT_INT) {
           arg1 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg1, SPTIR_NULL, 0);
         } else if (at1 != SPTT_FLT) {
           rc->aborted = 1; return 0;       /* non-numeric arg1 */
         }
-        if (at2 == SPTT_INT) {
-          arg2 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg2, SPTIR_NULL, 0);
-        } else if (at2 != SPTT_FLT) {
-          rc->aborted = 1; return 0;       /* non-numeric arg2 */
+        int arg2;
+        if (b == 4) {
+          arg2 = ir->reg_map[rc->frame_base + a + 3];
+          if (arg2 < 0) { rc->aborted = 1; return 0; }
+          SPTType at2 = ir->reg_type[rc->frame_base + a + 3];
+          if (at2 == SPTT_INT) {
+            arg2 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg2, SPTIR_NULL, 0);
+          } else if (at2 != SPTT_FLT) {
+            rc->aborted = 1; return 0;     /* non-numeric arg2 */
+          }
+        } else if (b == 3) {
+          /* Single-arg form: math.atan(y) → atan2(y, 1.0) */
+          arg2 = sptir_kflt(ir, 1.0);
+        } else {
+          rc->aborted = 1; return 0;
         }
         int fref = sptir_emit(ir, SPTIR_FMATH2, SPTT_FLT, arg1, arg2,
                               (int64_t)(intptr_t)libm2);

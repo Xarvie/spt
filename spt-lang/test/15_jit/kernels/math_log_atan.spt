@@ -1,0 +1,61 @@
+/* §10.67 math.log + math.atan JIT 内联差分 kernel
+   math.log(x) → FMATH(log)        — 一元
+   math.atan(y) → FMATH2(atan2,y,1) — 单参数
+   math.atan(y,x) → FMATH2(atan2,y,x) — 双参数
+   math.log(x,base) → abort (正确, 回退解释器) */
+
+/* 1. math.log(x) 单参数 — 累加 log(i) */
+float a = 0.0;
+for (int i = 0, 100000) {
+  a = a + math.log(i * 1.0 + 1.0);
+}
+print(a);
+
+/* 2. math.log(x) 常量参数 */
+float b = 0.0;
+for (int i = 0, 100000) {
+  b = b + math.log(2.718281828459045);
+}
+print(b);
+
+/* 3. math.atan(y) 单参数 — 累加 atan(i) */
+float c = 0.0;
+for (int i = 0, 100000) {
+  c = c + math.atan(i * 1.0);
+}
+print(c);
+
+/* 4. math.atan(y, x) 双参数 */
+float d = 0.0;
+for (int i = 0, 100000) {
+  d = d + math.atan(i * 1.0, 1.0);
+}
+print(d);
+
+/* 5. math.log + math.atan 混合 */
+float e = 0.0;
+for (int i = 0, 100000) {
+  e = e + math.log(i * 1.0 + 1.0) * math.atan(i * 1.0);
+}
+print(e);
+
+/* 6. math.atan 常量参数 */
+float f = 0.0;
+for (int i = 0, 100000) {
+  f = f + math.atan(1.0);
+}
+print(f);
+
+/* 7. int 参数提升: math.log(int) */
+float g = 0.0;
+for (int i = 1, 100001) {
+  g = g + math.log(i);
+}
+print(g);
+
+/* 8. int 参数提升: math.atan(int) 单参数 */
+float h = 0.0;
+for (int i = 0, 100000) {
+  h = h + math.atan(i);
+}
+print(h);

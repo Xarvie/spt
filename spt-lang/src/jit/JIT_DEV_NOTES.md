@@ -2701,3 +2701,34 @@ JIT on/off 输出**完全一致**(整数累加 + 浮点累加 + 交叉更新)。
 (1) **复用解释器代码 = 位精确的最短路径**:float % 的符号修正、NaN/-0.0 边界、denormal 处理都在 `luai_nummod` 里。手写 branchless lowering 不仅工作量大,还容易在边界 case 出错。用一个 leaf wrapper 直接调解释器自己的宏,**零差异保证 + 零新边界分析**。这是"已验证机器 × 新场景"的又一例(§10.42 FMATH 的 libm 调用机器 × luamodf wrapper)。
 (2) **二元 libm 的 codegen 增量极小**:FMATH2 vs FMATH 只多一条 `gen_load_xmm XMM1=arg2`——x64 ABI 把浮点前两参放 XMM0/XMM1,其余(帧对齐、RSP 调整、RAX=fn、call、存 XMM0)完全相同。RA-disabled 也相同(FMATH/FMATH2 都不在 `ra_op_is_safe`)。这使二元扩展的风险极低。
 (3) **LUA_COMPAT_MATHLIB 的条件编译陷阱**:math_pow 是 file-static 且在 `#if LUA_COMPAT_MATHLIB` 内,故 `spt_jit_binary_math` 也必须在同一 `#if` 内(否则引用不到 math_pow)。但 spt_jit.c 的 extern 声明在块外,需要 `#else` NULL fallback 保持链接。这是 C 条件编译跨翻译单元的典型坑。
+
+## §10.67 math.log + math.atan JIT 内联（复用 FMATH/FMATH2，零新 IR/codegen，✅ 阶段达成）
+
+### 背景
+§10.42 FMATH 覆盖 sqrt/sin/cos/tan/exp/asin/acos（一元 libm），§10.66 FMATH2 覆盖 pow + float %（二元 libm）。math.log 和 math.atan 是剩余的两个常用 math 库函数，分别可以复用 FMATH 和 FMATH2 机制——**零新 IR 操作、零新 codegen**。
+
+### 实现
+**(1) math.log(x) → FMATH(log)**:
+- `spt_jit_unary_math` 加 `if (f == math_log) return log;`
+- math.log(x) 单参数：SELF 设 pending_cfn，CALL 时 b==3（self+x）→ emit FMATH(log, x)
+- math.log(x, base) 双参数：b==4 → FMATH 录制路径 `b != 3` → abort（正确行为，base 分支太复杂）
+- math_log 是无条件定义的（不在 LUA_COMPAT_MATHLIB 块内），识别器无需条件编译保护
+
+**(2) math.atan(y) → FMATH2(atan2, y, kflt(1.0))**:
+- `spt_jit_binary_math` 加 `if (f == math_atan) return atan2;`
+- math.atan 总是调用 atan2（二元 libm），故总是走 FMATH2
+- math.atan(y) 单参数：b==3 → arg2 = `sptir_kflt(ir, 1.0)`（x 默认 1.0，等价于 atan(y)）
+- math.atan(y, x) 双参数：b==4 → 正常 FMATH2 路径（arg2 = R[A+3]）
+- FMATH2 录制路径从 `if (b != 4) abort` 改为三分支：b==4 正常、b==3 单参数 kflt(1.0)、其他 abort
+
+**(3) spt_jit_binary_math 移出 LUA_COMPAT_MATHLIB 块**:
+- math_atan 是无条件定义的（不在 LUA_COMPAT_MATHLIB 块内），但 math_pow 在块内
+- 重构：函数移出 `#if`，内部用 `#if defined(LUA_COMPAT_MATHLIB)` 保护 math_pow 识别，math_atan 识别无条件
+- spt_jit.c 的 extern 声明从 `#if/#else static NULL/#endif` 改为无条件 `extern`（函数现在总是定义）
+
+### 验证（完整门槛，全绿）
+构建 0 err。**366/366 ctest 全通过**（新增 `math_log_atan.spt`）· **kernel 差分 pass=133 fail=1**（唯一 fail = `foreach_map_str.spt` 预存 map 哈希顺序 flakiness）· **模糊器 300 例 0 失配**· **float if-conv 模糊器 150 例 0 失配**· `math_log_atan.spt` 8 条 trace 全编译（log 单参数/常量、atan 单参数/双参数、混合、int 参数提升），off==on 位精确，recorded=8 compiled=8 aborted=0 guard_fail=0。§10.42–§10.66 零回归。
+
+**关键教训**:
+(1) **单参数二元函数的 kflt 技巧**:math.atan(y) 的 x 默认 1.0，用 `sptir_kflt(ir, 1.0)` 作为 FMATH2 的 arg2，无需特殊 IR 或 codegen——常量 1.0 在 codegen 时被 gen_load_xmm 直接加载到 XMM1。这是"已有机器 × 新参数模式"的又一例。
+(2) **条件编译重构的增量安全**:把 spt_jit_binary_math 移出 LUA_COMPAT_MATHLIB 块时，用 `#if` 保护 math_pow 识别（它仍在块内）、math_atan 识别无条件（它不在块内）。这比"整个函数在块内 + #else NULL fallback"更干净——函数总是定义，extern 声明总是有效，链接更简单。
