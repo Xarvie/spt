@@ -39,6 +39,22 @@ typedef struct {
   uint8_t value_type;   /* expected SPTType at trace entry */
 } SPTFieldLayout;
 
+/* One saved caller frame for nested inlining. Pushed at OP_CALL inline entry,
+   popped at OP_RETURN. The method_self_pc / method_resume_snap / multiwrite_mode
+   fields belong to the *callee* frame (set at push, read while recording the
+   callee body). */
+typedef struct SPTInlineFrame {
+  Proto *p;                        /* caller proto */
+  const TValue *k;                 /* caller constant table */
+  LClosure *cl;                    /* caller closure */
+  const Instruction *pc;           /* caller PC just after the CALL */
+  int frame_base;                  /* caller frame_base */
+  int call_result_slot;            /* absolute reg_map slot for return value */
+  const Instruction *method_self_pc;  /* SELF PC for resume-at-SELF (callee) */
+  int method_resume_snap;          /* shared snapshot for in-method guards */
+  int multiwrite_mode;             /* multi-write mode for callee body */
+} SPTInlineFrame;
+
 /* =====================================================================
 ** Trace structure
 ** ===================================================================== */

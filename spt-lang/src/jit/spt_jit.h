@@ -137,6 +137,11 @@ typedef l_uint32 Instruction;
    GETFIELD/SETFIELD. */
 #define SPT_JIT_MAX_FIELD_LAYOUTS 16
 
+/* Maximum nested inlining depth (A→B→C = depth 2). Each level pushes a frame
+   onto the inline_frames stack. 8 is generous: real OOP chains rarely exceed
+   3-4 levels. */
+#define SPT_JIT_MAX_INLINE_DEPTH 8
+
 /* Trace cache size (must be power of 2). */
 #define SPT_JIT_CACHE_SIZE 256
 

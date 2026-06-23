@@ -365,13 +365,13 @@ typedef struct {
      all inlined calls in one trace must share the same (slot, proto). */
   int inline_fn_slot;       /* -1 = no inlined call yet */
   Proto *inline_fn_proto;
-  /* Saved caller state while recording an inlined callee (depth-1 only). */
-  Proto *save_p;
-  const TValue *save_k;
-  LClosure *save_cl;
-  const Instruction *save_pc;   /* caller PC just after the CALL */
-  int save_frame_base;
-  int call_result_slot;     /* absolute reg_map slot receiving the return value */
+  /* Saved caller state stack for nested inlining (depth <= SPT_JIT_MAX_INLINE_DEPTH).
+     Each entry holds the caller's p/k/cl/pc/frame_base/call_result_slot plus the
+     method_self_pc / method_resume_snap / multiwrite_mode that belong to the
+     *callee* frame (set at inline entry, used by rec_snap/rec_guard_pc while
+     recording the callee body). inline_depth == 0 means root frame. */
+  SPTInlineFrame inline_frames[SPT_JIT_MAX_INLINE_DEPTH];
+  int inline_depth;
   /* Pending unary-math call set up by an OP_SELF that resolved a known libm
      math method (e.g. math.sqrt): the immediately following OP_CALL on this
      slot is lowered to an SPTIR_FMATH instead of a real call. -1 slot = none. */
@@ -453,6 +453,7 @@ typedef struct {
   int pending_method_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
   Proto *pending_method_proto; /* resolved method proto to inline */
   void *pending_method_cl;     /* the method LClosure (callee_cl for the inline) */
+  const Instruction *pending_method_self_pc;  /* SELF PC, set by SELF, consumed by CALL push */
   /* Method entry-guard identities (copied onto the trace). A trace may inline
      several distinct methods (`a.foo(); a.bar()`); each receiver is loop-
      invariant, and at entry we pin its metatable (the class) and re-resolve the
@@ -465,9 +466,8 @@ typedef struct {
      re-executes SELF+CALL+method. Safe only because pure-read method bodies have
      no committed side effects, so re-execution is idempotent. method_self_pc is
      the SELF instruction; method_resume_snap is the shared snapshot all in-method
-     guards point at (-1 outside a method body). */
-  const Instruction *method_self_pc;
-  int method_resume_snap;
+     guards point at (-1 outside a method body).
+     NOTE: These are now per-frame fields in inline_frames[inline_depth-1]. */
   /* Targeted store-to-load forwarding, active ONLY inside an inlined method body
      (frame_base != 0). After a SETFIELD to (base_ref, key), a GETFIELD of the
      SAME base ref + key forwards to the written value with NO emit and NO guard --
@@ -483,8 +483,8 @@ typedef struct {
   int fwd_val;              /* IR ref of the last SETFIELD's written value */
   /* Multi-write method mode: when set, GETFIELD/SETFIELD in the current inlined
      method body emit guard-free (entry field-layout guards verify key + type).
-     Set at method-inline entry if proto_is_multiwrite_method_inlinable. */
-  int multiwrite_mode;
+     Set at method-inline entry if proto_is_multiwrite_method_inlinable.
+     NOTE: Now a per-frame field in inline_frames[inline_depth-1].multiwrite_mode. */
   SPTFieldLayout field_layouts[SPT_JIT_MAX_FIELD_LAYOUTS];
   int n_field_layouts;
   /* Snapshot index of the FORLOOP "count > 0" guard (loop-continuation guard).
@@ -662,8 +662,11 @@ static Table *rec_eval_array(SPTRecCtx *rc, int ref) {
    a callee PC with no callee frame. Pure-read bodies have no committed side
    effects, so re-execution is idempotent. Everywhere else: a fresh snapshot. */
 static int rec_snap(SPTRecCtx *rc) {
-  if (rc->frame_base != 0 && rc->method_resume_snap >= 0)
-    return rc->method_resume_snap;
+  if (rc->inline_depth > 0) {
+    SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+    if (f->method_resume_snap >= 0)
+      return f->method_resume_snap;
+  }
   if (rc->call_arg_self_pc != NULL)            /* arg-load window: resume at the SELF */
     return sptir_snapshot(rc->ir, rc->call_arg_self_pc);
   return sptir_snapshot(rc->ir, rc->pc);
@@ -674,11 +677,27 @@ static int rec_snap(SPTRecCtx *rc) {
    in the interpreter); everywhere else it is the current PC. Used for guards
    built via sptir_guard(), which create their own snapshot at the given PC. */
 static const Instruction *rec_guard_pc(SPTRecCtx *rc) {
-  if (rc->frame_base != 0 && rc->method_self_pc != NULL)
-    return rc->method_self_pc;
+  if (rc->inline_depth > 0) {
+    SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+    if (f->method_self_pc != NULL)
+      return f->method_self_pc;
+  }
   if (rc->call_arg_self_pc != NULL)            /* arg-load window: resume at the SELF */
     return rc->call_arg_self_pc;
   return rc->pc;
+}
+
+/* Pop an inline frame and restore caller state. The caller's p/k/cl/frame_base/pc
+   are restored; the return value must be bound to call_result_slot by the caller
+   BEFORE calling this (call_result_slot is in the popped frame). */
+static void rec_inline_pop(SPTRecCtx *rc) {
+  SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+  rc->p = f->p;
+  rc->k = f->k;
+  rc->cl = f->cl;
+  rc->frame_base = f->frame_base;
+  rc->pc = f->pc;
+  rc->inline_depth--;
 }
 
 static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
@@ -1284,14 +1303,13 @@ static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int b
   } else {
     rc->aborted = 1; return 1;            /* mixed arms / int-arms-under-float-cmp: fall back */
   }
-  ir->reg_map[rc->call_result_slot] = res;
-  ir->reg_type[rc->call_result_slot] = res_t;
-  if (rc->call_result_slot > ir->maxslot) ir->maxslot = rc->call_result_slot;
-  rc->p = rc->save_p;
-  rc->k = rc->save_k;
-  rc->cl = rc->save_cl;
-  rc->frame_base = rc->save_frame_base;
-  rc->pc = rc->save_pc;
+  {
+    SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+    ir->reg_map[f->call_result_slot] = res;
+    ir->reg_type[f->call_result_slot] = res_t;
+    if (f->call_result_slot > ir->maxslot) ir->maxslot = f->call_result_slot;
+  }
+  rec_inline_pop(rc);
   return 1;
 }
 
@@ -1400,14 +1418,13 @@ static int rec_try_chained_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop0, int ar
   }
 
   /* bind to caller, unwind (identical to the single cond-return tail) */
-  ir->reg_map[rc->call_result_slot] = res;
-  ir->reg_type[rc->call_result_slot] = res_t;
-  if (rc->call_result_slot > ir->maxslot) ir->maxslot = rc->call_result_slot;
-  rc->p = rc->save_p;
-  rc->k = rc->save_k;
-  rc->cl = rc->save_cl;
-  rc->frame_base = rc->save_frame_base;
-  rc->pc = rc->save_pc;
+  {
+    SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+    ir->reg_map[f->call_result_slot] = res;
+    ir->reg_type[f->call_result_slot] = res_t;
+    if (f->call_result_slot > ir->maxslot) ir->maxslot = f->call_result_slot;
+  }
+  rec_inline_pop(rc);
   return 1;
 }
 
@@ -2937,7 +2954,8 @@ static int rec_inst(SPTRecCtx *rc) {
          the §10.49 single-trailing-write restriction: a read after a write no
          longer risks double-write on resume-at-SELF because there is no
          in-body guard to resume from. */
-      if (rc->frame_base != 0 && rc->multiwrite_mode) {
+      if (rc->frame_base != 0 && rc->inline_depth > 0 &&
+          rc->inline_frames[rc->inline_depth - 1].multiwrite_mode) {
         TValue mapval;
         if (!rec_eval_container(rc, bref, &mapval))
           mapval = *s2v((rc->ci->func.p + 1) + b);
@@ -3130,7 +3148,8 @@ static int rec_inst(SPTRecCtx *rc) {
         if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort (would insert) */
         n += nx;
       }
-      if (rc->frame_base != 0 && rc->multiwrite_mode) {
+      if (rc->frame_base != 0 && rc->inline_depth > 0 &&
+          rc->inline_frames[rc->inline_depth - 1].multiwrite_mode) {
         /* Multi-write mode: guard-free field write. Entry field-layout guard
            verified the key exists, so no in-body guard needed. No snapshot,
            no exit stub -> no in-callee exit -> write-safe regardless of how
@@ -3650,13 +3669,7 @@ static int rec_inst(SPTRecCtx *rc) {
            protected: the write is the last committing op, so any guard failure
            side-exits before it commits and the interpreter re-runs the call
            exactly once (no double write). See proto_is_write_method_inlinable. */
-        rc->p = rc->save_p;
-        rc->k = rc->save_k;
-        rc->cl = rc->save_cl;
-        rc->frame_base = rc->save_frame_base;
-        rc->pc = rc->save_pc;
-        rc->method_resume_snap = -1;
-        rc->method_self_pc = NULL;
+        rec_inline_pop(rc);
         return 1;
       }
       sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
@@ -3671,16 +3684,11 @@ static int rec_inst(SPTRecCtx *rc) {
         int aref = rec_load_reg(rc, a);
         if (rc->aborted) return 0;
         SPTType rt = ir->reg_type[rc->frame_base + a];
-        rc->p = rc->save_p;
-        rc->k = rc->save_k;
-        rc->cl = rc->save_cl;
-        rc->frame_base = rc->save_frame_base;
-        rc->pc = rc->save_pc;
-        ir->reg_map[rc->call_result_slot] = aref;
-        ir->reg_type[rc->call_result_slot] = rt;
-        if (rc->call_result_slot > ir->maxslot) ir->maxslot = rc->call_result_slot;
-        rc->method_resume_snap = -1;            /* leaving method body */
-        rc->method_self_pc = NULL;
+        SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+        ir->reg_map[f->call_result_slot] = aref;
+        ir->reg_type[f->call_result_slot] = rt;
+        if (f->call_result_slot > ir->maxslot) ir->maxslot = f->call_result_slot;
+        rec_inline_pop(rc);
         return 1;
       }
       int aref = rec_load_reg(rc, a);
@@ -3694,13 +3702,7 @@ static int rec_inst(SPTRecCtx *rc) {
            no result to bind. A value-returning OP_RETURN from an inlined method
            is not supported here (write methods are void). */
         if (b != 1) { rc->aborted = 1; return 0; }
-        rc->p = rc->save_p;
-        rc->k = rc->save_k;
-        rc->cl = rc->save_cl;
-        rc->frame_base = rc->save_frame_base;
-        rc->pc = rc->save_pc;
-        rc->method_resume_snap = -1;
-        rc->method_self_pc = NULL;
+        rec_inline_pop(rc);
         return 1;
       }
       if (b == 1) {
@@ -4009,8 +4011,13 @@ static int rec_inst(SPTRecCtx *rc) {
         /* c == 2: one result (pure-read / cond-return method). c == 1: zero
            results (void single-trailing-write method, e.g. a setter/accumulator
            called as a statement). Both are valid; the RETURN handler binds a
-           result only for the value-returning case. */
-        if ((c != 1 && c != 2) || b < 1 || rc->frame_base != 0) { rc->aborted = 1; return 0; }
+           result only for the value-returning case.
+           §10.68b: frame_base != 0 is now allowed -- nested inline frames can
+           inline methods. The inlined-frame exit safety net (post-optimization
+           guard exit-PC range check) refuses to compile any trace whose in-callee
+           guard survives, so only zero-in-body-guard methods actually compile;
+           the rest fall back to the interpreter (correct, just not accelerated). */
+        if ((c != 1 && c != 2) || b < 1) { rc->aborted = 1; return 0; }
         if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
         int ret_reg = -1;
         if (!proto_is_method_inlinable(callee_p, &ret_reg) &&
@@ -4022,25 +4029,28 @@ static int rec_inst(SPTRecCtx *rc) {
             !proto_is_multiwrite_method_inlinable(callee_p)) { rc->aborted = 1; return 0; }
         int new_fb = rc->frame_base + a + 1;
         if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
-        /* Arm the shared resume snapshot for guards inside the method body. Its
-           exit PC is the SELF instruction (in the caller / main proto), so a
-           guard failure re-executes SELF+CALL+method in the interpreter. Taken
-           now, while still in the caller frame, so it captures the caller's live
-           state (loop vars, accumulator, receiver source). */
-        rc->method_resume_snap =
-            (rc->method_self_pc != NULL) ? sptir_snapshot(ir, rc->method_self_pc) : -1;
-        rc->save_p = rc->p;
-        rc->save_k = rc->k;
-        rc->save_cl = rc->cl;
-        rc->save_pc = rc->pc + 1;
-        rc->save_frame_base = rc->frame_base;
-        rc->call_result_slot = rc->frame_base + a;
+        if (rc->inline_depth >= SPT_JIT_MAX_INLINE_DEPTH) { rc->aborted = 1; return 0; }
+        /* Push caller frame onto the inline stack. The method_self_pc /
+           method_resume_snap fields belong to the callee frame (used by
+           rec_snap/rec_guard_pc while recording the callee body). */
+        SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth];
+        f->method_self_pc = rc->pending_method_self_pc;
+        f->method_resume_snap =
+            (rc->pending_method_self_pc != NULL) ? sptir_snapshot(ir, rc->pending_method_self_pc) : -1;
+        f->p = rc->p;
+        f->k = rc->k;
+        f->cl = rc->cl;
+        f->pc = rc->pc + 1;
+        f->frame_base = rc->frame_base;
+        f->call_result_slot = rc->frame_base + a;
+        f->multiwrite_mode = proto_is_multiwrite_method_inlinable(callee_p);
+        rc->inline_depth++;
+        rc->pending_method_self_pc = NULL;  /* consumed */
         rc->p = callee_p;
         rc->k = callee_p->k;
         rc->cl = callee_cl;
         rc->frame_base = new_fb;
         rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
-        rc->multiwrite_mode = proto_is_multiwrite_method_inlinable(callee_p);
         rc->pc = callee_p->code;
         return 1;                                 /* keep recording in the method */
       }
@@ -4086,19 +4096,24 @@ static int rec_inst(SPTRecCtx *rc) {
       /* Save caller state and switch the recorder into the callee. The callee's
          argument slots already coincide with the caller's argument registers in
          reg_map (callee slot k == caller slot A+1+k), so nothing is copied. */
-      rc->save_p = rc->p;
-      rc->save_k = rc->k;
-      rc->save_cl = rc->cl;
-      rc->save_pc = rc->pc + 1;                  /* caller resumes after the CALL */
-      rc->save_frame_base = rc->frame_base;
-      rc->call_result_slot = rc->frame_base + a; /* caller R[A] takes the result */
+      if (rc->inline_depth >= SPT_JIT_MAX_INLINE_DEPTH) { rc->aborted = 1; return 0; }
+      SPTInlineFrame *ff = &rc->inline_frames[rc->inline_depth];
+      ff->p = rc->p;
+      ff->k = rc->k;
+      ff->cl = rc->cl;
+      ff->pc = rc->pc + 1;                  /* caller resumes after the CALL */
+      ff->frame_base = rc->frame_base;
+      ff->call_result_slot = rc->frame_base + a; /* caller R[A] takes the result */
+      ff->method_self_pc = NULL;            /* free-function inline: no SELF resume */
+      ff->method_resume_snap = -1;
+      ff->multiwrite_mode = 0;              /* multi-write only applies to method inlining */
+      rc->inline_depth++;
 
       rc->p = callee_p;
       rc->k = callee_p->k;
       rc->cl = callee_cl;
       rc->frame_base = new_fb;
       rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
-      rc->multiwrite_mode = 0;      /* multi-write only applies to method inlining */
       rc->pc = callee_p->code;
       return 1;                                  /* keep recording in the callee */
     }
@@ -4231,7 +4246,9 @@ static int rec_inst(SPTRecCtx *rc) {
          time GUARD_CFUNC re-walks on the (dynamic) GETTABUP result, so the live
          lookup here is only a prediction. Top frame only. */
       int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
+      /* §10.68b: OP_SELF is now allowed in nested inline frames (frame_base != 0).
+         SETLIST/CLOSURE/VARARG still abort in nested frames. */
+      if (rc->frame_base != 0 && op != OP_SELF) { rc->aborted = 1; return 0; }
       const TValue *kc = &rc->k[c];
       if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
       TString *key = tsvalue(kc);
@@ -4248,20 +4265,27 @@ static int rec_inst(SPTRecCtx *rc) {
            proto. The metatable + method identity is pinned by a once-per-entry C
            guard (method_recv_slot), so a different class / reassigned method
            declines. Requiring an SLOAD receiver also guarantees loop-invariance
-           (a receiver reassigned in the body would not be a bare SLOAD). */
+           (a receiver reassigned in the body would not be a bare SLOAD).
+
+           §10.68b: This path is now reachable in nested inline frames. The
+           receiver's SLOAD aux always points to the ROOT frame's slot (each
+           inline layer passes `this` = slot 0, whose IR ref is the caller's
+           SLOAD), so the entry-time method-identity guard checks the correct
+           stack slot regardless of inline depth. The live-stack read below uses
+           frame_base to find the receiver in the current inline frame. */
         if (gi && gi->op == SPTIR_SLOAD) {
           int recv_slot = (int)gi->aux;
-          TValue *recv = s2v((rc->ci->func.p + 1) + b);
+          TValue *recv = s2v((rc->ci->func.p + 1) + rc->frame_base + b);
           if (!ttistable(recv)) { rc->aborted = 1; return 0; }
           Table *mt = hvalue(recv)->metatable;
           if (!mt) { rc->aborted = 1; return 0; }
           const TValue *mv = rec_table_getstr(mt, key);
           if (!mv || !ttisLclosure(mv)) { rc->aborted = 1; return 0; }
           LClosure *mcl = clLvalue(mv);
-          rc->method_self_pc = rc->pc;          /* resume point for in-method guards */
+          rc->pending_method_self_pc = rc->pc;  /* resume point for in-method guards */
           ir->reg_map[rc->frame_base + a + 1] = bref;        /* R[A+1] = receiver */
           ir->reg_type[rc->frame_base + a + 1] = SPTT_TAB;
-          if (a + 1 > ir->maxslot) ir->maxslot = a + 1;
+          if (rc->frame_base + a + 1 > ir->maxslot) ir->maxslot = rc->frame_base + a + 1;
           rc->pending_method_slot = rc->frame_base + a;       /* next CALL inlines it */
           rc->pending_method_proto = mcl->p;
           rc->pending_method_cl = mcl;
@@ -4397,7 +4421,7 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.frame_base = 0;
   rc.is_side_trace = is_side;
   rc.fwd_base = -1;            /* store-to-load forwarding: none pending */
-  rc.multiwrite_mode = 0;
+  rc.inline_depth = 0;         /* no inlined frames yet */
   rc.n_field_layouts = 0;
   rc.inline_fn_slot = -1;
   rc.inline_fn_proto = NULL;
@@ -4421,9 +4445,8 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.pending_method_slot = -1;
   rc.pending_method_proto = NULL;
   rc.pending_method_cl = NULL;
+  rc.pending_method_self_pc = NULL;
   rc.n_methods = 0;
-  rc.method_self_pc = NULL;
-  rc.method_resume_snap = -1;
   rc.loop_end_snap = -1;
 
   /* Mark loop start in IR. */

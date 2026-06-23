@@ -2732,3 +2732,120 @@ JIT on/off 输出**完全一致**(整数累加 + 浮点累加 + 交叉更新)。
 **关键教训**:
 (1) **单参数二元函数的 kflt 技巧**:math.atan(y) 的 x 默认 1.0，用 `sptir_kflt(ir, 1.0)` 作为 FMATH2 的 arg2，无需特殊 IR 或 codegen——常量 1.0 在 codegen 时被 gen_load_xmm 直接加载到 XMM1。这是"已有机器 × 新参数模式"的又一例。
 (2) **条件编译重构的增量安全**:把 spt_jit_binary_math 移出 LUA_COMPAT_MATHLIB 块时，用 `#if` 保护 math_pow 识别（它仍在块内）、math_atan 识别无条件（它不在块内）。这比"整个函数在块内 + #else NULL fallback"更干净——函数总是定义，extern 声明总是有效，链接更简单。
+
+## §10.68a 嵌套内联多帧 阶段 1：栈化基础设施（SPTInlineFrame 数组 + inline_depth，纯重构零行为变化，✅ 阶段达成）
+
+### 背景
+现有方法内联（§10.46–§10.65）和自由函数内联（§10.12）只支持**深度 1**：一次内联 push 一个帧，RETURN pop 回主帧。嵌套内联（A→B→C = 深度 2）需要 push 多个帧。但 `SPTRecCtx` 的 caller 状态（`save_p/save_k/save_cl/save_pc/save_frame_base/call_result_slot`）和 callee 元数据（`method_self_pc/method_resume_snap/multiwrite_mode`）都是**单值字段**——第二次 push 会覆盖第一次的 caller 状态，pop 时恢复到错误的帧。
+
+### 实现（纯重构，零行为变化）
+**(1) SPTInlineFrame 结构体**（`spt_jit_internal.h`）：
+```c
+typedef struct SPTInlineFrame {
+  Proto *p;                        /* caller proto */
+  const TValue *k;                 /* caller constant table */
+  LClosure *cl;                    /* caller closure */
+  const Instruction *pc;           /* caller PC just after the CALL */
+  int frame_base;                  /* caller frame_base */
+  int call_result_slot;            /* absolute reg_map slot for return value */
+  const Instruction *method_self_pc;  /* SELF PC for resume-at-SELF (callee) */
+  int method_resume_snap;          /* shared snapshot for in-method guards */
+  int multiwrite_mode;             /* multi-write mode for callee body */
+} SPTInlineFrame;
+```
+`SPT_JIT_MAX_INLINE_DEPTH=8`（`spt_jit.h`）：每层 push 一个帧，8 足够（真实 OOP 链罕见超过 3-4 层）。
+
+**(2) SPTRecCtx 字段替换**（`spt_jit.c`）：
+- 删除单值字段：`save_p/save_k/save_cl/save_pc/save_frame_base/call_result_slot/method_self_pc/method_resume_snap/multiwrite_mode`
+- 新增数组：`SPTInlineFrame inline_frames[SPT_JIT_MAX_INLINE_DEPTH]; int inline_depth;`
+- 新增临时字段：`const Instruction *pending_method_self_pc;`（SELF 设置 → CALL 消费，避免 push 前被覆盖）
+
+**(3) rec_inline_pop() 辅助函数**：
+```c
+static void rec_inline_pop(SPTRecCtx *rc) {
+  SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+  rc->p = f->p; rc->k = f->k; rc->cl = f->cl;
+  rc->frame_base = f->frame_base; rc->pc = f->pc;
+  rc->inline_depth--;
+}
+```
+
+**(4) 所有 push/pop 点修改**：
+- OP_CALL 方法内联（push）：`inline_frames[depth]` 填入 caller 状态 + callee 元数据，`inline_depth++`
+- OP_CALL 自由函数内联（push）：同上，但 `method_self_pc=NULL, method_resume_snap=-1, multiwrite_mode=0`
+- OP_RETURN0/RETURN1/RETURN + 两处 condreturn helper（pop）：用 `rec_inline_pop(rc)`，RETURN1 额外从 `inline_frames[depth-1].call_result_slot` 绑定返回值
+
+**(5) rec_snap / rec_guard_pc 修改**：
+```c
+static int rec_snap(SPTRecCtx *rc) {
+  if (rc->inline_depth > 0) {
+    SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+    if (f->method_resume_snap >= 0) return f->method_resume_snap;
+  }
+  if (rc->call_arg_self_pc != NULL) return sptir_snapshot(rc->ir, rc->call_arg_self_pc);
+  return sptir_snapshot(rc->ir, rc->pc);
+}
+```
+内联帧里的守卫快照用 callee 帧的 `method_resume_snap`（caller 的 SELF PC）。
+
+**(6) GETFIELD/SETFIELD multiwrite_mode 检查**：
+```c
+if (rc->frame_base != 0 && rc->inline_depth > 0 &&
+    rc->inline_frames[rc->inline_depth - 1].multiwrite_mode) { ... }
+```
+
+**(7) OP_SELF**：`rc->method_self_pc = rc->pc` → `rc->pending_method_self_pc = rc->pc`（临时字段，CALL 消费）
+
+### 正确性（纯重构，零行为变化）
+阶段 1 是**纯重构**：所有 push/pop 点的行为与单值字段时完全一致。`inline_depth` 在主帧时为 0，第一次 push 后为 1——与原来 `save_*` 单值字段等价。全测试通过确认零回归。
+
+### 验证（完整门槛，全绿）
+构建 0 err。**367/367 ctest 全通过** · **134/134 kernel 差分全通过** · **模糊器 250+150×4=850 例 0 失配**。零回归。
+
+## §10.68b 嵌套内联多帧 阶段 2：零体内守卫方法的多帧内联（放开 frame_base!=0 abort，安全网保证正确性，✅ 阶段达成）
+
+### 背景
+阶段 1 把栈化基础设施铺好后，阶段 2 解除 `frame_base != 0` 的硬性 abort——让 OP_SELF 和 OP_CALL 方法内联路径在嵌套帧里也能触发。现有方法内联纯度检查（`proto_is_method_inlinable` 等）不允许方法体里有 CALL/SELF，所以阶段 2 目前是**前瞻性基础设施改动**——为阶段 3（通用 resume-at-call，放开 callee 纯度要求）铺路。
+
+### 实现（三处改动 + 安全网保证）
+**(1) OP_SELF 放开 frame_base != 0 abort**（`spt_jit.c`）：
+```c
+// 旧: if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
+// 新: if (rc->frame_base != 0 && op != OP_SELF) { rc->aborted = 1; return 0; }
+```
+SETLIST/CLOSURE/VARARG 仍在嵌套帧里 abort，只有 OP_SELF 放开。
+
+**(2) OP_SELF 用户方法路径栈访问修复**：
+```c
+// 旧: TValue *recv = s2v((rc->ci->func.p + 1) + b);
+// 新: TValue *recv = s2v((rc->ci->func.p + 1) + rc->frame_base + b);
+```
+嵌套帧里 `b` 是当前帧的寄存器号，需要加 `frame_base` 偏移才能找到正确的栈位置。
+
+**(3) OP_CALL 方法内联路径放开 frame_base != 0 abort**：
+```c
+// 旧: if ((c != 1 && c != 2) || b < 1 || rc->frame_base != 0) { rc->aborted = 1; return 0; }
+// 新: if ((c != 1 && c != 2) || b < 1) { rc->aborted = 1; return 0; }
+```
+
+**(4) maxslot 修复**：
+```c
+// 旧: if (a + 1 > ir->maxslot) ir->maxslot = a + 1;
+// 新: if (rc->frame_base + a + 1 > ir->maxslot) ir->maxslot = rc->frame_base + a + 1;
+```
+嵌套帧里 maxslot 必须用绝对 slot（`frame_base + a + 1`），否则 codegen 会漏 spill。
+
+### 正确性（安全网保证）
+**关键安全机制 = 内联帧退出安全网**（§10.46 建立的 post-optimization guard exit-PC range check）：
+- 安全网扫描所有 surviving guard 的 exit PC，如果任何 exit PC 在主 proto 的 `[code, code+sizecode)` 范围外（即在内联 callee 的 proto 里），拒绝编译。
+- 嵌套帧里的方法体守卫的 exit PC 是 `method_resume_snap`（内联帧的 SELF PC）——不在主 proto 范围内 → 安全网拒绝。
+- 只有**零体内守卫**的方法体（如 `proto_is_multiwrite_method_inlinable`：入口字段布局守卫 + 体内无守卫字段访问）才能通过安全网。
+
+**入口校验（多方法）**：`sptjit_trace_enter` 遍历 `methods[0..n_methods-1]`，检查每个方法的 receiver slot 的 metatable + 方法身份。`recv_slot` 是 SLOAD 的 aux，在嵌套帧里通过参数传递链（`this` = slot 0，IR ref 是 caller 的 SLOAD）始终追溯到主帧 slot——入口校验可以正确检查。
+
+### 当前限制
+现有方法内联纯度检查（`proto_is_method_inlinable` 等）不允许方法体里有 CALL/SELF，所以阶段 2 目前没有场景能触发嵌套帧里的方法内联。要触发需要：
+- 阶段 3（§10.68c）：通用 resume-at-call——放开 callee 纯度要求（允许带分支/循环的 callee），exit stub 重建 CallInfo 栈。
+
+### 验证（完整门槛，全绿）
+构建 0 err。**367/367 ctest 全通过** · **134/134 kernel 差分全通过** · **模糊器 250+150×4=850 例 0 失配**。零回归（前瞻性改动，安全网保证正确性）。
