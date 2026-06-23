@@ -1,6 +1,6 @@
 # SPT JIT —— 交接文档 (Handoff)
 
-最后更新：§10.70 嵌套方法内联 + §10.34 修复 4（RMW bail 移除）。本文件是新接手者的**入口**。详细历史见 `src/jit/JIT_DEV_NOTES.md`（开发日志 §10.1–§10.70，每个特性的设计/bug/教训），路线全貌见 `src/jit/JIT_ROADMAP.md`。
+最后更新：§10.70 嵌套方法内联 + §10.34 修复 4（RMW bail 移除）+ 修复 5（值返回多写精确门）。本文件是新接手者的**入口**。详细历史见 `src/jit/JIT_DEV_NOTES.md`（开发日志 §10.1–§10.70，每个特性的设计/bug/教训），路线全貌见 `src/jit/JIT_ROADMAP.md`。
 
 ---
 
@@ -56,8 +56,10 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 3. 当前状态（交接时点）
 
-### 已完成并交付：截至 §10.70 + §10.34 修复 4
-最近交付的是 **§10.34 修复 4：同数组 RMW bail 移除**——移除 `try_unroll_inner_loop` 中对"展开体对同一数组既读又写"的精准回退（reads/writes 位图 + bail）。调查发现修复 3 报告的"codegen bug"实为期望值计算错误（未计 Lua inclusive for 语义，`for(i=0,N)` 跑 N+1 次）。CSE 已在 `has_table_write` 时禁用表载前推，每个展开副本的 GETI 重新从内存加载，load-after-store 依赖完整保留。新增 3 个回归 kernel（`rmw_simple.spt`、`rmw_tiny.spt`、`rmw_collision.spt`）。
+### 已完成并交付：截至 §10.70 + §10.34 修复 4/5
+最近交付的是 **§10.34 修复 5：值返回多写方法精确门**——放开 `proto_is_multiwrite_method_inlinable` 中值返回路径对 GETI/GETTABLE/LEN 的保守禁令。此前禁了所有 GETI/GETTABLE/LEN（无论位置）；现仅禁 SETFIELD **之后**的（守卫在写后触发会双写非幂等字段）。SETFIELD 前的 GETI 安全（守卫先于写提交 → resume-at-SELF 无双写）。解锁"先读数组再写多字段并返值"模式。新增回归 kernel `multiwrite_ret_geti.spt`。
+
+往前是 **§10.34 修复 4：同数组 RMW bail 移除**——移除 `try_unroll_inner_loop` 中对"展开体对同一数组既读又写"的精准回退（reads/writes 位图 + bail）。调查发现修复 3 报告的"codegen bug"实为期望值计算错误（未计 Lua inclusive for 语义，`for(i=0,N)` 跑 N+1 次）。CSE 已在 `has_table_write` 时禁用表载前推，每个展开副本的 GETI 重新从内存加载，load-after-store 依赖完整保留。新增 3 个回归 kernel（`rmw_simple.spt`、`rmw_tiny.spt`、`rmw_collision.spt`）。
 
 往前是 **§10.70 嵌套方法内联**——带 guarded branch 的方法内联，扩展 `proto_is_branch_inlinable` 允许 callee 体内含 EQ/LT/LE 等条件分支（if-conversion 处理），使含 if-else 的 callee（如 `abs(int x)`、`clamp(int v,int lo,int hi)`）能被内联。
 
@@ -75,13 +77,13 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 - **§10.59–§10.62 math 库内联 + SLEN/SBYTE resume-at-SELF**：min/max/abs/floor/ceil/string.len/byte。
 
 该状态**全门槛绿**：
-- **373/373 ctest**（含 3 个新 RMW kernel）、**300 fuzz + 150 float_ifconv fuzz（seed 12345）0 失配**、entries==exits、guard_fail=0。
+- **374/374 ctest**（含 4 个新 RMW/多写 kernel）、**300 fuzz + 150 float_ifconv fuzz（seed 12345）0 失配**、entries==exits、guard_fail=0。
 - 加速表与各特性细节见 `JIT_ROADMAP.md` 与 `JIT_DEV_NOTES.md §10.x`。
 
 ### 已知非问题：`foreach_map_str.spt` 的 map 迭代顺序（已修复）
 `pairs(map)` 的迭代顺序依赖 per-process 哈希种子（`luai_makeseed` 混合 `time(NULL)` + 栈地址 ASLR），JIT on/off 两次进程的种子不同 → 字符串键的哈希不同 → 迭代顺序不同。原测试用字符串拼接（`..`，不可交换）暴露了这个差异。**已修复**：改为求字符串长度之和（`string.len(v)`，加法可交换），不再依赖迭代顺序。
 
-> 当前基线 = **§10.70 + §10.34 修复 4 完成**。可直接构建（`cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build`）。
+> 当前基线 = **§10.70 + §10.34 修复 4/5 完成**。可直接构建（`cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build`）。
 
 ---
 
@@ -98,10 +100,9 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 5. 之后的路线（优先级，各自专项）
 
-> 嵌套内联多帧 3 阶段（§10.68a/b/c）均已落地，已从本清单移除。§10.69 带循环 callee 内联已落地。§10.70 嵌套方法内联（带 guarded branch 的方法内联）已落地。
+> 嵌套内联多帧 3 阶段（§10.68a/b/c）均已落地，已从本清单移除。§10.69 带循环 callee 内联已落地。§10.70 嵌套方法内联（带 guarded branch 的方法内联）已落地。§10.34 修复 4（RMW bail 移除）+ 修复 5（值返回多写精确门）已落地。
 
-1. **值返回多写的精确门扩展（小项）**：当前值返回路径保守地禁了所有 GETI/GETTABLE/LEN，连"GETI 在所有写**之前**"这种其实安全的形态也拒。精确做法是只禁出现在 SETFIELD **之后**的 GETI/GETTABLE/LEN（按写位置扫描），解锁"先读数组再写多字段并返值"。低险、低价值，按需。
-2. 路线 §4（循环展开 / 强度削减）、§5（寄存器中介的 trace 链接，高风险）。详见 `JIT_ROADMAP.md`。
+1. 路线 §4（循环展开 / 强度削减）、§5（寄存器中介的 trace 链接，高风险）。详见 `JIT_ROADMAP.md`。
 
 ---
 
@@ -121,4 +122,4 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 7. 一句话状态
 
-**基线 = §10.70 嵌套方法内联完成（带 guarded branch 的方法内联：rec_cond_branch 清除 method_self_pc/method_resume_snap 切换 resume-at-SELF → resume-at-call + proto_is_branch_inlinable 扩展允许 GETFIELD/GETI/GETTABLE/LEN + SPTResumeInfo 增加 callee_cl 字段修复 exit stub 覆盖函数值导致的 crash），全门槛绿（370 ctest、模糊 300+150 例 0 失配）。下一步：值返回多写精确门扩展（小项）或路线 §4/§5。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。
+**基线 = §10.70 + §10.34 修复 4/5 完成（RMW bail 移除 + 值返回多写精确门：SETFIELD 前的 GETI/GETTABLE/LEN 放行），全门槛绿（374 ctest、模糊 300+150 例 0 失配）。下一步：路线 §4（循环展开/强度削减）或 §5（寄存器中介 trace 链接，高风险）。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。

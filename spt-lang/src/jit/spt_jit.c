@@ -2406,7 +2406,7 @@ static int proto_is_write_method_inlinable(Proto *p) {
   return 1;
 }
 
-/* Decide whether `p` is an inlinable MULTI-write void method: a straight-line
+/* Decide whether `p` is an inlinable MULTI-write method: a straight-line
    body with TWO OR MORE SETFIELDs (e.g. `void update(int x){ this.a=x; this.b=x+1; }`
    or `void swap(){ int t=this.a; this.a=this.b; this.b=t; }`). The §10.49 single-
    trailing-write safety does NOT hold (the 2nd SETFIELD's key-existence guard
@@ -2416,8 +2416,9 @@ static int proto_is_write_method_inlinable(Proto *p) {
    and the body emits guard-free GETFIELD/SETFIELD. Zero in-body field guards
    -> no in-callee exits from field access -> write-safe regardless of write
    count. Body shape: straight-line (no branches), only method_read_op_ok ops
-   + SETFIELD + void return. Value-returning multi-write is NOT supported
-   (would need exit-safe read-after-write of the returned field). */
+   + SETFIELD + return. Since §10.65 a VALUE return (OP_RETURN1) is supported;
+   since §10.34 fix 5, GETI/GETTABLE/LEN before the first SETFIELD are also
+   allowed (their guards fire pre-write -> resume-at-SELF is safe). */
 static int proto_is_multiwrite_method_inlinable(Proto *p) {
   if (isvararg(p)) return 0;
   if (p->sizep != 0) return 0;
@@ -2441,13 +2442,16 @@ static int proto_is_multiwrite_method_inlinable(Proto *p) {
      free in multi-write mode (they still emit bounds/type guards); a guard AFTER a
      committed write could, in a value-returning method, resume-at-SELF and double-
      write a non-idempotent field. So when there IS a value return we forbid those
-     guarded reads, guaranteeing a strictly guard-free body. (The void path keeps
-     the §10.64 gate unchanged -- zero regression.) */
+     guarded reads **after** the first SETFIELD, guaranteeing no guard fires post-
+     write. GETI/GETTABLE/LEN **before** any SETFIELD are safe (guard fires before
+     any write commits -> resume-at-SELF re-runs with no double-write). (The void
+     path keeps the §10.64 gate unchanged -- zero regression.) */
+  int seen_write = 0;
   for (int i = 0; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_SETFIELD) continue;
+    if (o == OP_SETFIELD) { seen_write = 1; continue; }
     if (o == OP_RETURN0 || o == OP_RETURN || o == OP_RETURN1 || o == OP_EXTRAARG) continue;
-    if (has_value_return && (o == OP_GETI || o == OP_GETTABLE || o == OP_LEN)) return 0;
+    if (has_value_return && seen_write && (o == OP_GETI || o == OP_GETTABLE || o == OP_LEN)) return 0;
     if (method_read_op_ok(o)) continue;
     return 0;
   }

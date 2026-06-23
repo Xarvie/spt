@@ -1,0 +1,22 @@
+// §10.34 fix 5: value-return multiwrite method with GETI before SETFIELD.
+// Previously the value-return path forbade ALL GETI/GETTABLE/LEN; now only
+// those AFTER the first SETFIELD are forbidden (guard fires post-write ->
+// resume-at-SELF double-write). GETI before any SETFIELD is safe.
+class Processor {
+  int x;
+  int y;
+  int process(int idx, list<int> a) {
+    int v = a[idx];   // GETI before SETFIELD -- now allowed
+    this.x = v;
+    this.y = v + 1;
+    return this.x;    // value return
+  }
+}
+
+Processor p = Processor();
+list<int> a = [10, 20, 30, 40, 50];
+int sum = 0;
+for (int i = 0, 100000) {
+  sum += p.process(i % 5, a);
+}
+print(sum);

@@ -1657,6 +1657,19 @@ load-after-store 依赖完整保留。修复 3 描述的"GETI 像是读了入口
 (2)**CSE 的 has_table_write 守护比显式 bail 更可靠**——它覆盖所有路径(含未来新增的表写 op),而位图 bail 只查已知 op。
 (3)修复 3 的"精准回退"纪律没错(可疑即回退),但回退后应尽快复测以确认 bug 真实性,避免长期保留不必要的限制。
 
+### 修复 5:值返回多写方法——精确放开 SETFIELD 前的 GETI/GETTABLE/LEN
+§10.65 的值返回多写方法门保守地禁了**所有** GETI/GETTABLE/LEN(无论位置),因为它们的守卫在值返回路径下
+会 resume-at-SELF,若守卫在 SETFIELD **之后**触发则双写非幂等字段。但 GETI/GETTABLE/LEN 在 SETFIELD **之前**
+时守卫先于任何写提交触发,resume-at-SELF 重跑方法体时无字段已被写 → 无双写 → 安全。
+
+**修复**:`proto_is_multiwrite_method_inlinable` 第二循环加 `seen_write` 标志,遇 SETFIELD 置位;
+`has_value_return && seen_write && (GETI/GETTABLE/LEN)` 才 return 0。SETFIELD 前的 GETI/GETTABLE/LEN 放行。
+
+**解锁场景**:`int process(int idx, list<int> a){ int v=a[idx]; this.x=v; this.y=v+1; return this.x; }`
+(先读数组再写多字段并返值)。回归 kernel `multiwrite_ret_geti.spt`(100001 reps,输出 3000010)。
+
+**验证**:374 ctest(含 1 个新 kernel)· 300 fuzz + 150 float_ifconv fuzz(seed 12345)0 失配。
+
 ---
 
 ## §10.35 变量边界内层循环:带守卫的推测展开(Phase 3a 续 2)
