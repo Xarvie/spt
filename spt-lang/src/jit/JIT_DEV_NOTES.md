@@ -1580,7 +1580,7 @@ FORPREP 落入体(idx=init),尾部 FORLOOP 递减 count、idx+=step、跳回;**b
 
 ---
 
-## §10.34 嵌套循环优化(Phase 3a 续):递归展开 + 两个被模糊器抓出的 bug
+## §10.34 嵌套循环优化(Phase 3a 续):递归展开 + MMBIN 误报 + RMW bail 移除
 
 §10.33 的单层展开只把**最内层**循环展进它的直接父循环。再测画像发现下一个瓶颈:
 **定长矩阵乘 matmul_const 仅 1.22×**(即便维度是常量!)。`SPT_JIT_DEBUG` 显示 entries=1.6M、aborted=24、只编译 1 条 trace。
@@ -1634,6 +1634,28 @@ SETI/SETTABLE/SETFIELD/SETTABUP/SETUPVAL(R[A] 是表/upval 基址、不重新赋
 (3)缩小 correctness bug 用**正交切分**(纯写 vs 读改写、连续 vs 交错、同数组 vs 不同数组、碰撞次数阈值)定位到最小触发面,
    再决定"修根因 vs 精准回退"。当根因在深层且范围窄,精准回退(保住大收益、放弃小众场景)是符合纪律的选择。
 (4)展开+codegen 的交互在**大 trace + 别名写**上才暴露——小负载全绿不代表 codegen 在重度展开下也对(§10.32 的"做对≠做值"延伸到"小对≠大对")。
+
+### 修复 4:同数组 RMW 展开——"bug"实为期望值计算错误,bail 完全可移除
+修复 3 的"codegen bug"在后续复测中**无法复现**。重新运行 `nested_histogram.spt` 得到正确结果(a[4]=2400012);
+缩小用例 `rmw_collision.spt`(`for rep=0,100000: for i=0,2: for j=0,2: a[i+j]=a[i+j]+1`)输出 `100001 200002 300003 200002 100001`——**完全正确**。
+
+**根因**:此前报告的"灾难性错误"(a[4]=12)基于**错误的期望值**:未计 Lua inclusive for 语义——`for(int rep=0,200000)` 跑 **200001** 次(不是 200000)。
+按正确次数重算,所有输出均匹配。
+
+**为什么 RMW 展开本就安全**:CSE pass(`sptir_optimize`)扫描整条 trace,遇 SETI/SETFIELD 即置 `has_table_write=1`;
+`try_cse` 对 GETI 在 `has_table_write` 时直接 return 0(行 627-635)。所以每个展开副本的 GETI 都**重新从内存加载**,
+load-after-store 依赖完整保留。修复 3 描述的"GETI 像是读了入口缓存值"不会发生——CSE 早已禁用表载前推。
+
+**修复**:移除 `try_unroll_inner_loop` 中的 reads/writes 位图、RMW 检测循环、bail 分支(约 20 行)。
+更新注释说明 RMW 安全的理由。三个回归 kernel(`rmw_simple.spt`、`rmw_tiny.spt`、`rmw_collision.spt`)覆盖:
+单数组双写、小嵌套碰撞、大嵌套碰撞(100001 reps)。
+
+**验证**:373 ctest(含 3 个新 RMW kernel)· 300 fuzz(seed 12345)· 150 float_ifconv fuzz(seed 12345)全 0 失配。
+
+**关键教训**:
+(1)**复测 bug 前先验证期望值**——inclusive vs half-open 语义差 1 可能让正确输出看起来像 bug。
+(2)**CSE 的 has_table_write 守护比显式 bail 更可靠**——它覆盖所有路径(含未来新增的表写 op),而位图 bail 只查已知 op。
+(3)修复 3 的"精准回退"纪律没错(可疑即回退),但回退后应尽快复测以确认 bug 真实性,避免长期保留不必要的限制。
 
 ---
 

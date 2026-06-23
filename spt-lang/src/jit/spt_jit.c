@@ -2747,8 +2747,7 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
   int limit_ref = ir->reg_map[base + a + 1];
   int step_ref  = ir->reg_map[base + a + 2];
   if (init_ref < 0 || limit_ref < 0 || step_ref < 0) return 0;
-  if (init_ref >= ir->ninst || limit_ref >= ir->ninst || step_ref >= ir->ninst)
-    return 0;
+  if (init_ref >= ir->ninst || limit_ref >= ir->ninst || step_ref >= ir->ninst) return 0;
   int init_k  = (ir->insts[init_ref].op  == SPTIR_KINT);
   int limit_k = (ir->insts[limit_ref].op == SPTIR_KINT);
   int step_k  = (ir->insts[step_ref].op  == SPTIR_KINT);
@@ -2766,15 +2765,15 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
      R[A] (the FORLOOP counter) holds (count - k) during body iteration k. */
   lua_Unsigned count;
   if (step > 0) {
-    if (init > limit) return 0;          /* empty loop: rare, just bail */
+    if (init > limit) return 0;
     count = (lua_Unsigned)limit - (lua_Unsigned)init;
     if (step != 1) count /= (lua_Unsigned)step;
   } else {
-    if (init < limit) return 0;          /* empty loop */
+    if (init < limit) return 0;
     count = (lua_Unsigned)init - (lua_Unsigned)limit;
     count /= (lua_Unsigned)(-(step + 1)) + 1u;
   }
-  if (count + 1 > (lua_Unsigned)js->unroll_max) return 0;   /* too long */
+  if (count + 1 > (lua_Unsigned)js->unroll_max) return 0;
   int trips = (int)(count + 1);
 
   /* Inner body is [body_pc, forloop_pc); FORLOOP closes it. */
@@ -2783,11 +2782,8 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
   if (forloop_pc <= body_pc) return 0;
   if (GET_OPCODE(*forloop_pc) != OP_FORLOOP) return 0;
   if (GETARG_A(*forloop_pc) != a) return 0;
-  /* FORLOOP must jump back to body_pc (its target = (forloop_pc+1) - Bx). */
   if ((forloop_pc + 1) - GETARG_Bx(*forloop_pc) != body_pc) return 0;
 
-  /* Body must be straight-line and must not overwrite the loop control slots
-     (A=counter, A+1=step, A+2=idx); we pin those to constants per copy. */
   /* Body must be straight-line and must not REASSIGN the loop control slots
      (A=counter, A+1=step, A+2=idx) -- those are pinned to constants per copy, so
      a body that overwrote the loop variable would be miscompiled (in SPT the
@@ -2798,18 +2794,10 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
      upvalue) without reassigning R[A]; none clobber the loop variable. Reading
      R[A+2] as an operand (the normal use of the loop index) is fine.
 
-     We also refuse to unroll a body that both READS and WRITES the same array
-     (a read-modify-write like `a[idx] = a[idx] + ...`). Fully unrolling such a
-     loop produces many element loads/stores to indices that fold to constants;
-     when the same element is touched repeatedly through *colliding* computed
-     indices (e.g. a histogram `a[i+j]++`), the large straight-line trace
-     mis-codegens the load-after-store dependency. Matrix multiply etc. are
-     unaffected: they read a/b and write a *different* array c, with no
-     element aliased. Detect by array-base register: GETI/GETTABLE/GETFIELD read
-     R[B], SETI/SETTABLE/SETFIELD write R[A]; a register in both sets means the
-     same array is read and written, so we fall back (safe) rather than risk it. */
-  uint8_t reads[256]; uint8_t writes[256];
-  memset(reads, 0, sizeof(reads)); memset(writes, 0, sizeof(writes));
+     Read-modify-write patterns (a[idx] = a[idx] + ...) are safe to unroll: the
+     CSE pass disables table-load forwarding when any SETI/SETFIELD is present
+     (has_table_write), so each GETI in every unrolled copy reloads from memory,
+     preserving the load-after-store dependency. */
   for (const Instruction *p = body_pc; p < forloop_pc; p++) {
     OpCode op = GET_OPCODE(*p);
     if (unroll_unsafe_op(op)) return 0;
@@ -2817,16 +2805,7 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
       int da = GETARG_A(*p);
       if (da == a || da == a + 1 || da == a + 2) return 0;
     }
-    switch (op) {
-      case OP_GETI: case OP_GETTABLE: case OP_GETFIELD:
-        reads[GETARG_B(*p) & 0xFF] = 1; break;
-      case OP_SETI: case OP_SETTABLE: case OP_SETFIELD:
-        writes[GETARG_A(*p) & 0xFF] = 1; break;
-      default: break;
-    }
   }
-  for (int s = 0; s < 256; s++)
-    if (reads[s] && writes[s]) return 0;     /* read-modify-write same array */
 
   /* For any bound that was not a compile-time KINT, pin it to the value we
      speculated with a run-time guard, snapshotting the FORPREP so a mismatch

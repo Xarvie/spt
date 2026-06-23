@@ -72,9 +72,9 @@ C/内置函数、多返回值、`CONCAT`、map 访问、`NEWLIST/SETLIST`、`CLO
 （点积 1.79×、内层=4 仅 0.98× 即负优化），展开后点积 6.33×、内层=4 提到 5.46×。仍无法展开的嵌套
 （变量边界、内层体含分支/调用/再嵌套、或 trip 超 UNROLL_MAX）维持原行为：外层 trace 在内层 back-edge
 中止回退、内层保留自己的 trace（§10.15）——安全但内层较短时仍受重入开销影响。展开为**递归**：全常量多层嵌套
-（如定长矩阵乘）逐层塌进最外层 trace（matmul_const 1.22→7.9×，§10.34）。**例外:展开体若对同一数组既读又写
-（潜在 RMW，如直方图 `a[i+j]++`）不展开**——避开重度展开下同数组 RMW 的 codegen 误处理（根因未定位，列为未来调查）；
-回退到内层 trace、正确但无展开提速。matmul（写不同数组）、点积（只读）不受此例外影响。**变量边界**内层循环
+（如定长矩阵乘）逐层塌进最外层 trace（matmul_const 1.22→7.9×，§10.34）。**同数组 RMW（如直方图 `a[i+j]++`）
+也安全展开**——CSE 在 `has_table_write` 时禁用表载前推，每个 GETI 重新从内存加载，保留 load-after-store 依赖
+（§10.34 修复 4）。**变量边界**内层循环
 若边界是**循环不变量**(如 `for j=0,N-1`,N 设一次不改)由**带守卫的推测展开**处理:读运行时值、发守卫钉住、按观测 trip 展开
 (matmul_var 1.26→6.06×、nest_var 1.44→8.0×,§10.35);守卫失败则侧退出回 FORPREP、解释器用真实边界重跑(故永远正确)。
 不变量分析排除 PHI 归纳变量,故三角 `for j=0,i`、每轮变化的 GETI 边界 `for j=0,lens[i]` 不被推测(分别走常量路径 / 维持原行为)。
@@ -195,11 +195,12 @@ C/内置函数、多返回值、`CONCAT`、map 访问、`NEWLIST/SETLIST`、`CLO
   `rec_inst→FORPREP→try_unroll` 自然递归)。全常量嵌套逐层塌进最外层;变量边界内层在 replay 中途 abort 回退(安全)。
   **定长矩阵乘 matmul_const 1.22→7.9×**(此前只展一层、entries 1.6M)。附带修了 MMBIN 误报(其 A 是操作数非目标,
   加 `unroll_writes_dest_A` 精确区分),详见 §10.34。
-- **3a 已知限制 / RMW 回退 ✅**:**展开体若对同一数组既读又写(潜在 RMW,如直方图 `a[i+j]++`)则不展开**——
-  重度展开 + 同数组 RMW 经碰撞常量索引时,codegen 误处理 load-after-store(`gen_recursive_nest` 抓出)。
-  精准回退保住 matmul(写不同数组 c)、点积(只读)、标量累加的收益;同数组 RMW 回退到内层 trace(正确、约原速)。
-  回归 kernel `nested_histogram.spt`。**根因(大展开 + 同数组 RMW 的 codegen 驻留/spill 复用)未精确定位,列为未来调查**:
-  修掉它即可让直方图/原地数组更新也展开。详见 §10.34。
+- **3a 同数组 RMW 展开 ✅(修复 4)**:**展开体对同一数组既读又写(如直方图 `a[i+j]++`)现在安全展开**。
+  此前(修复 3)因怀疑大展开+同数组 RMW 的 codegen 误处理 load-after-store 而精准回退;调查发现"bug"实为
+  期望值计算错误(未计 Lua inclusive for 语义,`for(i=0,N)`跑 N+1 次)。实际 CSE 已在 `has_table_write` 时
+  禁用表载前推(`try_cse` 对 GETI 直接 return 0),每个展开副本的 GETI 重新从内存加载,load-after-store 依赖完整保留。
+  移除 reads/writes 位图与 RMW bail 后,`rmw_collision.spt`(100001 reps 嵌套 RMW)输出正确、全 373 ctest+450 fuzz 通过。
+  回归 kernel `rmw_simple.spt`、`rmw_tiny.spt`、`rmw_collision.spt`。详见 §10.34。
 - **3a 带守卫的推测展开 ✅(续 2,变量边界)**:内层边界是**循环不变量变量**(`for j=0,N-1`,N 运行时才知道)时,
   录制时读 N 的活值、用**运行时守卫钉住**(两个 GUARD_LE 合成 ==,因 GUARD_EQ 无 codegen)、按观测 trip 展开。
   **正确性完全靠守卫**——猜错就侧退出到 FORPREP、解释器用真实边界重跑(故 eval 精度只影响性能)。不变量分析(叶子限 KINT/SLOAD、

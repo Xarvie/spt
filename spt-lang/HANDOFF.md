@@ -1,6 +1,6 @@
 # SPT JIT —— 交接文档 (Handoff)
 
-最后更新：§10.69 带循环 callee 内联完成。本文件是新接手者的**入口**。详细历史见 `src/jit/JIT_DEV_NOTES.md`（开发日志 §10.1–§10.69，每个特性的设计/bug/教训），路线全貌见 `src/jit/JIT_ROADMAP.md`。
+最后更新：§10.70 嵌套方法内联 + §10.34 修复 4（RMW bail 移除）。本文件是新接手者的**入口**。详细历史见 `src/jit/JIT_DEV_NOTES.md`（开发日志 §10.1–§10.70，每个特性的设计/bug/教训），路线全貌见 `src/jit/JIT_ROADMAP.md`。
 
 ---
 
@@ -56,8 +56,10 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 3. 当前状态（交接时点）
 
-### 已完成并交付：截至 §10.69
-最近交付的是 **§10.69 带循环 callee 内联**——扩展 `proto_is_branch_inlinable` 允许 OP_FORPREP/OP_FORLOOP，使含 numeric for-loop 的 callee（如 `sum_range(int n)`）能被内联。`try_unroll_inner_loop` 在内联帧中投机展开循环体（常量或 loop-invariant 边界），展开后经常量折叠变为单常量。同时修复了两处 maxslot 偏移 bug（`try_unroll_inner_loop` 和 OP_FORLOOP case 中 `a + 2` 漏了 `frame_base` 偏移）。
+### 已完成并交付：截至 §10.70 + §10.34 修复 4
+最近交付的是 **§10.34 修复 4：同数组 RMW bail 移除**——移除 `try_unroll_inner_loop` 中对"展开体对同一数组既读又写"的精准回退（reads/writes 位图 + bail）。调查发现修复 3 报告的"codegen bug"实为期望值计算错误（未计 Lua inclusive for 语义，`for(i=0,N)` 跑 N+1 次）。CSE 已在 `has_table_write` 时禁用表载前推，每个展开副本的 GETI 重新从内存加载，load-after-store 依赖完整保留。新增 3 个回归 kernel（`rmw_simple.spt`、`rmw_tiny.spt`、`rmw_collision.spt`）。
+
+往前是 **§10.70 嵌套方法内联**——带 guarded branch 的方法内联，扩展 `proto_is_branch_inlinable` 允许 callee 体内含 EQ/LT/LE 等条件分支（if-conversion 处理），使含 if-else 的 callee（如 `abs(int x)`、`clamp(int v,int lo,int hi)`）能被内联。
 
 往前是 **§10.68c 通用 resume-at-call**——嵌套内联多帧 3 阶段规划的最后一步。当内联 callee 体内的守卫失败时，exit stub 调用 C helper `sptjit_exit_resume` 重建 callee 的 CallInfo 帧（压帧、设 base/savedpc/callstatus），让解释器在 callee PC 恢复执行。`sptjit_hot_check` 宏更新 `ci/cl/k` 以适配切换后的 callee CI。安全网修改为允许有 resume info（`callee_proto != NULL`）的 in-callee exit PC。新增 `proto_is_branch_inlinable` 允许 forward conditional branches + 多 RETURN1 的 callee 内联。`rec_cond_branch` abort 放宽为仅对 method inline abort。
 
@@ -73,13 +75,13 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 - **§10.59–§10.62 math 库内联 + SLEN/SBYTE resume-at-SELF**：min/max/abs/floor/ceil/string.len/byte。
 
 该状态**全门槛绿**：
-- **369/369 ctest**、**kernel 差分 pass=136 fail=0**、**模糊 seeds 42+99×20=40 例 0 失配**、entries==exits、guard_fail=0。
+- **373/373 ctest**（含 3 个新 RMW kernel）、**300 fuzz + 150 float_ifconv fuzz（seed 12345）0 失配**、entries==exits、guard_fail=0。
 - 加速表与各特性细节见 `JIT_ROADMAP.md` 与 `JIT_DEV_NOTES.md §10.x`。
 
 ### 已知非问题：`foreach_map_str.spt` 的 map 迭代顺序（已修复）
 `pairs(map)` 的迭代顺序依赖 per-process 哈希种子（`luai_makeseed` 混合 `time(NULL)` + 栈地址 ASLR），JIT on/off 两次进程的种子不同 → 字符串键的哈希不同 → 迭代顺序不同。原测试用字符串拼接（`..`，不可交换）暴露了这个差异。**已修复**：改为求字符串长度之和（`string.len(v)`，加法可交换），不再依赖迭代顺序。
 
-> 当前基线 = **§10.69 完成**。可直接构建（`cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build`）。
+> 当前基线 = **§10.70 + §10.34 修复 4 完成**。可直接构建（`cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build`）。
 
 ---
 
