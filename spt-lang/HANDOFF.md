@@ -1,6 +1,6 @@
 # SPT JIT —— 交接文档 (Handoff)
 
-最后更新：§10.68c 通用 resume-at-call 完成。本文件是新接手者的**入口**。详细历史见 `src/jit/JIT_DEV_NOTES.md`（开发日志 §10.1–§10.68c，每个特性的设计/bug/教训），路线全貌见 `src/jit/JIT_ROADMAP.md`。
+最后更新：§10.69 带循环 callee 内联完成。本文件是新接手者的**入口**。详细历史见 `src/jit/JIT_DEV_NOTES.md`（开发日志 §10.1–§10.69，每个特性的设计/bug/教训），路线全貌见 `src/jit/JIT_ROADMAP.md`。
 
 ---
 
@@ -56,8 +56,10 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 3. 当前状态（交接时点）
 
-### 已完成并交付：截至 §10.68c
-最近交付的完整包是 **§10.68c 通用 resume-at-call**——嵌套内联多帧 3 阶段规划的最后一步。当内联 callee 体内的守卫失败时，exit stub 调用 C helper `sptjit_exit_resume` 重建 callee 的 CallInfo 帧（压帧、设 base/savedpc/callstatus），让解释器在 callee PC 恢复执行。`sptjit_hot_check` 宏更新 `ci/cl/k` 以适配切换后的 callee CI。安全网修改为允许有 resume info（`callee_proto != NULL`）的 in-callee exit PC。新增 `proto_is_branch_inlinable` 允许 forward conditional branches + 多 RETURN1 的 callee 内联。`rec_cond_branch` abort 放宽为仅对 method inline abort。
+### 已完成并交付：截至 §10.69
+最近交付的是 **§10.69 带循环 callee 内联**——扩展 `proto_is_branch_inlinable` 允许 OP_FORPREP/OP_FORLOOP，使含 numeric for-loop 的 callee（如 `sum_range(int n)`）能被内联。`try_unroll_inner_loop` 在内联帧中投机展开循环体（常量或 loop-invariant 边界），展开后经常量折叠变为单常量。同时修复了两处 maxslot 偏移 bug（`try_unroll_inner_loop` 和 OP_FORLOOP case 中 `a + 2` 漏了 `frame_base` 偏移）。
+
+往前是 **§10.68c 通用 resume-at-call**——嵌套内联多帧 3 阶段规划的最后一步。当内联 callee 体内的守卫失败时，exit stub 调用 C helper `sptjit_exit_resume` 重建 callee 的 CallInfo 帧（压帧、设 base/savedpc/callstatus），让解释器在 callee PC 恢复执行。`sptjit_hot_check` 宏更新 `ci/cl/k` 以适配切换后的 callee CI。安全网修改为允许有 resume info（`callee_proto != NULL`）的 in-callee exit PC。新增 `proto_is_branch_inlinable` 允许 forward conditional branches + 多 RETURN1 的 callee 内联。`rec_cond_branch` abort 放宽为仅对 method inline abort。
 
 往前数的三阶段（**嵌套内联多帧 3 阶段**）：
 - **§10.68a 栈化基础设施**：SPTInlineFrame 数组 + inline_depth，纯重构零行为变化。
@@ -71,13 +73,13 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 - **§10.59–§10.62 math 库内联 + SLEN/SBYTE resume-at-SELF**：min/max/abs/floor/ceil/string.len/byte。
 
 该状态**全门槛绿**：
-- **368/368 ctest**、**kernel 差分 pass=135 fail=0**、**模糊 seeds 42+99×200=400 例 0 失配**、entries==exits、guard_fail=0。
+- **369/369 ctest**、**kernel 差分 pass=136 fail=0**、**模糊 seeds 42+99×20=40 例 0 失配**、entries==exits、guard_fail=0。
 - 加速表与各特性细节见 `JIT_ROADMAP.md` 与 `JIT_DEV_NOTES.md §10.x`。
 
 ### 已知非问题：`foreach_map_str.spt` 的 map 迭代顺序（已修复）
 `pairs(map)` 的迭代顺序依赖 per-process 哈希种子（`luai_makeseed` 混合 `time(NULL)` + 栈地址 ASLR），JIT on/off 两次进程的种子不同 → 字符串键的哈希不同 → 迭代顺序不同。原测试用字符串拼接（`..`，不可交换）暴露了这个差异。**已修复**：改为求字符串长度之和（`string.len(v)`，加法可交换），不再依赖迭代顺序。
 
-> 当前基线 = **§10.68c 完成**。可直接构建（`cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build`）。
+> 当前基线 = **§10.69 完成**。可直接构建（`cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON && cmake --build build`）。
 
 ---
 
@@ -94,12 +96,11 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 5. 之后的路线（优先级，各自专项）
 
-> 嵌套内联多帧 3 阶段（§10.68a/b/c）均已落地，已从本清单移除。
+> 嵌套内联多帧 3 阶段（§10.68a/b/c）均已落地，已从本清单移除。§10.69 带循环 callee 内联已落地。
 
-1. **带循环的 callee 内联**：§10.68c 已实现带分支 callee 的 resume-at-call，但带循环的 callee（如 GCD/FibIter）仍需处理循环回边在 callee proto 内的 exit PC。当前 `proto_is_branch_inlinable` 不允许 OP_FORLOOP/OP_FORPREP，带循环的 callee 会安全 abort 回退解释器。
-2. **嵌套方法内联**：§10.68c 的 `rec_cond_branch` abort 放宽为仅对 method inline abort。要放开 method inline 的 guarded branch，需处理 method 的 resume-at-SELF 与 resume-at-call 的交互。
-3. **值返回多写的精确门扩展（小项）**：当前值返回路径保守地禁了所有 GETI/GETTABLE/LEN，连"GETI 在所有写**之前**"这种其实安全的形态也拒。精确做法是只禁出现在 SETFIELD **之后**的 GETI/GETTABLE/LEN（按写位置扫描），解锁"先读数组再写多字段并返值"。低险、低价值，按需。
-4. 路线 §4（循环展开 / 强度削减）、§5（寄存器中介的 trace 链接，高风险）。详见 `JIT_ROADMAP.md`。
+1. **嵌套方法内联**：§10.68c 的 `rec_cond_branch` abort 放宽为仅对 method inline abort。要放开 method inline 的 guarded branch，需处理 method 的 resume-at-SELF 与 resume-at-call 的交互。
+2. **值返回多写的精确门扩展（小项）**：当前值返回路径保守地禁了所有 GETI/GETTABLE/LEN，连"GETI 在所有写**之前**"这种其实安全的形态也拒。精确做法是只禁出现在 SETFIELD **之后**的 GETI/GETTABLE/LEN（按写位置扫描），解锁"先读数组再写多字段并返值"。低险、低价值，按需。
+3. 路线 §4（循环展开 / 强度削减）、§5（寄存器中介的 trace 链接，高风险）。详见 `JIT_ROADMAP.md`。
 
 ---
 
@@ -119,4 +120,4 @@ diff <(SPT_JIT=0 build/bin/sptscript K.spt) <(SPT_JIT=on SPT_JIT_HOT=8 build/bin
 
 ## 7. 一句话状态
 
-**基线 = §10.68c 通用 resume-at-call 完成（嵌套内联多帧 3 阶段最后一步：带分支 callee 内联、exit stub 调用 sptjit_exit_resume 重建 callee CI、sptjit_hot_check 宏更新 ci/cl/k、安全网允许有 resume info 的 in-callee exit PC、proto_is_branch_inlinable 允许 forward conditional branches + 多 RETURN1、rec_cond_branch abort 放宽为仅对 method inline），全门槛绿（368 ctest、kernel 差分 135 pass/0 fail、模糊 400 例 0 失配）。下一步：带循环 callee 内联 / 嵌套方法内联。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。
+**基线 = §10.69 带循环 callee 内联完成（扩展 proto_is_branch_inlinable 允许 OP_FORPREP/OP_FORLOOP + 修复 try_unroll_inner_loop 和 OP_FORLOOP 的 maxslot 偏移 bug），全门槛绿（369 ctest、kernel 差分 136 pass/0 fail、模糊 40 例 0 失配）。下一步：嵌套方法内联。** 全部历史与教训在 `src/jit/JIT_DEV_NOTES.md`，路线在 `src/jit/JIT_ROADMAP.md`。

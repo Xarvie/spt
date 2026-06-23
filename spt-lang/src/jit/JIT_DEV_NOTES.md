@@ -2916,3 +2916,39 @@ if (epc && (epc < lo || epc >= hi)) {
 构建 0 err。**368/368 ctest 全通过** · **134/135 kernel 差分通过**（唯一 fail=`foreach_map_str` 为预存 map 哈希顺序 flakiness，stash 验证确认与本次改动无关）· **模糊器 200+200=400 例 0 失配**。零回归。
 
 新增测试 kernel `inline_branch_multi.spt`：`classify(int x)` 函数有两个条件返回路径 + 一个默认返回，验证多返回路径 callee 的内联正确性。
+
+## §10.69 带循环 callee 内联（扩展 proto_is_branch_inlinable + 修复 maxslot 偏移，✅ 阶段达成）
+
+### 背景
+§10.68c 完成后，`proto_is_branch_inlinable` 允许 forward conditional branches + 多 RETURN1 的 callee 内联，但仍排除 OP_FORPREP/OP_FORLOOP。这意味着含 numeric for-loop 的 callee（如 `sum_range(int n) { int s=0; for(int i=1,n) s+=i; return s; }`）无法被内联——CALL 处直接 abort。
+
+### 核心改动（3 处）
+
+**(1) 扩展 `proto_is_branch_inlinable` 允许 OP_FORPREP/OP_FORLOOP**：
+```c
+case OP_FORPREP:
+case OP_FORLOOP:
+  break;
+```
+理由：`try_unroll_inner_loop`（§10.33-§10.35）已在录制时投机展开内层 numeric for-loop——它用 `eval_invariant_int` 评估循环边界（KINT 或 loop-invariant SLOAD），用 `emit_pin_guard`（两个 GUARD_LE）固定投机值，然后逐次重放循环体。如果循环体不是 straight-line 或 trip count 超过展开上限，unroller bail，FORLOOP back-edge abort trace 安全回退到解释器。
+
+**(2) 修复 `try_unroll_inner_loop` 的 maxslot 偏移 bug**（行 ~2835）：
+```c
+// 旧: if (a + 2 > ir->maxslot) ir->maxslot = a + 2;
+// 新: if (base + a + 2 > ir->maxslot) ir->maxslot = base + a + 2;
+```
+`try_unroll_inner_loop` 用 `base = rc->frame_base` 访问 `reg_map`，但 maxslot 更新遗漏了 `base` 偏移。当 `frame_base != 0`（内联 callee）时，maxslot 被设为过小的值，导致 codegen 截断寄存器溢出。
+
+**(3) 修复 OP_FORLOOP case 的同一 maxslot 偏移 bug**（行 ~3751）：
+```c
+// 旧: if (a + 2 > ir->maxslot) ir->maxslot = a + 2;
+// 新: if (rc->frame_base + a + 2 > ir->maxslot) ir->maxslot = rc->frame_base + a + 2;
+```
+
+### 效果
+`inline_loop.spt` 的 `sum_range(10)` 现在被成功内联到外层循环 trace 中。IR 显示 66 insts：函数引用 SLOAD + GUARD_T 后，内层 for-loop 被 `try_unroll_inner_loop` 完全展开（n=10 是常量），10 次 `s += i` 经常量折叠后变为单个常量 55，外层循环体变为 `total = total + 55`。两个 trace 编译成功（16 insts 内层独立 trace + 66 insts 外层含内联 trace），0 aborts，entries==exits，guard_fail=0。
+
+### 验证（完整门槛，全绿）
+构建 0 err。**369/369 ctest 全通过** · **136/136 kernel 差分通过**（含新增 `inline_loop.spt`）· **模糊器 40 例 0 失配**。零回归。
+
+新增测试 kernel `inline_loop.spt`：`sum_range(int n)` 含 numeric for-loop，外层循环调用 100 万次，验证带循环 callee 的内联 + 展开 + 常量折叠正确性。

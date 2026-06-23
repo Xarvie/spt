@@ -1,0 +1,10 @@
+// Function with a loop - test if JIT can inline it
+int sum_range(int n) {
+  int s = 0;
+  for (int i = 1, n) { s = s + i; }
+  return s;
+}
+
+int total = 0;
+for (int i = 0, 1000000) { total = total + sum_range(10); }
+print(total);

@@ -2076,6 +2076,14 @@ static int proto_is_branch_inlinable(Proto *p, int *ret_reg) {
         if (target >= n) return 0;      /* jump out of function: not inlinable */
         break;
       }
+      /* numeric for-loops: allowed because try_unroll_inner_loop will unroll
+         the body inline at recording time (constant or speculative trip count).
+         If the body is not straight-line or the trip count exceeds the unroll
+         cap, the unroller bails and the FORLOOP back-edge aborts the trace
+         safely (falls back to interpreter). */
+      case OP_FORPREP:
+      case OP_FORLOOP:
+        break;
       default:
         return 0;                       /* anything else: not inlinable */
     }
@@ -2824,7 +2832,7 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
     ir->reg_type[base + a + 1] = SPTT_INT;
     ir->reg_map[base + a + 2] = sptir_kint(ir, idx);
     ir->reg_type[base + a + 2] = SPTT_INT;
-    if (a + 2 > ir->maxslot) ir->maxslot = a + 2;
+    if (base + a + 2 > ir->maxslot) ir->maxslot = base + a + 2;
 
     rc->pc = body_pc;
     while (rc->pc < forloop_pc) {
@@ -3740,7 +3748,7 @@ static int rec_inst(SPTRecCtx *rc) {
       ir->reg_type[rc->frame_base + a + 2] = SPTT_INT;
 
       if (a > ir->maxslot) ir->maxslot = a;
-      if (a + 2 > ir->maxslot) ir->maxslot = a + 2;
+      if (rc->frame_base + a + 2 > ir->maxslot) ir->maxslot = rc->frame_base + a + 2;
 
       /* This is the loop back-edge. */
       sptir_loop(ir);
