@@ -4,7 +4,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-FRONTEND_DIR="../../spt-lang/src/frontend"
+FRONTEND_DIR="../../spt-lang/src"
 INC="-Ithird_party/cjson -Isrc/rpc -Isrc/lsp -Isrc/analysis -Isrc/features -I$FRONTEND_DIR"
 CFLAGS="-std=c11 -g -O0 -Wall -Wextra"
 OBJ=/tmp/lspobj

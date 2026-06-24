@@ -1,0 +1,131 @@
+--- /tmp/spt_jit_codegen.c.orig	2026-06-23 10:46:13.597838031 +0000
++++ src/jit/spt_jit_codegen.c	2026-06-23 11:12:58.466970089 +0000
+@@ -130,14 +130,6 @@
+   int8_t slot_reg[256];       /* GPR holding each int-resident slot, or -1 */
+   int8_t slot_xmm[256];       /* XMM holding each float-resident slot, or -1 */
+ 
+-  /* Array pointer cache: when a loop-invariant array ref is read by multiple
+-     GETIs, we load t->array once into a dedicated register (in the preheader)
+-     and reuse it across all GETIs that read the same array. This eliminates
+-     the per-GETI spill-slot load of the array ref and the t->array memory
+-     load. Only active when use_ra and a free register is available. */
+-  int arr_cache_ref;          /* IR ref of the cached array's SLOAD, or -1 */
+-  int8_t arr_cache_reg;       /* GPR holding t->array, or -1 if inactive */
+-
+   /* Current PC offset (for restoring savedpc on exit) */
+   int cur_pc_offset;
+ } SPTCodeGen;
+@@ -433,60 +425,6 @@
+   cg->use_ra = 1;
+ }
+ 
+-/* Set up the array pointer cache: find a loop-invariant array ref that is read
+-   by at least one GETI, and if a free register is available, bind it to hold
+-   t->array for that array. The actual load is emitted in the preheader (by
+-   gen_inst for a synthetic ARR_CACHE marker, or inline in the preheader loop).
+-   Called after ra_analyze so we know which RA_POOL registers are free. */
+-static void ra_setup_arr_cache(SPTCodeGen *cg) {
+-  SPTIRBuilder *ir = &cg->trace->ir;
+-  cg->arr_cache_ref = -1;
+-  cg->arr_cache_reg = -1;
+-  if (!cg->use_ra) return;
+-
+-  /* Count how many RA_POOL registers are used by integer slots. */
+-  int nint = 0, nflt = 0;
+-  for (int s = 0; s < 256; s++) {
+-    if (cg->slot_reg[s] >= 0) nint++;
+-    if (cg->slot_xmm[s] >= 0) nflt++;
+-  }
+-  int free_idx = nint + nflt;
+-  if (free_idx >= RA_POOL_N) return;  /* no free GPR */
+-  SPTReg cache_reg = RA_POOL[free_idx];
+-
+-  /* If the loop writes any array element, the array pointer could be reallocated
+-     by a SETI, so don't cache it. (Same check as ra_hoist_invariants.) */
+-  for (int i = 0; i < ir->ninst; i++) {
+-    if (ir->insts[i].flags & SPTIRF_DEAD) continue;
+-    if (ir->insts[i].op == SPTIR_SETI) return;
+-  }
+-
+-  /* Find the first GETI whose array operand is a read-only SLOAD (loop-invariant
+-     array ref). Only cache one array -- the common case is a single array read
+-     in a loop. */
+-  for (int i = 0; i < ir->ninst; i++) {
+-    SPTIRInst *in = &ir->insts[i];
+-    if (in->flags & SPTIRF_DEAD) continue;
+-    if (in->op != SPTIR_GETI) continue;
+-    int aref = in->op1;
+-    if (aref < 0 || aref >= ir->ninst) continue;
+-    /* Chase NOP aliases to the real array ref. */
+-    while (aref >= 0 && aref < ir->ninst &&
+-           ir->insts[aref].op == SPTIR_NOP)
+-      aref = ir->insts[aref].op1;
+-    if (aref < 0 || aref >= ir->ninst) continue;
+-    SPTIRInst *ain = &ir->insts[aref];
+-    if (ain->op != SPTIR_SLOAD) continue;
+-    int slot = (int)ain->aux;
+-    /* Read-only check: reg_map[slot] must point back to this SLOAD. */
+-    if (ir->reg_map[slot] != aref) continue;
+-    /* Found a cacheable array ref. */
+-    cg->arr_cache_ref = aref;
+-    cg->arr_cache_reg = (int8_t)cache_reg;
+-    return;
+-  }
+-}
+-
+ /* Loop-invariant code motion (targeted). Once residency is decided, hoist
+    instructions whose value is the same every iteration into the preheader so
+    they run once: read-only-slot SLOADs (e.g. an array reference), their type
+@@ -1581,25 +1519,10 @@
+          type (inst->type) and side-exit on mismatch, then load the value.
+          Uses x86 SIB addressing ([base+index*scale+disp]) to compute both
+          the tag and value addresses in a single load instruction each,
+-         avoiding LEA+ADD+IMUL chains.
+-
+-         Array pointer cache: if this GETI's array ref matches the cached
+-         loop-invariant array, t->array is already in arr_cache_reg (loaded
+-         once in the preheader), so we skip the per-GETI spill load + memory
+-         dereference. */
++         avoiding LEA+ADD+IMUL chains. */
+       gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);  /* RCX = index */
+-      /* Check if this GETI's array ref is the cached one (chase NOPs). */
+-      int aref = inst->op1;
+-      while (aref >= 0 && aref < ir->ninst &&
+-             ir->insts[aref].op == SPTIR_NOP)
+-        aref = ir->insts[aref].op1;
+-      if (cg->arr_cache_ref >= 0 && aref == cg->arr_cache_ref) {
+-        /* RAX = cached t->array */
+-        sptasm_mov_rr(a, SPT_RAX, (SPTReg)cg->arr_cache_reg);
+-      } else {
+-        gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);  /* RAX = Table* */
+-        sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
+-      }
++      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);  /* RAX = Table* */
++      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
+ 
+       /* --- type guard: movzx edx, byte[rax + rcx*1 + 4] --- */
+       sptasm_movzx_rm8s(a, SPT_RDX, SPT_RAX, SPT_RCX, 0, 4);
+@@ -1874,9 +1797,6 @@
+      bindings are fixed. */
+   ra_hoist_invariants(&cg);
+ 
+-  /* Set up array pointer cache (after RA, so we know which registers are free). */
+-  ra_setup_arr_cache(&cg);
+-
+   /* Create labels. */
+   cg.loop_label = sptasm_newlabel(&cg.asm_);
+   cg.epilogue_label = sptasm_newlabel(&cg.asm_);
+@@ -1890,13 +1810,6 @@
+     for (int i = 0; i < ir->ninst; i++) {
+       if (cg.ref_hoist[i]) gen_inst(&cg, i);
+     }
+-    /* Emit array pointer cache load: load array ref from spill, then t->array
+-       into the cache register. This runs once in the preheader. */
+-    if (cg.arr_cache_ref >= 0 && cg.arr_cache_reg >= 0) {
+-      SPTAsm *a = &cg.asm_;
+-      gen_load(&cg, SPT_RAX, cg.arr_cache_ref, SPTT_ARR);
+-      sptasm_mov_rm(a, (SPTReg)cg.arr_cache_reg, SPT_RAX, OFF_TABLE_ARRAY);
+-    }
+   }
+ 
+   /* Place loop label (entry point for the back-edge). */

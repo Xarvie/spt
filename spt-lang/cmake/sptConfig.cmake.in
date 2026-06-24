@@ -1,0 +1,13 @@
+# sptConfig.cmake.in
+# CMake 包配置文件模板，由 configure_package_config_file() 处理。
+# 外部工程通过 find_package(spt REQUIRED) 加载本文件。
+
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/sptTargets.cmake")
+
+# 提供便捷变量
+set(spt_core_FOUND TRUE)
+set(spt_LIBRARIES spt::core)
+
+check_required_components(spt)

@@ -1,13 +1,13 @@
 /*
-** loadast.c — 前端编排：源码 -> 词法 -> 语法 -> AST 根节点。
+** spt_frontend.c — 前端编排：源码 -> 词法 -> 语法 -> AST 根节点。
 **
 ** 生命周期策略：
-**   - 每次 loadAst 创建一个独立 arena，并把源码**复制进 arena**后再做词法/语法，
+**   - 每次 spt_frontend_parse 创建一个独立 arena，并把源码**复制进 arena**后再做词法/语法，
 **     因此 token 词素与 AST 内所有字符串都指向 arena 内存，杜绝悬垂指针。
-**   - 返回的根节点登记到全局注册表（根指针 -> arena）；destroyAst 据此销毁 arena。
-**     模型为单线程（与原 C++ 实现一致：import 期间嵌套 load/destroy 也按栈式配对）。
+**   - 返回的根节点登记到全局注册表（根指针 -> arena）；spt_frontend_destroy 据此销毁 arena。
+**     模型为单线程（与原 C++ 实现一致：import 期间嵌套 parse/destroy 也按栈式配对）。
 */
-#include "loadast.h"
+#include "spt_frontend.h"
 
 #include "spt_arena.h"
 #include "spt_ast.h"
@@ -100,7 +100,7 @@ static size_t normalize_newlines(char *s, size_t len) {
   return w;
 }
 
-struct AstNode *loadAst(const char *sourceCode_, const char *filename_) {
+LUALIB_API struct AstNode *spt_frontend_parse(const char *sourceCode_, const char *filename_) {
   const char *display = (filename_ && filename_[0]) ? filename_ : "<unknown>";
 
   /* 取原始源码（来自参数或文件），随后复制进 arena。 */
@@ -161,7 +161,7 @@ struct AstNode *loadAst(const char *sourceCode_, const char *filename_) {
   return root;
 }
 
-void destroyAst(struct AstNode *node) {
+LUALIB_API void spt_frontend_destroy(struct AstNode *node) {
   if (!node)
     return;
   SptArena *a = reg_take(node);
@@ -171,7 +171,7 @@ void destroyAst(struct AstNode *node) {
     /* 未登记：理论上不会发生。可能是重复 destroy 或外部构造的节点。
     ** 静默忽略会掩盖 use-after-free / double-free 类 bug，这里告警。 */
     fprintf(stderr,
-            "[Ast Warning] destroyAst: node %p not registered (double free?)\n",
+            "[Ast Warning] spt_frontend_destroy: node %p not registered (double free?)\n",
             (void *)node);
   }
 }

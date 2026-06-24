@@ -11,7 +11,7 @@
 #
 # 分层：
 #   third_party/cjson   vendored cJSON 1.7.19 (MIT)
-#   ../../spt-lang/src/frontend  复用的前端（词法/语法/AST/arena/诊断 + LSP 桥）
+#   ../../spt-lang/src  复用的前端（词法/语法/AST/arena/诊断 + LSP 桥）
 #   src/rpc             Content-Length 分帧 + JSON-RPC 2.0
 #   src/lsp             生命周期 + 分派 + 文档存储 + 主循环
 #   src/analysis        语义模型（符号/解析/引用）+ 工作区索引
@@ -28,7 +28,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin)
 
-set(FRONTEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../spt-lang/src/frontend)
+set(FRONTEND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../spt-lang/src)
 
 # ---- vendored cJSON ----
 add_library(spt_cjson STATIC third_party/cjson/cJSON.c)

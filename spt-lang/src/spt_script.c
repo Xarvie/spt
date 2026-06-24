@@ -1,6 +1,6 @@
 /*
-** sptscript.c — SPT 解释器命令行入口（纯 C，移植自 sptscript.cpp）。
-**   流程：读源码 -> loadAst -> astY_compile -> lua_pcall。
+** spt_script.c — SPT 解释器命令行入口（纯 C，移植自 sptscript.cpp）。
+**   流程：读源码 -> spt_frontend_parse -> astY_compile -> lua_pcall。
 **   去除 iostream/filesystem，改用 stdio 与简易路径辅助。
 */
 #define _POSIX_C_SOURCE 200809L
@@ -18,8 +18,8 @@
 #endif
 #endif
 
-#include "loadast.h"
-#include "ast_codegen.h"
+#include "spt_frontend.h"
+#include "spt_codegen.h"
 
 #include "lauxlib.h"
 #include "lua.h"
@@ -126,7 +126,7 @@ static const char *path_basename(const char *path) {
 }
 
 static int runSource(const char *source, const char *chunkname, lua_State *L) {
-  AstNode *ast = loadAst(source, chunkname);
+  AstNode *ast = spt_frontend_parse(source, chunkname);
   if (!ast) {
     fprintf(stderr, "Failed to parse AST\n");
     return -1;
@@ -139,7 +139,7 @@ static int runSource(const char *source, const char *chunkname, lua_State *L) {
   LClosure *cl = astY_compile(L, ast, &dyd, cn);
   if (!cl) {
     fprintf(stderr, "Failed to compile AST\n");
-    destroyAst(ast);
+    spt_frontend_destroy(ast);
     return -1;
   }
 
@@ -147,11 +147,11 @@ static int runSource(const char *source, const char *chunkname, lua_State *L) {
   if (status != LUA_OK) {
     const char *err = lua_tostring(L, -1);
     fprintf(stderr, "Runtime error: %s\n", err ? err : "unknown error");
-    destroyAst(ast);
+    spt_frontend_destroy(ast);
     return -1;
   }
 
-  destroyAst(ast);
+  spt_frontend_destroy(ast);
   return 0;
 }
 

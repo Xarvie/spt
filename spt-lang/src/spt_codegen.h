@@ -1,5 +1,5 @@
 /*
-** ast_codegen.h
+** spt_codegen.h
 ** AST-to-Lua 5.5 bytecode compiler
 ** Replaces lparser.c with a front-end that walks a pre-built AST
 ** and emits Lua 5.5 bytecode through the lcode.h interface.
@@ -11,8 +11,8 @@
 ** as luaY_parser).
 */
 
-#ifndef ast_codegen_h
-#define ast_codegen_h
+#ifndef spt_codegen_h
+#define spt_codegen_h
 
 #include "spt_ast.h"
 
@@ -88,17 +88,17 @@ extern "C" {
 **   LClosure* pushed on top of the Lua stack (caller pops it).
 **   On error, throws a Lua error through luaD_throw.
 */
-LUAI_FUNC LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *name);
+LUALIB_API LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *name);
 
 /*
 ** Compile a single function body from a LambdaNode or FunctionDeclNode.
 ** Mostly internal, but exposed for testing / REPL use.
 */
-LUAI_FUNC Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
+LUALIB_API Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
                                       AstNode *funcNode, const char *name);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* ast_codegen_h */
+#endif /* spt_codegen_h */

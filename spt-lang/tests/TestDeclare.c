@@ -2,7 +2,7 @@
  * TestDeclare.c — 验证 `declare` 的 AST 契约 (未来 LSP 消费的表示)。
  *
  * declare 在运行期被擦除、不可观测,故其「符号 + 描述是否正确建模」必须在
- * 编译期通过 AST 直接断言。这里走 loadAst -> 检查 AstNode。
+ * 编译期通过 AST 直接断言。这里走 spt_frontend_parse -> 检查 AstNode。
  *
  * 覆盖:
  *   - 环境声明 (declare <member>) 产生 NODE_FUNCTION_DECL/VARIABLE_DECL，is_ambient=true
@@ -13,7 +13,7 @@
  *   - 非法形式被拒绝: auto / 初始化器 / 函数体
  */
 
-#include "loadast.h"
+#include "spt_frontend.h"
 #include "spt_ast.h"
 
 #include <stdio.h>
@@ -47,8 +47,8 @@ static AstNode *stmt(AstNode *root, int i) {
 /* ---- 1. 环境函数声明 + 多行行文档 ---- */
 static void test_ambient_func_with_doc(void) {
   printf("Testing: ambient func + doc...\n");
-  AstNode *root = loadAst("/// hello doc\n/// second line\ndeclare int foo(int x);\n", "t1");
-  CHECK(root != NULL, "loadAst should succeed");
+  AstNode *root = spt_frontend_parse("/// hello doc\n/// second line\ndeclare int foo(int x);\n", "t1");
+  CHECK(root != NULL, "spt_frontend_parse should succeed");
   if (!root)
     return;
   CHECK(root->u.block.statements.count == 1, "one top-level statement");
@@ -63,14 +63,14 @@ static void test_ambient_func_with_doc(void) {
               s0->u.func_decl.return_type->type == NODE_TYPE_PRIMITIVE,
           "return type primitive (int)");
   }
-  destroyAst(root);
+  spt_frontend_destroy(root);
 }
 
 /* ---- 2. 环境 const 变量声明 (无 doc / 无初始化器) ---- */
 static void test_ambient_const_var(void) {
   printf("Testing: ambient const var...\n");
-  AstNode *root = loadAst("declare const int FLAG;\n", "t2");
-  CHECK(root != NULL, "loadAst should succeed");
+  AstNode *root = spt_frontend_parse("declare const int FLAG;\n", "t2");
+  CHECK(root != NULL, "spt_frontend_parse should succeed");
   if (!root)
     return;
   AstNode *s0 = stmt(root, 0);
@@ -82,7 +82,7 @@ static void test_ambient_const_var(void) {
     CHECK(s0->u.var_decl.initializer == NULL, "no initializer");
     CHECK(s0->u.var_decl.doc == NULL, "no doc");
   }
-  destroyAst(root);
+  spt_frontend_destroy(root);
 }
 
 /* ---- 3. 模块声明块 + 模块文档 + 成员文档 + 类成员 ---- */
@@ -95,14 +95,14 @@ static void test_declare_module(void) {
                     "  const int INIT_VIDEO;\n"
                     "  class Window { void Destroy(); int w; }\n"
                     "}\n";
-  AstNode *root = loadAst(src, "t3");
-  CHECK(root != NULL, "loadAst should succeed");
+  AstNode *root = spt_frontend_parse(src, "t3");
+  CHECK(root != NULL, "spt_frontend_parse should succeed");
   if (!root)
     return;
   AstNode *s0 = stmt(root, 0);
   CHECK(s0 && s0->type == NODE_DECLARE_MODULE, "s0 is declare-module");
   if (!s0 || s0->type != NODE_DECLARE_MODULE) {
-    destroyAst(root);
+    spt_frontend_destroy(root);
     return;
   }
   CHECK(streq(s0->u.declare_module.module_path, "sdl"), "module path 'sdl'");
@@ -147,14 +147,14 @@ static void test_declare_module(void) {
             "Window.w field");
     }
   }
-  destroyAst(root);
+  spt_frontend_destroy(root);
 }
 
 /* ---- 4. 多返回函数声明 (vars) ---- */
 static void test_declare_multireturn(void) {
   printf("Testing: declare vars (multi-return)...\n");
-  AstNode *root = loadAst("declare from \"m\" { vars GetVersion(); }\n", "t4");
-  CHECK(root != NULL, "loadAst should succeed");
+  AstNode *root = spt_frontend_parse("declare from \"m\" { vars GetVersion(); }\n", "t4");
+  CHECK(root != NULL, "spt_frontend_parse should succeed");
   if (!root)
     return;
   AstNode *s0 = stmt(root, 0);
@@ -169,26 +169,26 @@ static void test_declare_multireturn(void) {
             "return type multireturn");
     }
   }
-  destroyAst(root);
+  spt_frontend_destroy(root);
 }
 
-/* ---- 5. 非法形式必须被拒绝 (loadAst 返回 NULL) ---- */
+/* ---- 5. 非法形式必须被拒绝 (spt_frontend_parse 返回 NULL) ---- */
 static void test_rejections(void) {
   printf("Testing: rejections (auto / initializer / body)...\n");
-  AstNode *a = loadAst("declare auto x;\n", "r1");
+  AstNode *a = spt_frontend_parse("declare auto x;\n", "r1");
   CHECK(a == NULL, "declare auto must be rejected");
   if (a)
-    destroyAst(a);
+    spt_frontend_destroy(a);
 
-  AstNode *b = loadAst("declare int x = 5;\n", "r2");
+  AstNode *b = spt_frontend_parse("declare int x = 5;\n", "r2");
   CHECK(b == NULL, "declare with initializer must be rejected");
   if (b)
-    destroyAst(b);
+    spt_frontend_destroy(b);
 
-  AstNode *c = loadAst("declare int f(int a) { return a; }\n", "r3");
+  AstNode *c = spt_frontend_parse("declare int f(int a) { return a; }\n", "r3");
   CHECK(c == NULL, "declare with function body must be rejected");
   if (c)
-    destroyAst(c);
+    spt_frontend_destroy(c);
 }
 
 int main(void) {

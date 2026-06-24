@@ -32,6 +32,10 @@
 #include "lvm.h"
 #include "lzio.h"
 
+/* SPT 前端：源码 -> AST -> 字节码 */
+#include "spt_frontend.h"
+#include "spt_codegen.h"
+
 #define errorstatus(s) ((s) > LUA_YIELD)
 
 /*
@@ -1039,13 +1043,8 @@ static void checkmode(lua_State *L, const char *mode, const char *x) {
 }
 
 struct AstNode;
-extern struct AstNode *loadAst(const char *sourceCode_, const char *filename_);
-extern void destroyAst(struct AstNode *node);
-extern LClosure *astY_compile(lua_State *L, struct AstNode *root, Dyndata *dyd, const char *name);
-extern Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
-                                   struct AstNode *funcNode, const char *name);
 
-/* 替换 ldo.c 中的 f_parser */
+/* SPT 前端入口已通过 spt_frontend.h / spt_codegen.h 引入 */
 static void f_parser(lua_State *L, void *ud) {
   LClosure *cl;
   struct SParser *p = cast(struct SParser *, ud);
@@ -1100,12 +1099,12 @@ static void f_parser(lua_State *L, void *ud) {
     const char *full_source = luaZ_buffer(&p->buff);
 
     // --- 步骤 B: 调用你的 C++ 前端生成 AST ---
-    struct AstNode *ast = loadAst(full_source, p->name);
+    struct AstNode *ast = spt_frontend_parse(full_source, p->name);
 
     if (ast == NULL) {
-      // 注意：loadAst 返回 NULL 代表解析失败，通常需要抛出语法错误
+      // 注意：spt_frontend_parse 返回 NULL 代表解析失败，通常需要抛出语法错误
       // 这里没有具体的错误信息，暂时抛出通用语法错误
-      // 如果你的 loadAst 能设置 lua error message 会更好
+      // 如果你的 spt_frontend_parse 能设置 lua error message 会更好
       luaD_throw(L, LUA_ERRSYNTAX);
     }
 
@@ -1113,7 +1112,7 @@ static void f_parser(lua_State *L, void *ud) {
     cl = astY_compile(L, ast, &p->dyd, p->name);
 
     // --- 步骤 D: 清理 AST ---
-    destroyAst(ast);
+    spt_frontend_destroy(ast);
   }
 
   // 原生逻辑：检查 upvalues 初始化

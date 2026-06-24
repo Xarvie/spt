@@ -176,16 +176,16 @@ SPTJitState *sptjit_create(void) {
      SPT_JIT_DEBUG=1        -> emit recording/compile diagnostics to stderr */
   {
     const char *e = getenv("SPT_JIT");
-    if (e && *e && e[0] != '0' &&
-        e[0] != 'o' /* "off" */ && e[0] != 'O' &&
-        e[0] != 'f' /* "false" */ && e[0] != 'F' &&
-        e[0] != 'n' /* "no" */ && e[0] != 'N') {
-      js->mode = SPT_JIT_MODE_ON;
+    if (e && *e) {
+      /* Enable on "1", "on", "true", "yes" (case-insensitive). Any other
+         non-empty value disables. This avoids the ambiguity where 'o' could
+         mean both "on" and "off". */
+      if (e[0] == '1' || e[0] == 't' || e[0] == 'T' ||
+          e[0] == 'y' || e[0] == 'Y' ||
+          (e[0] == 'o' && e[1] == 'n') || (e[0] == 'O' && e[1] == 'N')) {
+        js->mode = SPT_JIT_MODE_ON;
+      }
     }
-    /* "on"/"true"/"yes" explicitly enable */
-    if (e && (e[0] == 'o' || e[0] == 'O' || e[0] == 't' || e[0] == 'T' ||
-              e[0] == 'y' || e[0] == 'Y'))
-      js->mode = SPT_JIT_MODE_ON;
 
     const char *h = getenv("SPT_JIT_HOT");
     if (h && *h) {

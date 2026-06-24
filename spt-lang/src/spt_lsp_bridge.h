@@ -2,9 +2,9 @@
 ** spt_lsp_bridge.h — 前端面向语言服务器的稳定桥。
 **
 ** 给定源码，产出一个「分析单元」：尽力而为的 AST + 诊断 + token 列表 + 规范化源码。
-** 单元自带 arena，整体生命周期由 spt_lsp_unit_free 管理（不走 loadAst 的全局注册表）。
+** 单元自带 arena，整体生命周期由 spt_lsp_unit_free 管理（不走 spt_frontend_parse 的全局注册表）。
 **
-** 与 loadAst 的区别：
+** 与 spt_frontend_parse 的区别：
 **   - 容错：即使有语法错误也返回（可能不完整的）AST，便于在编辑中途的代码上提供功能。
 **   - 暴露诊断（行/列/消息）与 token（种类/跨度/文档注释），供 diagnostics 与语义高亮。
 **   - CRLF/CR 规范化为 LF（与编译路径一致），位置以规范化后的源码为准。

@@ -1,8 +1,8 @@
 /*
 ** spt_ast.c — AST 构造辅助与名称表。
 **
-** 注意：本文件**没有** destroyAst 的递归析构逻辑——AST 生命周期完全由
-** arena 管理（见 loadast.c 中的 destroyAst = spt_arena_destroy）。
+** 注意：本文件**没有** spt_frontend_destroy 的递归析构逻辑——AST 生命周期完全由
+** arena 管理（见 spt_frontend.c 中的 spt_frontend_destroy = spt_arena_destroy）。
 ** 这正是「标签联合 + Arena」相对原 C++ 析构链的核心简化。
 */
 #include "spt_ast.h"

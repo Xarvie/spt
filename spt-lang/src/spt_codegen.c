@@ -24,7 +24,7 @@
  * Includes
  *=====================================================================*/
 
-#include "ast_codegen.h"
+#include "spt_codegen.h"
 #include <assert.h>
 #include <stdarg.h>
 #include <string.h>
@@ -2620,7 +2620,7 @@ static void ast_mainfunc(CompileCtx *C, FuncState *fs, AstNode *root) {
   ast_close_func(C);
 }
 
-LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *name) {
+LUALIB_API LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *name) {
   CompileCtx ctx = {0};
   FuncState funcstate = {};
 
@@ -2677,7 +2677,7 @@ LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, const char *na
   return cl;
 }
 
-Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
+LUALIB_API Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
                                        AstNode *funcNode, const char *name) {
   CompileCtx ctx = {0};
   ctx.L = L;

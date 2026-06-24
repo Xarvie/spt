@@ -14,8 +14,8 @@
 
 #include "spt_module.h"
 
-#include "loadast.h"
-#include "ast_codegen.h"
+#include "spt_frontend.h"
+#include "spt_codegen.h"
 
 #define SPT_PATH_VAR "SPT_PATH"
 
@@ -131,7 +131,7 @@ static int spt_module_loader(lua_State *L) {
   fclose(f);
 
   /* Parse */
-  AstNode *ast = loadAst(source, filename);
+  AstNode *ast = spt_frontend_parse(source, filename);
   free(source);
   if (!ast)
     return luaL_error(L, "failed to parse SPT file '%s'", filename);
@@ -142,7 +142,7 @@ static int spt_module_loader(lua_State *L) {
   snprintf(chunkname, sizeof(chunkname), "@%s", filename);
 
   LClosure *cl = astY_compile(L, ast, &dyd, chunkname);
-  destroyAst(ast);
+  spt_frontend_destroy(ast);
   if (!cl)
     return luaL_error(L, "failed to compile SPT file '%s'", filename);
 

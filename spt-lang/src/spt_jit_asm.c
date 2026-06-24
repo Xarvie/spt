@@ -199,9 +199,20 @@ void sptasm_mov_rr(SPTAsm *a, SPTReg dst, SPTReg src) {
 }
 
 void sptasm_mov_ri64(SPTAsm *a, SPTReg dst, int64_t imm) {
-  sptasm_rex(a, 1, 0, 0, (dst >> 3) & 1);
-  sptasm_byte(a, 0xB8 + (dst & 7)); /* MOV r64, imm64 */
-  sptasm_qword(a, (uint64_t)imm);
+  /* Use sign-extended MOV r/m64, imm32 (7 bytes) when the value fits in int32,
+     instead of MOV r64, imm64 (10 bytes). This saves 3 bytes per constant load
+     and improves instruction density for KINT-heavy traces (e.g. array index
+     constants 0..7 in unrolled GETI sequences). */
+  if (imm == (int64_t)(int32_t)imm) {
+    sptasm_rex(a, 1, 0, 0, (dst >> 3) & 1);  /* REX.W for 64-bit sign-extension */
+    sptasm_byte(a, 0xC7);                     /* MOV r/m64, imm32 */
+    emit_modrm(a, 3, 0, dst);
+    sptasm_dword(a, (uint32_t)(int32_t)imm);
+  } else {
+    sptasm_rex(a, 1, 0, 0, (dst >> 3) & 1);
+    sptasm_byte(a, 0xB8 + (dst & 7)); /* MOV r64, imm64 */
+    sptasm_qword(a, (uint64_t)imm);
+  }
 }
 
 void sptasm_mov_ri32(SPTAsm *a, SPTReg dst, int32_t imm) {
@@ -291,6 +302,30 @@ void sptasm_or_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x09, dst, sr
 void sptasm_and_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x21, dst, src); }
 void sptasm_sub_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x29, dst, src); }
 void sptasm_xor_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x31, dst, src); }
+
+/* Generic r/m arithmetic: dst = dst <op> [base+disp].
+   Uses the "r, r/m" direction (opcode + 2 from the "r/m, r" form) so the
+   memory operand is the source. This enables a single memory-source
+   instruction (e.g. add r15, [rsp+0x170]) instead of load+op (mov+add),
+   saving one instruction and enabling micro-fusion. */
+static void arith_rm(SPTAsm *a, uint8_t op, SPTReg dst, SPTReg base, int32_t disp) {
+  emit_rex_rm(a, 1, dst, base);
+  sptasm_byte(a, op);
+  emit_mem(a, dst, base, disp);
+}
+
+void sptasm_add_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x03, dst, base, disp); }
+void sptasm_or_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x0B, dst, base, disp); }
+void sptasm_and_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x23, dst, base, disp); }
+void sptasm_sub_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x2B, dst, base, disp); }
+void sptasm_xor_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x33, dst, base, disp); }
+
+void sptasm_imul_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  emit_rex_rm(a, 1, dst, base);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0xAF); /* IMUL r64, r/m64 */
+  emit_mem(a, dst, base, disp);
+}
 
 /* Generic r/imm32 arithmetic: 0x81 /digit, imm32. */
 static void arith_ri(SPTAsm *a, uint8_t subop, SPTReg dst, int32_t imm) {
@@ -432,6 +467,26 @@ void sptasm_movzx_rm8(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0xB6);
   emit_mem(a, dst, base, disp);
+}
+
+/* MOVZX r32, byte [base + index*scale + disp]: 0F B6 /r with SIB.
+   Used by GETI tag guards: movzx edx, byte[array + idx*1 + 4]. */
+void sptasm_movzx_rm8s(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index,
+                       int scale, int32_t disp) {
+  int r = (dst >> 3) & 1;
+  int x = (index >> 3) & 1;
+  int b = (base >> 3) & 1;
+  sptasm_rex(a, 0, r, x, b);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0xB6);
+  int mod;
+  if (disp == 0 && (base & 7) != 5) mod = 0;
+  else if (disp >= -128 && disp <= 127) mod = 1;
+  else mod = 2;
+  emit_modrm(a, mod, dst, 4);
+  emit_sib(a, scale, index, base);
+  if (mod == 1) sptasm_byte(a, (uint8_t)(disp & 0xff));
+  else if (mod == 2) sptasm_dword(a, (uint32_t)disp);
 }
 
 /* =====================================================================

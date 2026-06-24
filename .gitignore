@@ -308,3 +308,8 @@ coverage-report/
 # Scratch / temp files
 _out.txt
 
+# SPT-lang build artifacts and debug logs
+/spt-lang/build/
+/spt-lang/build_*/
+/spt-lang/jit_*.txt
+

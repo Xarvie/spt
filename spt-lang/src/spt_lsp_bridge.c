@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* CRLF/CR -> LF 就地规范化（仅缩短）。返回新长度。与 loadast.c 一致。 */
+/* CRLF/CR -> LF 就地规范化（仅缩短）。返回新长度。与 spt_frontend.c 一致。 */
 static size_t normalize_newlines(char *s, size_t len) {
   size_t w = 0;
   for (size_t r = 0; r < len; r++) {

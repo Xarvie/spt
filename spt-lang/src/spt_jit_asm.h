@@ -185,6 +185,14 @@ void sptasm_and_ri(SPTAsm *a, SPTReg dst, int32_t imm);
 void sptasm_or_ri(SPTAsm *a, SPTReg dst, int32_t imm);
 void sptasm_xor_ri(SPTAsm *a, SPTReg dst, int32_t imm);
 
+/* ADD/SUB/AND/OR/XOR reg, [base+disp] (memory-source, micro-fused) */
+void sptasm_add_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+void sptasm_sub_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+void sptasm_and_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+void sptasm_or_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+void sptasm_xor_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+void sptasm_imul_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+
 /* IMUL reg, reg (signed multiply) */
 void sptasm_imul_rr(SPTAsm *a, SPTReg dst, SPTReg src);
 /* IMUL reg, reg, imm32 */
@@ -226,6 +234,9 @@ void sptasm_setcc(SPTAsm *a, SPTCC cc, SPTReg r);
 void sptasm_movzx_r8(SPTAsm *a, SPTReg dst, SPTReg src);
 /* MOVZX reg, byte [base+disp] (zero-extend a memory byte to 64-bit) */
 void sptasm_movzx_rm8(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
+/* MOVZX reg, byte [base + index*scale + disp] (SIB variant for GETI tag guards) */
+void sptasm_movzx_rm8s(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index,
+                       int scale, int32_t disp);
 
 /* ---- Control flow ---- */
 

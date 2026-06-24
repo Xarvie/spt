@@ -392,10 +392,11 @@ static int try_cse(SPTIRBuilder *b, int idx, int has_table_write) {
     default:
       return 0;
   }
-  /* Search backwards for identical instruction (limited window). aux is part of
-     the identity (the constant value for KINT; 0 for the other pure ops). */
-  int start = idx > 64 ? idx - 64 : 0;
-  for (int i = idx - 1; i >= start; i--) {
+  /* Search backwards for identical instruction. Traces are typically short
+     (< 200 insts); the full-trace scan ensures CSE catches all duplicates
+     even in heavily unrolled traces (e.g. 8x unrolled array reads produce
+     8 identical LENs that the old 64-inst window missed for the tail). */
+  for (int i = idx - 1; i >= 0; i--) {
     SPTIRInst *o = &b->insts[i];
     if (o->op == ir->op && o->type == ir->type &&
         o->op1 == ir->op1 && o->op2 == ir->op2 && o->aux == ir->aux &&

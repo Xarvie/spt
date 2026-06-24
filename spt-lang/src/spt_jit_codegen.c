@@ -425,6 +425,104 @@ static void ra_analyze(SPTCodeGen *cg) {
   cg->use_ra = 1;
 }
 
+/* Coalesce the def-use chain from a slot's live-in SLOAD to its final loop-end
+   value into the slot's resident register. This keeps the accumulator in a
+   register across the entire chain (e.g. s = s+a[0]; s = s+a[1]; ...),
+   eliminating spill store-to-load between consecutive updates.
+
+   Safety: each intermediate ref must have exactly one use (the next ref in the
+   chain), and the live-in SLOAD must have exactly one use (the first ADD).
+   This ensures no instruction reads a stale value after the register is
+   overwritten. Exit stubs are safe: the register always holds the latest
+   chain value, and snapshots reference the current ref at each guard point. */
+static void ra_coalesce_chain(SPTCodeGen *cg) {
+  SPTIRBuilder *ir = &cg->trace->ir;
+  if (!cg->use_ra) return;
+
+  for (int s = 0; s < 256; s++) {
+    int reg = cg->slot_reg[s];
+    if (reg < 0) continue;
+
+    /* Find the live-in SLOAD for this slot (assigned to this register). */
+    int sload = -1;
+    for (int i = 0; i < ir->ninst; i++) {
+      SPTIRInst *in = &ir->insts[i];
+      if (in->flags & SPTIRF_DEAD) continue;
+      if (in->op != SPTIR_SLOAD) continue;
+      if ((int)in->aux != s) continue;
+      if (cg->ref_reg[i] == reg) { sload = i; break; }
+    }
+    if (sload < 0) continue;
+
+    int final_ref = ra_canon_ref(ir, ir->reg_map[s]);
+    if (final_ref < 0 || final_ref >= ir->ninst || final_ref == sload) continue;
+    if (cg->ref_reg[final_ref] != reg) continue;
+
+    /* The live-in SLOAD must have exactly one use in the loop body (the first
+       ADD in the chain). Hoisted instructions (e.g. the SLOAD's type guard)
+       run in the preheader before the loop body and don't conflict, so they
+       are excluded from the count. */
+    int sload_uses = 0;
+    for (int u = 0; u < ir->ninst && sload_uses <= 1; u++) {
+      SPTIRInst *in = &ir->insts[u];
+      if (in->flags & SPTIRF_DEAD) continue;
+      if (in->op == SPTIR_LOOP) continue;
+      if (cg->ref_hoist[u]) continue;  /* hoisted → preheader, skip */
+      if (ra_canon_ref(ir, in->op1) == sload) sload_uses++;
+      if (ra_canon_ref(ir, in->op2) == sload) sload_uses++;
+    }
+    if (sload_uses != 1) continue;
+
+    /* Walk backwards from final_ref to sload, following op1.
+       Collect intermediate refs and verify each supports two-address form. */
+    int chain[64];
+    int chain_len = 0;
+    int cur = final_ref;
+    int guard = 0;
+    while (cur != sload && chain_len < 64 && guard++ < 256) {
+      SPTIRInst *ci = &ir->insts[cur];
+      if (ci->flags & SPTIRF_DEAD) { chain_len = 0; break; }
+      int op = ci->op;
+      int safe_op = (op == SPTIR_ADD || op == SPTIR_SUB || op == SPTIR_MUL ||
+                     op == SPTIR_BAND || op == SPTIR_BOR || op == SPTIR_BXOR);
+      if (!safe_op) { chain_len = 0; break; }
+      int prev = ra_canon_ref(ir, ci->op1);
+      if (prev < 0 || prev >= ir->ninst) { chain_len = 0; break; }
+      chain[chain_len++] = cur;
+      if (prev == sload) break;
+      cur = prev;
+    }
+    if (chain_len <= 1) continue;  /* no intermediate refs to coalesce */
+
+    /* Verify each intermediate ref (except final_ref, already assigned) has
+       exactly one use in the loop body. Also verify no conflicting register. */
+    int ok = 1;
+    for (int i = 0; i < chain_len && ok; i++) {
+      int ref = chain[i];
+      if (ref == final_ref) continue;
+      if (cg->ref_reg[ref] >= 0 && cg->ref_reg[ref] != reg) { ok = 0; break; }
+      int uses = 0;
+      for (int u = 0; u < ir->ninst && uses <= 1; u++) {
+        SPTIRInst *in = &ir->insts[u];
+        if (in->flags & SPTIRF_DEAD) continue;
+        if (in->op == SPTIR_LOOP) continue;
+        if (cg->ref_hoist[u]) continue;  /* hoisted → preheader, skip */
+        if (ra_canon_ref(ir, in->op1) == ref) uses++;
+        if (ra_canon_ref(ir, in->op2) == ref) uses++;
+      }
+      if (uses != 1) ok = 0;
+    }
+    if (!ok) continue;
+
+    /* Assign the register to all intermediate refs. */
+    for (int i = 0; i < chain_len; i++) {
+      int ref = chain[i];
+      if (cg->ref_reg[ref] < 0)
+        cg->ref_reg[ref] = (int8_t)reg;
+    }
+  }
+}
+
 /* Loop-invariant code motion (targeted). Once residency is decided, hoist
    instructions whose value is the same every iteration into the preheader so
    they run once: read-only-slot SLOADs (e.g. an array reference), their type
@@ -469,12 +567,13 @@ static void ra_hoist_invariants(SPTCodeGen *cg) {
       case SPTIR_LEN:
       case SPTIR_TOFLT: case SPTIR_TOINT:
         is_inv = o1ok; break;
-      case SPTIR_GUARD_LT: {
+      case SPTIR_GUARD_LT:
+      case SPTIR_GUARD_LE: {
         /* Hoist a bounds guard only for a *constant* compared value with an
-           invariant bound -- i.e. the `c < LEN` guard of a constant-index GETI.
-           This excludes the FORLOOP count guard (bound = live counter, not
-           invariant) and variable-index guards (op1 not constant), both of
-           which break internal looping if hoisted. */
+           invariant bound -- i.e. the `c < LEN` or `c <= idx` guard of a
+           constant-index GETI. This excludes the FORLOOP count guard (bound =
+           live counter, not invariant) and variable-index guards (op1 not
+           constant), both of which break internal looping if hoisted. */
         SPTIRInst *v = sptir_get(ir, o1);
         int bnd = (int)in->aux;
         int bndok = (bnd < 0) || inv[bnd];
@@ -510,6 +609,50 @@ static void ra_hoist_invariants(SPTCodeGen *cg) {
     }
   }
   free(inv);
+}
+
+/* Assign free RA_POOL registers to hoisted GETI results. A hoisted GETI
+   computes its value once in the preheader; without a register the value is
+   spilled to the stack and loaded every iteration by the loop-body consumer
+   (e.g. ADD). Giving it a dedicated register turns the loop-body ADD from
+   `mov rax, [rsp+spill]; add r15, rax` into `add r15, r9` (one instruction,
+   no load latency).
+
+   Safety: the register is written once in the preheader (GETI gen_store) and
+   read in the loop body (gen_load / emit_int_inplace). Free RA_POOL registers
+   are never used as scratch by any codegen path (only RAX/RCX/RDX are scratch),
+   so the value survives across the loop body. Exit stubs read via gen_load,
+   which sources from ref_reg, so snapshot restoration is correct. */
+static void ra_assign_geti_regs(SPTCodeGen *cg) {
+  SPTIRBuilder *ir = &cg->trace->ir;
+  if (!cg->use_ra) return;
+
+  /* Find which RA_POOL registers are already in use (assigned to slots). */
+  int reg_busy[16] = {0};
+  for (int s = 0; s < 256; s++) {
+    if (cg->slot_reg[s] >= 0 && cg->slot_reg[s] < 16)
+      reg_busy[cg->slot_reg[s]] = 1;
+  }
+
+  /* Collect free registers from RA_POOL, in pool order. */
+  SPTReg free_regs[RA_POOL_N];
+  int nfree = 0;
+  for (int i = 0; i < RA_POOL_N; i++) {
+    if (!reg_busy[RA_POOL[i]]) free_regs[nfree++] = RA_POOL[i];
+  }
+  if (nfree == 0) return;
+
+  /* Assign free registers to hoisted integer GETI results. */
+  int next_reg = 0;
+  for (int i = 0; i < ir->ninst && next_reg < nfree; i++) {
+    SPTIRInst *in = &ir->insts[i];
+    if (in->flags & SPTIRF_DEAD) continue;
+    if (in->op != SPTIR_GETI) continue;
+    if (!cg->ref_hoist[i]) continue;       /* only hoisted GETIs */
+    if (cg->ref_reg[i] >= 0) continue;     /* already has a register */
+    if (in->type != SPTT_INT) continue;    /* only integer for GPR */
+    cg->ref_reg[i] = (int8_t)free_regs[next_reg++];
+  }
 }
 
 /* =====================================================================
@@ -892,6 +1035,36 @@ static void emit_int_inplace(SPTCodeGen *cg, int op, SPTReg R, int srcref) {
       case SPTIR_BOR:  sptasm_or_rr(a, R, S);  return;
       case SPTIR_BXOR: sptasm_xor_rr(a, R, S); return;
       default: break;
+    }
+  }
+
+  /* Memory-source: if the source is a spilled computed value (no resident
+     register, not a constant), use a single memory-source instruction
+     (e.g. add R, [rsp+disp]) instead of load+op. This halves the instruction
+     count for spill-source operands and enables micro-fusion. */
+  if (cg->use_ra && srcref >= 0 && srcref < ir->ninst) {
+    int canon = ra_canon_ref(ir, srcref);
+    if (canon >= 0 && canon < ir->ninst && cg->ref_reg[canon] < 0) {
+      SPTIRInst *cs = &ir->insts[canon];
+      /* Exclude constants (materialized on demand) and NOPs (no spill slot
+         written). Computed values (GETI, ADD, SLOAD, etc.) write their result
+         to the spill slot via gen_store, so reading [rsp+spill_off] is safe. */
+      if (cs->op != SPTIR_KINT && cs->op != SPTIR_KFLT &&
+          cs->op != SPTIR_KSTR && cs->op != SPTIR_KPTR &&
+          cs->op != SPTIR_KGC && cs->op != SPTIR_NIL &&
+          cs->op != SPTIR_FALSE && cs->op != SPTIR_TRUE &&
+          cs->op != SPTIR_NOP) {
+        int off = spill_off(cg, canon);
+        switch (op) {
+          case SPTIR_ADD:  sptasm_add_rm(a, R, SPT_RSP, off); return;
+          case SPTIR_SUB:  sptasm_sub_rm(a, R, SPT_RSP, off); return;
+          case SPTIR_MUL:  sptasm_imul_rm(a, R, SPT_RSP, off); return;
+          case SPTIR_BAND: sptasm_and_rm(a, R, SPT_RSP, off); return;
+          case SPTIR_BOR:  sptasm_or_rm(a, R, SPT_RSP, off);  return;
+          case SPTIR_BXOR: sptasm_xor_rm(a, R, SPT_RSP, off); return;
+          default: break;
+        }
+      }
     }
   }
 
@@ -1513,30 +1686,30 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
     case SPTIR_GETI: {
       /* R[A] = R[B][C] for arrays.  op1 = array ref, op2 = index ref.
          Memory layout (see ltable.h): t->array points between values and tags.
-           value k = t->array[-(k+1)]            = [array - (k+1)*8]
-           tag   k = ((uint8_t*)t->array)[4 + k] = [array + 4 + k]
+           value k = t->array[-(k+1)*8]            = [array - (k+1)*8]
+           tag   k = ((uint8_t*)t->array)[4 + k]   = [array + 4 + k]
          This is a guarded load: check the element's tag against the recorded
-         type (inst->type) and side-exit on mismatch, then load the value. */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);  /* RAX = Table* */
+         type (inst->type) and side-exit on mismatch, then load the value.
+         Uses x86 SIB addressing ([base+index*scale+disp]) to compute both
+         the tag and value addresses in a single load instruction each,
+         avoiding LEA+ADD+IMUL chains. */
       gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);  /* RCX = index */
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);  /* RAX = Table* */
       sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
 
-      /* --- type guard: load tag at [array + 4 + index], compare, exit --- */
-      sptasm_lea(a, SPT_RDX, SPT_RAX, 4);   /* RDX = array + 4 */
-      sptasm_add_rr(a, SPT_RDX, SPT_RCX);   /* RDX = array + 4 + index */
-      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6); sptasm_byte(a, 0x12); /* movzx edx,byte[rdx] */
+      /* --- type guard: movzx edx, byte[rax + rcx*1 + 4] --- */
+      sptasm_movzx_rm8s(a, SPT_RDX, SPT_RAX, SPT_RCX, 0, 4);
       sptasm_cmp_ri(a, SPT_RDX, spt_type_to_tag(inst->type));
       {
         int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
         sptasm_jcc(a, SPT_CC_NE, exlbl);
       }
 
-      /* --- load value at [array - (index+1)*8] (RAX=array, RCX=index) --- */
+      /* --- load value at [array - (index+1)*8] = [array + (-index)*8 - 8] ---
+         Negate index, then use SIB: mov rax, [rax + rcx*8 - 8]
+         SIB scale field: 0=×1, 1=×2, 2=×4, 3=×8 */
       sptasm_neg_r(a, SPT_RCX);             /* RCX = -index */
-      sptasm_lea(a, SPT_RDX, SPT_RAX, -8);  /* RDX = array - 8 */
-      sptasm_imul_rri(a, SPT_RCX, SPT_RCX, 8); /* RCX = -index*8 */
-      sptasm_add_rr(a, SPT_RDX, SPT_RCX);   /* RDX = array - 8 - index*8 */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, 0); /* RAX = value */
+      sptasm_mov_rms(a, SPT_RAX, SPT_RAX, SPT_RCX, 3, -8); /* RAX = value */
       gen_store(cg, idx, SPT_RAX);
       break;
     }
@@ -1793,9 +1966,15 @@ void sptjit_codegen_compile(SPTTrace *t, SPTJitState *js) {
     sptasm_free(&cg.asm_);
     return;
   }
+  /* Coalesce accumulator chains into resident registers (e.g. s=s+a[0]; s=s+a[1]
+     stays in one register, eliminating spill store-to-load between updates). */
+  ra_coalesce_chain(&cg);
   /* Hoist loop-invariant work (e.g. array pointer/length/type guard) once RA
      bindings are fixed. */
   ra_hoist_invariants(&cg);
+  /* Assign free registers to hoisted GETI results so the loop body reads them
+     from registers instead of spill slots. */
+  ra_assign_geti_regs(&cg);
 
   /* Create labels. */
   cg.loop_label = sptasm_newlabel(&cg.asm_);

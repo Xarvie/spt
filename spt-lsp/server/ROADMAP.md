@@ -7,7 +7,7 @@
 
 ## 一、这是什么
 
-SPT（Lua 5.5 方言）的**纯 C 语言服务器**，直接复用 `spt-lang/src/frontend` 的词法/语法/AST
+SPT（Lua 5.5 方言）的**纯 C 语言服务器**，直接复用 `spt-lang/src` 的词法/语法/AST
 作为**唯一解析真相**——不引入第二套文法，不依赖 ANTLR/C++，避免与真实编译器漂移。
 
 JSON 用 vendored **cJSON 1.7.19**。仅链接前端 6 个文件（arena/ast/diag/lexer/parser
@@ -16,7 +16,7 @@ JSON 用 vendored **cJSON 1.7.19**。仅链接前端 6 个文件（arena/ast/dia
 核心分层：
 ```
 third_party/cjson/   vendored cJSON（JSON 解析/序列化）
-../../spt-lang/src/frontend/  复用前端：spt_lexer / spt_parser / spt_ast / spt_arena / spt_diag
+../../spt-lang/src/  复用前端：spt_lexer / spt_parser / spt_ast / spt_arena / spt_diag
                      + spt_lsp_bridge（容错解析桥：spt_parse_tolerant -> AST+诊断+token）
 src/rpc/             Content-Length 分帧 + JSON-RPC 2.0
 src/lsp/             server（生命周期/分派/能力）、documents（Full 同步 + UTF-16↔字节）、
@@ -331,7 +331,7 @@ callHierarchy 出入边/rangeFormatting 局部格式化），全量 16/16 ctest 
 
 ## 六、贯穿所有阶段的纪律
 
-1. **单一解析真相**：任何语法/AST 变动必须复用 `spt-lang/src/frontend`，**绝不**在 LSP 内引入
+1. **单一解析真相**：任何语法/AST 变动必须复用 `spt-lang/src`，**绝不**在 LSP 内引入
    第二套文法或解析逻辑。容错解析走 `spt_lsp_bridge` 的 `spt_parse_tolerant`。
 2. **纯函数核心**：新功能尽量落在 `lsp_dispatch` 的纯函数路径上，保证可单测；
    主动通知经 `emit` 出口，测试用捕获器断言。

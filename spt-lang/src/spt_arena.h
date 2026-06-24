@@ -4,7 +4,7 @@
 ** 线性 Arena 分配器：AST 节点、节点列表与字符串的统一所有权。
 **
 ** 设计要点（见迁移规划书 §5.2 / §5.6）：
-**   - 所有 AST 内存都从一个 arena 申请，destroyAst 退化为一次 spt_arena_destroy，
+**   - 所有 AST 内存都从一个 arena 申请，spt_frontend_destroy 退化为一次 spt_arena_destroy，
 **     O(1)、无递归、无逐节点 free，结构上不可能泄漏。
 **   - 在 Lua 的 setjmp/longjmp 错误模型下天然安全：被长跳转绕过的中间分配
 **     仍由 arena 统一回收。

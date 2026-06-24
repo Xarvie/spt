@@ -6,7 +6,7 @@
 **
 **   - 单一 AstNode 结构：公共头(type + loc) + 各节点负载的 union。
 **   - 类型注解节点（PrimitiveType/ListType/…）并入同一联合，统一为 AstNode*。
-**   - 所有节点、列表、字符串均从 SptArena 分配；destroyAst 即销毁整个 arena。
+**   - 所有节点、列表、字符串均从 SptArena 分配；spt_frontend_destroy 即销毁整个 arena。
 **   - 节点经 spt_arena_alloc 清零分配，故所有指针字段默认 NULL，
 **     与原 C++ 默认成员初始化一致。
 **
