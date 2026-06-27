@@ -46,6 +46,7 @@ int main() {
 
     // 1. 注册 DataProcessor 类
     auto dp_type = lua.new_usertype<DataProcessor>("DataProcessor");
+    dp_type.constructor<>();
     dp_type.set("process_list", &DataProcessor::process_list);
     dp_type.set("process_map", &DataProcessor::process_map);
 
@@ -64,7 +65,7 @@ int main() {
 
     safe_do_string(lua, R"(
             // 实例化 C++ 类
-            auto processor = new DataProcessor();
+            auto processor = DataProcessor();
 
             // 验证并修改 C++ 传进来的 List
             print("Script sees globalList size: " .. #globalList);

@@ -1,63 +1,62 @@
-// list.hpp - List type support for SPT Lua 5.5 C++ bindings
+// list.hpp - SPT 数组（LUA_TARRAY）的 C++ 绑定
+// list<T> 持有强类型元素；list<void>（object_list）允许异构元素。
+// 通过 registry ref 持有 Lua 数组，析构时自动释放。
 
 #pragma once
 
 extern "C" {
-#include "../../src/vm/lua.h"
-#include "../../src/vm/lauxlib.h"
+#include <lua.h>
+#include <lauxlib.h>
 }
 
-#include "stack.hpp"
 #include "error.hpp"
+#include "stack.hpp"
 #include <cstddef>
 #include <iterator>
+#include <type_traits>
+#include <utility>
 
 namespace sptxx {
 
-template<typename T = void>
-class list {
-private:
-  lua_State *L;
-  int ref; // 统一使用极速 O(1) 句柄
-
+// 强类型数组包装。T 为元素类型。
+template <typename T = void> class list {
 public:
-  list() : L(nullptr), ref(LUA_NOREF) {}
+  // 默认构造：无效引用，后续可被赋值。
+  list() : L_(nullptr), ref_(LUA_NOREF) {}
 
-  list(lua_State *state, int reference) : L(state), ref(reference) {
-    if (ref == LUA_NOREF || ref == LUA_REFNIL) {
-      throw error("Invalid list reference");
+  // 从已有的 registry ref 构造。构造时验证 ref 指向 LUA_TARRAY。
+  list(lua_State *L, int ref) : L_(L), ref_(ref) {
+    if (!valid())
+      throw error("invalid list reference");
+    lua_getref(L_, ref_);
+    if (lua_gettablemode(L_, -1) != 1) { // TABLE_ARRAY
+      lua_pop(L_, 1);
+      throw error("reference is not a list (TABLE_ARRAY)");
     }
-    lua_getref(L, ref);
-    if (lua_gettablemode(L, -1) != 1) {
-      lua_pop(L, 1);
-      throw error("Reference is not a list (TABLE_ARRAY)");
-    }
-    lua_pop(L, 1);
+    lua_pop(L_, 1);
   }
 
-  list(const list &other) : L(other.L), ref(LUA_NOREF) {
+  list(const list &other) : L_(other.L_), ref_(LUA_NOREF) {
     if (other.valid()) {
-      lua_getref(L, other.ref);
-      ref = luaL_ref(L, LUA_REGISTRYINDEX);
+      lua_getref(L_, other.ref_);
+      ref_ = luaL_ref(L_, LUA_REGISTRYINDEX);
     }
   }
 
-  list(list &&other) noexcept : L(other.L), ref(other.ref) {
-    other.L = nullptr;
-    other.ref = LUA_NOREF;
+  list(list &&other) noexcept : L_(other.L_), ref_(other.ref_) {
+    other.L_ = nullptr;
+    other.ref_ = LUA_NOREF;
   }
 
   list &operator=(const list &other) {
     if (this != &other) {
-      if (valid()) {
-        luaL_unref(L, LUA_REGISTRYINDEX, ref);
-      }
-      L = other.L;
+      release();
+      L_ = other.L_;
       if (other.valid()) {
-        lua_getref(L, other.ref);
-        ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        lua_getref(L_, other.ref_);
+        ref_ = luaL_ref(L_, LUA_REGISTRYINDEX);
       } else {
-        ref = LUA_NOREF;
+        ref_ = LUA_NOREF;
       }
     }
     return *this;
@@ -65,214 +64,213 @@ public:
 
   list &operator=(list &&other) noexcept {
     if (this != &other) {
-      if (valid()) {
-        luaL_unref(L, LUA_REGISTRYINDEX, ref);
-      }
-      L = other.L;
-      ref = other.ref;
-      other.L = nullptr;
-      other.ref = LUA_NOREF;
+      release();
+      L_ = other.L_;
+      ref_ = other.ref_;
+      other.L_ = nullptr;
+      other.ref_ = LUA_NOREF;
     }
     return *this;
   }
 
-  ~list() {
-    if (valid()) {
-      luaL_unref(L, LUA_REGISTRYINDEX, ref);
-    }
-  }
+  ~list() { release(); }
 
-  bool valid() const { return L != nullptr && ref != LUA_NOREF && ref != LUA_REFNIL; }
+  bool valid() const { return L_ != nullptr && ref_ != LUA_NOREF && ref_ != LUA_REFNIL; }
   explicit operator bool() const { return valid(); }
 
+  lua_State *lua_state() const { return L_; }
+  int registry_index() const { return ref_; }
+
+  // ---- 容量 ----
+
   std::size_t size() const {
-    if (!valid())
-      throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_Integer len = lua_arraylen(L, -1);
-    lua_pop(L, 1);
-    return static_cast<std::size_t>(len);
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_Integer n = lua_arraylen(L_, -1);
+    lua_pop(L_, 1);
+    return static_cast<std::size_t>(n);
   }
 
   std::size_t capacity() const {
-    if (!valid())
-      throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_Integer cap = lua_arraycapacity(L, -1);
-    lua_pop(L, 1);
-    return static_cast<std::size_t>(cap);
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_Integer c = lua_arraycapacity(L_, -1);
+    lua_pop(L_, 1);
+    return static_cast<std::size_t>(c);
   }
 
   bool empty() const {
-    if (!valid())
-      throw error("Invalid list");
-    lua_getref(L, ref);
-    int is_empty = lua_arrayisempty(L, -1);
-    lua_pop(L, 1);
-    return is_empty != 0;
+    require_valid();
+    lua_getref(L_, ref_);
+    int e = lua_arrayisempty(L_, -1);
+    lua_pop(L_, 1);
+    return e != 0;
   }
 
-  void resize(std::size_t new_size) {
-    if (!valid())
-      throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_arraysetlen(L, -1, static_cast<lua_Integer>(new_size));
-    lua_pop(L, 1);
+  void resize(std::size_t n) {
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_arraysetlen(L_, -1, static_cast<lua_Integer>(n));
+    lua_pop(L_, 1);
   }
 
-  void reserve(std::size_t capacity) {
-    if (!valid())
-      throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_arrayreserve(L, -1, static_cast<lua_Integer>(capacity));
-    lua_pop(L, 1);
+  void reserve(std::size_t cap) {
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_arrayreserve(L_, -1, static_cast<lua_Integer>(cap));
+    lua_pop(L_, 1);
   }
 
-  template <typename U = T>
-  auto get(std::size_t index) const -> typename std::enable_if<!std::is_void_v<U>, U>::type {
-    if (!valid())
-      throw error("Invalid list");
+  // ---- 元素访问（0-based） ----
+
+  T get(std::size_t index) const {
+    require_valid();
     if (index >= size())
-      throw error("List index out of range");
-
-    lua_getref(L, ref);
-    lua_geti(L, -1, static_cast<lua_Integer>(index));
-    U result = stack::get<U>(L, -1);
-    lua_pop(L, 2);
+      throw error("list index out of range");
+    lua_getref(L_, ref_);
+    lua_geti(L_, -1, static_cast<lua_Integer>(index));
+    T result = stack::get<T>(L_, -1);
+    lua_pop(L_, 2);
     return result;
   }
 
   void set(std::size_t index, const T &value) {
-    if (!valid())
-      throw error("Invalid list");
+    require_valid();
     if (index >= size())
-      throw error("List index out of range");
-
-    lua_getref(L, ref);
-    stack::push(L, value);
-    lua_seti(L, -2, static_cast<lua_Integer>(index));
-    lua_pop(L, 1);
+      throw error("list index out of range");
+    lua_getref(L_, ref_);
+    stack::push(L_, value);
+    lua_seti(L_, -2, static_cast<lua_Integer>(index));
+    lua_pop(L_, 1);
   }
 
   void set(std::size_t index, T &&value) {
-    if (!valid())
-      throw error("Invalid list");
+    require_valid();
     if (index >= size())
-      throw error("List index out of range");
-
-    lua_getref(L, ref);
-    stack::push(L, std::move(value));
-    lua_seti(L, -2, static_cast<lua_Integer>(index));
-    lua_pop(L, 1);
+      throw error("list index out of range");
+    lua_getref(L_, ref_);
+    stack::push(L_, std::move(value));
+    lua_seti(L_, -2, static_cast<lua_Integer>(index));
+    lua_pop(L_, 1);
   }
 
   void push_back(const T &value) {
-    if (!valid())
-      throw error("Invalid list");
-    std::size_t current_size = size();
+    require_valid();
+    std::size_t n = size();
+    lua_getref(L_, ref_);
+    stack::push(L_, value);
+    lua_seti(L_, -2, static_cast<lua_Integer>(n));
+    lua_pop(L_, 1);
+  }
 
-    lua_getref(L, ref);
-    stack::push(L, value);
-    lua_seti(L, -2, static_cast<lua_Integer>(current_size));
-    lua_pop(L, 1);
+  void push_back(T &&value) {
+    require_valid();
+    std::size_t n = size();
+    lua_getref(L_, ref_);
+    stack::push(L_, std::move(value));
+    lua_seti(L_, -2, static_cast<lua_Integer>(n));
+    lua_pop(L_, 1);
   }
 
   T pop_back() {
-    if (!valid())
-      throw error("Invalid list");
-    std::size_t current_size = size();
-    if (current_size == 0)
-      throw error("Cannot pop from empty list");
-
-    T result = get(current_size - 1);
-    resize(current_size - 1);
+    require_valid();
+    std::size_t n = size();
+    if (n == 0)
+      throw error("cannot pop from empty list");
+    T result = get(n - 1);
+    resize(n - 1);
     return result;
   }
 
-  class iterator {
-  private:
-    list *lst;
-    std::size_t pos;
+  // ---- 迭代器 ----
 
+  class iterator {
   public:
     using difference_type = std::ptrdiff_t;
     using value_type = T;
-    using pointer = T *;
-    using reference = T &;
-    using iterator_category = std::random_access_iterator_tag;
+    using pointer = const T *;
+    using reference = T;
+    using iterator_category = std::forward_iterator_tag;
 
-    iterator(list *l, std::size_t p) : lst(l), pos(p) {}
+    iterator() : lst_(nullptr), pos_(0) {}
+    iterator(list *l, std::size_t p) : lst_(l), pos_(p) {}
 
-    T operator*() const { return lst->get(pos); }
+    T operator*() const { return lst_->get(pos_); }
 
     iterator &operator++() {
-      ++pos;
+      ++pos_;
       return *this;
     }
-
     iterator operator++(int) {
       iterator tmp = *this;
-      ++(*this);
+      ++pos_;
       return tmp;
     }
 
-    bool operator==(const iterator &other) const { return lst == other.lst && pos == other.pos; }
-
+    bool operator==(const iterator &other) const { return lst_ == other.lst_ && pos_ == other.pos_; }
     bool operator!=(const iterator &other) const { return !(*this == other); }
+
+  private:
+    list *lst_;
+    std::size_t pos_;
   };
 
   iterator begin() { return iterator(this, 0); }
   iterator end() { return iterator(this, size()); }
 
-  lua_State *lua_state() const { return L; }
+private:
+  lua_State *L_;
+  int ref_;
 
-  int registry_index() const { return ref; }
+  void require_valid() const {
+    if (!valid())
+      throw error("invalid list");
+  }
+
+  void release() {
+    if (valid())
+      luaL_unref(L_, LUA_REGISTRYINDEX, ref_);
+  }
 };
 
-template<>
-class list<void> {
-private:
-  lua_State *L;
-  int ref;
+// ---- list<void> 特化：异构 object_list ----
 
+template <> class list<void> {
 public:
-  list() : L(nullptr), ref(LUA_NOREF) {}
+  list() : L_(nullptr), ref_(LUA_NOREF) {}
 
-  list(lua_State *state, int reference) : L(state), ref(reference) {
-    if (ref == LUA_NOREF || ref == LUA_REFNIL) {
-      throw error("Invalid list reference");
+  list(lua_State *L, int ref) : L_(L), ref_(ref) {
+    if (!valid())
+      throw error("invalid list reference");
+    lua_getref(L_, ref_);
+    if (lua_gettablemode(L_, -1) != 1) {
+      lua_pop(L_, 1);
+      throw error("reference is not a list (TABLE_ARRAY)");
     }
-    lua_getref(L, ref);
-    if (lua_gettablemode(L, -1) != 1) {
-      lua_pop(L, 1);
-      throw error("Reference is not a list (TABLE_ARRAY)");
-    }
-    lua_pop(L, 1);
+    lua_pop(L_, 1);
   }
 
-  list(const list &other) : L(other.L), ref(LUA_NOREF) {
+  list(const list &other) : L_(other.L_), ref_(LUA_NOREF) {
     if (other.valid()) {
-      lua_getref(L, other.ref);
-      ref = luaL_ref(L, LUA_REGISTRYINDEX);
+      lua_getref(L_, other.ref_);
+      ref_ = luaL_ref(L_, LUA_REGISTRYINDEX);
     }
   }
 
-  list(list &&other) noexcept : L(other.L), ref(other.ref) {
-    other.L = nullptr;
-    other.ref = LUA_NOREF;
+  list(list &&other) noexcept : L_(other.L_), ref_(other.ref_) {
+    other.L_ = nullptr;
+    other.ref_ = LUA_NOREF;
   }
 
   list &operator=(const list &other) {
     if (this != &other) {
-      if (valid()) {
-        luaL_unref(L, LUA_REGISTRYINDEX, ref);
-      }
-      L = other.L;
+      release();
+      L_ = other.L_;
       if (other.valid()) {
-        lua_getref(L, other.ref);
-        ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        lua_getref(L_, other.ref_);
+        ref_ = luaL_ref(L_, LUA_REGISTRYINDEX);
       } else {
-        ref = LUA_NOREF;
+        ref_ = LUA_NOREF;
       }
     }
     return *this;
@@ -280,126 +278,136 @@ public:
 
   list &operator=(list &&other) noexcept {
     if (this != &other) {
-      if (valid()) {
-        luaL_unref(L, LUA_REGISTRYINDEX, ref);
-      }
-      L = other.L;
-      ref = other.ref;
-      other.L = nullptr;
-      other.ref = LUA_NOREF;
+      release();
+      L_ = other.L_;
+      ref_ = other.ref_;
+      other.L_ = nullptr;
+      other.ref_ = LUA_NOREF;
     }
     return *this;
   }
 
-  ~list() {
-    if (valid()) {
-      luaL_unref(L, LUA_REGISTRYINDEX, ref);
-    }
-  }
+  ~list() { release(); }
 
-  bool valid() const { return L != nullptr && ref != LUA_NOREF && ref != LUA_REFNIL; }
+  bool valid() const { return L_ != nullptr && ref_ != LUA_NOREF && ref_ != LUA_REFNIL; }
   explicit operator bool() const { return valid(); }
 
+  lua_State *lua_state() const { return L_; }
+  int registry_index() const { return ref_; }
+
   std::size_t size() const {
-    if (!valid()) throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_Integer len = lua_arraylen(L, -1);
-    lua_pop(L, 1);
-    return static_cast<std::size_t>(len);
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_Integer n = lua_arraylen(L_, -1);
+    lua_pop(L_, 1);
+    return static_cast<std::size_t>(n);
   }
 
   std::size_t capacity() const {
-    if (!valid()) throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_Integer cap = lua_arraycapacity(L, -1);
-    lua_pop(L, 1);
-    return static_cast<std::size_t>(cap);
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_Integer c = lua_arraycapacity(L_, -1);
+    lua_pop(L_, 1);
+    return static_cast<std::size_t>(c);
   }
 
   bool empty() const {
-    if (!valid()) throw error("Invalid list");
-    lua_getref(L, ref);
-    int is_empty = lua_arrayisempty(L, -1);
-    lua_pop(L, 1);
-    return is_empty != 0;
+    require_valid();
+    lua_getref(L_, ref_);
+    int e = lua_arrayisempty(L_, -1);
+    lua_pop(L_, 1);
+    return e != 0;
   }
 
-  void resize(std::size_t new_size) {
-    if (!valid()) throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_arraysetlen(L, -1, static_cast<lua_Integer>(new_size));
-    lua_pop(L, 1);
+  void resize(std::size_t n) {
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_arraysetlen(L_, -1, static_cast<lua_Integer>(n));
+    lua_pop(L_, 1);
   }
 
-  void reserve(std::size_t capacity) {
-    if (!valid()) throw error("Invalid list");
-    lua_getref(L, ref);
-    lua_arrayreserve(L, -1, static_cast<lua_Integer>(capacity));
-    lua_pop(L, 1);
+  void reserve(std::size_t cap) {
+    require_valid();
+    lua_getref(L_, ref_);
+    lua_arrayreserve(L_, -1, static_cast<lua_Integer>(cap));
+    lua_pop(L_, 1);
   }
 
+  // 异构访问：调用方显式指定目标类型
   template <typename U> U get(std::size_t index) const {
-    if (!valid()) throw error("Invalid list");
-    if (index >= size()) throw error("List index out of range");
-    lua_getref(L, ref);
-    lua_geti(L, -1, static_cast<lua_Integer>(index));
-    U result = stack::get<U>(L, -1);
-    lua_pop(L, 2);
+    require_valid();
+    if (index >= size())
+      throw error("list index out of range");
+    lua_getref(L_, ref_);
+    lua_geti(L_, -1, static_cast<lua_Integer>(index));
+    U result = stack::get<U>(L_, -1);
+    lua_pop(L_, 2);
     return result;
   }
 
   template <typename U> void set(std::size_t index, const U &value) {
-    if (!valid()) throw error("Invalid list");
-    if (index >= size()) throw error("List index out of range");
-    lua_getref(L, ref);
-    stack::push(L, value);
-    lua_seti(L, -2, static_cast<lua_Integer>(index));
-    lua_pop(L, 1);
+    require_valid();
+    if (index >= size())
+      throw error("list index out of range");
+    lua_getref(L_, ref_);
+    stack::push(L_, value);
+    lua_seti(L_, -2, static_cast<lua_Integer>(index));
+    lua_pop(L_, 1);
   }
 
   template <typename U> void push_back(const U &value) {
-    if (!valid()) throw error("Invalid list");
-    std::size_t current_size = size();
-    lua_getref(L, ref);
-    stack::push(L, value);
-    lua_seti(L, -2, static_cast<lua_Integer>(current_size));
-    lua_pop(L, 1);
+    require_valid();
+    std::size_t n = size();
+    lua_getref(L_, ref_);
+    stack::push(L_, value);
+    lua_seti(L_, -2, static_cast<lua_Integer>(n));
+    lua_pop(L_, 1);
   }
 
   template <typename U> U pop_back() {
-    if (!valid()) throw error("Invalid list");
-    std::size_t current_size = size();
-    if (current_size == 0) throw error("Cannot pop from empty list");
-    U result = get<U>(current_size - 1);
-    resize(current_size - 1);
+    require_valid();
+    std::size_t n = size();
+    if (n == 0)
+      throw error("cannot pop from empty list");
+    U result = get<U>(n - 1);
+    resize(n - 1);
     return result;
   }
 
-  lua_State *lua_state() const { return L; }
-  int registry_index() const { return ref; }
+private:
+  lua_State *L_;
+  int ref_;
+
+  void require_valid() const {
+    if (!valid())
+      throw error("invalid list");
+  }
+
+  void release() {
+    if (valid())
+      luaL_unref(L_, LUA_REGISTRYINDEX, ref_);
+  }
 };
 
+// 便捷别名
 using object_list = list<void>;
 
-// 允许从 Lua 栈中提取 List
+// ---- stack 特化：list 可在 Lua 栈与 C++ 间传递 ----
+
 template <typename T> struct getter<list<T>> {
   static list<T> get(lua_State *L, int index) {
-    // 将指定索引的 table 拷贝到栈顶
     lua_pushvalue(L, index);
-    // 生成 Registry 句柄 (List 析构时会自动 unref)
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     return list<T>(L, ref);
   }
 };
 
-// 允许将 List 推送到 Lua 栈
 template <typename T> struct pusher<list<T>> {
   static void push(lua_State *L, const list<T> &value) {
-    if (value.valid()) {
+    if (value.valid())
       lua_getref(L, value.registry_index());
-    } else {
+    else
       lua_pushnil(L);
-    }
   }
 };
 

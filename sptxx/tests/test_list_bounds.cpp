@@ -2,9 +2,9 @@
 #include <iostream>
 
 extern "C" {
-#include "../../src/vm/lauxlib.h"
-#include "../../src/vm/lua.h"
-#include "../../src/vm/lualib.h"
+#include <lauxlib.h>
+#include <lua.h>
+#include <lualib.h>
 }
 
 static int test_idx;

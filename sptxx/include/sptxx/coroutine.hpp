@@ -3,11 +3,12 @@
 #pragma once
 
 extern "C" {
-#include "../../src/vm/lua.h"
-#include "../../src/vm/lauxlib.h"
+#include <lua.h>
+#include <lauxlib.h>
 }
 
 #include "error.hpp"
+#include "function.hpp"
 #include "stack.hpp"
 #include <functional>
 #include <optional>
@@ -217,6 +218,13 @@ public:
 
     if constexpr (std::is_void_v<R>) {
       lua_pop(co, nresults);
+      return {yielded, std::nullopt};
+    } else if constexpr (detail::is_tuple_v<R>) {
+      if (nresults > 0) {
+        R result = detail::extract_multi_return<R>(co, -nresults);
+        lua_pop(co, nresults);
+        return {yielded, std::move(result)};
+      }
       return {yielded, std::nullopt};
     } else {
       if (nresults > 0) {

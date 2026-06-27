@@ -68,7 +68,7 @@ int main() {
 
     // 严格按照 LangParser.g4 和 LangLexer.g4 编写的测试脚本
     safe_do_string(lua, R"(
-        auto w = new Warrior("Arthur", 500, 50);
+        auto w = Warrior("Arthur", 500, 50);
 
         w.introduce();
         print("Initial HP from script: " .. w.hp);

@@ -11,6 +11,10 @@
 #include "sptxx/stack.hpp"
 #include "sptxx/error.hpp"
 #include "sptxx/coroutine.hpp"
+#include "sptxx/table_proxy.hpp"
+#include "sptxx/variadic.hpp"
+#include "sptxx/containers.hpp"
+#include "sptxx/variant.hpp"
 
 // Convenience namespace alias
 namespace spt = sptxx;

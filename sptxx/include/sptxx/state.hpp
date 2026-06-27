@@ -1,11 +1,14 @@
-// state.hpp - Core state management for SPT Lua 5.5 C++ bindings
+// state.hpp - Lua state 管理与顶层 API
+// basic_state 持有 lua_State*，提供 set/get_global、set_function、
+// create_list/create_map、new_usertype/get_usertype、call、do_string/do_file 等。
+// state = basic_state<>（默认分配器）。
 
 #pragma once
 
 extern "C" {
-#include "../../src/vm/lua.h"
-#include "../../src/vm/lauxlib.h"
-#include "../../src/vm/lualib.h"
+#include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
 }
 
 #include "error.hpp"
@@ -13,203 +16,204 @@ extern "C" {
 #include "list.hpp"
 #include "map.hpp"
 #include "stack.hpp"
+#include "table_proxy.hpp"
 #include "usertype.hpp"
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace sptxx {
 
-template<typename Allocator = std::allocator<void>>
-class basic_state {
-private:
-  lua_State *L;
-  bool own_state;
-
+template <typename Allocator = std::allocator<void>> class basic_state {
 public:
-  basic_state() : L(luaL_newstate()), own_state(true) {
-    if (!L) {
-      throw std::runtime_error("Failed to create Lua state");
-    }
+  basic_state() : L_(luaL_newstate()), own_state_(true) {
+    if (!L_)
+      throw error("failed to create Lua state");
   }
 
-  explicit basic_state(lua_State *state, bool take_ownership = false)
-      : L(state), own_state(take_ownership) {
-    if (!L) {
-      throw std::invalid_argument("Lua state cannot be null");
-    }
+  explicit basic_state(lua_State *L, bool take_ownership = false)
+      : L_(L), own_state_(take_ownership) {
+    if (!L_)
+      throw error("Lua state cannot be null");
   }
 
   basic_state(const basic_state &) = delete;
   basic_state &operator=(const basic_state &) = delete;
 
-  basic_state(basic_state &&other) noexcept : L(other.L), own_state(other.own_state) {
-    other.L = nullptr;
-    other.own_state = false;
+  basic_state(basic_state &&other) noexcept : L_(other.L_), own_state_(other.own_state_) {
+    other.L_ = nullptr;
+    other.own_state_ = false;
   }
 
   basic_state &operator=(basic_state &&other) noexcept {
     if (this != &other) {
-      if (own_state && L) {
-        lua_close(L);
-      }
-      L = other.L;
-      own_state = other.own_state;
-      other.L = nullptr;
-      other.own_state = false;
+      if (own_state_ && L_)
+        lua_close(L_);
+      L_ = other.L_;
+      own_state_ = other.own_state_;
+      other.L_ = nullptr;
+      other.own_state_ = false;
     }
     return *this;
   }
 
   ~basic_state() {
-    if (own_state && L) {
-      lua_close(L);
-    }
+    if (own_state_ && L_)
+      lua_close(L_);
   }
 
-  lua_State *lua_state() const { return L; }
+  lua_State *lua_state() const { return L_; }
+  operator lua_State *() const { return L_; }
 
-  operator lua_State *() const { return L; }
+  int get_top() const { return lua_gettop(L_); }
+  void set_top(int index) { lua_settop(L_, index); }
 
-  int get_top() const { return lua_gettop(L); }
-
-  void set_top(int index) { lua_settop(L, index); }
-
-  void open_libraries() {
-    luaL_requiref(L, "_G", luaopen_base, 1);
-    lua_pop(L, 1);
-
-    luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1);
-    lua_pop(L, 1);
-  }
+  // 打开所有标准库（base, coroutine, table, string, math, io, os, debug, utf8, package）
+  void open_libraries() { luaL_openlibs(L_); }
 
   int do_string(const char *code, const char *chunkname = nullptr) {
-    int result = luaL_dostring(L, code);
-    detail::handle_lua_error(L, result);
-    return result;
+    (void)chunkname;
+    int status = luaL_dostring(L_, code);
+    detail::handle_lua_error(L_, status);
+    return status;
   }
 
   int do_file(const char *filename) {
-    int result = luaL_dofile(L, filename);
-    detail::handle_lua_error(L, result);
-    return result;
+    int status = luaL_dofile(L_, filename);
+    detail::handle_lua_error(L_, status);
+    return status;
   }
+
+  // ---- 全局变量 ----
 
   template <typename T> T get_global(const char *name) {
-    lua_getglobal(L, name);
-    if (lua_isnil(L, -1)) {
-      lua_pop(L, 1);
-      throw error(std::string("Global variable '") + name + "' not found");
+    lua_getglobal(L_, name);
+    if (lua_isnil(L_, -1)) {
+      lua_pop(L_, 1);
+      throw error(std::string("global '") + name + "' not found");
     }
-    T result = stack::get<T>(L, -1);
-    lua_pop(L, 1);
+    T result = stack::get<T>(L_, -1);
+    lua_pop(L_, 1);
     return result;
   }
 
+  // table_proxy 链式访问入口：lua["a"]["b"] = value;  /  int x = lua["a"].get<int>();
+  table_proxy operator[](const char *key) { return table_proxy(L_, key); }
+
   template <typename T> void set_global(const char *name, T &&value) {
-    stack::push(L, std::forward<T>(value));
-    lua_setglobal(L, name);
+    stack::push(L_, std::forward<T>(value));
+    lua_setglobal(L_, name);
   }
 
-  template <typename T = void> auto create_list(size_t capacity = 0) {
-    lua_createarray(L, static_cast<int>(capacity));
-    if (capacity > 0) {
-      lua_arraysetlen(L, -1, static_cast<lua_Integer>(capacity));
+  template <typename T = void> std::optional<T> get_global_or(const char *name) {
+    lua_getglobal(L_, name);
+    if (lua_isnil(L_, -1)) {
+      lua_pop(L_, 1);
+      return std::nullopt;
     }
-    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    return list<T>(L, ref);
+    T result = stack::get<T>(L_, -1);
+    lua_pop(L_, 1);
+    return result;
   }
 
-  template <typename T = void> auto create_map() {
-    lua_createtable(L, 0, 0);
-    return map<T>(L, luaL_ref(L, LUA_REGISTRYINDEX));
+  // ---- 容器创建 ----
+
+  template <typename T = void> list<T> create_list(std::size_t capacity = 0) {
+    lua_createarray(L_, static_cast<int>(capacity));
+    if (capacity > 0)
+      lua_arraysetlen(L_, -1, static_cast<lua_Integer>(capacity));
+    int ref = luaL_ref(L_, LUA_REGISTRYINDEX);
+    return list<T>(L_, ref);
   }
+
+  template <typename T = void> map<T> create_map() {
+    lua_createtable(L_, 0, 0);
+    return map<T>(L_, luaL_ref(L_, LUA_REGISTRYINDEX));
+  }
+
+  // ---- 函数绑定 ----
 
   template <typename Func> void set_function(const char *name, Func &&func) {
-    detail::push_function_wrapper(L, std::forward<Func>(func));
-    lua_setglobal(L, name);
+    detail::push_function_wrapper(L_, std::forward<Func>(func));
+    lua_setglobal(L_, name);
   }
 
-  template <typename T> usertype<T> new_usertype(const char *name) {
-    usertype<T> ut(L, name);
-    ut.constructor();
-    return ut;
-  }
-
-  template <typename T> usertype<T> get_usertype(const char *name) {
-    if (luaL_getmetatable(L, name) == LUA_TNIL) {
-      lua_pop(L, 1);
-      throw error(std::string("Usertype '") + name + "' not found");
+  template <typename Signature> function_ref<Signature> get_function(const char *name) {
+    lua_getglobal(L_, name);
+    if (lua_isnil(L_, -1)) {
+      lua_pop(L_, 1);
+      throw error(std::string("function '") + name + "' not found");
     }
-    lua_pop(L, 1);
-    return usertype<T>(L, name);
+    if (!lua_isfunction(L_, -1)) {
+      lua_pop(L_, 1);
+      throw error(std::string("'") + name + "' is not a function");
+    }
+    int ref = luaL_ref(L_, LUA_REGISTRYINDEX);
+    return function_ref<Signature>(L_, ref);
   }
 
+  // 调用全局 Lua 函数。R 可为 void、单值、或 std::tuple（多返回值）。
   template <typename R = void, typename... Args> R call(const char *name, Args &&...args) {
-    lua_getglobal(L, name);
-    if (!lua_isfunction(L, -1)) {
-      lua_pop(L, 1);
+    lua_getglobal(L_, name);
+    if (!lua_isfunction(L_, -1)) {
+      lua_pop(L_, 1);
       throw error(std::string("'") + name + "' is not a function");
     }
 
-    lua_pushnil(L);
+    lua_pushnil(L_); // Slot 0 receiver
+    detail::push_args(L_, std::forward<Args>(args)...);
 
-    detail::push_args<Args...>(L, std::forward<Args>(args)...);
-
-    int nargs = sizeof...(Args) + 1;
-    int nresults = 1;
+    int nargs = static_cast<int>(sizeof...(Args)) + 1; // +1 for receiver
+    int nresults;
     if constexpr (std::is_void_v<R>) {
       nresults = 0;
     } else if constexpr (detail::is_tuple_v<R>) {
       nresults = static_cast<int>(std::tuple_size_v<R>);
+    } else {
+      nresults = 1;
     }
 
-    int result = lua_pcall(L, nargs, nresults, 0);
-    if (result != LUA_OK) {
-      std::string err = lua_tostring(L, -1);
-      lua_pop(L, 1);
-      throw error("Lua error calling '" + std::string(name) + "': " + err);
+    int status = lua_pcall(L_, nargs, nresults, 0);
+    if (status != LUA_OK) {
+      const char *msg = lua_tostring(L_, -1);
+      std::string err = msg ? std::string(msg) : std::string("unknown Lua error");
+      lua_pop(L_, 1);
+      throw runtime_error("calling '" + std::string(name) + "': " + err);
     }
 
     if constexpr (std::is_void_v<R>) {
       return;
     } else if constexpr (detail::is_tuple_v<R>) {
-      auto ret = detail::extract_multi_return<R>(L, -nresults);
-      lua_pop(L, nresults);
+      R ret = detail::extract_multi_return<R>(L_, -nresults);
+      lua_pop(L_, nresults);
       return ret;
     } else {
-      R ret = stack::get<R>(L, -1);
-      lua_pop(L, 1);
+      R ret = stack::get<R>(L_, -1);
+      lua_pop(L_, 1);
       return ret;
     }
   }
 
-  template <typename Signature> function_ref<Signature> get_function(const char *name) {
-    lua_getglobal(L, name);
-    if (lua_isnil(L, -1)) {
-      lua_pop(L, 1);
-      throw error(std::string("Function '") + name + "' not found");
-    }
-    if (!lua_isfunction(L, -1)) {
-      lua_pop(L, 1);
-      throw error(std::string("'") + name + "' is not a function");
-    }
-    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    return function_ref<Signature>(L, ref);
+  // ---- usertype ----
+
+  template <typename T> usertype<T> new_usertype(const char *name) {
+    return usertype<T>(L_, name);
   }
 
-  template <typename T = void> std::optional<T> get_global_or(const char *name) {
-    lua_getglobal(L, name);
-    if (lua_isnil(L, -1)) {
-      lua_pop(L, 1);
-      return std::nullopt;
+  template <typename T> usertype<T> get_usertype(const char *name) {
+    if (luaL_getmetatable(L_, name) == LUA_TNIL) {
+      lua_pop(L_, 1);
+      throw error(std::string("usertype '") + name + "' not found");
     }
-    T result = stack::get<T>(L, -1);
-    lua_pop(L, 1);
-    return result;
+    lua_pop(L_, 1);
+    return usertype<T>(L_, name);
   }
+
+private:
+  lua_State *L_;
+  bool own_state_;
 };
 
 using state = basic_state<>;
