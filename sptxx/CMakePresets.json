@@ -1,0 +1,61 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "msvc-release",
+      "displayName": "MSVC Release (日常开发)",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "clang-asan",
+      "displayName": "Clang-cl ASan (内存安全验证)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-asan",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ENABLE_ASAN": "ON"
+      },
+      "environment": {
+        "PATH": "$penv{PATH};C:/env/LLVM/lib/clang/22/lib/windows"
+      }
+    },
+    {
+      "name": "clang-coverage",
+      "displayName": "Clang Coverage (覆盖率统计)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-cov",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ENABLE_COVERAGE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "msvc-release", "configurePreset": "msvc-release" },
+    { "name": "clang-asan", "configurePreset": "clang-asan" },
+    { "name": "clang-coverage", "configurePreset": "clang-coverage" }
+  ],
+  "testPresets": [
+    {
+      "name": "clang-asan",
+      "configurePreset": "clang-asan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "clang-coverage",
+      "configurePreset": "clang-coverage",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    }
+  ]
+}
