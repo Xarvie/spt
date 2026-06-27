@@ -254,9 +254,9 @@ shiftExp
     ;
 shiftExpOp:(LSHIFT | GT GT);
 
-/** 字符串连接 (..) - 左结合 (注意: 若需右结合, 语法需调整) */
+/** 字符串连接 (..) - 右结合（与 Lua 一致；codegen codeconcat 依赖右结合合并 CONCAT 指令） */
 concatExp
-    : addSubExp (CONCAT addSubExp)* #concatExpression
+    : addSubExp (CONCAT concatExp)? #concatExpression
     ;
 
 /** 加减法 (+, -) - 左结合 */
@@ -304,10 +304,11 @@ atomexp
     : NULL_ | TRUE | FALSE | INTEGER | FLOAT_LITERAL | STRING_LITERAL
     ;
 
-/** Lambda/匿名函数表达式: function (parameterList?) -> type { body } */
+/** Lambda/匿名函数表达式: function (parameterList?) (-> type)? { body }
+ * 返回类型注解可选：省略时由上下文/LSP 推断，codegen 不依赖该字段。 */
 lambdaExpression
- : FUNCTION OP parameterList? CP ARROW (type | VARS) blockStatement #lambdaExprDef
- ;
+	: FUNCTION OP parameterList? CP (ARROW (type | VARS))? blockStatement #lambdaExprDef
+	;
 
 /** List 字面量: [elem1, elem2, ...] */
 listExpression

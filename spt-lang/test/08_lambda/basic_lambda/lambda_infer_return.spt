@@ -1,0 +1,52 @@
+// 测试: Lambda - 省略返回类型
+// 语法: lambdaExpression -> FUNCTION OP parameterList? CP (ARROW (type|VARS))? block
+// 描述: 返回类型注解可选。省略时 return_type 为 NULL，codegen 不依赖该字段。
+//       降低单表达式匿名函数的书写摩擦。
+
+// ---- 1. 省略返回类型：基本场景 ----
+auto f1 = function() { return 1; };
+assert(f1() == 1, "inferred int return");
+
+auto f2 = function() { return "hi"; };
+assert(f2() == "hi", "inferred str return");
+
+auto f3 = function() { return 1.5; };
+assert(f3() == 1.5, "inferred float return");
+
+auto f4 = function() { return true; };
+assert(f4() == true, "inferred bool return");
+
+// ---- 2. 省略返回类型 + 带参数 ----
+auto g = function(int x) { return x + 1; };
+assert(g(10) == 11, "inferred return with param");
+
+auto add = function(int a, int b) { return a + b; };
+assert(add(3, 4) == 7, "inferred return with two params");
+
+// ---- 3. 省略返回类型 + void body ----
+auto side = function() { };
+assert(side() == null, "void lambda returns null");
+
+// ---- 4. 省略返回类型 + 闭包捕获 ----
+int base = 100;
+auto closure = function(int x) { return x + base; };
+assert(closure(5) == 105, "inferred return closure");
+
+// ---- 5. 作为参数传递（高阶函数）----
+// 形参 f 用 function 类型注解（与现有 lambda_higher_order 测试一致）
+int apply(function f, int x) { return f(x); };
+assert(apply(function(int n) { return n * 2; }, 10) == 20, "lambda as arg, inferred return");
+
+// ---- 6. 与带返回类型的 lambda 混用 ----
+auto typed = function(int x) -> int { return x * 2; };
+auto untyped = function(int x) { return x * 3; };
+assert(typed(5) + untyped(5) == 25, "typed + untyped mix");
+
+// ---- 7. 省略返回类型 + 多语句 body ----
+auto multi = function(int x) {
+  int y = x * 2;
+  return y + 1;
+};
+assert(multi(4) == 9, "inferred return multi-stmt");
+
+print("lambda_infer_return tests passed!");

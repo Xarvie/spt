@@ -1,0 +1,31 @@
+// 测试: 表达式 - 字符串连接右结合
+// 语法: concatExp -> addSubExp (CONCAT concatExp)?
+// 描述: 验证 .. 为右结合（与 Lua 一致），及与 +/- 的优先级关系。
+//       字符串拼接结果与结合性无关，本测试重点验证：
+//       1) 多层 concat 结果正确（回归保证）
+//       2) concat 优先级低于 + - （+ 先算）
+//       3) 右结合求值顺序：a..b..c == a..(b..c)
+
+// ---- 1. 多层 concat 基本回归 ----
+assert("a" .. "b" == "ab", "two-way concat");
+assert("a" .. "b" .. "c" == "abc", "three-way concat");
+assert("1" .. "2" .. "3" .. "4" .. "5" == "12345", "five-way concat");
+assert(1 .. 2 .. 3 == "123", "int concat to string");
+
+// ---- 2. concat 优先级低于 + - （加减先于 concat）----
+// "x" .. 1 + 2  =>  "x" .. (1+2)  =>  "x3"
+assert("x" .. 1 + 2 == "x3", "concat lower than + (right side)");
+// 1 + 2 .. "y"  =>  (1+2) .. "y"  =>  "3y"
+assert(1 + 2 .. "y" == "3y", "concat lower than + (left side)");
+// "a" .. 10 - 3 .. "b"  =>  "a" .. (10-3) .. "b"  =>  "a7b"
+assert("a" .. 10 - 3 .. "b" == "a7b", "concat lower than - mixed");
+
+// ---- 3. 括号显式分组 ----
+assert(("a" .. "b") .. "c" == "abc", "explicit left group");
+assert("a" .. ("b" .. "c") == "abc", "explicit right group");
+
+// ---- 4. 与表达式混合 ----
+assert("result: " .. (1 + 2) * 3 == "result: 9", "concat with arith expr");
+assert("v=" .. 1 .. ",w=" .. 2 == "v=1,w=2", "interleaved concat");
+
+print("concat_right_assoc tests passed!");

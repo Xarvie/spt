@@ -484,8 +484,10 @@ static AstNode *parse_binary(Parser *P, int min_prec) {
     SourceLocation loc = cur_loc(P);
     for (int i = 0; i < b.ntok; i++)
       advance(P);
-    /* 全部左结合：右侧最小优先级 = prec + 1 */
-    AstNode *right = parse_binary(P, b.prec + 1);
+    /* CONCAT (..) 为右结合：同级运算符继续向右递归（min = prec）；
+     * 其它运算符为左结合：右侧最小优先级 = prec + 1。 */
+    int next_min = (b.op == OPK_CONCAT) ? b.prec : b.prec + 1;
+    AstNode *right = parse_binary(P, next_min);
     AstNode *n = spt_ast_new(P->arena, NODE_BINARY_OP, loc);
     n->u.binary.op = b.op;
     n->u.binary.left = left;
@@ -785,7 +787,9 @@ static AstList parse_parameter_list(Parser *P, int *out_variadic) {
   return nv_finish(&v, P->arena);
 }
 
-/* lambda: FUNCTION OP parameterList? CP ARROW (type | VARS) blockStatement */
+/* lambda: FUNCTION OP parameterList? CP (ARROW (type | VARS))? blockStatement
+ * 返回类型注解可选：省略时 return_type 为 NULL（codegen 不依赖该字段，
+ * 仅用于 LSP/类型检查显示）。降低单表达式匿名函数的书写摩擦。 */
 static AstNode *parse_lambda(Parser *P) {
   SourceLocation loc = cur_loc(P);
   expect2(P, TOK_FUNCTION);
@@ -793,14 +797,16 @@ static AstNode *parse_lambda(Parser *P) {
   int variadic = 0;
   AstList params = parse_parameter_list(P, &variadic);
   expect2(P, TOK_RPAREN);
-  expect2(P, TOK_ARROW);
-  AstNode *ret;
-  if (at(P, TOK_VARS)) {
-    SourceLocation vloc = cur_loc(P);
+  AstNode *ret = NULL;
+  if (at(P, TOK_ARROW)) {
     advance(P);
-    ret = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, vloc);
-  } else {
-    ret = parse_type(P);
+    if (at(P, TOK_VARS)) {
+      SourceLocation vloc = cur_loc(P);
+      advance(P);
+      ret = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, vloc);
+    } else {
+      ret = parse_type(P);
+    }
   }
   AstNode *body = parse_block(P);
   AstNode *n = spt_ast_new(P->arena, NODE_LAMBDA, loc);
