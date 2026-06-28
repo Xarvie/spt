@@ -193,22 +193,26 @@ static int db_getinfo(lua_State *L) {
   return 1; /* return table */
 }
 
+/*
+** SPT: level 已是 0-based（lua_getstack 本身 0-based，level 0 = 当前帧）。
+** nvar 是 0-based 输入；C API lua_getlocal 是 1-based，边界 +1。
+*/
 static int db_getlocal(lua_State *L) {
   int arg;
   lua_State *L1 = getthread(L, &arg);
-  int nvar = (int)luaL_checkinteger(L, arg + 2);    /* local-variable index */
-  if (lua_isfunction(L, arg + 1)) {                 /* function argument? */
-    lua_pushvalue(L, arg + 1);                      /* push function */
-    lua_pushstring(L, lua_getlocal(L, NULL, nvar)); /* push local name */
-    return 1;                                       /* return only name (there is no value) */
-  } else {                                          /* stack-level argument */
+  int nvar = (int)luaL_checkinteger(L, arg + 2);        /* SPT 0-based */
+  if (lua_isfunction(L, arg + 1)) {                     /* function argument? */
+    lua_pushvalue(L, arg + 1);                          /* push function */
+    lua_pushstring(L, lua_getlocal(L, NULL, nvar + 1)); /* push local name */
+    return 1;                                           /* return only name (there is no value) */
+  } else {                                              /* stack-level argument */
     lua_Debug ar;
     const char *name;
     int level = (int)luaL_checkinteger(L, arg + 1);
     if (l_unlikely(!lua_getstack(L1, level, &ar))) /* out of range? */
       return luaL_argerror(L, arg + 1, "level out of range");
     checkstack(L, L1, 1);
-    name = lua_getlocal(L1, &ar, nvar);
+    name = lua_getlocal(L1, &ar, nvar + 1);
     if (name) {
       lua_xmove(L1, L, 1);     /* move local value */
       lua_pushstring(L, name); /* push name */
@@ -227,14 +231,14 @@ static int db_setlocal(lua_State *L) {
   lua_State *L1 = getthread(L, &arg);
   lua_Debug ar;
   int level = (int)luaL_checkinteger(L, arg + 1);
-  int nvar = (int)luaL_checkinteger(L, arg + 2);
+  int nvar = (int)luaL_checkinteger(L, arg + 2); /* SPT 0-based */
   if (l_unlikely(!lua_getstack(L1, level, &ar))) /* out of range? */
     return luaL_argerror(L, arg + 1, "level out of range");
   luaL_checkany(L, arg + 3);
   lua_settop(L, arg + 3);
   checkstack(L, L1, 1);
   lua_xmove(L, L1, 1);
-  name = lua_setlocal(L1, &ar, nvar);
+  name = lua_setlocal(L1, &ar, nvar + 1);
   if (name == NULL)
     lua_pop(L1, 1); /* pop value (if not popped by 'lua_setlocal') */
   lua_pushstring(L, name);
@@ -244,12 +248,14 @@ static int db_setlocal(lua_State *L) {
 /*
 ** get (if 'get' is true) or set an upvalue from a closure.
 ** SPT slot-2 ABI: receiver=arg1, closure=arg2, n=arg3, value=arg4(set).
+** n 是 0-based（SPT 总则）；C API lua_getupvalue/lua_setupvalue 是 1-based，
+** 边界处 +1 转换。n_spt=-1 → n_lua=0 → C API 返回 NULL（越界）。
 */
 static int auxupvalue(lua_State *L, int get) {
   const char *name;
-  int n = (int)luaL_checkinteger(L, 3); /* upvalue index (SPT: arg3) */
+  int n = (int)luaL_checkinteger(L, 3); /* SPT 0-based upvalue index */
   luaL_checktype(L, 2, LUA_TFUNCTION);  /* closure (SPT: arg2) */
-  name = get ? lua_getupvalue(L, 2, n) : lua_setupvalue(L, 2, n);
+  name = get ? lua_getupvalue(L, 2, n + 1) : lua_setupvalue(L, 2, n + 1);
   if (name == NULL)
     return 0;
   lua_pushstring(L, name);
@@ -267,15 +273,17 @@ static int db_setupvalue(lua_State *L) {
 /*
 ** Check whether a given upvalue from a given closure exists and
 ** returns its index.
+** SPT: nup 是 0-based 输入；C API lua_upvalueid 是 1-based，边界 +1。
+** *pnup 存 1-based 索引（供后续 lua_upvaluejoin 直接使用，避免重复转换）。
 */
 static void *checkupval(lua_State *L, int argf, int argnup, int *pnup) {
   void *id;
-  int nup = (int)luaL_checkinteger(L, argnup); /* upvalue index */
+  int nup = (int)luaL_checkinteger(L, argnup); /* SPT 0-based upvalue index */
   luaL_checktype(L, argf, LUA_TFUNCTION);      /* closure */
-  id = lua_upvalueid(L, argf, nup);
+  id = lua_upvalueid(L, argf, nup + 1);
   if (pnup) {
     luaL_argcheck(L, id != NULL, argnup, "invalid upvalue index");
-    *pnup = nup;
+    *pnup = nup + 1; /* 转 1-based 给 lua_upvaluejoin */
   }
   return id;
 }

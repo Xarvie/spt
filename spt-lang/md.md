@@ -180,7 +180,7 @@ list.pack 返回 list 无 .n。
   - map 不受影响（无越界概念，缺 key 返回 null）
 
 待实施（讨论中）：
-- debug.getlocal/setlocal 的 nvar 是否做 0-based 转换（当前保持 Lua 1-based，与 upvalue 索引一致）
+- 暂无
 
 已实施（§2.1 rawlen / tostring）：
 - rawlen/#map：lapi.c lua_rawlen 对 LUA_VTABLE 返回 luaH_getn；纯字符串 key 的 map 已返回 0，无需改动
@@ -189,11 +189,15 @@ list.pack 返回 list 无 .n。
 - 字符串值在容器中暂不带引号（与 Lua tostring 一致，后续可改）
 - 循环引用不做检测（用户责任，栈溢出可接受）
 
-已实施（§2.10 debug upvalue slot-2）：
-- ldblib.c auxupvalue：closure 从 arg1→arg2，n 从 arg2→arg3
+已实施（§2.10 debug upvalue/local slot-2 + 0-based）：
+- ldblib.c auxupvalue：closure 从 arg1→arg2，n 从 arg2→arg3；n 0-based，调用 C API 前 +1
 - ldblib.c db_setupvalue：value 从 arg3→arg4
-- ldblib.c db_upvalueid：f 从 (1,2)→(2,3)
-- ldblib.c db_upvaluejoin：(1,2,3,4)→(2,3,4,5)，iscfunction 检查与 lua_upvaluejoin 调用同步更新
-- upvalue/local 索引 n 仍按 Lua 1-based（md.md §2.10 "语义基本照旧"），0-based 转换待讨论
-- 其他 debug 函数（getinfo/getlocal/sethook/traceback 等）已通过 getthread()+arg+N 模式正确适配，hookf 已垫 nil receiver
-- 测试：10_builtins/debug/debug_upvalue.spt
+- ldblib.c db_getlocal/db_setlocal：nvar 0-based，调用 lua_getlocal/lua_setlocal 前 +1
+- ldblib.c db_upvalueid：f 从 (1,2)→(2,3)；checkupval 内部 +1 转 1-based 给 lua_upvalueid
+- ldblib.c db_upvaluejoin：(1,2,3,4)→(2,3,4,5)；checkupval 存 1-based 索引供 lua_upvaluejoin 直接使用
+- level 沿用 Lua 语义不转换：level 0 = db_getlocal C 帧，level 1 = 调用者（用户函数）。lua_getstack 本身 0-based，但相对 C 帧计数
+- nvar 0 = SPT 隐式 receiver 槽（名为 "(receiver)"），用户局部变量从 nvar 1 起。这是透明低层语义，与 Lua 暴露 "(C temporary)" 同理
+- upvalue 索引 0 = 第一个 upvalue（无 receiver 干扰，因为 upvalue 不含 receiver）
+- 越界：n_spt=-1 → n_lua=0 → C API 返回 NULL；正向越界同样 NULL
+- 其他 debug 函数（getinfo/sethook/traceback 等）已通过 getthread()+arg+N 模式正确适配，hookf 已垫 nil receiver
+- 测试：10_builtins/debug/debug_upvalue.spt 覆盖 getupvalue/setupvalue/upvalueid/upvaluejoin/getlocal/setlocal + 越界
