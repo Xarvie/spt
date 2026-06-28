@@ -21,6 +21,10 @@ SPT 嵌入层标准库 —— 微调规范 (Adjustment Spec)
 
 slot-0 ABI：每个 C 函数实参从索引 2 起，索引 1 是 receiver。math、
 pcall/xpcall 已做（README §8.2/§8.3），其余逐库审计。
+推论（SPT 函数帧）：SPT 用户函数编译时隐式插入 receiver 槽作为第一个 local，
+故 debug.getlocal(level, 0) 在 SPT 函数帧上返回名为 "(receiver)" 的槽，
+用户声明的局部变量从 nvar 1 起。这是 slot-0 ABI 的实现痕迹，debug 库透明暴露
+（与 Lua 暴露 "(C temporary)" 同理），不做跳过；LSP/调试器按 "(" 前缀过滤即可。
 0-based：一切接受/返回的位置、索引、偏移都 0-based。
 统一半开区间 [start, end)，上界永远不含：所有区间（string.sub、byte、
 list.concat/unpack/move、utf8.*、find 的返回值、可选库 list.slice）一律半开，
