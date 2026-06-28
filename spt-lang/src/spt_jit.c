@@ -60,6 +60,10 @@ extern int spt_jit_math_floorceil(lua_CFunction f);
 /* Address of luaB_next (the pairs() iterator); used to pin a for-each trace's
    iterator with an entry guard. See lbaselib.c. */
 extern lua_CFunction spt_jit_pairs_next(void);
+/* Address of iter_list_next (the iter() list iterator); same key sequence
+   0,1,...,loglen-1 as luaB_next over a list, so the native lowering is
+   identical. See lbaselib.c. */
+extern lua_CFunction spt_jit_iter_list_next(void);
 
 /* =====================================================================
 ** Branch-direction profiling (see spt_jit.h). Global fast gate + tally.
@@ -4237,8 +4241,9 @@ static int rec_inst(SPTRecCtx *rc) {
     }
 
     case OP_TFORCALL: {
-      /* Generic-for iterator step, specialized ONLY for `for k[,v] : pairs(L)`
-         over a List. luaH_next over an array-mode table yields keys
+      /* Generic-for iterator step, specialized for `for k[,v] : pairs(L)` or
+         `for k[,v] : iter(2, L)` over a List. Both luaB_next (pairs) and
+         iter_list_next (iter) over an array-mode table yield keys
          0,1,...,loglen-1 with value = L[key] (see ltable.c luaH_next), so the
          whole loop is a native index loop -- no C call, no GC.
 
@@ -4249,8 +4254,8 @@ static int rec_inst(SPTRecCtx *rc) {
          value = state[newkey]. The guard/value snapshots capture the PRE-update
          state at this PC, so when the guard fails (key was the last element) the
          exit re-runs the real TFORCALL -> next returns nil -> TFORLOOP ends the
-         loop. The iterator identity (== luaB_next) is pinned with a once-per-
-         entry C guard (forin_iter_slot). Top frame only. */
+         loop. The iterator identity (== luaB_next or iter_list_next) is pinned
+         with a once-per-entry C guard (forin_iter_slot). Top frame only. */
       int a = GETARG_A(i), c = GETARG_C(i);
       if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
       /* next yields exactly (key,value); support 1 or 2 loop vars. >2 would bind
@@ -4258,9 +4263,14 @@ static int rec_inst(SPTRecCtx *rc) {
       if (c < 1 || c > 2) { rc->aborted = 1; return 0; }
 
       StkId base = rc->ci->func.p + 1;
-      /* Iterator must be luaB_next (a light C function); pinned in C at entry. */
+      /* Iterator must be luaB_next (pairs) or iter_list_next (iter): both yield
+         the same contiguous 0-based key sequence over a list, so the native
+         index-loop lowering applies to either. Pinned in C at entry. */
       TValue *fv = s2v(base + a);
-      if (!ttislcf(fv) || fvalue(fv) != spt_jit_pairs_next()) { rc->aborted = 1; return 0; }
+      lua_CFunction fn = ttislcf(fv) ? fvalue(fv) : NULL;
+      if (fn != spt_jit_pairs_next() && fn != spt_jit_iter_list_next()) {
+        rc->aborted = 1; return 0;
+      }
       /* State must be a List (array-mode table). */
       TValue *sv = s2v(base + a + 1);
       if (!ttisarray(sv)) { rc->aborted = 1; return 0; }
@@ -4756,9 +4766,10 @@ static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
       return 0;
   }
   /* for-each list specialization: the iterator slot must still hold the exact
-     C function (luaB_next) we specialized for. A custom iterator or a map
-     iterator would not produce the contiguous 0-based key sequence the native
-     loop assumes, so decline and let the interpreter run the generic-for. */
+     C function (luaB_next for pairs, or iter_list_next for iter) we specialized
+     for. A custom iterator or a map iterator would not produce the contiguous
+     0-based key sequence the native loop assumes, so decline and let the
+     interpreter run the generic-for. */
   if (t->forin_iter_slot >= 0) {
     TValue *fv = s2v(ci->func.p + 1 + t->forin_iter_slot);
     if (!ttislcf(fv) || fvalue(fv) != t->forin_iter_fn)

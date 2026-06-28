@@ -1,0 +1,30 @@
+// JIT kernel: for-each via iter() auto-wrap over a List.
+//
+// `for (auto v : L)` and `for (auto k, v : L)` are auto-wrapped by the parser
+// to `iter(2, L)`, which returns (iter_list_next, L, nil, nil). The JIT
+// specializes OP_TFORCALL for iter_list_next exactly like pairs(luaB_next):
+// both yield keys 0,1,...,loglen-1 with value = L[key], so the native index-
+// loop lowering (newkey = key+1; GUARD newkey < #L; value = L[newkey]) applies.
+// The iterator is pinned to iter_list_next with a once-per-entry C guard.
+//
+// This exercises the 1-var (hidden __it_k, C=2, value-only) and 2-var (C=2,
+// key+value) paths, plus a float list for the float element path.
+list<int> li = [3, 1, 4, 1, 5, 9, 2, 6];
+list<float> lf = [1.5, 2.5, 3.0, 0.5];
+int sv = 0;
+int sk = 0;
+float sf = 0.0;
+for (int rep = 0, 50000) {
+  for (auto v : li) {        // iter(2, li) -> 1-var value iteration
+    sv = sv + v;
+  }
+  for (auto k, v : li) {     // iter(2, li) -> 2-var key+value
+    sk = sk + k;
+  }
+  for (auto vv : lf) {       // iter(2, lf) -> 1-var float value
+    sf = sf + vv;
+  }
+}
+print(sv);
+print(sk);
+print(sf);

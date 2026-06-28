@@ -130,10 +130,11 @@ struct SPTTrace {
   Proto *inline_fn_proto;
 
   /* for-each (OP_TFORCALL) list specialization: the trace iterated a List via
-     pairs() and may only be entered while slot `forin_iter_slot` still holds the
-     expected iterator C function `forin_iter_fn` (= luaB_next). Re-derives the
-     key sequence (0,1,...) and value (GETI) natively, so a different iterator
-     (custom / over a map) would be wrong -> decline. -1 = not a for-each trace. */
+     pairs() or iter() and may only be entered while slot `forin_iter_slot`
+     still holds the expected iterator C function `forin_iter_fn` (= luaB_next
+     for pairs, or iter_list_next for iter). Re-derives the key sequence
+     (0,1,...) and value (GETI) natively, so a different iterator (custom /
+     over a map) would be wrong -> decline. -1 = not a for-each trace. */
   int forin_iter_slot;
   lua_CFunction forin_iter_fn;
 
