@@ -1,0 +1,126 @@
+// 测试: io 库文件 I/O 链路（slot-0 ABI + 文件方法 OOP 模式）
+// 语法: io.open/read/write/close/lines/type + f.read/write/close/seek/flush/lines
+// 描述: 覆盖 io 库文件操作全链路，包括 open→write→close→read→seek→close
+// 注: SPT 方法调用用 `.`（f.read），不是 `:`。f.read(x) 编译为 receiver=f, arg=x。
+
+str tmpfile = "io_file_chain_tmp.txt";
+
+// ===== io.open + f.write + f.close（写入路径）=====
+auto wf = io.open(tmpfile, "w");
+assert(wf != null, "io.open('w') should return file handle");
+assert(io.type(wf) == "file", "io.type should be 'file' for open handle");
+
+// f.write 多次写入（OOP 模式，receiver=f）
+auto w1 = wf.write("line1\n");
+auto w2 = wf.write("line2\n", "line3\n");  // 多参数写入
+assert(w1 != null, "f.write should return file (truthy)");
+assert(w2 != null, "f.write multi-args should return file");
+
+// f.flush 确保写入磁盘
+auto fr = wf.flush();
+assert(fr != null, "f.flush should return file");
+
+// f.close
+vars cok = wf.close();
+assert(cok == true || cok != null, "f.close should succeed");
+
+// 关闭后 io.type 返回 "closed file"（Lua 语义）
+assert(io.type(wf) == "closed file", "io.type after close should be 'closed file'");
+
+// ===== io.open + f.read + f.close（读取路径）=====
+auto rf = io.open(tmpfile, "r");
+assert(rf != null, "io.open('r') should return file handle");
+
+// f.read("*l") 逐行读取（"*l" = line 模式）
+vars l1 = rf.read("*l");
+assert(l1 == "line1", "first read('*l') should be 'line1'");
+vars l2 = rf.read("*l");
+assert(l2 == "line2", "second read('*l') should be 'line2'");
+vars l3 = rf.read("*l");
+assert(l3 == "line3", "third read('*l') should be 'line3'");
+vars l4 = rf.read("*l");
+assert(l4 == null, "read('*l') at EOF should return null");
+
+// f.seek 重置到文件开头
+vars spos = rf.seek("set", 0);
+assert(spos == 0, "seek('set', 0) should return position 0");
+
+// f.read("*a") 读全部内容
+vars all = rf.read("*a");
+assert(all == "line1\nline2\nline3\n", "read('*a') should read entire file");
+
+// f.seek 当前位置（Windows 文本模式 \n→\r\n 会使字节数 > #all，只验证 >= ）
+vars cur = rf.seek("cur", 0);
+assert(cur >= #all, "seek('cur', 0) at EOF should be >= file char count");
+
+// f.seek 到末尾
+vars end_pos = rf.seek("end", 0);
+assert(end_pos >= #all, "seek('end', 0) should be >= file char count");
+assert(end_pos == cur, "seek('end') and seek('cur') at EOF should match");
+
+// f.read 在 EOF 返回 null
+vars eof_read = rf.read("*l");
+assert(eof_read == null, "read('*l') at EOF should return null");
+
+// f.close
+rf.close();
+
+// ===== io.lines 迭代器（返回迭代函数）=====
+// io.lines(filename, ...) 打开文件并返回迭代器，自动关闭
+int line_count = 0;
+str all_lines = "";
+for (auto ln : io.lines(tmpfile)) {
+    line_count = line_count + 1;
+    all_lines = all_lines .. ln .. ";";
+}
+assert(line_count == 3, "io.lines should iterate 3 lines");
+assert(all_lines == "line1;line2;line3;", "io.lines content mismatch");
+
+// ===== f.lines 文件方法迭代器（toclose=0，需手动关闭）=====
+auto lf = io.open(tmpfile, "r");
+int lc2 = 0;
+for (auto ln : lf.lines()) {
+    lc2 = lc2 + 1;
+}
+assert(lc2 == 3, "f.lines should iterate 3 lines");
+// f.lines 不会自动关闭文件（与 io.lines 不同），需手动 close
+assert(io.type(lf) == "file", "f.lines should keep file open (toclose=0)");
+lf.close();
+assert(io.type(lf) == "closed file", "after manual close should be 'closed file'");
+
+// ===== io.open 错误路径：打开不存在文件 =====
+vars badfile, err = io.open("nonexistent_file_xyz.spt", "r");
+assert(badfile == null, "io.open non-existent file should return null");
+assert(typeof(err) == "str", "io.open error should return string message");
+
+// ===== io.open 错误模式 =====
+vars badmode_ok, badmode_err = pcall(fn() { io.open(tmpfile, "invalid_mode"); });
+assert(badmode_ok == false, "io.open with invalid mode should error");
+
+// ===== io.tmpfile 创建临时文件 =====
+auto tf = io.tmpfile();
+assert(tf != null, "io.tmpfile should return file handle");
+assert(io.type(tf) == "file", "io.tmpfile result should be 'file'");
+// 临时文件可读写
+tf.write("tmpcontent");
+vars tpos = tf.seek("set", 0);
+assert(tpos == 0, "tmpfile seek to start");
+vars tcontent = tf.read("*a");
+assert(tcontent == "tmpcontent", "tmpfile read after write+seek");
+tf.close();
+
+// ===== io.write/io.read 用默认 stdin/stdout（仅验证不报错）=====
+// io.write 返回 io 库（成功）
+auto wres = io.write("io.write test\n");
+assert(wres != null, "io.write should return io (truthy)");
+io.flush();
+
+// ===== 清理临时文件 =====
+vars rm_ok, rm_err = os.remove(tmpfile);
+assert(rm_ok == true || rm_ok != null, "os.remove should succeed");
+
+// 再次 remove 应失败（文件已删除）
+vars rm2_ok, rm2_err = os.remove(tmpfile);
+assert(rm2_ok == null, "os.remove on deleted file should fail");
+
+print("io_file_chain tests passed!");

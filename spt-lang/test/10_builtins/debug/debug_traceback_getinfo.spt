@@ -1,0 +1,83 @@
+// 测试: debug 库 traceback/getinfo（slot-0 ABI 已适配）
+// 语法: debug.traceback(msg, level), debug.getinfo(level_or_fn, options)
+// 描述: 覆盖错误堆栈格式化和函数信息查询
+
+// ===== debug.traceback 基本行为 =====
+// traceback 返回字符串，包含调用栈信息
+str tb = debug.traceback("test message");
+assert(typeof(tb) == "str", "traceback should return string");
+assert(#tb > 0, "traceback should be non-empty");
+// traceback 应包含 "test message" 和 "stack traceback"
+assert(string.find(tb, "test message") != null, "traceback should contain msg");
+assert(string.find(tb, "stack traceback:") != null, "traceback should contain header");
+
+// traceback 无 msg 参数
+str tb2 = debug.traceback();
+assert(typeof(tb2) == "str", "traceback() should return string");
+assert(string.find(tb2, "stack traceback:") != null, "traceback() should contain header");
+
+// traceback level 参数：level 0 = 当前帧
+str tb3 = debug.traceback("msg", 0);
+assert(typeof(tb3) == "str", "traceback(msg, 0) should return string");
+
+// ===== debug.getinfo 基本行为：level 1 = 调用者帧 =====
+map<any, any> info = debug.getinfo(1, "flnSrtu");
+assert(info != null, "getinfo should return table");
+assert(info["source"] != null, "getinfo should have source");
+assert(typeof(info["currentline"]) == "int", "getinfo currentline should be int");
+assert(typeof(info["what"]) == "str", "getinfo what should be str");
+
+// getinfo 关于函数本身
+int dummy_fn() {
+    map<any, any> fi = debug.getinfo(1, "nSl");
+    assert(typeof(fi["name"]) == "str" || fi["name"] == null, "getinfo name is str or null");
+    assert(typeof(fi["currentline"]) == "int", "getinfo currentline in fn");
+    assert(typeof(fi["source"]) == "str", "getinfo source in fn");
+    return 42;
+}
+int r = dummy_fn();
+assert(r == 42, "dummy_fn should return 42");
+
+// getinfo 关于函数值（不是 level）
+str helper() { return "ok"; }
+map<any, any> finfo = debug.getinfo(helper, "uS");
+assert(typeof(finfo["what"]) == "str", "getinfo on function: what");
+assert(typeof(finfo["nups"]) == "int", "getinfo on function: nups");
+
+// getinfo 越界 level：返回 null
+vars bad_info = debug.getinfo(999, "l");
+assert(bad_info == null, "getinfo out-of-range level should return null");
+
+// ===== traceback 在 pcall 错误中捕获 =====
+vars ok, err = pcall(fn() {
+    str msg = debug.traceback("inside pcall");
+    assert(string.find(msg, "inside pcall") != null, "traceback inside pcall");
+    error("triggered error");
+});
+assert(ok == false, "pcall should catch error");
+assert(typeof(err) == "str", "pcall err should be string");
+
+// ===== getinfo 在嵌套调用中 =====
+str outer() {
+    str inner() {
+        map<any, any> i = debug.getinfo(2, "n");  // level 2 = outer
+        if (typeof(i["name"]) == "str") {
+            return i["name"];
+        }
+        return "null_name";
+    }
+    return inner();
+}
+str name = outer();
+assert(typeof(name) == "str", "getinfo nested should return str name");
+
+// ===== getinfo what 字段：Lua/SPT 函数 vs C 函数 =====
+// SPT 用户函数的 what 应为 "Lua"（内部仍是 Lua VM）
+map<any, any> spt_info = debug.getinfo(helper, "S");
+assert(spt_info["what"] == "Lua", "SPT function what should be 'Lua' (VM-level)");
+
+// C 函数（如 print）的 what 应为 "C"
+map<any, any> c_info = debug.getinfo(print, "S");
+assert(c_info["what"] == "C", "C function what should be 'C'");
+
+print("debug_traceback_getinfo tests passed!");

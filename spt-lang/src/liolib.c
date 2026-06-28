@@ -360,18 +360,25 @@ static int f_lines(lua_State *L) {
 ** closed, also returns the file itself as a second result (to be
 ** closed as the state at the exit of a generic for).
 */
-/* io_lines - receiver is arg1, filename is arg2 (optional) */
+/* io_lines - receiver is arg1, filename is arg2 (optional), formats start from arg3.
+ *
+ * [SPT 修复] slot-0 ABI 适配遗留 bug：原实现把 filename 留在索引 2，aux_lines
+ * 把它当作 read format，导致 "invalid format"。修复：opencheck/replace 之前先
+ * lua_remove(L, 2) 移除 filename/nil，让用户传的 format args（原 arg3+）对齐到
+ * 索引 2，aux_lines 的 n = gettop - 1 正确计算 format 数量。 */
 static int io_lines(lua_State *L) {
   int toclose;
   if (lua_isnone(L, 2))
     lua_pushnil(L);                               /* at least one argument */
   if (lua_isnil(L, 2)) {                          /* no file name? */
+    lua_remove(L, 2);                             /* [SPT] 移除 nil，让 format args 对齐 */
     lua_getfield(L, LUA_REGISTRYINDEX, IO_INPUT); /* get default input */
     lua_replace(L, 1);                            /* put it at index 1 */
     tofile(L);                                    /* check that it's a valid file handle */
     toclose = 0;                                  /* do not close it after iteration */
   } else {                                        /* open a new file */
     const char *filename = luaL_checkstring(L, 2);
+    lua_remove(L, 2);               /* [SPT] 移除 filename，让 format args 对齐 */
     opencheck(L, filename, "r");
     lua_replace(L, 1); /* put file at index 1 */
     toclose = 1;       /* close it after iteration */

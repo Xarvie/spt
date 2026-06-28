@@ -1,0 +1,94 @@
+// 测试: utf8.codes 迭代器 + charpattern（slot-0 ABI）
+// 语法: utf8.codes(s, lax), utf8.charpattern
+// 描述: 覆盖 UTF-8 字符遍历迭代器和 charpattern 常量
+// 注意: iter_aux 返回 (position, codepoint)，单变量取 position（0-based 字节位置），
+//       双变量 (p, c) 取 (position, codepoint)。
+
+// ===== utf8.codes 双变量迭代：ASCII =====
+str ascii = "ABC";
+list<int> positions = [];
+list<int> codepoints = [];
+for (auto p, auto c : utf8.codes(ascii)) {
+    list.push(positions, p);
+    list.push(codepoints, c);
+}
+assert(#positions == 3, "utf8.codes('ABC') should yield 3 positions");
+assert(#codepoints == 3, "utf8.codes('ABC') should yield 3 codepoints");
+assert(positions[0] == 0, "first position should be 0 (0-based byte)");
+assert(positions[1] == 1, "second position should be 1");
+assert(positions[2] == 2, "third position should be 2");
+assert(codepoints[0] == 65, "first codepoint should be 65 ('A')");
+assert(codepoints[1] == 66, "second codepoint should be 66 ('B')");
+assert(codepoints[2] == 67, "third codepoint should be 67 ('C')");
+
+// ===== utf8.codes 单变量：取 position =====
+list<int> ps_only = [];
+for (auto p : utf8.codes(ascii)) {
+    list.push(ps_only, p);
+}
+assert(#ps_only == 3, "single-var should iterate 3 times");
+assert(ps_only[0] == 0, "single-var first position 0");
+assert(ps_only[1] == 1, "single-var second position 1");
+assert(ps_only[2] == 2, "single-var third position 2");
+
+// ===== utf8.codes 迭代：多字节中文 =====
+str zh = "你好";
+list<int> zh_cps = [];
+for (auto p, auto c : utf8.codes(zh)) {
+    list.push(zh_cps, c);
+}
+assert(#zh_cps == 2, "utf8.codes('你好') should yield 2 codepoints");
+assert(zh_cps[0] == 20320, "first cp should be 20320 ('你')");
+assert(zh_cps[1] == 22909, "second cp should be 22909 ('好')");
+
+// 中文 position 是字节位置（UTF-8 中文每字 3 字节）
+list<int> zh_pos = [];
+for (auto p, auto c : utf8.codes(zh)) {
+    list.push(zh_pos, p);
+}
+assert(zh_pos[0] == 0, "你 starts at byte 0");
+assert(zh_pos[1] == 3, "好 starts at byte 3");
+
+// ===== utf8.codes 空字符串 =====
+str empty = "";
+int empty_count = 0;
+for (auto p, auto c : utf8.codes(empty)) {
+    empty_count = empty_count + 1;
+}
+assert(empty_count == 0, "utf8.codes('') should iterate 0 times");
+
+// ===== utf8.codes lax vs strict 模式（surrogate pair U+D800 = 0xED 0xA0 0x80）=====
+// surrogate 在 strict 模式非法，lax 模式允许
+str surrogate = "\xED\xA0\x80";
+int lax_count = 0;
+for (auto p, auto c : utf8.codes(surrogate, true)) {
+    lax_count = lax_count + 1;
+}
+assert(lax_count == 1, "utf8.codes lax mode should accept surrogates");
+
+// strict 模式对 surrogate 抛错
+vars ok, err = pcall(fn() {
+    for (auto p, auto c : utf8.codes(surrogate)) {
+        // 应该在第一次迭代时抛错
+    }
+});
+assert(ok == false, "utf8.codes strict on surrogate should error");
+
+// ===== utf8.codes 用 utf8.char 往返验证 =====
+str orig = "Hello世界";
+list<int> roundtrip_cps = [];
+for (auto p, auto c : utf8.codes(orig)) {
+    list.push(roundtrip_cps, c);
+}
+// 用 utf8.char 重建
+str rebuilt = "";
+for (auto i = 0, #roundtrip_cps - 1) {
+    rebuilt = rebuilt .. utf8.char(roundtrip_cps[i]);
+}
+assert(rebuilt == orig, "utf8.codes + utf8.char roundtrip should preserve string");
+
+// ===== utf8.charpattern 常量 =====
+assert(typeof(utf8.charpattern) == "str", "charpattern should be string");
+assert(#utf8.charpattern > 0, "charpattern should be non-empty");
+
+print("utf8_codes tests passed!");

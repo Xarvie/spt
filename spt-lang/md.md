@@ -224,3 +224,26 @@ list.pack 返回 list 无 .n。
   - other/select_0based.spt：select(0)=全部 + select(k)=跳过k + select('#') + 负索引 + 越界
   - other/base_iter_xpcall.spt：ipairs 显式协议 + next(list/map) + xpcall 单参/变参/无参/成功路径 + rawequal + rawlen
 - 全量测试 384/384 通过
+
+已实施（io_lines slot-0 ABI 修复 + io/debug/utf8 测试覆盖）：
+- io_lines slot-0 ABI 真实 bug 修复（liolib.c）：
+  - 现象：SPT 适配时 replace(L,1) 后 filename 留在栈索引 2，aux_lines 把它当作
+    read format，导致 `for (auto line : io.lines(p))` 报 "invalid format"
+  - 修复：在两个分支（无 filename / 有 filename）的 opencheck/replace 前都加
+    `lua_remove(L, 2)` 移除 filename 或 nil，让用户传的 format args（原 arg3+）
+    对齐到索引 2，aux_lines 的 `n = gettop - 1` 正确计算 format 数量
+  - f_lines 不受影响（receiver=arg1 已是 file，无 filename 干扰）
+- 测试覆盖补充（10_builtins/）：
+  - io_funcs/io_file_chain.spt：io.open/read/write/close/lines/type/flush/tmpfile +
+    f.read/write/close/seek/flush/lines + 错误路径（不存在文件、无效模式）+
+    os.remove 清理。注意：用 `.` 方法调用（非 `:`），seek 比较用 `>=`（Windows
+    文本模式 \n→\r\n），f.lines 不自动关闭（toclose=0，与 io.lines 不同）
+  - debug/debug_traceback_getinfo.spt：traceback（带/不带 msg、level 参数）+
+    getinfo（level/function、各种 options、嵌套调用、what 字段区分 Lua/C）
+  - utf8_funcs/utf8_codes.spt：utf8.codes 双变量 (p, c) 迭代（ASCII/中文/空串）+
+    单变量取 position + lax/strict 模式（surrogate pair）+ utf8.char 往返验证 +
+    charpattern 常量。注意：iter_aux 返回 (position, codepoint)，单变量取 position
+    （0-based 字节位置），双变量 (p, c) 取 (position, codepoint)；iter_codes 返回
+    3 值（func, state, control），SPT for-each 协议期望 4 值，但 ast_adjust_assign
+    自动用 nil 填充第 4 个 closing，无需修改 lutf8lib.c
+- 全量测试 384/384 通过
