@@ -242,13 +242,14 @@ static int db_setlocal(lua_State *L) {
 }
 
 /*
-** get (if 'get' is true) or set an upvalue from a closure
+** get (if 'get' is true) or set an upvalue from a closure.
+** SPT slot-2 ABI: receiver=arg1, closure=arg2, n=arg3, value=arg4(set).
 */
 static int auxupvalue(lua_State *L, int get) {
   const char *name;
-  int n = (int)luaL_checkinteger(L, 2); /* upvalue index */
-  luaL_checktype(L, 1, LUA_TFUNCTION);  /* closure */
-  name = get ? lua_getupvalue(L, 1, n) : lua_setupvalue(L, 1, n);
+  int n = (int)luaL_checkinteger(L, 3); /* upvalue index (SPT: arg3) */
+  luaL_checktype(L, 2, LUA_TFUNCTION);  /* closure (SPT: arg2) */
+  name = get ? lua_getupvalue(L, 2, n) : lua_setupvalue(L, 2, n);
   if (name == NULL)
     return 0;
   lua_pushstring(L, name);
@@ -259,13 +260,13 @@ static int auxupvalue(lua_State *L, int get) {
 static int db_getupvalue(lua_State *L) { return auxupvalue(L, 1); }
 
 static int db_setupvalue(lua_State *L) {
-  luaL_checkany(L, 3);
+  luaL_checkany(L, 4); /* SPT: value at arg4 */
   return auxupvalue(L, 0);
 }
 
 /*
 ** Check whether a given upvalue from a given closure exists and
-** returns its index
+** returns its index.
 */
 static void *checkupval(lua_State *L, int argf, int argnup, int *pnup) {
   void *id;
@@ -279,8 +280,9 @@ static void *checkupval(lua_State *L, int argf, int argnup, int *pnup) {
   return id;
 }
 
+/* SPT slot-2 ABI: receiver=arg1, f1=arg2, n1=arg3, f2=arg4, n2=arg5 */
 static int db_upvalueid(lua_State *L) {
-  void *id = checkupval(L, 1, 2, NULL);
+  void *id = checkupval(L, 2, 3, NULL);
   if (id != NULL)
     lua_pushlightuserdata(L, id);
   else
@@ -290,11 +292,11 @@ static int db_upvalueid(lua_State *L) {
 
 static int db_upvaluejoin(lua_State *L) {
   int n1, n2;
-  checkupval(L, 1, 2, &n1);
-  checkupval(L, 3, 4, &n2);
-  luaL_argcheck(L, !lua_iscfunction(L, 1), 1, "Lua function expected");
-  luaL_argcheck(L, !lua_iscfunction(L, 3), 3, "Lua function expected");
-  lua_upvaluejoin(L, 1, n1, 3, n2);
+  checkupval(L, 2, 3, &n1);
+  checkupval(L, 4, 5, &n2);
+  luaL_argcheck(L, !lua_iscfunction(L, 2), 2, "Lua function expected");
+  luaL_argcheck(L, !lua_iscfunction(L, 4), 4, "Lua function expected");
+  lua_upvaluejoin(L, 2, n1, 4, n2);
   return 0;
 }
 

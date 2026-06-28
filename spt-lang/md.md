@@ -180,7 +180,7 @@ list.pack 返回 list 无 .n。
   - map 不受影响（无越界概念，缺 key 返回 null）
 
 待实施（讨论中）：
-- §2.10 debug upvalue slot-2
+- debug.getlocal/setlocal 的 nvar 是否做 0-based 转换（当前保持 Lua 1-based，与 upvalue 索引一致）
 
 已实施（§2.1 rawlen / tostring）：
 - rawlen/#map：lapi.c lua_rawlen 对 LUA_VTABLE 返回 luaH_getn；纯字符串 key 的 map 已返回 0，无需改动
@@ -188,3 +188,12 @@ list.pack 返回 list 无 .n。
 - print() / error 消息均经 luaL_tolstring，自动套用新格式
 - 字符串值在容器中暂不带引号（与 Lua tostring 一致，后续可改）
 - 循环引用不做检测（用户责任，栈溢出可接受）
+
+已实施（§2.10 debug upvalue slot-2）：
+- ldblib.c auxupvalue：closure 从 arg1→arg2，n 从 arg2→arg3
+- ldblib.c db_setupvalue：value 从 arg3→arg4
+- ldblib.c db_upvalueid：f 从 (1,2)→(2,3)
+- ldblib.c db_upvaluejoin：(1,2,3,4)→(2,3,4,5)，iscfunction 检查与 lua_upvaluejoin 调用同步更新
+- upvalue/local 索引 n 仍按 Lua 1-based（md.md §2.10 "语义基本照旧"），0-based 转换待讨论
+- 其他 debug 函数（getinfo/getlocal/sethook/traceback 等）已通过 getthread()+arg+N 模式正确适配，hookf 已垫 nil receiver
+- 测试：10_builtins/debug/debug_upvalue.spt

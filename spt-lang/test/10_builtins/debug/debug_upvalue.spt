@@ -1,0 +1,48 @@
+// 测试: debug 库 upvalue 函数的 slot-2 ABI 适配
+// 语法: debug.getupvalue / setupvalue / upvalueid / upvaluejoin
+// 描述: 验证 receiver 占 arg1，closure 从 arg2 起（之前 bug：closure 错占 arg1）
+
+// 构造一个带 upvalue 的闭包
+fn make() {
+    int x = 42;
+    return fn() -> int { return x; };
+}
+
+fn getter = make();
+assert(getter() == 42, "closure initial upvalue");
+
+// debug.getupvalue(f, n) —— n 仍按 Lua 1-based（"语义照旧"，未做 0-based 转换）
+vars name1, val1 = debug.getupvalue(getter, 1);
+assert(name1 == "x", "getupvalue name should be 'x'");
+assert(val1 == 42, "getupvalue value should be 42");
+
+// 越界 upvalue 索引返回无值
+vars name0, val0 = debug.getupvalue(getter, 0);
+assert(name0 == null, "getupvalue(f, 0) out of range returns null");
+
+// debug.setupvalue(f, n, value) —— value 在 arg4
+debug.setupvalue(getter, 1, 999);
+assert(getter() == 999, "closure upvalue changed via setupvalue");
+
+vars name2, val2 = debug.getupvalue(getter, 1);
+assert(val2 == 999, "getupvalue after setupvalue should be 999");
+
+// debug.upvalueid(f, n) —— 返回 light userdata
+auto id1 = debug.upvalueid(getter, 1);
+assert(id1 != null, "upvalueid should be non-null");
+assert(typeof(id1) == "userdata", "upvalueid should be userdata");
+
+// debug.upvaluejoin(f1, n1, f2, n2) —— 共享 upvalue
+fn g1 = make();
+fn g2 = make();
+assert(g1() == 42, "g1 initial");
+assert(g2() == 42, "g2 initial");
+
+// 把 g2 的 upvalue 1 join 到 g1 的 upvalue 1
+debug.upvaluejoin(g1, 1, g2, 1);
+// 修改 g2 的 upvalue，g1 应该看到同样的值（共享）
+debug.setupvalue(g2, 1, 777);
+assert(g1() == 777, "g1 should see g2's upvalue after upvaluejoin");
+assert(g2() == 777, "g2 should also see the same upvalue");
+
+print("debug_upvalue tests passed!");
