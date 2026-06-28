@@ -1,0 +1,34 @@
+// 测试: tostring 对 list/map 的格式化
+// 语法: tostring(list) / tostring(map)
+// 描述: 测试tostring按SPT字面量风格格式化 list 和 map（含嵌套）
+
+// 基础 list（顺序稳定，精确比较）
+assert(tostring([10, 20, 30]) == "[10, 20, 30]", "list tostring");
+assert(tostring([]) == "[]", "empty list tostring");
+
+// 基础 map（hash 顺序不稳定，用 plain find 逐项检查）
+map<str, int> m = {"a": 1, "b": 2};
+str ms = tostring(m);
+assert(string.sub(ms, 0, 1) == "{", "map should start with {");
+assert(string.sub(ms, #ms - 1, #ms) == "}", "map should end with }");
+assert(string.find(ms, "a: 1", 0, true) != null, "map should contain 'a: 1'");
+assert(string.find(ms, "b: 2", 0, true) != null, "map should contain 'b: 2'");
+assert(tostring({}) == "{}", "empty map tostring");
+
+// 嵌套 list
+assert(tostring([[1, 2], [3, 4]]) == "[[1, 2], [3, 4]]", "nested list tostring");
+
+// 混合嵌套
+str mix = tostring({"list": [1, 2], "map": {"x": 9}});
+assert(string.sub(mix, 0, 1) == "{", "mix should start with {");
+assert(string.sub(mix, #mix - 1, #mix) == "}", "mix should end with }");
+assert(string.find(mix, "list: [1, 2]", 0, true) != null, "mix should contain 'list: [1, 2]'");
+assert(string.find(mix, "map: {x: 9}", 0, true) != null, "mix should contain 'map: {x: 9}'");
+
+// 基本类型不变
+assert(tostring(42) == "42", "int tostring");
+assert(tostring("hello") == "hello", "string tostring");
+assert(tostring(true) == "true", "bool tostring");
+assert(tostring(null) == "null", "null tostring");
+
+print("tostring_format tests passed!");

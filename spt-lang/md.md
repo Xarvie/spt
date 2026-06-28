@@ -180,5 +180,11 @@ list.pack 返回 list 无 .n。
   - map 不受影响（无越界概念，缺 key 返回 null）
 
 待实施（讨论中）：
-- §2.1 rawlen map→0、tostring list/map 格式化
 - §2.10 debug upvalue slot-2
+
+已实施（§2.1 rawlen / tostring）：
+- rawlen/#map：lapi.c lua_rawlen 对 LUA_VTABLE 返回 luaH_getn；纯字符串 key 的 map 已返回 0，无需改动
+- tostring(list) → "[e0, e1, ...]"、tostring(map) → "{k: v, k: v}"：lauxlib.c luaL_tolstring 新增 LUA_TARRAY / LUA_TTABLE 分支，递归格式化嵌套结构（commit 待提交）
+- print() / error 消息均经 luaL_tolstring，自动套用新格式
+- 字符串值在容器中暂不带引号（与 Lua tostring 一致，后续可改）
+- 循环引用不做检测（用户责任，栈溢出可接受）

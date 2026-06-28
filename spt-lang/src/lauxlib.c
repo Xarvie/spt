@@ -907,6 +907,44 @@ LUALIB_API const char *luaL_tolstring(lua_State *L, int idx, size_t *len) {
     case LUA_TNIL:
       lua_pushliteral(L, "null");
       break;
+    case LUA_TARRAY: { /* SPT: list → [e0, e1, ...] */
+      luaL_Buffer b;
+      luaL_buffinit(L, &b);
+      luaL_addchar(&b, '[');
+      lua_Integer n = (lua_Integer)lua_rawlen(L, idx);
+      for (lua_Integer i = 0; i < n; i++) {
+        if (i > 0) luaL_addlstring(&b, ", ", 2);
+        lua_geti(L, idx, i);
+        luaL_tolstring(L, -1, NULL);
+        lua_remove(L, -2);
+        luaL_addvalue(&b);
+      }
+      luaL_addchar(&b, ']');
+      luaL_pushresult(&b);
+      break;
+    }
+    case LUA_TTABLE: { /* SPT: map → {k: v, k: v} */
+      luaL_Buffer b;
+      luaL_buffinit(L, &b);
+      luaL_addchar(&b, '{');
+      lua_Integer count = 0;
+      lua_pushnil(L);
+      while (lua_next(L, idx)) {
+        if (count > 0) luaL_addlstring(&b, ", ", 2);
+        lua_pushvalue(L, -2);          /* copy key */
+        luaL_tolstring(L, -1, NULL);   /* key string */
+        lua_remove(L, -2);             /* remove key copy */
+        luaL_addvalue(&b);             /* pop key string */
+        luaL_addlstring(&b, ": ", 2);
+        luaL_tolstring(L, -1, NULL);   /* value string */
+        luaL_addvalue(&b);             /* pop value string */
+        lua_pop(L, 1);                 /* pop value, keep key */
+        count++;
+      }
+      luaL_addchar(&b, '}');
+      luaL_pushresult(&b);
+      break;
+    }
     default: {
       int tt = luaL_getmetafield(L, idx, "__name"); /* try name */
       const char *kind = (tt == LUA_TSTRING) ? lua_tostring(L, -1) : luaL_typename(L, idx);
