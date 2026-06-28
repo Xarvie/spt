@@ -1,0 +1,88 @@
+// 测试: 内置函数 - map 模块函数（§2.3）
+// 语法: map.create / keys / values / has / get / set / delete
+// 描述: 验证 map 库所有函数严格校验 LUA_TTABLE，slot-0 ABI（receiver arg1, map arg2, key arg3, value arg4）
+
+// ===== map.create =====
+map<str, int> m = map.create(4);
+assert(#m == 0, "new map should have #map == 0");
+assert(map.has(m, "x") == false, "new map should not have 'x'");
+
+// ===== map.set / map.get / map.has =====
+map.set(m, "a", 1);
+map.set(m, "b", 2);
+map.set(m, "c", 3);
+assert(#m == 0, "#map still 0 (map uses hash, not loglen)");
+assert(map.has(m, "a"), "map should have 'a' after set");
+assert(map.has(m, "b"), "map should have 'b' after set");
+assert(map.has(m, "missing") == false, "map should not have 'missing'");
+
+assert(map.get(m, "a") == 1, "map.get('a') should be 1");
+assert(map.get(m, "b") == 2, "map.get('b') should be 2");
+assert(map.get(m, "missing") == null, "map.get('missing') should be null");
+assert(map.get(m, "missing", 99) == 99, "map.get with default should return 99");
+
+// ===== map.delete =====
+map.delete(m, "b");
+assert(map.has(m, "b") == false, "map should not have 'b' after delete");
+assert(map.get(m, "b") == null, "map.get('b') should be null after delete");
+assert(map.has(m, "a"), "map should still have 'a' after deleting 'b'");
+
+// ===== map.keys / map.values =====
+// 顺序不稳定（hash），用排序后比较
+map<str, int> m2 = map.create(4);
+map.set(m2, "x", 10);
+map.set(m2, "y", 20);
+map.set(m2, "z", 30);
+
+list<str> keys = map.keys(m2);
+assert(#keys == 3, "map.keys should return list of length 3");
+list.sort(keys);
+assert(keys[0] == "x", "sorted keys[0] should be 'x'");
+assert(keys[1] == "y", "sorted keys[1] should be 'y'");
+assert(keys[2] == "z", "sorted keys[2] should be 'z'");
+
+list<int> vals = map.values(m2);
+assert(#vals == 3, "map.values should return list of length 3");
+list.sort(vals);
+assert(vals[0] == 10, "sorted values[0] should be 10");
+assert(vals[1] == 20, "sorted values[1] should be 20");
+assert(vals[2] == 30, "sorted values[2] should be 30");
+
+// ===== 类型校验：传 list 给 map 函数应抛错 =====
+list<int> wrong = [1, 2, 3];
+bool caught = false;
+vars ok, err = pcall(fn() { map.has(wrong, "x"); });
+if (!ok) { caught = true; }
+assert(caught, "map.has on list should error");
+
+caught = false;
+vars ok2, err2 = pcall(fn() { map.get(wrong, "x"); });
+if (!ok2) { caught = true; }
+assert(caught, "map.get on list should error");
+
+caught = false;
+vars ok3, err3 = pcall(fn() { map.set(wrong, "x", 1); });
+if (!ok3) { caught = true; }
+assert(caught, "map.set on list should error");
+
+caught = false;
+vars ok4, err4 = pcall(fn() { map.delete(wrong, "x"); });
+if (!ok4) { caught = true; }
+assert(caught, "map.delete on list should error");
+
+caught = false;
+vars ok5, err5 = pcall(fn() { map.keys(wrong); });
+if (!ok5) { caught = true; }
+assert(caught, "map.keys on list should error");
+
+caught = false;
+vars ok6, err6 = pcall(fn() { map.values(wrong); });
+if (!ok6) { caught = true; }
+assert(caught, "map.values on list should error");
+
+// ===== map.keys/values 对空 map 返回空 list =====
+map<str, int> empty = map.create(0);
+assert(#map.keys(empty) == 0, "map.keys on empty map should return empty list");
+assert(#map.values(empty) == 0, "map.values on empty map should return empty list");
+
+print("map_api tests passed!");

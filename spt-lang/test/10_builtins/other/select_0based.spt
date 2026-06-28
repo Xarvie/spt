@@ -1,0 +1,68 @@
+// 测试: select 0-based 行为（§2.1, §4 已定项）
+// 语法: select(n, ...) / select('#', ...)
+// 描述: select(0, ...)=全部变参，select(k, ...)=跳过前 k 个，select('#', ...)=个数，负索引从尾计
+
+void check(...) {
+    auto args = list.pack(...);
+    int n = #args;
+    assert(n == 5, "should receive 5 varargs");
+
+    // select('#', ...) 取个数
+    int count = select('#', ...);
+    assert(count == 5, "select('#', ...) should be 5");
+
+    // select(0, ...) = 全部变参
+    auto all = list.pack(select(0, ...));
+    assert(#all == 5, "select(0, ...) should return all 5");
+    assert(all[0] == 10, "select(0, ...)[0] should be 10");
+    assert(all[4] == 50, "select(0, ...)[4] should be 50");
+
+    // select(1, ...) = 跳过前 1 个
+    auto skip1 = list.pack(select(1, ...));
+    assert(#skip1 == 4, "select(1, ...) should return 4");
+    assert(skip1[0] == 20, "select(1, ...)[0] should be 20");
+    assert(skip1[3] == 50, "select(1, ...)[3] should be 50");
+
+    // select(2, ...) = 跳过前 2 个
+    auto skip2 = list.pack(select(2, ...));
+    assert(#skip2 == 3, "select(2, ...) should return 3");
+    assert(skip2[0] == 30, "select(2, ...)[0] should be 30");
+
+    // select(4, ...) = 只剩最后一个
+    auto skip4 = list.pack(select(4, ...));
+    assert(#skip4 == 1, "select(4, ...) should return 1");
+    assert(skip4[0] == 50, "select(4, ...)[0] should be 50");
+
+    // 负索引从尾计：select(-1, ...) = 最后一个
+    auto last = list.pack(select(-1, ...));
+    assert(#last == 1, "select(-1, ...) should return 1");
+    assert(last[0] == 50, "select(-1, ...) should be 50 (last)");
+
+    // select(-2, ...) = 最后两个
+    auto last2 = list.pack(select(-2, ...));
+    assert(#last2 == 2, "select(-2, ...) should return 2");
+    assert(last2[0] == 40, "select(-2, ...)[0] should be 40");
+    assert(last2[1] == 50, "select(-2, ...)[1] should be 50");
+}
+
+check(10, 20, 30, 40, 50);
+
+// ===== 越界抛错 =====
+bool caught = false;
+vars ok, err = pcall(fn() { select(5, 1, 2, 3, 4, 5); });  // 5 个变参，select(5) 越界
+if (!ok) { caught = true; }
+assert(caught, "select(5, ...) with 5 varargs should error (out of range)");
+
+caught = false;
+vars ok2, err2 = pcall(fn() { select(-6, 1, 2, 3, 4, 5); });  // 负越界
+if (!ok2) { caught = true; }
+assert(caught, "select(-6, ...) with 5 varargs should error (out of range)");
+
+// ===== 0 个变参 + select('#') =====
+void empty(...) {
+    int c = select('#', ...);
+    assert(c == 0, "select('#', ...) with 0 varargs should be 0");
+}
+empty();
+
+print("select_0based tests passed!");

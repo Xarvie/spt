@@ -1,0 +1,90 @@
+// 测试: string.match / gmatch 0-based 位置捕获（§2.2）
+// 语法: string.match(s, pat, [init]) / string.gmatch(s, pat)
+// 描述: 验证普通捕获、位置捕获 () 返回 0-based、init 0-based、与 find 一致性
+
+str s = "hello world";
+
+// ===== 普通捕获 =====
+vars m1 = string.match(s, "(world)");
+assert(m1 == "world", "match (world) should capture 'world'");
+
+vars m2 = string.match(s, "(h(e)llo)");
+assert(m2 == "hello", "match (h(e)llo) outer capture");
+// 多捕获：match 返回多个值
+vars m2a, m2b = string.match(s, "(h(e)llo)");
+assert(m2a == "hello", "match outer");
+assert(m2b == "e", "match inner");
+
+// ===== 位置捕获 () 返回 0-based =====
+// "hello" 中 'l' 在 0-based 索引 2，'l' 后位置是 3
+vars pos = string.match("hello", "l()");
+assert(pos == 3, "position capture l() should be 0-based (3, not 4)");
+
+// 第一个 'l' 后 = 3，第二个 'l' 后 = 4
+vars pos2 = string.match("hello", "ll()");
+assert(pos2 == 4, "position capture ll() should be 0-based (4)");
+
+// ===== 无匹配返回 null =====
+vars nomatch = string.match(s, "xyz");
+assert(nomatch == null, "no match should return null");
+
+// ===== 与 string.find 一致性 =====
+// find 返回 [start, end) 半开；match 的位置捕获应等于 end
+vars fs, fe = string.find(s, "world");
+assert(fs == 6, "find world start should be 6 (0-based)");
+assert(fe == 11, "find world end should be 11 (0-based half-open)");
+vars wpos = string.match(s, "world()");
+assert(wpos == 11, "position capture world() should equal find end (11)");
+// sub(s, start, end) 恰好取出匹配
+assert(string.sub(s, fs, fe) == "world", "sub with find range should give match");
+
+// ===== init 参数 0-based =====
+// 从 init=4 开始找 "o"：0-based 索引 4 是 'o'（hello 中的第二个 o 前面）
+// 实际 "hello world" 索引：h=0,e=1,l=2,l=3,o=4, =5,w=6,o=7,r=8,l=9,d=10
+vars m4 = string.match(s, "o", 4);
+assert(m4 == "o", "match from init=4 should find 'o' at index 4");
+
+// init 跳过前面的 'o'，从索引 5 开始
+vars m5 = string.match(s, "o", 5);
+assert(m5 == "o", "match from init=5 should find 'o' at index 7");
+
+// ===== gmatch 迭代所有匹配 =====
+list<str> words = [];
+for (auto w : string.gmatch(s, "%w+")) {
+    list.push(words, w);
+}
+assert(#words == 2, "gmatch should find 2 words");
+assert(words[0] == "hello", "gmatch word[0]");
+assert(words[1] == "world", "gmatch word[1]");
+
+// ===== gmatch 位置捕获 =====
+// "hello" 中所有 'l' 的位置（0-based）：l 在 2 和 3，l 后位置是 3 和 4
+list<int> lpositions = [];
+for (auto p : string.gmatch("hello", "l()")) {
+    list.push(lpositions, p);
+}
+assert(#lpositions == 2, "gmatch l() should find 2 positions");
+assert(lpositions[0] == 3, "gmatch l() first position 0-based (3)");
+assert(lpositions[1] == 4, "gmatch l() second position 0-based (4)");
+
+// ===== gmatch 无匹配返回空迭代 =====
+list<str> empty = [];
+for (auto w : string.gmatch(s, "xyz")) {
+    list.push(empty, w);
+}
+assert(#empty == 0, "gmatch with no match should iterate 0 times");
+
+// ===== gmatch 多捕获 =====
+// "a1b2" → (letter)(digit) 对
+str pairs = "a1b2";
+list<str> letters = [];
+list<str> digits = [];
+for (auto ch, auto d : string.gmatch(pairs, "(%a)(%d)")) {
+    list.push(letters, ch);
+    list.push(digits, d);
+}
+assert(#letters == 2 && #digits == 2, "gmatch multi-capture should find 2 pairs");
+assert(letters[0] == "a" && digits[0] == "1", "first pair");
+assert(letters[1] == "b" && digits[1] == "2", "second pair");
+
+print("string_match_gmatch tests passed!");

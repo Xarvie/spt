@@ -1,0 +1,97 @@
+// 测试: math.random 半开区间行为（§2.4）
+// 语法: math.random() / math.random(n) / math.random(m, n) / math.randomseed(s)
+// 描述: 验证 [0,1) / [0,n) / [m,n) 半开区间，返回类型，可重复性
+
+// ===== 用固定 seed 确保可重复 =====
+math.randomseed(42, 0);
+
+// ===== math.random() → [0, 1) float =====
+float r = math.random();
+assert(typeof(r) == "float", "math.random() should return float");
+assert(r >= 0.0, "math.random() should be >= 0.0");
+assert(r < 1.0, "math.random() should be < 1.0");
+
+// ===== math.random(n) → [0, n) int =====
+math.randomseed(42, 0);
+int i = 0;
+while (i < 200) {
+    int v = math.random(10);
+    assert(typeof(v) == "int", "math.random(n) should return int");
+    assert(v >= 0, "math.random(10) should be >= 0");
+    assert(v < 10, "math.random(10) should be < 10");
+    i = i + 1;
+}
+
+// n = 1: 永远返回 0
+int j = 0;
+while (j < 10) {
+    assert(math.random(1) == 0, "math.random(1) should always be 0");
+    j = j + 1;
+}
+
+// ===== math.random(m, n) → [m, n) int =====
+math.randomseed(42, 0);
+int k = 0;
+while (k < 200) {
+    int v = math.random(5, 10);
+    assert(v >= 5, "math.random(5, 10) should be >= 5");
+    assert(v < 10, "math.random(5, 10) should be < 10");
+    k = k + 1;
+}
+
+// m == n-1: 永远返回 m
+int p = 0;
+while (p < 10) {
+    assert(math.random(7, 8) == 7, "math.random(7, 8) should always be 7");
+    p = p + 1;
+}
+
+// 骰子习语：random(1, 7) → [1, 7) = {1,2,3,4,5,6}
+int q = 0;
+while (q < 100) {
+    int dice = math.random(1, 7);
+    assert(dice >= 1 && dice <= 6, "dice should be in 1..6");
+    q = q + 1;
+}
+
+// ===== 可重复性：相同 seed 产生相同序列 =====
+math.randomseed(123, 0);
+int a1 = math.random(1000);
+int a2 = math.random(1000);
+int a3 = math.random(1000);
+
+math.randomseed(123, 0);
+int b1 = math.random(1000);
+int b2 = math.random(1000);
+int b3 = math.random(1000);
+
+assert(a1 == b1, "same seed should produce same sequence[0]");
+assert(a2 == b2, "same seed should produce same sequence[1]");
+assert(a3 == b3, "same seed should produce same sequence[2]");
+
+// ===== list 索引习语：arr[math.random(#arr)] 直接可用 =====
+list<int> arr = [10, 20, 30, 40, 50];
+int s = 0;
+while (s < 50) {
+    int idx = math.random(#arr);  // [0, #arr)
+    int elem = arr[idx];           // 合法索引
+    assert(elem == 10 || elem == 20 || elem == 30 || elem == 40 || elem == 50, "valid arr element");
+    s = s + 1;
+}
+
+// ===== math.random(0) → 全范围随机整数（特殊行为）=====
+int fullrand = math.random(0);
+assert(typeof(fullrand) == "int", "math.random(0) should return int");
+
+// ===== 空区间应抛错 =====
+bool caught = false;
+vars ok, err = pcall(fn() { math.random(5, 5); });  // [5, 5) = 空
+if (!ok) { caught = true; }
+assert(caught, "math.random(5, 5) empty interval should error");
+
+caught = false;
+vars ok2, err2 = pcall(fn() { math.random(10, 5); });  // [10, 5) = 空
+if (!ok2) { caught = true; }
+assert(caught, "math.random(10, 5) empty interval should error");
+
+print("math_random tests passed!");

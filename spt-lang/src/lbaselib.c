@@ -631,13 +631,18 @@ static int luaB_pcall(lua_State *L) {
 ** stack will have <f, err, true, f, [args...]>; so, the function passes
 ** 2 to 'finishpcall' to skip the 2 first values when returning results.
 */
-/* luaB_xpcall - receiver is arg1, func is arg2, errhandler is arg3, args start from arg4 */
+/* luaB_xpcall - receiver is arg1, func is arg2, errhandler is arg3, args start from arg4.
+ *
+ * errhandler 直接作为 msgh 传给 pcallk。SPT 的 luaG_errormsg (ldebug.c) 已自动为
+ * errhandler 压 nil receiver 垫片（栈构造为 [errfunc, nil, err_msg]），故 errhandler
+ * 符合 SPT slot-0 ABI（numparams = 1 + 用户参数数），无需 C trampoline 桥接。 */
 static int luaB_xpcall(lua_State *L) {
   int status;
   int n = lua_gettop(L);
   luaL_checktype(L, 3, LUA_TFUNCTION); /* check error function */
-  lua_pushboolean(L, 1);               /* first result */
-  lua_pushvalue(L, 2);                 /* function */
+
+  lua_pushboolean(L, 1); /* first result */
+  lua_pushvalue(L, 2);   /* function */
 
   /* [修改] 压入 nil 作为目标函数的 receiver 垫片 */
   lua_pushnil(L);

@@ -1,0 +1,112 @@
+// 测试: base 库剩余函数 - ipairs/next/xpcall/rawequal/rawlen
+// 语法: ipairs(t), next(t, k), xpcall(f, h, ...), rawequal(a, b), rawlen(v)
+// 描述: 覆盖 §2.x 测试缺口中 base 库未测函数
+
+// ===== ipairs: list 0-based 迭代（显式调用迭代协议）=====
+list<int> arr = [10, 20, 30];
+// SPT for-each 直接迭代 list 用 `for (auto v : arr)`，不经过 ipairs
+// ipairs 主要用于显式迭代协议：返回 (func, state, control, closing)
+vars ifn, istate, ictrl = ipairs(arr);
+assert(ifn != null, "ipairs should return iterator fn");
+assert(istate == arr, "ipairs state should be the list");
+// SPT ipairs 初始 control = -1，第一次 +1 → 0
+vars k0, v0 = ifn(istate, ictrl);
+assert(k0 == 0, "first ipairs key should be 0");
+assert(v0 == 10, "first ipairs value should be 10");
+vars k1, v1 = ifn(istate, k0);
+assert(k1 == 1, "second ipairs key should be 1");
+vars k2, v2 = ifn(istate, k1);
+assert(k2 == 2, "third ipairs key should be 2");
+vars k3, v3 = ifn(istate, k2);
+assert(k3 == null, "ipairs should return null key after last");
+
+// ipairs 空 list
+list<int> empty = [];
+vars ek, estate, ectrl = ipairs(empty);
+vars fk, fv = ek(estate, ectrl);
+// ectrl 是初始 control=-1，+1 → 0，0 >= loglen(0)，返回 nil
+assert(fk == null, "ipairs on empty list should immediately return null");
+
+// ipairs over map: SPT 严格区分 list/map，ipairs(map) 应返回空迭代
+map<string, int> m = {"a": 1, "b": 2};
+vars mfn, mstate, mctrl = ipairs(m);
+vars mk, mv = mfn(mstate, mctrl);
+// map 不是 list，迭代器在 0 索引取不到值，返回 null
+assert(mk == null, "ipairs on map should return null (not a list)");
+
+// ===== next: list 整数键 0-based, map hash 序 =====
+list<int> nl = [100, 200, 300];
+vars nk1, nv1 = next(nl, null);
+assert(nk1 == 0, "next(list, null) first key should be 0");
+assert(nv1 == 100, "next(list, null) first value should be 100");
+vars nk2, nv2 = next(nl, nk1);
+assert(nk2 == 1, "next(list, 0) should return key 1");
+vars nk3, nv3 = next(nl, nk2);
+assert(nk3 == 2, "next(list, 1) should return key 2");
+vars nk4, nv4 = next(nl, nk3);
+assert(nk4 == null, "next(list, 2) should return null (end)");
+
+// next over map: hash 序，key 是用户给的 key
+map<string, int> nm = {"x": 10, "y": 20};
+vars mkk1, mkv1 = next(nm, null);
+assert(mkk1 != null, "next(map, null) should return first key");
+assert(mkv1 == 10 || mkv1 == 20, "next(map, null) value should be 10 or 20");
+vars mkk2, mkv2 = next(nm, mkk1);
+assert(mkk2 != null, "next(map, k) should return next key");
+assert(mkk2 != mkk1, "next key should differ from current");
+vars mkk3, mkv3 = next(nm, mkk2);
+assert(mkk3 == null, "next(map, last) should return null");
+
+// ===== xpcall: 错误路径，handler 接收 error_msg =====
+vars ok1, err1 = xpcall(fn() { error("boom"); }, fn(str e) { return e; });
+assert(ok1 == false, "xpcall error path should return false");
+// error() 加位置前缀，handler 原样返回，err1 是字符串
+assert(typeof(err1) == "str", "xpcall err should be string");
+assert(#err1 > 0, "xpcall err should be non-empty");
+
+// xpcall: 变参 handler 用 list.pack(...) 收集
+vars ok2, err2 = xpcall(fn() { error("boom2"); }, fn(...) {
+    auto args = list.pack(...);
+    return "caught:" .. args[0];
+});
+assert(ok2 == false, "xpcall vararg handler error path");
+assert(#err2 > 0, "xpcall vararg handler should return caught msg");
+
+// xpcall: 无参 handler 忽略 error_msg
+vars ok3, err3 = xpcall(fn() { error("boom3"); }, fn() {
+    return "fixed";
+});
+assert(ok3 == false, "xpcall no-arg handler error path");
+assert(err3 == "fixed", "xpcall no-arg handler should return 'fixed'");
+
+// xpcall: 成功路径，func 不出错，extra args 透传
+vars ok4, r4 = xpcall(fn(int x) -> int { return x * 2; }, fn(str e) { return e; }, 21);
+assert(ok4 == true, "xpcall success path should return true");
+assert(r4 == 42, "xpcall success result should be 42");
+
+// xpcall: 多返回值
+vars ok5, a5, b5 = xpcall(fn() { return 1, 2; }, fn(str e) { return e; });
+assert(ok5 == true, "xpcall multi-return success");
+assert(a5 == 1, "xpcall multi-return first");
+assert(b5 == 2, "xpcall multi-return second");
+
+// ===== rawequal: 0-based ABI，arg1=receiver, v1=arg2, v2=arg3 =====
+assert(rawequal(null, null) == true, "rawequal null null");
+assert(rawequal(1, 1) == true, "rawequal int equal");
+assert(rawequal(1, 2) == false, "rawequal int differ");
+assert(rawequal("a", "a") == true, "rawequal str equal");
+assert(rawequal("a", "b") == false, "rawequal str differ");
+assert(rawequal(1, "1") == false, "rawequal int vs str");
+list<int> la = [1];
+list<int> lb = [1];
+assert(rawequal(la, la) == true, "rawequal same list ref");
+assert(rawequal(la, lb) == false, "rawequal different list instances");
+
+// ===== rawlen: list=loglen, map=0, str=#str =====
+assert(rawlen([1, 2, 3]) == 3, "rawlen list = loglen");
+assert(rawlen([]) == 0, "rawlen empty list");
+assert(rawlen({"a": 1, "b": 2}) == 0, "rawlen map = 0 (SPT spec)");
+assert(rawlen("hello") == 5, "rawlen str = byte length");
+assert(rawlen("") == 0, "rawlen empty str");
+
+print("base_iter_xpcall tests passed!");

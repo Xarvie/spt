@@ -205,3 +205,22 @@ list.pack 返回 list 无 .n。
 - 越界：n_spt=-1 → n_lua=0 → C API 返回 NULL；正向越界同样 NULL
 - 其他 debug 函数（getinfo/sethook/traceback 等）已通过 getthread()+arg+N 模式正确适配，hookf 已垫 nil receiver
 - 测试：10_builtins/debug/debug_upvalue.spt 覆盖 getupvalue/setupvalue/upvalueid/upvaluejoin/getlocal/setlocal + 越界
+
+已实施（§2.1 base 库测试覆盖 + xpcall 调查结论）：
+- xpcall 无需 C trampoline：SPT 早期已在 ldebug.c::luaG_errormsg 中为 errhandler
+  自动构造 [errfunc, nil_receiver, err_msg] 栈（line 802-813），errhandler 直接作 msgh
+  传给 pcallk 即可。曾尝试在 lbaselib.c 加 xpcall_handler_trampoline C 包装器，但
+  这等于把 receiver 垫片加了两次（luaG_errormsg 加 + trampoline 加），导致 handler
+  的 slot 1（用户声明的参数 e）读到 nil，error object 变成 nil → "<no error object>"。
+  正确实现：luaB_xpcall 直接传 errhandler 作 msgh，不加 trampoline（lbaselib.c）
+- finishpcall 减 1 剔除 receiver：pcall/xpcall 成功路径返回值数 = lua_gettop - 1 - extra，
+  其中 -1 跳过 arg1（receiver），extra 跳过 [func, errhandler]（xpcall）或无（pcall）
+- luaB_pcall/luaB_xpcall 内部为目标函数 func 压 nil receiver 垫片（slot-0 ABI），
+  模拟 SPT 编译器在用户层调用 fn 时自动加 receiver 的行为（spt_codegen.c:837）
+- 测试覆盖补充（10_builtins/）：
+  - map_funcs/map_api.spt：map 库 7 函数全覆盖 + 类型校验 + 空 map
+  - math_funcs/math_random.spt：[0,n)/[m,n) 半开区间 + 可重复性 + list 索引习语
+  - string_funcs/string_match_gmatch.spt：位置捕获 0-based + find 一致性 + init 0-based
+  - other/select_0based.spt：select(0)=全部 + select(k)=跳过k + select('#') + 负索引 + 越界
+  - other/base_iter_xpcall.spt：ipairs 显式协议 + next(list/map) + xpcall 单参/变参/无参/成功路径 + rawequal + rawlen
+- 全量测试 384/384 通过
