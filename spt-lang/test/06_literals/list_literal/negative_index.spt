@@ -35,4 +35,26 @@ assert(m[-1] == null, "map[-1] should be null (no such key)");
 m[-1] = 999;
 assert(m[-1] == 999, "map[-1] should be 999 after assignment");
 
+// rawget/rawset 支持 list 负索引（与 [] 一致，绕过元方法但走负索引转换）
+list<int> r = [10, 20, 30, 40, 50];
+assert(rawget(r, -1) == 50, "rawget(r, -1) should be 50");
+assert(rawget(r, -5) == 10, "rawget(r, -5) should be 10");
+rawset(r, -1, 99);
+assert(rawget(r, 4) == 99, "rawget(r, 4) should be 99 after rawset(r, -1, 99)");
+rawset(r, -5, 11);
+assert(rawget(r, 0) == 11, "rawget(r, 0) should be 11 after rawset(r, -5, 11)");
+
+// rawget/rawset 越界（正数与负数越界都抛错）
+vars ok3, err3 = pcall(fn() -> void { auto x = rawget(r, 100); });
+assert(ok3 == false, "rawget(r, 100) should fail (out of bounds)");
+vars ok4, err4 = pcall(fn() -> void { rawset(r, 100, 1); });
+assert(ok4 == false, "rawset(r, 100, 1) should fail (out of bounds)");
+vars ok5, err5 = pcall(fn() -> void { auto x = rawget(r, -6); });
+assert(ok5 == false, "rawget(r, -6) should fail (out of bounds)");
+
+// map 的 rawget/rawset 不转换负索引（-1 是普通整数 key）
+assert(rawget(m, -1) == 999, "rawget(m, -1) should be 999 (plain key)");
+rawset(m, -2, 888);
+assert(rawget(m, -2) == 888, "rawget(m, -2) should be 888 (plain key)");
+
 print("negative_index tests passed!");

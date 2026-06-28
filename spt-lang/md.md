@@ -172,8 +172,13 @@ list.pack 返回 list 无 .n。
     （ltablib.c；相对各自 loglen 转换）
   - map 不转换负索引（-1 是普通整数 key，按 hash 查找）
   - 测试：06_literals/list_literal/negative_index.spt、10_builtins/list_funcs/negative_index_lib.spt
+- §1 规则5 list 越界抛错（结构性，非元方法）：
+  - lvm.c OP_GETI/SETI 在 array 分支越界直接 luaG_runerror；OP_GETTABLE/SETTABLE 经 luaH_getint/luaH_finishset 抛错
+  - ltable.c luaH_getint（line 950）检查 key<0 || key>=loglen 抛错；luaH_setint（line 1231）同样检查
+  - luaH_finishset（line 1161）对 list 整数 key 仅允许 k==loglen（append），其余抛错
+  - lbaselib.c luaB_rawget/luaB_rawset 支持 list 负索引转换（与 [] 一致），越界仍抛错
+  - map 不受影响（无越界概念，缺 key 返回 null）
 
 待实施（讨论中）：
-- §1 规则5 list 越界抛错（rawget/rawset）
 - §2.1 rawlen map→0、tostring list/map 格式化
 - §2.10 debug upvalue slot-2

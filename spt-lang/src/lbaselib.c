@@ -176,6 +176,15 @@ static int luaB_rawget(lua_State *L) {
   luaL_argexpected(L, t == LUA_TTABLE || t == LUA_TARRAY, 2, "table or list");
   luaL_checkany(L, 3);
   lua_settop(L, 3);
+  /* list 负索引从尾计：-1 = 最后一个 */
+  if (t == LUA_TARRAY && lua_isinteger(L, 3)) {
+    lua_Integer k = lua_tointeger(L, 3);
+    if (k < 0) {
+      k += luaL_len(L, 2);
+      lua_pop(L, 1);
+      lua_pushinteger(L, k);
+    }
+  }
   lua_rawget(L, 2);
   return 1;
 }
@@ -187,6 +196,16 @@ static int luaB_rawset(lua_State *L) {
   luaL_checkany(L, 3);
   luaL_checkany(L, 4);
   lua_settop(L, 4);
+  /* list 负索引从尾计：-1 = 最后一个 */
+  if (t == LUA_TARRAY && lua_isinteger(L, 3)) {
+    lua_Integer k = lua_tointeger(L, 3);
+    if (k < 0) {
+      k += luaL_len(L, 2);
+      lua_pushinteger(L, k);
+      lua_copy(L, -1, 3);
+      lua_pop(L, 1);
+    }
+  }
   lua_rawset(L, 2);
   return 1;
 }
