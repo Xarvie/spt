@@ -68,7 +68,17 @@ function(spt_apply_instrumentation target)
         set(san_flag "-fsanitize=${san_flag_str}")
 
         if(MSVC OR (CMAKE_C_SIMULATE_ID STREQUAL "MSVC"))
-            # MSVC / clang-cl: 仅支持 address sanitizer
+            # MSVC / clang-cl: ASan + UBSan
+            # 注意：clang-cl 的 /fsanitize=undefined 不被识别，需用 GNU 风格 -fsanitize=
+            # ASan 不支持 debug runtime (-MDd)，必须用 /MD 强制 release runtime
+            set(msvc_san_flags "")
+            if(ENABLE_ASAN)
+                list(APPEND msvc_san_flags "-fsanitize=address")
+            endif()
+            if(ENABLE_UBSAN)
+                list(APPEND msvc_san_flags "-fsanitize=undefined")
+            endif()
+
             if(ENABLE_ASAN)
                 # 查找 clang ASan 运行时库（仅计算一次，缓存到父作用域变量）
                 if(NOT DEFINED _SPT_ASAN_LIB)
@@ -90,8 +100,11 @@ function(spt_apply_instrumentation target)
                     message(STATUS "ASan library: ${_SPT_ASAN_LIB}")
                 endif()
 
-                target_compile_options(${target} PRIVATE /fsanitize=address)
+                # /MD 强制 release runtime（ASan 不支持 debug runtime）
+                target_compile_options(${target} PRIVATE ${msvc_san_flags} /MD /O0 /Zi /D_DISABLE_CONSTEXPR_MUTEX_CHECK)
                 target_link_libraries(${target} PRIVATE ${_SPT_ASAN_LIB} ${_SPT_ASAN_THUNK})
+            elseif(ENABLE_UBSAN)
+                target_compile_options(${target} PRIVATE ${msvc_san_flags} /O0 /Zi)
             endif()
         else()
             # Clang/GCC: 完整 ASan+UBSan 支持

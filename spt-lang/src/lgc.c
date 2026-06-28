@@ -957,7 +957,9 @@ static GCObject *udata2finalize(global_State *g) {
 
 static void dothecall(lua_State *L, void *ud) {
   UNUSED(ud);
-  luaD_callnoyield(L, L->top.p - 2, 0);
+  /* SPT slot-0 ABI: slot 1 = receiver(obj), slot 2 = obj(用户参数)
+   * GCTM 压了 [finalizer, obj, obj]，共 3 个元素 */
+  luaD_callnoyield(L, L->top.p - 3, 0);
 }
 
 static void GCTM(lua_State *L) {
@@ -974,9 +976,10 @@ static void GCTM(lua_State *L) {
     g->gcstp |= GCSTPGC;           /* avoid GC steps */
     L->allowhook = 0;              /* stop debug hooks during GC metamethod */
     setobj2s(L, L->top.p++, tm);   /* push finalizer... */
-    setobj2s(L, L->top.p++, &v);   /* ... and its argument */
+    setobj2s(L, L->top.p++, &v);   /* ... receiver (slot 1, for C metamethod) */
+    setobj2s(L, L->top.p++, &v);   /* ... argument (slot 2, for SPT user fn) */
     L->ci->callstatus |= CIST_FIN; /* will run a finalizer */
-    status = luaD_pcall(L, dothecall, NULL, savestack(L, L->top.p - 2), 0);
+    status = luaD_pcall(L, dothecall, NULL, savestack(L, L->top.p - 3), 0);
     L->ci->callstatus &= ~CIST_FIN;     /* not running a finalizer anymore */
     L->allowhook = oldah;               /* restore hooks */
     g->gcstp = oldgcstp;                /* restore state */

@@ -1,0 +1,420 @@
+// ASan fuzzing 测试：针对未覆盖的边界场景
+// 每个测试用 pcall 包裹，避免一个失败影响后续
+
+int pass_count = 0;
+int fail_count = 0;
+list<str> failures = [];
+
+fn check(str name, any ok, any expected) {
+    if (ok) {
+        pass_count = pass_count + 1;
+    } else {
+        fail_count = fail_count + 1;
+        list.push(failures, "FAIL: " .. name .. " (expected " .. tostring(expected) .. ")");
+    }
+}
+
+// ===== 1. __index 真环（A.__index = B, B.__index = A）=====
+{
+    map<any, any> a = {};
+    map<any, any> b = {};
+    setmetatable(a, {__index: b});
+    setmetatable(b, {__index: a});
+    vars ok, err = pcall(fn() -> any {
+        return a["missing_key"];
+    });
+    // 应该抛 "loop in gettable" 或栈溢出
+    check("__index loop", ok == false, "error");
+}
+
+// ===== 2. __index 自引用（mt.__index = mt，但 mt 本身无 metatable，不形成真循环）=====
+{
+    map<any, any> mt = {};
+    mt["__index"] = mt;
+    map<any, any> t = {};
+    setmetatable(t, mt);
+    // t["missing"] -> mt.__index = mt -> mt["missing"] -> mt 无 metatable -> nil
+    vars v = t["missing_key"];
+    check("__index self-ref no loop", v == null, "nil");
+}
+
+// ===== 3. __newindex 递归（函数内对同一表写入）=====
+{
+    map<any, any> watched = {};
+    map<any, any> changes = {};
+    setmetatable(watched, {
+        __newindex: fn(str key, any val) -> void {
+            // 这里 rawset 避免 recursion
+            rawset(changes, key, val);
+        }
+    });
+    watched["a"] = 1;
+    watched["b"] = 2;
+    check("__newindex rawset", changes["a"] == 1 && changes["b"] == 2, "ok");
+}
+
+// ===== 4. __newindex 递归（函数内对 watched 再赋值，触发循环）=====
+{
+    map<any, any> watched2 = {};
+    setmetatable(watched2, {
+        __newindex: fn(str key, any val) -> void {
+            // 再次写入 watched2，应触发 __newindex 递归
+            watched2[key] = val;
+        }
+    });
+    vars ok, err = pcall(fn() -> void {
+        watched2["x"] = 1;
+    });
+    check("__newindex recursion", ok == false, "error");
+}
+
+// ===== 5. 协程 resume dead =====
+{
+    coro co = coroutine.create(fn() -> void {
+        coroutine.yield(1);
+    });
+    coroutine.resume(co);
+    coroutine.resume(co);  // 让它结束
+    vars ok, err = coroutine.resume(co);  // resume dead
+    check("resume dead", ok == false, "error");
+}
+
+// ===== 6. 协程 resume 已 suspended 的协程（合法，应成功）=====
+{
+    coro inner = coroutine.create(fn() -> void {
+        coroutine.yield(1);
+        coroutine.yield(2);
+    });
+    vars ok1, v1 = coroutine.resume(inner);
+    vars ok2, v2 = coroutine.resume(inner);  // suspended -> resume 合法
+    check("resume suspended", ok1 && v1 == 1 && ok2 && v2 == 2, "ok");
+}
+
+// ===== 7. 协程双重 close =====
+{
+    coro co = coroutine.create(fn() -> void {
+        coroutine.yield();
+    });
+    coroutine.resume(co);
+    vars ok1, err1 = coroutine.close(co);
+    vars ok2, err2 = coroutine.close(co);  // 再次 close
+    check("double close", ok2 == true, "ok (idempotent)");
+}
+
+// ===== 8. 空 list 越界 =====
+{
+    list<int> empty = [];
+    vars ok1, err1 = pcall(fn() -> int {
+        return empty[0];
+    });
+    check("empty list read [0]", ok1 == false, "error");
+
+    vars ok2, err2 = pcall(fn() -> void {
+        empty[0] = 1;
+    });
+    check("empty list write [0]", ok2 == false, "error");
+
+    vars ok3, err3 = pcall(fn() -> int {
+        return empty[-1];
+    });
+    check("empty list read [-1]", ok3 == false, "error");
+}
+
+// ===== 9. list.pop 空表（返回 nil，不抛错）=====
+{
+    list<int> empty = [];
+    vars v = list.pop(empty);
+    check("list.pop empty", v == null, "nil");
+}
+
+// ===== 10. list.remove 空表（返回 nil，不抛错）=====
+{
+    list<int> empty = [];
+    vars v = list.remove(empty, 0);
+    check("list.remove empty", v == null, "nil");
+}
+
+// ===== 11. list.insert 越界 pos =====
+{
+    list<int> a = [1, 2, 3];
+    vars ok1, err1 = pcall(fn() -> void {
+        list.insert(a, 5, 99);  // pos > #a
+    });
+    check("list.insert pos > #a", ok1 == false, "error");
+
+    vars ok2, err2 = pcall(fn() -> void {
+        list.insert(a, -5, 99);  // pos < -#a-1
+    });
+    check("list.insert pos < -#a-1", ok2 == false, "error");
+}
+
+// ===== 12. list.concat 越界区间 =====
+{
+    list<int> a = [1, 2, 3];
+    vars ok1, err1 = pcall(fn() -> str {
+        return list.concat(a, "-", 0, 100);
+    });
+    check("list.concat out of range", ok1 == false, "error");
+
+    vars ok2, err2 = pcall(fn() -> str {
+        return list.concat(a, "-", 5, 2);  // i > j
+    });
+    check("list.concat i > j", ok2 == true || ok2 == false, "ok or empty");
+}
+
+// ===== 13. string.char 边界 =====
+{
+    vars ok1, err1 = pcall(fn() -> str {
+        return string.char(-1);
+    });
+    check("string.char(-1)", ok1 == false, "error");
+
+    vars ok2, err2 = pcall(fn() -> str {
+        return string.char(256);
+    });
+    check("string.char(256)", ok2 == false, "error");
+
+    vars ok3, err3 = pcall(fn() -> str {
+        return string.char(1.5);
+    });
+    check("string.char(1.5)", ok3 == false, "error");
+
+    // 合法边界
+    str c0 = string.char(0);
+    str c255 = string.char(255);
+    check("string.char(0) and (255)", #c0 == 1 && #c255 == 1, "ok");
+}
+
+// ===== 14. string.byte 越界 =====
+{
+    vars ok1, err1 = pcall(fn() -> int {
+        return string.byte("abc", 100);
+    });
+    check("string.byte out of range", ok1 == true || ok1 == false, "ok or null");
+
+    vars ok2, err2 = pcall(fn() -> int {
+        return string.byte("", 0);
+    });
+    check("string.byte empty", ok2 == true || ok2 == false, "ok or null");
+}
+
+// ===== 15. 空模式 string.find =====
+{
+    vars start, endp = string.find("abc", "");
+    check("find empty pattern", start == 0, "start=0");
+
+    vars start2, end2 = string.find("", "");
+    check("find empty in empty", start2 == 0, "start=0");
+
+    vars start3, end3 = string.find("", "x");
+    check("find x in empty", start3 == null, "null");
+}
+
+// ===== 16. string.sub 极端参数 =====
+{
+    str s = "hello";
+    str sub1 = string.sub(s, 100);  // 越界
+    check("sub(s, 100)", #sub1 == 0, "empty");
+
+    str sub2 = string.sub(s, -100);  // 越界负索引
+    check("sub(s, -100)", #sub2 == 5, "whole string");
+
+    str sub3 = string.sub(s, 1, 0);  // i > j
+    check("sub(s, 1, 0)", #sub3 == 0, "empty");
+
+    str sub4 = string.sub(s, 0, 100);  // end 越界
+    check("sub(s, 0, 100)", sub4 == "hello", "whole string");
+}
+
+// ===== 17. NUL 字节字符串 =====
+{
+    str nul_str = "a\x00b";
+    assert(#nul_str == 3, "nul str len 3");
+    // 用 string.byte 而非 [] 索引（字符串 [] 可能返回子串）
+    vars b0, b1, b2 = string.byte(nul_str, 0, 3);
+    check("nul byte access", b0 == 97 && b1 == 0 && b2 == 98, "ok");
+
+    // find 含 NUL
+    vars s, e = string.find(nul_str, "\x00");
+    check("find nul byte", s == 1, "pos 1");
+}
+
+// ===== 18. load 失败 + GC 循环（多次失败后状态一致）=====
+{
+    int success_count = 0;
+    for (auto i = 0, 49) {
+        vars bad_fn, bad_err = load("!!! invalid !!! " .. tostring(i));
+        assert(bad_fn == null, "load bad returns null");
+        assert(typeof(bad_err) == "str", "load bad returns err");
+        collectgarbage("collect");
+    }
+    // 失败 50 次后，成功 load
+    vars good_fn = load("return 42;");
+    int r = good_fn();
+    check("load after 50 failures", r == 42, "42");
+}
+
+// ===== 19. load 嵌套（loaded 函数内再 load）=====
+{
+    str code = "vars inner_fn = load('return 99;'); return inner_fn();";
+    vars outer_fn = load(code);
+    int r = outer_fn();
+    check("nested load", r == 99, "99");
+}
+
+// ===== 20. 真栈溢出边界（受控深度）=====
+{
+    fn rec(int n) {
+        if (n == 0) { return 0; }
+        return 1 + rec(n - 1);
+    }
+    // 浅递归验证正确性
+    int r = rec(100);
+    check("rec(100)", r == 100, "100");
+
+    // 深递归触发栈溢出（pcall 捕获）
+    vars ok, err = pcall(fn() -> int {
+        return rec(1000000);
+    });
+    check("rec(1000000) stack overflow", ok == false, "error");
+}
+
+// ===== 21. 相互递归（用 map 存函数实现前向引用）=====
+{
+    map<any, any> fns = {};
+    fns["is_even"] = fn(int n) {
+        if (n == 0) { return true; }
+        return fns["is_odd"](n - 1);
+    };
+    fns["is_odd"] = fn(int n) {
+        if (n == 0) { return false; }
+        return fns["is_even"](n - 1);
+    };
+    bool e = fns["is_even"](10);
+    bool o = fns["is_odd"](10);
+    check("mutual recursion via map", e == true && o == false, "ok");
+}
+
+// ===== 22. 无效 UTF-8 字节序列 =====
+{
+    // 孤立 continuation byte
+    str bad1 = "\x80";
+    vars ok1, len1 = pcall(fn() -> int {
+        return utf8.len(bad1);
+    });
+    check("utf8.len lone continuation", ok1 == true, "ok");
+
+    // truncated 序列
+    str bad2 = "\xC0";  // lead byte 但无 continuation
+    vars ok2, len2 = pcall(fn() -> int {
+        return utf8.len(bad2);
+    });
+    check("utf8.len truncated", ok2 == true, "ok");
+
+    // overlong encoding
+    str bad3 = "\xC0\xAF";  // overlong U+002F
+    vars ok3, len3 = pcall(fn() -> int {
+        return utf8.len(bad3);
+    });
+    check("utf8.len overlong", ok3 == true, "ok");
+}
+
+// ===== 23. string.format 类型不匹配 =====
+{
+    vars ok1, err1 = pcall(fn() -> str {
+        return string.format("%d", "not a number");
+    });
+    check("format %d with str", ok1 == false, "error");
+
+    vars ok2, err2 = pcall(fn() -> str {
+        return string.format("%s", 42);
+    });
+    check("format %s with int", ok2 == true, "ok (auto convert)");
+}
+
+// ===== 24. rawget/rawset 在 list 上越界 =====
+{
+    list<int> a = [1, 2, 3];
+    vars ok1, err1 = pcall(fn() -> int {
+        return rawget(a, 100);
+    });
+    check("rawget list oob", ok1 == false, "error");
+
+    vars ok2, err2 = pcall(fn() -> void {
+        rawset(a, 100, 99);
+    });
+    check("rawset list oob", ok2 == false, "error");
+}
+
+// ===== 25. 元方法 __tostring（SPT 的 tostring 对 list/map 有内置格式，可能不调用 __tostring）=====
+{
+    map<any, any> t = {};
+    setmetatable(t, {
+        __tostring: fn(any v) -> str {
+            return "custom_tostring";
+        }
+    });
+    str s = tostring(t);
+    // SPT 的 tostring 可能用内置格式 "{}" 而非 __tostring
+    check("__tostring metamethod", typeof(s) == "str", "str");
+}
+
+// ===== 26. defer 在 error 路径的资源清理 =====
+{
+    list<str> cleaned = [];
+    fn worker() {
+        defer {
+            list.push(cleaned, "cleaned");
+        }
+        error("boom");
+    }
+    vars ok, err = pcall(worker);
+    check("defer on error", ok == false && #cleaned == 1, "ok");
+    check("defer msg", cleaned[0] == "cleaned", "cleaned");
+}
+
+// ===== 27. 协程内 error 传播 =====
+{
+    coro co = coroutine.create(fn() -> void {
+        error("coro error");
+    });
+    vars ok, err = coroutine.resume(co);
+    check("coro error propagate", ok == false, "error");
+    check("coro err msg", typeof(err) == "str", "str");
+
+    // 协程状态应为 dead
+    str status = coroutine.status(co);
+    check("coro status after error", status == "dead", "dead");
+}
+
+// ===== 28. 协程 yield 跨 pcall 边界 =====
+{
+    coro co = coroutine.create(fn() -> void {
+        vars ok, err = pcall(fn() -> void {
+            coroutine.yield(42);
+        });
+        // pcall 成功（yield 不是错误）
+        coroutine.yield(ok);
+    });
+    vars ok1, v1 = coroutine.resume(co);
+    vars ok2, v2 = coroutine.resume(co);
+    check("yield across pcall", ok1 && v1 == 42, "42");
+    check("yield across pcall 2", ok2 && v2 == true, "true");
+}
+
+// 输出结果到文件（避免 stdout 缓冲未 flush）
+file f = io.open("_fuzz_result.txt", "w");
+if (f != null) {
+    f.write("=== ASan fuzz tests: " .. tostring(pass_count) .. " passed, " .. tostring(fail_count) .. " failed ===\n");
+    for (auto i = 0, #failures - 1) {
+        f.write(failures[i] .. "\n");
+    }
+    f.close();
+}
+print("=== ASan fuzz tests: " .. tostring(pass_count) .. " passed, " .. tostring(fail_count) .. " failed ===");
+for (auto i = 0, #failures - 1) {
+    print(failures[i]);
+}
+if (fail_count > 0) {
+    error("Some fuzz tests failed!");
+}

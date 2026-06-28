@@ -1,0 +1,96 @@
+// 测试: list.move 区间重叠（aliasing）
+// 语法: list.move(src, start, end, dst_at, dst)
+// 描述: 测试 src == dst 时区间重叠的正确拷贝行为
+
+// === 1. 向前移动（dst_at > start，元素前移，memmove 从后往前复制）===
+// src = [1,2,3,4,5], move(src, 0, 3, 1, src) -> [1,1,2,3,5]
+{
+    list<int> a = [1, 2, 3, 4, 5];
+    list.move(a, 0, 3, 1, a);
+    // memmove: a[3]=a[2]=3, a[2]=a[1]=2, a[1]=a[0]=1; a[4] 不变
+    assert(#a == 5, "forward move length");
+    assert(a[0] == 1, "forward [0]");
+    assert(a[1] == 1, "forward [1]");
+    assert(a[2] == 2, "forward [2]");
+    assert(a[3] == 3, "forward [3]");
+    assert(a[4] == 5, "forward [4]");
+}
+
+// === 2. 向后移动（dst_at < start，元素后移）===
+// src = [1,2,3,4,5], move(src, 2, 5, 0, src) -> [3,4,5,4,5]
+// 注意：SPT list.move 是半开区间 [start, end)，n = end - start
+{
+    list<int> a = [1, 2, 3, 4, 5];
+    list.move(a, 2, 5, 0, a);
+    // 期望 [3,4,5,4,5]（index 0-2 是 2-4 的副本，3-4 不变）
+    assert(#a == 5, "backward move length");
+    assert(a[0] == 3, "backward [0]");
+    assert(a[1] == 4, "backward [1]");
+    assert(a[2] == 5, "backward [2]");
+    assert(a[3] == 4, "backward [3]");
+    assert(a[4] == 5, "backward [4]");
+}
+
+// === 3. 不重叠移动 ===
+{
+    list<int> src = [10, 20, 30];
+    list<int> dst = [1, 2, 3, 4, 5];
+    list.move(src, 0, 3, 1, dst);
+    // dst = [1, 10, 20, 30, 5]
+    assert(#dst == 5, "non-overlap length");
+    assert(dst[0] == 1, "non-overlap [0]");
+    assert(dst[1] == 10, "non-overlap [1]");
+    assert(dst[2] == 20, "non-overlap [2]");
+    assert(dst[3] == 30, "non-overlap [3]");
+    assert(dst[4] == 5, "non-overlap [4]");
+}
+
+// === 4. 单元素移动（边界）===
+{
+    list<int> a = [1, 2, 3];
+    list.move(a, 0, 1, 2, a);
+    // a = [1, 2, 1]（index 2 被 index 0 的值覆盖）
+    assert(#a == 3, "single element length");
+    assert(a[0] == 1, "single [0]");
+    assert(a[1] == 2, "single [1]");
+    assert(a[2] == 1, "single [2]");
+}
+
+// === 5. 空区间移动（start == end）===
+{
+    list<int> a = [1, 2, 3];
+    list.move(a, 1, 1, 0, a);
+    // 空区间，不移动
+    assert(#a == 3, "empty range length");
+    assert(a[0] == 1, "empty [0]");
+    assert(a[1] == 2, "empty [1]");
+    assert(a[2] == 3, "empty [2]");
+}
+
+// === 6. 跨表移动到更大目标 ===
+{
+    list<int> src = [100, 200];
+    list<int> dst = [1, 2, 3, 4, 5, 6, 7];
+    list.move(src, 0, 2, 3, dst);
+    // dst = [1, 2, 3, 100, 200, 6, 7]
+    assert(#dst == 7, "cross move length");
+    assert(dst[3] == 100, "cross [3]");
+    assert(dst[4] == 200, "cross [4]");
+    assert(dst[5] == 6, "cross [5]");
+}
+
+// === 7. 负索引区间重叠 ===
+{
+    list<int> a = [1, 2, 3, 4, 5];
+    // move(a, -3, -1, 0, a) = move(a, 2, 4, 0, a)
+    // 把 a[2],a[3] 复制到 a[0],a[1]，源区间不变
+    list.move(a, -3, -1, 0, a);
+    assert(#a == 5, "neg idx length");
+    assert(a[0] == 3, "neg idx [0]");
+    assert(a[1] == 4, "neg idx [1]");
+    assert(a[2] == 3, "neg idx [2] (src unchanged)");
+    assert(a[3] == 4, "neg idx [3] (src unchanged)");
+    assert(a[4] == 5, "neg idx [4]");
+}
+
+print("list_move_overlap tests passed!");

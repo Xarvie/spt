@@ -1,0 +1,99 @@
+// 测试: 尾调用（tail call）
+// 语法: return f(...)
+// 描述: 测试尾调用不增长栈，深尾调用不溢出
+
+// === 1. 基本尾调用 ===
+fn helper(int n) {
+    return n + 1;
+}
+fn caller(int n) {
+    return helper(n);  // 尾调用
+}
+assert(caller(41) == 42, "basic tail call");
+
+// === 2. 深尾递归（不增长栈）===
+fn tail_sum(int n, int acc) {
+    if (n == 0) { return acc; }
+    return tail_sum(n - 1, acc + n);  // 尾递归
+}
+assert(tail_sum(100, 0) == 5050, "tail_sum(100)");
+assert(tail_sum(1000, 0) == 500500, "tail_sum(1000)");
+
+// === 3. 超深尾递归（非尾递归会栈溢出）===
+fn deep_tail(int n, int acc) {
+    if (n == 0) { return acc; }
+    return deep_tail(n - 1, acc + 1);
+}
+// 100000 层尾递归应正常完成（非尾递归会栈溢出）
+assert(deep_tail(100000, 0) == 100000, "deep tail call 100000");
+
+// === 4. 尾调用后仍有 upvalue 访问 ===
+fn make_counter(int start) {
+    int count = start;
+    fn increment() {
+        count = count + 1;
+        return count;
+    }
+    return increment;
+}
+fn inc = make_counter(10);
+assert(inc() == 11, "upvalue after tail call");
+assert(inc() == 12, "upvalue 2");
+
+// === 5. 尾调用链（A -> B -> C）===
+fn step_c(int acc) {
+    return acc + 3;
+}
+fn step_b(int acc) {
+    return step_c(acc + 2);  // 尾调用
+}
+fn step_a(int acc) {
+    return step_b(acc + 1);  // 尾调用
+}
+assert(step_a(0) == 6, "tail call chain A->B->C");
+
+// === 6. 尾调用 vs 非尾调用 ===
+fn non_tail(int n) {
+    if (n == 0) { return 0; }
+    return 1 + non_tail(n - 1);  // 非尾递归（return 1 + f()）
+}
+fn tail_version(int n, int acc) {
+    if (n == 0) { return acc; }
+    return tail_version(n - 1, acc + 1);  // 尾递归
+}
+assert(non_tail(100) == 100, "non-tail recursion");
+assert(tail_version(100, 0) == 100, "tail recursion");
+
+// === 7. 尾调用多返回值 ===
+fn multi(int a, int b, int c) {
+    return a, b, c;
+}
+fn caller_multi() {
+    return multi(1, 2, 3);  // 尾调用，多返回值
+}
+vars x, y, z = caller_multi();
+assert(x == 1 && y == 2 && z == 3, "tail call multi-return");
+
+// === 8. pcall 内的尾调用 ===
+fn tail_in_pcall(int n) {
+    if (n == 0) { return "done"; }
+    return tail_in_pcall(n - 1);  // 尾递归
+}
+vars ok, result = pcall(fn() {
+    return tail_in_pcall(10000);
+});
+assert(ok, "pcall tail recursion ok");
+assert(result == "done", "pcall tail recursion result");
+
+// === 9. 尾调用 error 传播 ===
+fn error_tail(int n) {
+    if (n == 0) { error("tail error"); }
+    return error_tail(n - 1);
+}
+vars ok2, err = pcall(fn() {
+    return error_tail(100);
+});
+assert(ok2 == false, "tail error propagated");
+assert(typeof(err) == "str", "tail error msg is str");
+
+print("tail_call tests passed!");

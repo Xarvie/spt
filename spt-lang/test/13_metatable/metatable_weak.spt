@@ -1,0 +1,127 @@
+// 测试: 元表 - 弱表（weak table）
+// 语法: setmetatable(t, {__mode: "k"|"v"|"kv"})
+// 描述: 测试弱键/弱值的 GC 回收行为
+
+// === 1. 弱值表（__mode = "v"）===
+{
+    map<any, any> weak_v = {};
+    setmetatable(weak_v, {__mode: "v"});
+    str key = "k1";
+    map<any, any> val = {x: 1};
+    weak_v[key] = val;
+    // 释放强引用
+    val = null;
+    collectgarbage("collect");
+    // 弱值应被回收
+    assert(weak_v[key] == null, "weak value collected");
+}
+
+// === 2. 弱值表 - 保留强引用 ===
+{
+    map<any, any> weak_v = {};
+    setmetatable(weak_v, {__mode: "v"});
+    str key = "k2";
+    map<any, any> val = {x: 2};
+    weak_v[key] = val;
+    collectgarbage("collect");
+    // val 仍有强引用，不应被回收
+    assert(weak_v[key] != null, "weak value kept (strong ref exists)");
+    assert(weak_v[key]["x"] == 2, "weak value correct");
+    val = null;  // 现在释放
+    collectgarbage("collect");
+    assert(weak_v[key] == null, "weak value collected after strong ref released");
+}
+
+// === 3. 弱键表（__mode = "k"）===
+{
+    map<any, any> weak_k = {};
+    setmetatable(weak_k, {__mode: "k"});
+    map<any, any> key = {id: 1};
+    weak_k[key] = "value1";
+    // 释放强引用
+    key = null;
+    collectgarbage("collect");
+    // 弱键应被回收，条目消失
+    int count = 0;
+    vars k, v = next(weak_k, null);
+    while (k != null) {
+        count = count + 1;
+        vars k2, v2 = next(weak_k, k);
+        k = k2;
+    }
+    assert(count == 0, "weak key collected");
+}
+
+// === 4. 弱键值表（__mode = "kv"）===
+{
+    map<any, any> weak_kv = {};
+    setmetatable(weak_kv, {__mode: "kv"});
+    map<any, any> key = {id: 2};
+    map<any, any> val = {data: "v2"};
+    weak_kv[key] = val;
+    key = null;
+    val = null;
+    collectgarbage("collect");
+    int count = 0;
+    vars k, v = next(weak_kv, null);
+    while (k != null) {
+        count = count + 1;
+        vars k2, v2 = next(weak_kv, k);
+        k = k2;
+    }
+    assert(count == 0, "weak kv collected");
+}
+
+// === 5. 字符串键不受弱键影响（字符串被 intern）===
+{
+    map<any, any> weak_k = {};
+    setmetatable(weak_k, {__mode: "k"});
+    str key = "string_key";
+    weak_k[key] = 42;
+    key = null;
+    collectgarbage("collect");
+    // 字符串被 intern，不会被回收
+    assert(weak_k["string_key"] == 42, "string key not collected (interned)");
+}
+
+// === 6. 数字值不被弱值回收（数字是值类型）===
+{
+    map<any, any> weak_v = {};
+    setmetatable(weak_v, {__mode: "v"});
+    weak_v["num"] = 123;
+    collectgarbage("collect");
+    // 数字是值类型，不受弱值影响
+    assert(weak_v["num"] == 123, "number value not collected");
+}
+
+// === 7. 弱值表 - 多条目部分回收 ===
+{
+    map<any, any> weak_v = {};
+    setmetatable(weak_v, {__mode: "v"});
+    map<any, any> keep = {keep: true};
+    map<any, any> drop = {drop: true};
+    weak_v["keep"] = keep;
+    weak_v["drop"] = drop;
+    // 只释放 drop
+    drop = null;
+    collectgarbage("collect");
+    assert(weak_v["keep"] != null, "keep kept");
+    assert(weak_v["drop"] == null, "drop collected");
+    keep = null;
+    collectgarbage("collect");
+    assert(weak_v["keep"] == null, "keep collected after release");
+}
+
+// === 8. 非弱表不回收值 ===
+{
+    map<any, any> strong = {};
+    map<any, any> val = {x: 1};
+    strong["k"] = val;
+    val = null;
+    collectgarbage("collect");
+    // 非弱表，值不被回收
+    assert(strong["k"] != null, "strong table keeps value");
+    assert(strong["k"]["x"] == 1, "strong table value correct");
+}
+
+print("metatable_weak tests passed!");

@@ -1,0 +1,151 @@
+// 测试: 元表 - __gc finalizer
+// 语法: setmetatable(t, {__gc: fn(o) {...}})
+// 描述: 测试 GC finalizer 的调用、顺序、resurrect、错误处理
+
+// === 1. 基本 __gc 调用 ===
+{
+    map<any, any> obj = {};
+    list<str> log = [];
+    setmetatable(obj, {
+        __gc: fn(any o) {
+            list.push(log, "finalized");
+        }
+    });
+    obj = null;
+    collectgarbage("collect");
+    assert(#log == 1, "basic __gc called");
+    assert(log[0] == "finalized", "basic __gc msg");
+}
+
+// === 2. 多对象 finalizer 顺序（GC 不保证顺序，但都会被调用）===
+{
+    list<int> ids = [];
+    fn make_obj(int id) {
+        map<any, any> obj = {};
+        setmetatable(obj, {
+            __gc: fn(any o) {
+                list.push(ids, id);
+            }
+        });
+        return obj;
+    }
+    list<any> objs = [make_obj(1), make_obj(2), make_obj(3)];
+    objs = null;
+    collectgarbage("collect");
+    assert(#ids == 3, "all 3 finalized");
+    // 顺序不保证，但 1/2/3 都应在
+    bool has1 = false;
+    bool has2 = false;
+    bool has3 = false;
+    for (auto i = 0, #ids - 1) {
+        if (ids[i] == 1) { has1 = true; }
+        if (ids[i] == 2) { has2 = true; }
+        if (ids[i] == 3) { has3 = true; }
+    }
+    assert(has1 && has2 && has3, "all ids present");
+}
+
+// === 3. __gc 中访问对象字段 ===
+{
+    map<any, any> obj = {name: "myobj", value: 42};
+    str captured = "";
+    setmetatable(obj, {
+        __gc: fn(any o) {
+            // finalizer 收到的 o 是被回收的对象
+            captured = tostring(o["name"]);
+        }
+    });
+    obj = null;
+    collectgarbage("collect");
+    assert(captured == "myobj", "__gc can read object field");
+}
+
+// === 4. __gc 中抛错（应被 GC 安全捕获，不影响后续）===
+{
+    map<any, any> bad = {};
+    list<str> after_log = [];
+    setmetatable(bad, {
+        __gc: fn(any o) {
+            error("finalizer error");
+        }
+    });
+    bad = null;
+    collectgarbage("collect");  // 不应崩溃
+    // 后续 GC 正常
+    map<any, any> good = {};
+    setmetatable(good, {
+        __gc: fn(any o) {
+            list.push(after_log, "good");
+        }
+    });
+    good = null;
+    collectgarbage("collect");
+    assert(#after_log == 1, "GC continues after __gc error");
+}
+
+// === 5. __gc 只调用一次（即使 resurrect）===
+{
+    int call_count = 0;
+    map<any, any> holder = {};
+    {
+        map<any, any> obj = {};
+        setmetatable(obj, {
+            __gc: fn(any o) {
+                call_count = call_count + 1;
+                // resurrect: 重新引用自己
+                holder["resurrected"] = o;
+            }
+        });
+        obj = null;
+    }
+    collectgarbage("collect");  // 第一次 GC：调用 __gc，resurrect
+    assert(call_count == 1, "__gc called once on resurrect");
+    // 释放 resurrected 引用
+    holder["resurrected"] = null;
+    collectgarbage("collect");  // 第二次 GC：不再调用 __gc
+    assert(call_count == 1, "__gc not called again after resurrect release");
+}
+
+// === 6. __gc 与 upvalue 捕获 ===
+{
+    list<int> counts = [];
+    fn make_counter(int initial) {
+        map<any, any> obj = {};
+        int count = initial;
+        setmetatable(obj, {
+            __gc: fn(any o) {
+                count = count + 1;
+                list.push(counts, count);
+            }
+        });
+        return obj;
+    }
+    map<any, any> c1 = make_counter(10);
+    map<any, any> c2 = make_counter(20);
+    c1 = null;
+    collectgarbage("collect");
+    assert(#counts == 1, "c1 finalized");
+    assert(counts[0] == 11, "c1 upvalue captured");
+    c2 = null;
+    collectgarbage("collect");
+    assert(#counts == 2, "c2 finalized");
+    assert(counts[1] == 21, "c2 upvalue captured");
+}
+
+// === 7. 无 __gc 的对象不被 finalize ===
+{
+    map<any, any> obj = {};
+    // 不设 __gc
+    obj = null;
+    collectgarbage("collect");  // 不应崩溃
+    // 无断言可做，仅验证不崩溃
+}
+
+// === 8. __gc 与 list（list 无 metatable finalizer）===
+{
+    list<int> lst = [1, 2, 3];
+    lst = null;
+    collectgarbage("collect");  // 不应崩溃
+}
+
+print("metatable_gc tests passed!");

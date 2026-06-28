@@ -1,0 +1,97 @@
+// 测试: 内置函数 - string.rep（重复字符串）
+// 语法: string.rep(s, n, [sep])
+// 描述: 测试 string.rep 的边界场景、分隔符、溢出错误
+
+// ===== 基本：n=3 =====
+assert(string.rep("ab", 3) == "ababab", "basic rep ab*3");
+assert(string.rep("x", 5) == "xxxxx", "basic rep x*5");
+
+// ===== n=0 返回空串 =====
+assert(string.rep("ab", 0) == "", "n=0 returns empty");
+assert(#string.rep("ab", 0) == 0, "n=0 length is 0");
+
+// ===== n=1 返回原串 =====
+assert(string.rep("hello", 1) == "hello", "n=1 returns original");
+
+// ===== n 负数 返回空串 =====
+assert(string.rep("ab", -1) == "", "n=-1 returns empty");
+assert(string.rep("ab", -100) == "", "n=-100 returns empty");
+
+// ===== 空串作输入 =====
+assert(string.rep("", 5) == "", "empty string * 5 is empty");
+assert(string.rep("", 0) == "", "empty string * 0 is empty");
+
+// ===== 单字节字符重复 =====
+str dashes = string.rep("-", 10);
+assert(dashes == "----------", "dash * 10");
+assert(#dashes == 10, "dash * 10 length");
+
+// ===== 分隔符 sep：副本之间，不在末尾 =====
+assert(string.rep("a", 3, "-") == "a-a-a", "rep with sep");
+assert(string.rep("ab", 2, ", ") == "ab, ab", "rep with multi-char sep");
+
+// ===== 分隔符为空串 等价于无 sep =====
+assert(string.rep("a", 3, "") == "aaa", "rep with empty sep");
+assert(string.rep("a", 3, "") == string.rep("a", 3), "empty sep == no sep");
+
+// ===== n=1 + 分隔符：末尾不加分隔符 =====
+assert(string.rep("x", 1, ",") == "x", "n=1 with sep: no trailing sep");
+assert(string.rep("xy", 1, "Z") == "xy", "n=1 with multi-char sep: no trailing");
+
+// ===== n=0 + 分隔符：返回空串（无分隔符） =====
+assert(string.rep("a", 0, "-") == "", "n=0 with sep: empty");
+
+// ===== 多字节 UTF-8 字符串：按字节重复 =====
+str zh = "中文";           // 6 bytes (每个汉字 3 字节)
+str zh3 = string.rep(zh, 3);
+assert(#zh3 == 18, "utf8 multi-byte rep byte length");
+assert(zh3 == "中文中文中文", "utf8 rep content");
+
+// ===== NUL 字节字符串（用 \x00 表示 NUL）=====
+str nul = string.rep("\x00", 3);
+assert(#nul == 3, "nul byte rep length");
+assert(string.byte(nul, 0) == 0, "nul rep byte 0 is NUL");
+assert(string.byte(nul, 2) == 0, "nul rep byte 2 is NUL");
+str nulSep = string.rep("A", 3, "\x00");
+assert(#nulSep == 5, "nul sep length: A NUL A NUL A");
+assert(string.byte(nulSep, 0) == 65, "nul sep[0] is 'A'");
+assert(string.byte(nulSep, 1) == 0, "nul sep[1] is NUL");
+assert(string.byte(nulSep, 4) == 65, "nul sep[4] is 'A'");
+
+// ===== 大 n：验证长度正确（不爆内存） =====
+str big = string.rep("abcdefghij", 1000);  // 10 * 1000 = 10000 bytes
+assert(#big == 10000, "large rep byte length");
+assert(string.sub(big, 0, 10) == "abcdefghij", "large rep head");
+assert(string.sub(big, -10) == "abcdefghij", "large rep tail");
+
+// ===== 大 n + 分隔符：长度计算正确 =====
+str big2 = string.rep("ab", 100, "|");  // 2*100 + 1*99 = 299
+assert(#big2 == 299, "large rep with sep length");
+assert(string.sub(big2, 0, 3) == "ab|", "large sep head");
+assert(string.sub(big2, -2) == "ab", "large sep tail (no trailing)");
+
+// ===== 溢出错误：n 过大触发 "resulting string too large" =====
+fn hugeRepNoSep() {
+    vars _ = string.rep("xxxxxxxxxx", 1 << 60);
+}
+vars ok, err = pcall(hugeRepNoSep);
+assert(ok == false, "huge n should error");
+assert(string.find(tostring(err), "too large") != null, "error mentions 'too large'");
+
+// ===== 溢出错误：sep 使总长溢出 =====
+fn hugeRepWithSep() {
+    vars _ = string.rep("x", 1 << 60, "yyyyyyyyyy");
+}
+vars ok2, err2 = pcall(hugeRepWithSep);
+assert(ok2 == false, "huge n with sep should error");
+assert(string.find(tostring(err2), "too large") != null, "sep overflow error mentions 'too large'");
+
+// ===== 验证 string.rep 不修改输入串 =====
+str input = "abc";
+vars _ = string.rep(input, 5, "-");
+assert(input == "abc", "rep does not modify input");
+
+// ===== 与字符串拼接对比 =====
+assert(string.rep("ab", 4) == "ab" .. "ab" .. "ab" .. "ab", "rep matches concat");
+
+print("string_rep tests passed!");

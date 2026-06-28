@@ -1,0 +1,98 @@
+// ASan 边缘压力测试：探查未覆盖代码路径
+
+// === 1. 超长字符串 ===
+str long = "";
+for (auto i = 0, 9999) {
+    long = long .. "x";
+}
+assert(#long == 10000, "long string length");
+
+// === 2. 超长字符串拼接（可能触发 realloc 边界）===
+str concat = "";
+list<str> parts = ["ab", "cd", "ef", "gh"];
+for (auto i = 0, 999) {
+    concat = concat .. parts[i % 4];
+}
+assert(#concat == 2000, "concat length");
+
+// === 3. 大 list 操作 ===
+list<int> big = list.create(10000);
+for (auto i = 0, 9999) {
+    list.push(big, i);
+}
+int sum = 0;
+for (auto i = 0, 9999) {
+    sum = sum + big[i];
+}
+assert(sum == 49995000, "big list sum");
+
+// === 4. 深度嵌套 list/map ===
+list<any> nested = [1, [2, [3, [4, [5]]]]];
+assert(nested[1][1][1][1][0] == 5, "deep nested access");
+
+// === 5. 大量 string.sub/match（0-based 边界）===
+str s = "Hello, World!";
+for (auto i = 0, 999) {
+    str sub = string.sub(s, 0, 5);
+    assert(sub == "Hello", "sub in loop");
+}
+
+// === 6. 大量 string.pack/unpack ===
+for (auto i = 0, 999) {
+    str packed = string.pack("i4i4", i, i + 1);
+    vars a, b = string.unpack("i4i4", packed);
+    assert(a == i, "pack/unpack a");
+    assert(b == i + 1, "pack/unpack b");
+}
+
+// === 7. 协程大量创建/销毁 ===
+for (auto i = 0, 99) {
+    coro co = coroutine.create(fn() -> int {
+        coroutine.yield(42);
+        return 100;
+    });
+    vars ok, v1 = coroutine.resume(co);
+    assert(ok && v1 == 42, "coroutine yield");
+    vars ok2, v2 = coroutine.resume(co);
+    assert(ok2 && v2 == 100, "coroutine return");
+}
+
+// === 8. defer + error + pcall 组合 ===
+for (auto i = 0, 99) {
+    vars ok, err = pcall(fn() -> void {
+        defer { /* cleanup */ };
+        error("test error " .. tostring(42));
+    });
+    assert(ok == false, "pcall catches error with defer");
+}
+
+// === 9. load + 执行 + GC 压力 ===
+for (auto i = 0, 99) {
+    str code = "return " .. tostring(i) .. ";";
+    vars lf = load(code);
+    int r = lf();
+    assert(r == i, "load+exec in loop");
+    collectgarbage("collect");
+}
+
+// === 10. 元方法链 ===
+map<any, any> mt = {};
+mt["__index"] = mt;
+map<any, any> t = {};
+setmetatable(t, mt);
+mt["x"] = 42;
+// 通过 __index 链访问
+assert(t["x"] == 42, "metatable __index chain");
+
+// === 11. string.format 边界 ===
+str fmt = string.format("%d %s %f %x", 42, "hello", 3.14, 255);
+assert(string.find(fmt, "42") != null, "format %d");
+assert(string.find(fmt, "hello") != null, "format %s");
+
+// === 12. 超大整数 ===
+int big_int = 9223372036854775807;  // INT64_MAX
+assert(big_int == 9223372036854775807, "int64 max");
+int neg_int = -9223372036854775807 - 1;  // INT64_MIN
+assert(neg_int == -9223372036854775808, "int64 min");
+
+print("ASan edge case tests passed!");

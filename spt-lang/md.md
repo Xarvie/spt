@@ -337,3 +337,77 @@ list.pack 返回 list 无 .n。
 - load_loadfile.spt 启用失败路径测试：load 语法错误 / load("") / load+pcall+error
   组合 / loadfile 不存在文件，全部通过
 - 全量测试 394/394 通过（无回归）
+
+已实施（ASan/UBSan 全量测试 + 边缘/fuzz 压力测试）：
+- CMakeLists.txt MSVC 分支支持 ASan + UBSan（原本只支持 ASan）：
+  - clang-cl 的 /fsanitize=undefined 不被识别，UBSan 改用 GNU 风格 -fsanitize=undefined
+  - ASan 不支持 debug runtime (-MDd)，用 /MD 强制 release runtime（覆盖 Debug 的 /MDd）
+  - 构建类型用 RelWithDebInfo，保留调试信息
+  - 自动查找 clang ASan 运行时库（clang_rt.asan_dynamic-x86_64.lib + thunk），
+    支持自定义 LLVM_INSTALL_DIR 和默认 C:/env/LLVM 路径
+- 构建配置：便携式 MSVC + Clang 22.1.3 工具链（C:\msvc18\msvc_standalone），
+  setup_env.ps1 设置环境，clang-cl 编译，Ninja 构建
+- ASan 检测能力验证：_asan_test.c 故意触发 heap-buffer-overflow，ASan 正确检测
+- 测试结果（全部通过，0 sanitizer 报告）：
+  - 全量 394 个 .spt 测试（普通 ASan 选项）：394/394 pass
+  - 全量 394 个 .spt 测试（激进 ASan 选项 detect_stack_use_after_return=1:
+    halt_on_error=1:strict_string_checks=1:detect_container_overflow=1）：394/394 pass
+  - C API 测试（TestCApi, TestDeclare, TestIter）：3/3 pass
+  - JIT + Stress 测试 160 个（SPT_JIT=1）：160/160 pass
+  - 全量 394 个 .spt 测试（SPT_JIT=1）：394/394 pass
+  - 边缘压力测试 _asan_edge_cases.spt（12 场景）：pass
+  - fuzzing 测试 _asan_fuzz.spt（51 边界场景）：51/51 pass
+  - JIT 模式边缘+fuzz：全部 pass
+- 边缘压力测试 _asan_edge_cases.spt 覆盖（12 场景）：
+  超长字符串、字符串拼接 realloc、大 list 操作、深度嵌套、string.sub/match 循环、
+  string.pack/unpack 循环、协程创建/销毁、defer+error+pcall、load+GC 压力、
+  元方法链、string.format、超大整数（INT64_MAX/MIN）
+- fuzzing 测试 _asan_fuzz.spt 覆盖（51 边界场景）：
+  __index 真环（A↔B 循环检测）、__index 自引用（非真循环）、__newindex rawset、
+  __newindex 递归、协程 resume dead、协程 resume suspended、协程双重 close、
+  空 list 越界读/写、list.pop/remove 空表、list.insert 越界 pos、list.concat 越界、
+  string.char 边界（-1/256/1.5）、string.byte 越界、空模式 find、string.sub 极端参数、
+  NUL 字节字符串、load 失败+GC 循环 50 次、load 嵌套、栈溢出边界（rec(1000000)）、
+  相互递归（map 存函数）、无效 UTF-8（continuation/truncated/overlong）、
+  string.format 类型不匹配、rawget/rawset list 越界、__tostring 元方法、
+  defer+error 资源清理、协程 error 传播、协程 yield 跨 pcall 边界
+- 代码审计：SPT 自己的代码（spt_*.c）无危险函数（sprintf/strcpy/strcat/gets/scanf），
+  危险函数只在 Lua 原始代码（l*.c）中
+- 结论：ASan/UBSan 全量测试（含边缘压力 + fuzzing + JIT 模式）通过，未发现内存漏洞
+
+已实施（补充测试覆盖 + 修复 GCTM slot-0 ABI bug）：
+- 针对 fuzzing 研究中发现的完全空白场景补充 4 个正式测试文件（共 32 场景）：
+  - test/13_metatable/metatable_gc.spt（8 场景）：__gc 基本/多对象/字段访问/
+    抛错安全捕获/resurrect 只调用一次/upvalue 捕获/无 __gc/list GC
+  - test/13_metatable/metatable_weak.spt（8 场景）：弱值表/保留强引用/弱键表/
+    弱键值表/字符串键 intern/数字值不受弱值影响/多条目部分回收/非弱表
+  - test/14_stress/tail_call.spt（9 场景）：基本尾调用/深尾递归(1000)/
+    超深尾递归(100000 不溢出)/upvalue/尾调用链/对比非尾调用/多返回值/pcall/error
+  - test/10_builtins/list_funcs/list_move_overlap.spt（7 场景）：向前/向后/
+    不重叠/单元素/空区间/跨表/负索引重叠（memmove 方向正确性）
+- 发现并修复 GCTM slot-0 ABI bug（lgc.c）：
+  - 问题：GCTM 调用 __gc finalizer 时只压 [finalizer, obj] 共 2 个元素，
+    dothecall 用 L->top.p - 2 调用。SPT slot-0 ABI 下：
+      C metamethod 用 slot 1（receiver=obj），参数读取正常；
+      SPT 用户函数 fn(any o) 用 slot 2（声明参数=obj），但 slot 2 不存在，读到垃圾
+  - 修复：GCTM 多压一个 obj 副本 [finalizer, obj, obj]，dothecall 改用 L->top.p - 3。
+    C 函数照常用 slot 1；SPT 用户函数用 slot 2 拿到正确的 obj
+  - 验证：io 库 f_gc C 函数不受影响（slot 1 仍是 receiver=file userdata），
+    全量 400 个测试通过，0 回归
+- 全量测试：400/400 pass（含 4 个新测试文件，0 失败，0 sanitizer 报告）
+
+已实施（补充 string.rep / collectgarbage 高级选项测试）：
+- test/10_builtins/string_funcs/string_rep.spt（18 场景）：
+  基本 rep、n=0/n=1/n 负数、空串输入、单字节重复、分隔符 sep（副本之间不在末尾）、
+  空分隔符、n=1+sep 无尾分隔、n=0+sep、UTF-8 多字节按字节重复、
+  NUL 字节（\x00）、大 n 长度正确、大 n+sep 长度、溢出错误（n 过大触发 "resulting
+  string too large"）、sep 溢出错误、不修改输入串、与拼接对比
+- test/10_builtins/other/collectgarbage_advanced.spt（6 类场景）：
+  GC 模式切换（inc<->gen，返回旧模式字符串）、6 个 param 参数 get/set
+  （pause/stepmul/stepsize/minormul/minormajor/majorminor，编码无关验证：
+  set 返回旧值、-1 不改变、二次 set round-trip 一致）、无效 param 名抛错、
+  模式切换后 GC 正常（collect/step）、count 在两种模式下返回 float、
+  param 在两种模式下都可 get/set
+- 发现 param 编码精度限制：luaO_codeparam/applyparam 用浮点字节（eeeexxxx）
+  编码，设置 256 解码后为 250。测试改用 round-trip 验证而非精确值匹配
+- 全量测试：405/405 pass（含 6 个新测试文件，0 失败，0 sanitizer 报告，617s）

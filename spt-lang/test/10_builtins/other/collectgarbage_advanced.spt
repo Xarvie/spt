@@ -1,0 +1,134 @@
+// 测试: base 库 collectgarbage 高级选项（GC 模式切换 + param 参数）
+// 语法: collectgarbage("generational" | "incremental" | "param", ...)
+// 描述: 覆盖 Lua 5.4 GC 模式切换与参数 get/set 行为
+// 注意：每个 .spt 是独立进程，无需恢复 GC 状态
+//
+// param 编码说明（lobject.c luaO_codeparam/applyparam）：
+//   参数以浮点字节（eeeexxxx）编码，精度有限。
+//   例如设置 256 解码后可能得到 250。因此测试不依赖精确值，
+//   而是验证：get 返回 int、set 返回旧值、-1 不改变、二次 set 一致。
+
+// ===========================================================================
+// 1. GC 模式切换：incremental <-> generational
+// ===========================================================================
+// 默认模式（Lua 5.4 默认为 generational）
+vars mode1 = collectgarbage("generational");
+assert(typeof(mode1) == "str", "generational returns string");
+assert(mode1 == "incremental" || mode1 == "generational",
+       "initial mode should be 'incremental' or 'generational', got: " .. tostring(mode1));
+
+// 切换到 generational，返回旧模式
+vars old1 = collectgarbage("generational");
+// 再次切换到 generational，应返回 "generational"（已经是 gen 模式）
+vars old2 = collectgarbage("generational");
+assert(old2 == "generational", "switch gen->gen returns 'generational'");
+
+// 切换到 incremental，应返回 "generational"
+vars old3 = collectgarbage("incremental");
+assert(old3 == "generational", "switch gen->inc returns 'generational'");
+
+// 再次切换到 incremental，应返回 "incremental"
+vars old4 = collectgarbage("incremental");
+assert(old4 == "incremental", "switch inc->inc returns 'incremental'");
+
+// ===========================================================================
+// 2. param 选项：6 个参数的 get/set（编码无关）
+// ===========================================================================
+// 参数：pause / stepmul / stepsize / minormul / minormajor / majorminor
+// 行为：collectgarbage("param", name) 返回当前值（int）
+//       collectgarbage("param", name, value) 设置新值，返回旧值
+//       value=-1 表示查询但不设置
+
+// 通用验证函数：对单个参数测试 get/set/round-trip
+fn checkParam(str name, int newVal) {
+    int v0 = collectgarbage("param", name);           // 初始值
+    assert(typeof(v0) == "int", "param " .. name .. " returns int");
+    assert(v0 > 0, "param " .. name .. " default positive, got: " .. tostring(v0));
+
+    int prev = collectgarbage("param", name, newVal); // 设置，返回旧值
+    assert(prev == v0, "set " .. name .. " returns previous value");
+
+    int v1 = collectgarbage("param", name);           // 设置后的值（可能 != newVal，编码损失）
+    assert(v1 > 0, "param " .. name .. " after set is positive");
+
+    int prev2 = collectgarbage("param", name, newVal); // 再设一次，返回上次的编码值
+    assert(prev2 == v1, "second set " .. name .. " returns encoded value (round-trip)");
+
+    int queryNeg = collectgarbage("param", name, -1);  // -1 不改变
+    assert(queryNeg == v1, "param " .. name .. " with -1 does not change value");
+    int v2 = collectgarbage("param", name);
+    assert(v2 == v1, "param " .. name .. " unchanged after -1 query");
+}
+
+checkParam("pause", 300);
+checkParam("stepmul", 150);
+checkParam("stepsize", 256);
+checkParam("minormul", 30);
+checkParam("minormajor", 80);
+checkParam("majorminor", 40);
+
+// ===========================================================================
+// 3. 无效 param 名应抛错
+// ===========================================================================
+fn badParam() {
+    vars _ = collectgarbage("param", "nonexistent_param");
+}
+vars pok, perr = pcall(badParam);
+assert(pok == false, "invalid param name should error");
+assert(string.find(tostring(perr), "invalid option") != null
+    || string.find(tostring(perr), "nonexistent_param") != null,
+    "error mentions invalid option, got: " .. tostring(perr));
+
+// ===========================================================================
+// 4. 模式切换后 GC 仍可正常工作
+// ===========================================================================
+// 切到 generational 后做完整 collect
+collectgarbage("generational");
+vars gcret1 = collectgarbage("collect");
+assert(gcret1 == 0, "collect in gen mode returns 0");
+
+// 切到 incremental 后做 step
+collectgarbage("incremental");
+bool step_ok = collectgarbage("step", 1000);
+assert(typeof(step_ok) == "bool", "step in inc mode returns bool");
+
+// ===========================================================================
+// 5. count 在 gen/inc 模式下都返回 float KB
+// ===========================================================================
+collectgarbage("collect");
+float mem_inc = collectgarbage("count");
+assert(typeof(mem_inc) == "float", "count in inc mode returns float");
+assert(mem_inc > 0, "count in inc mode positive");
+
+collectgarbage("generational");
+collectgarbage("collect");
+float mem_gen = collectgarbage("count");
+assert(typeof(mem_gen) == "float", "count in gen mode returns float");
+assert(mem_gen > 0, "count in gen mode positive");
+
+// ===========================================================================
+// 6. param 在两种模式下都可 get/set
+// ===========================================================================
+collectgarbage("incremental");
+int p_inc_prev = collectgarbage("param", "pause", 400);
+int p_inc_after = collectgarbage("param", "pause");
+assert(p_inc_after > 0, "param set in inc mode produces positive value");
+// 再设一次验证 round-trip
+int p_inc_prev2 = collectgarbage("param", "pause", 400);
+assert(p_inc_prev2 == p_inc_after, "round-trip in inc mode");
+
+collectgarbage("generational");
+int p_gen_prev = collectgarbage("param", "pause", 500);
+int p_gen_after = collectgarbage("param", "pause");
+assert(p_gen_after > 0, "param set in gen mode produces positive value");
+int p_gen_prev2 = collectgarbage("param", "pause", 500);
+assert(p_gen_prev2 == p_gen_after, "round-trip in gen mode");
+
+// generational 专属参数（minormul/minormajor/majorminor）在 gen 模式下设置
+int mm_prev = collectgarbage("param", "minormul", 25);
+int mm_after = collectgarbage("param", "minormul");
+assert(mm_after > 0, "minormul set in gen mode produces positive value");
+int mm_prev2 = collectgarbage("param", "minormul", 25);
+assert(mm_prev2 == mm_after, "minormul round-trip in gen mode");
+
+print("collectgarbage_advanced tests passed!");
