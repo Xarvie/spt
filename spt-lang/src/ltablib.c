@@ -122,6 +122,7 @@ static int tinsert(lua_State *L) {
   case 4: {
     lua_Integer i;
     pos = luaL_checkinteger(L, 3); /* 2nd argument is the position */
+    if (pos < 0) pos += e; /* 负索引从尾计：-1 = 最后一个之前插入 */
     luaL_argcheck(L, (lua_Unsigned)pos <= (lua_Unsigned)e, 3, "position out of bounds");
     /* grow by appending a dummy nil at the end to trigger amortized growth */
     lua_pushnil(L);
@@ -151,6 +152,7 @@ static int tinsert(lua_State *L) {
 static int tremove(lua_State *L) {
   lua_Integer size = list_getn(L, 2);
   lua_Integer pos = luaL_optinteger(L, 3, (size > 0) ? size - 1 : 0);
+  if (pos < 0) pos += size; /* 负索引从尾计：-1 = 最后一个 */
   if (size == 0) {  /* empty list? */
     lua_pushnil(L); /* return nil, do nothing */
     return 1;
@@ -181,6 +183,12 @@ static int tmove(lua_State *L) {
   int tt = !lua_isnoneornil(L, 6) ? 6 : 2; /* destination table */
   luaL_checktype(L, 2, LUA_TARRAY);  /* source must be list */
   luaL_checktype(L, tt, LUA_TARRAY); /* destination must be list */
+  /* 负索引从尾计：相对各自 loglen 转换 */
+  lua_Integer src_len = luaL_len(L, 2);
+  lua_Integer dst_len = luaL_len(L, tt);
+  if (f < 0) f += src_len;
+  if (e < 0) e += src_len;
+  if (t < 0) t += dst_len;
   if (e > f) { /* otherwise, empty range; nothing to move */
     lua_Integer n, i;
     luaL_argcheck(L, f >= 0 || e < LUA_MAXINTEGER + f, 3, "too many elements to move");
@@ -214,11 +222,13 @@ static void addfield(lua_State *L, luaL_Buffer *b, lua_Integer i) {
  * j is arg5 (exclusive end, default = loglen). Half-open interval [i, j). */
 static int tconcat(lua_State *L) {
   luaL_Buffer b;
-  lua_Integer last = list_getn(L, 2); /* loglen (default exclusive end) */
+  lua_Integer loglen = list_getn(L, 2); /* loglen */
   size_t lsep;
   const char *sep = luaL_optlstring(L, 3, "", &lsep);
-  lua_Integer i = luaL_optinteger(L, 4, 0); /* default start: 0 */
-  last = luaL_optinteger(L, 5, last);       /* default end: loglen (exclusive) */
+  lua_Integer i = luaL_optinteger(L, 4, 0);      /* default start: 0 */
+  lua_Integer last = luaL_optinteger(L, 5, loglen); /* default end: loglen (exclusive) */
+  if (i < 0) i += loglen;     /* 负索引从尾计 */
+  if (last < 0) last += loglen;
   luaL_buffinit(L, &b);
   for (; i < last - 1; i++) { /* all but last, each followed by sep */
     addfield(L, &b, i);
@@ -261,8 +271,11 @@ static int tpack(lua_State *L) {
 static int tunpack(lua_State *L) {
   lua_Unsigned n;
   luaL_checktype(L, 2, LUA_TARRAY); /* list only */
-  lua_Integer i = luaL_optinteger(L, 3, 0);                          /* default start: 0 */
-  lua_Integer e = luaL_opt(L, luaL_checkinteger, 4, luaL_len(L, 2)); /* exclusive end */
+  lua_Integer loglen = luaL_len(L, 2);
+  lua_Integer i = luaL_optinteger(L, 3, 0);                /* default start: 0 */
+  lua_Integer e = luaL_opt(L, luaL_checkinteger, 4, loglen); /* exclusive end */
+  if (i < 0) i += loglen; /* 负索引从尾计 */
+  if (e < 0) e += loglen;
   if (i >= e)
     return 0;                      /* empty range */
   n = l_castS2U(e) - l_castS2U(i); /* number of elements */

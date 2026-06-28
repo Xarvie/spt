@@ -1,0 +1,38 @@
+// 测试: List - 负索引从尾计
+// 语法: list负索引访问
+// 描述: 测试SPT的List支持负索引，-1 为最后一个元素，-n 为第一个元素
+
+list<int> arr = [10, 20, 30, 40, 50];
+
+// 负索引读取
+assert(arr[-1] == 50, "arr[-1] should be 50 (last)");
+assert(arr[-2] == 40, "arr[-2] should be 40");
+assert(arr[-3] == 30, "arr[-3] should be 30");
+assert(arr[-4] == 20, "arr[-4] should be 20");
+assert(arr[-5] == 10, "arr[-5] should be 10 (first)");
+
+// 负索引写入
+arr[-1] = 99;
+assert(arr[4] == 99, "arr[4] should be 99 after arr[-1] = 99");
+arr[-5] = 11;
+assert(arr[0] == 11, "arr[0] should be 11 after arr[-5] = 11");
+
+// 越界负索引抛错
+vars ok1, err1 = pcall(fn() -> void {
+    auto x = arr[-6];
+});
+assert(ok1 == false, "arr[-6] on length-5 list should fail");
+
+// 越界负索引写入抛错
+vars ok2, err2 = pcall(fn() -> void {
+    arr[-6] = 100;
+});
+assert(ok2 == false, "arr[-6] = 100 on length-5 list should fail");
+
+// map 不支持负索引转换（-1 是普通整数 key）
+map<int, int> m = {0: 100, 1: 200};
+assert(m[-1] == null, "map[-1] should be null (no such key)");
+m[-1] = 999;
+assert(m[-1] == 999, "map[-1] should be 999 after assignment");
+
+print("negative_index tests passed!");

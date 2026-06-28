@@ -1,0 +1,56 @@
+// 测试: list 库函数负索引支持
+// 语法: list.insert/remove/concat/unpack/move 负索引
+// 描述: 测试list库函数的pos/start/end参数支持负索引从尾计
+
+// list.insert 负索引：在指定位置之前插入
+list<int> a = [10, 20, 30, 40, 50];
+list.insert(a, -1, 99);  // 在最后一个(50)之前插入
+assert(a[4] == 99, "a[4] should be 99 after insert(-1, 99)");
+assert(a[5] == 50, "a[5] should be 50 (shifted)");
+assert(#a == 6, "length should be 6");
+
+list.insert(a, -3, 77);  // -3 现在指向索引 3 (原 40)
+assert(a[3] == 77, "a[3] should be 77 after insert(-3, 77)");
+assert(#a == 7, "length should be 7");
+
+// list.remove 负索引：删除并返回
+list<int> b = [1, 2, 3, 4, 5];
+int removed = list.remove(b, -1);  // 删除最后一个
+assert(removed == 5, "removed should be 5");
+assert(#b == 4, "length should be 4 after remove");
+assert(b[3] == 4, "b[3] should be 4 (new last)");
+
+int removed2 = list.remove(b, -4);  // -4 = 索引 0 (第一个)
+assert(removed2 == 1, "removed2 should be 1");
+assert(b[0] == 2, "b[0] should be 2 after remove first");
+
+// list.concat 负索引：半开区间 [i, j)
+// c = [10, 20, 30, 40, 50]，loglen=5；-k 转换为 loglen-k
+list<int> c = [10, 20, 30, 40, 50];
+assert(list.concat(c, "-", 1, -2) == "20-30", "concat [1,-2)=[1,3) should be '20-30'");
+assert(list.concat(c, "-", -3) == "30-40-50", "concat [-3, end)=[2,5) should be '30-40-50'");
+assert(list.concat(c, "-", -2, -1) == "40", "concat [-2,-1)=[3,4) should be '40'");
+
+// list.unpack 负索引
+list<int> d = [10, 20, 30, 40, 50];
+vars u1, u2 = list.unpack(d, -2);  // [3,5) = [40, 50]
+assert(u1 == 40 && u2 == 50, "unpack(-2)=[3,5) should be 40, 50");
+vars v1, v2 = list.unpack(d, -3, -1);  // [2,4) = [30, 40]
+assert(v1 == 30 && v2 == 40, "unpack(-3,-1)=[2,4) should be 30, 40");
+
+// list.move 负索引
+// src = [1,2,3,4,5]；[-3,-1) = [2,4) = [3, 4]
+list<int> src = [1, 2, 3, 4, 5];
+list<int> dst = [0, 0, 0, 0, 0];
+list.move(src, -3, -1, 0, dst);  // 移动 src[2..4) = [3, 4] 到 dst[0..2)
+assert(dst[0] == 3, "dst[0] should be 3");
+assert(dst[1] == 4, "dst[1] should be 4");
+assert(dst[2] == 0, "dst[2] should remain 0");
+
+// list.move 目标负索引
+list<int> dst2 = [0, 0, 0, 0, 0];
+list.move(src, 0, 2, -2, dst2);  // 移动 src[0..2) = [1, 2] 到 dst2[3..5)
+assert(dst2[3] == 1, "dst2[3] should be 1");
+assert(dst2[4] == 2, "dst2[4] should be 2");
+
+print("negative_index_lib tests passed!");
