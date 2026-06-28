@@ -1,0 +1,97 @@
+// ============================================================
+// for_iter compare — iter() 自动包 vs pairs() 旧写法性能对比
+//
+// 在 Phase 4 JIT 支持 iter_list_next 后，验证：
+//   - iter(2, l) 的 JIT 加速 ≈ pairs(l) 的 JIT 加速（同一 lowering）
+//   - map 迭代 JIT 关≈开（不 JIT，回退解释器）
+//
+// 场景：
+//   1. iter_list_1var  — for (auto v : li)        iter 自动包（1 变量）
+//   2. iter_list_2var  — for (auto k, v : li)     iter 自动包（2 变量）
+//   3. pairs_list_2var — for (auto k, v : pairs(li))  pairs 旧写法（baseline）
+//   4. iter_map_1var   — for (auto v : mi)        iter map（1 变量）
+//   5. pairs_map_2var  — for (auto k, v : pairs(mi)) pairs map（baseline）
+//
+// 负载：100 元素 × 100000 次外循环 = 10^7 次元素访问
+// ============================================================
+
+int REPS = 100000;
+int SIZE = 100;
+
+// 准备数据
+list<int> li = [];
+map<int, int> mi = {};
+for (int i = 0, SIZE - 1) {
+    table.push(li, i);
+    mi[i] = i * 2;
+}
+
+print("=== for_iter compare ===");
+print("REPS=" .. tostring(REPS) .. " SIZE=" .. tostring(SIZE));
+
+// === 场景 1: iter_list_1var ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto v : li) {
+            s += v;
+        }
+    }
+    float t1 = os.clock();
+    print("iter_list_1var: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+// === 场景 2: iter_list_2var ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto k, v : li) {
+            s += v;
+        }
+    }
+    float t1 = os.clock();
+    print("iter_list_2var: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+// === 场景 3: pairs_list_2var (baseline) ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto k, v : pairs(li)) {
+            s += v;
+        }
+    }
+    float t1 = os.clock();
+    print("pairs_list_2var: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+// === 场景 4: iter_map_1var ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto v : mi) {
+            s += v;
+        }
+    }
+    float t1 = os.clock();
+    print("iter_map_1var: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+// === 场景 5: pairs_map_2var (baseline) ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto k, v : pairs(mi)) {
+            s += v;
+        }
+    }
+    float t1 = os.clock();
+    print("pairs_map_2var: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+print("=== compare done ===");
