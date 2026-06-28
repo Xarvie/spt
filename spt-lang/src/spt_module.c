@@ -212,10 +212,10 @@ static void append_searcher(lua_State *L, lua_CFunction fn) {
     return;
   }
 
-  /* Use table.insert(searchers, fn) to properly extend the sequence
+  /* Use list.insert(searchers, fn) to properly extend the sequence
    * SPT Lua calling convention: receiver is arg1, so we need 3 args total */
-  lua_getglobal(L, "table");     /* ... pkg searchers tbl */
-  lua_getfield(L, -1, "insert"); /* ... pkg searchers tbl insert */
+  lua_getglobal(L, "list");      /* ... pkg searchers list */
+  lua_getfield(L, -1, "insert"); /* ... pkg searchers list insert */
   lua_remove(L, -2);             /* ... pkg searchers insert      */
 
   lua_pushnil(L);           /* ... pkg searchers insert nil (receiver) */

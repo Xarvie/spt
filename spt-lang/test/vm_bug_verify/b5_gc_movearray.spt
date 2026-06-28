@@ -5,7 +5,7 @@
 list<int> dst = [0, 0, 0];
 list<int> src = [100, 200, 300];
 
-// 尝试触发 lua_movearray 路径（通过 table.move 或类似 API）
+// 尝试触发 lua_movearray 路径（通过 list.move 或类似 API）
 // SPT 可能没有直接暴露 lua_movearray，跳过直接测试
 print("B5: lua_movearray is C-API only, cannot test from .spt directly");
 print("B5: SKIPPED - requires C API test harness");

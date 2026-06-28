@@ -3,7 +3,7 @@
 // 描述: 测试lambda中的可变参数
 
 auto sum = fn(...) -> int {
-    auto args = table.pack(...);
+    auto args = list.pack(...);
     int total = 0;
     for (i = 0, #args - 1) {
         total += args[i];

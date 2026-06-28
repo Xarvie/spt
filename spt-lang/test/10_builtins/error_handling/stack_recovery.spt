@@ -81,7 +81,7 @@ assert(add100(5) == 105, "second closure after deep recursion");
 // ---- 深递归后 list/map 操作正常 ----
 list<int> lst = [];
 for (int i = 0, 99) {
-    table.push(lst, i);
+    list.push(lst, i);
 }
 assert(#lst == 100, "list should have 100 elements");
 assert(lst[50] == 50, "lst[50] should be 50");

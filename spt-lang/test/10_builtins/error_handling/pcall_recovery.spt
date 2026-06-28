@@ -57,7 +57,7 @@ assert(counter() == 2, "closure call 2");
 list<int> lst = [1, 2, 3];
 vars ok5, err5 = pcall(fn() -> int { error("list test"); return 0; });
 assert(ok5 == false, "should fail");
-table.push(lst, 4);
+list.push(lst, 4);
 assert(#lst == 4, "list should have 4 elements");
 assert(lst[3] == 4, "last element should be 4");
 
@@ -76,7 +76,7 @@ for (int i = 0, 4) {
         if (i % 2 == 0) { error("even"); }
         return i;
     });
-    if (ok) { table.push(collected, r); }
+    if (ok) { list.push(collected, r); }
 }
 assert(#collected == 2, "should collect 2 odd values");
 assert(collected[0] == 1, "first odd is 1");

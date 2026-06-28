@@ -3,7 +3,7 @@
 list<int> big = [];
 int i = 0;
 while (i < 10000) {
-    table.push(big, i);
+    list.push(big, i);
     i = i + 1;
 }
 assert(big[0] == 0, "first element");

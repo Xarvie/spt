@@ -10,7 +10,7 @@ assert(b[0] == 99, "b[0] should be 99");
 
 list<int> c = [1, 2, 3];
 list<int> d = c;
-table.push(d, 4);
+list.push(d, 4);
 assert(#c == 4, "#c should be 4 (shared reference)");
 assert(#d == 4, "#d should be 4");
 

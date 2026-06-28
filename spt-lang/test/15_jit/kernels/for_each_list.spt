@@ -1,7 +1,7 @@
 // JIT kernel: generic for-each over a List (OP_TFORCALL / OP_TFORLOOP).
 //
 // `for k,v : pairs(L)` over a List compiles to a native index loop. The key
-// insight (see ltable.c luaH_next): iterating an array-mode table yields keys
+// insight (see ltable.c luaH_next): iterating an array-mode list yields keys
 // 0,1,...,loglen-1 in order with value = L[key]. So the iterator step lowers to
 // newkey = key + 1; GUARD newkey < #L (loop-continue); value = L[newkey] -- a
 // GETI -- with NO C call into luaB_next and no GC. The iterator function is

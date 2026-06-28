@@ -9,7 +9,7 @@ void f(int a, ...) {
 f(42);
 
 void g(...) {
-    auto args = table.pack(...);
+    auto args = list.pack(...);
     assert(#args == 3, "args count should be 3");
 }
 

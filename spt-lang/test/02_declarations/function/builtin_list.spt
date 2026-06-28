@@ -1,17 +1,17 @@
-// 测试: 内置函数 - table模块
-// 语法: table.push, table.pop, table.insert, table.remove, table.concat, table.sort
-// 描述: 测试table模块函数
+// 测试: 内置函数 - list模块
+// 语法: list.push, list.pop, list.insert, list.remove, list.concat, list.sort
+// 描述: 测试list模块函数
 
 list<int> l = [1, 2, 3];
-table.push(l, 4);
+list.push(l, 4);
 assert(#l == 4, "list length should be 4 after push");
 assert(l[3] == 4, "last element should be 4");
 
-table.insert(l, 1, 99);
+list.insert(l, 1, 99);
 assert(l[1] == 99, "element at index 1 should be 99");
 
-any val = table.remove(l, 0);
+any val = list.remove(l, 0);
 assert(val == 1, "removed value should be 1");
 assert(#l == 4, "list length should be 4 after remove");
 
-print("builtin_table tests passed!");
+print("builtin_list tests passed!");

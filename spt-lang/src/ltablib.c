@@ -20,45 +20,26 @@
 #include "lualib.h"
 
 /*
-** Operations that an object must define to mimic a table
-** (some functions only need some of them)
+** list 专用：校验 LUA_TARRAY 并返回 loglen。
+** SPT 严格区分 list (LUA_TARRAY) 与 map (LUA_TTABLE)，不再支持元方法兼容。
 */
-#define TAB_R 1                /* read */
-#define TAB_W 2                /* write */
-#define TAB_L 4                /* length */
-#define TAB_RW (TAB_R | TAB_W) /* read/write */
+#define list_getn(L, n) (luaL_checktype(L, n, LUA_TARRAY), luaL_len(L, n))
 
-#define aux_getn(L, n, w) (checktab(L, n, (w) | TAB_L), luaL_len(L, n))
-
-static int checkfield(lua_State *L, const char *key, int n) {
-  lua_pushstring(L, key);
-  return (lua_rawget(L, -n) != LUA_TNIL);
+/* list_create - receiver is arg1, n is arg2 (capacity hint, default 0).
+ * Creates an empty array (LUA_TARRAY) with capacity n, loglen=0. */
+static int list_create(lua_State *L) {
+  lua_Integer n = luaL_optinteger(L, 2, 0);
+  luaL_argcheck(L, n >= 0, 2, "negative size");
+  lua_createarray(L, cast_int(n));
+  return 1;
 }
 
-/*
-** Check that 'arg' either is a table or can behave like one (that is,
-** has a metatable with the required metamethods)
-*/
-static void checktab(lua_State *L, int arg, int what) {
-  if (lua_type(L, arg) != LUA_TTABLE && lua_type(L, arg) != LUA_TARRAY) { /* not a table or list? */
-    int n = 1;                      /* number of elements to pop */
-    if (lua_getmetatable(L, arg) && /* must have metatable */
-        (!(what & TAB_R) || checkfield(L, "__index", ++n)) &&
-        (!(what & TAB_W) || checkfield(L, "__newindex", ++n)) &&
-        (!(what & TAB_L) || checkfield(L, "__len", ++n))) {
-      lua_pop(L, n); /* pop metatable and tested metamethods */
-    } else
-      luaL_checktype(L, arg, LUA_TTABLE); /* force an error */
-  }
-}
-
-/* tcreate - receiver is arg1, narray is arg2, nhash is arg3 */
-static int tcreate(lua_State *L) {
-  lua_Unsigned sizeseq = (lua_Unsigned)luaL_checkinteger(L, 2);
-  lua_Unsigned sizerest = (lua_Unsigned)luaL_optinteger(L, 3, 0);
-  luaL_argcheck(L, sizeseq <= cast_uint(INT_MAX), 2, "out of range");
-  luaL_argcheck(L, sizerest <= cast_uint(INT_MAX), 3, "out of range");
-  lua_createtable(L, cast_int(sizeseq), cast_int(sizerest));
+/* map_create - receiver is arg1, n is arg2 (hash capacity hint, default 0).
+ * Creates an empty map (LUA_TTABLE) with hash hint n. */
+static int map_create(lua_State *L) {
+  lua_Integer n = luaL_optinteger(L, 2, 0);
+  luaL_argcheck(L, n >= 0, 2, "negative size");
+  lua_createtable(L, 0, cast_int(n));
   return 1;
 }
 
@@ -130,25 +111,21 @@ static int tcreate(lua_State *L) {
 */
 static int tinsert(lua_State *L) {
   lua_Integer pos; /* where to insert new element */
-  lua_Integer e = aux_getn(L, 2, TAB_RW);
-  int isarray = (lua_type(L, 2) == LUA_TARRAY);
+  lua_Integer e = list_getn(L, 2);
   /* 'e' is the logical length; first empty slot is index e */
   switch (lua_gettop(L)) {
   case 3: {  /* called with only 2 arguments: append */
     pos = e; /* insert new element at the end */
-    /* for arrays, lua_seti at pos==e triggers amortized growth in finishset */
+    /* lua_seti at pos==e triggers amortized growth in finishset */
     break;
   }
   case 4: {
     lua_Integer i;
     pos = luaL_checkinteger(L, 3); /* 2nd argument is the position */
     luaL_argcheck(L, (lua_Unsigned)pos <= (lua_Unsigned)e, 3, "position out of bounds");
-    if (isarray) {
-      /* grow by appending a dummy nil at the end to trigger amortized growth,
-         then overwrite by shifting — but simpler: push nil to extend, shift, then write */
-      lua_pushnil(L);
-      lua_seti(L, 2, e); /* extend loglen to e+1 via append path */
-    }
+    /* grow by appending a dummy nil at the end to trigger amortized growth */
+    lua_pushnil(L);
+    lua_seti(L, 2, e); /* extend loglen to e+1 via append path */
     for (i = e; i > pos; i--) { /* move up elements */
       lua_geti(L, 2, i - 1);
       lua_seti(L, 2, i); /* t[i] = t[i - 1] */
@@ -172,10 +149,9 @@ static int tinsert(lua_State *L) {
 **   - Clear the vacated slot (done by arraysetlen)
 */
 static int tremove(lua_State *L) {
-  lua_Integer size = aux_getn(L, 2, TAB_RW);
+  lua_Integer size = list_getn(L, 2);
   lua_Integer pos = luaL_optinteger(L, 3, (size > 0) ? size - 1 : 0);
-  int isarray = (lua_type(L, 2) == LUA_TARRAY);
-  if (size == 0) {  /* empty table? */
+  if (size == 0) {  /* empty list? */
     lua_pushnil(L); /* return nil, do nothing */
     return 1;
   }
@@ -186,36 +162,31 @@ static int tremove(lua_State *L) {
     lua_geti(L, 2, pos + 1);
     lua_seti(L, 2, pos); /* t[pos] = t[pos + 1] */
   }
-  if (isarray) {
-    /* Shrink logical length by 1. arraysetlen clears the vacated slot. */
-    lua_arraysetlen(L, 2, size - 1);
-  } else {
-    lua_pushnil(L);
-    lua_seti(L, 2, pos); /* remove entry t[pos] */
-  }
+  /* Shrink logical length by 1. arraysetlen clears the vacated slot. */
+  lua_arraysetlen(L, 2, size - 1);
   return 1;
 }
 
 /*
-** Copy elements (1[f], ..., 1[e]) into (tt[t], tt[t+1], ...). Whenever
+** Copy elements in half-open range [f, e) into [t, t+n). Whenever
 ** possible, copy in increasing order, which is better for rehashing.
-** tmove - receiver is arg1, src is arg2, f is arg3, e is arg4, t is arg5, dst is arg6
-** "possible" means destination after original range, or smaller than origin, or copying to another
-*table.
+** tmove - receiver is arg1, src is arg2, f is arg3 (start inclusive),
+** e is arg4 (end exclusive), t is arg5 (dst start), dst is arg6 (optional)
+** "possible" means destination after original range, or before it, or copying to another table.
 */
 static int tmove(lua_State *L) {
   lua_Integer f = luaL_checkinteger(L, 3);
   lua_Integer e = luaL_checkinteger(L, 4);
   lua_Integer t = luaL_checkinteger(L, 5);
   int tt = !lua_isnoneornil(L, 6) ? 6 : 2; /* destination table */
-  checktab(L, 2, TAB_R);
-  checktab(L, tt, TAB_W);
-  if (e >= f) { /* otherwise, nothing to move */
+  luaL_checktype(L, 2, LUA_TARRAY);  /* source must be list */
+  luaL_checktype(L, tt, LUA_TARRAY); /* destination must be list */
+  if (e > f) { /* otherwise, empty range; nothing to move */
     lua_Integer n, i;
     luaL_argcheck(L, f >= 0 || e < LUA_MAXINTEGER + f, 3, "too many elements to move");
-    n = e - f + 1; /* number of elements to move */
+    n = e - f; /* number of elements to move (half-open) */
     luaL_argcheck(L, t <= LUA_MAXINTEGER - n + 1, 5, "destination wrap around");
-    if (t > e || t <= f || (tt != 2 && !lua_compare(L, 2, tt, LUA_OPEQ))) {
+    if (t >= e || t <= f || (tt != 2 && !lua_compare(L, 2, tt, LUA_OPEQ))) {
       for (i = 0; i < n; i++) {
         lua_geti(L, 2, f + i);
         lua_seti(L, tt, t + i);
@@ -239,20 +210,21 @@ static void addfield(lua_State *L, luaL_Buffer *b, lua_Integer i) {
   luaL_addvalue(b);
 }
 
-/* tconcat - receiver is arg1, table is arg2, sep is arg3, i is arg4, j is arg5 */
+/* tconcat - receiver is arg1, table is arg2, sep is arg3, i is arg4 (inclusive start),
+ * j is arg5 (exclusive end, default = loglen). Half-open interval [i, j). */
 static int tconcat(lua_State *L) {
   luaL_Buffer b;
-  lua_Integer last = aux_getn(L, 2, TAB_R); /* length */
+  lua_Integer last = list_getn(L, 2); /* loglen (default exclusive end) */
   size_t lsep;
   const char *sep = luaL_optlstring(L, 3, "", &lsep);
   lua_Integer i = luaL_optinteger(L, 4, 0); /* default start: 0 */
-  last = luaL_optinteger(L, 5, last - 1);   /* default end: last valid index */
+  last = luaL_optinteger(L, 5, last);       /* default end: loglen (exclusive) */
   luaL_buffinit(L, &b);
-  for (; i < last; i++) {
+  for (; i < last - 1; i++) { /* all but last, each followed by sep */
     addfield(L, &b, i);
     luaL_addlstring(&b, sep, lsep);
   }
-  if (i == last) /* add last value (if interval was not empty) */
+  if (i < last) /* add last value without separator (if interval was not empty) */
     addfield(L, &b, i);
   luaL_pushresult(&b);
   return 1;
@@ -285,9 +257,10 @@ static int tpack(lua_State *L) {
   return 1; /* return list (top of stack) */
 }
 
-/* tunpack - receiver is arg1, table is arg2, i is arg3, e is arg4 */
+/* tunpack - receiver is arg1, list is arg2, i is arg3 (start), e is arg4 (exclusive end) */
 static int tunpack(lua_State *L) {
   lua_Unsigned n;
+  luaL_checktype(L, 2, LUA_TARRAY); /* list only */
   lua_Integer i = luaL_optinteger(L, 3, 0);                          /* default start: 0 */
   lua_Integer e = luaL_opt(L, luaL_checkinteger, 4, luaL_len(L, 2)); /* exclusive end */
   if (i >= e)
@@ -469,7 +442,7 @@ static void auxsort(lua_State *L, IdxT lo, IdxT up, unsigned rnd) {
 
 /* sort - receiver is arg1, table is arg2, comp is arg3 */
 static int sort(lua_State *L) {
-  lua_Integer n = aux_getn(L, 2, TAB_RW);
+  lua_Integer n = list_getn(L, 2);
   if (n > 1) { /* non-trivial interval? */
     luaL_argcheck(L, n < INT_MAX, 2, "array too big");
     if (!lua_isnoneornil(L, 3))            /* is there a 2nd argument? */
@@ -553,13 +526,104 @@ static int lpop(lua_State *L) {
 }
 
 /* }====================================================== */
+/* {======================================================
+** Map Operations (create/keys/values/has/get/set/delete)
+** All map functions accept only LUA_TTABLE (map), rejecting lists.
+** =======================================================
+*/
 
-static const luaL_Reg tab_funcs[] = {{"concat", tconcat}, {"create", tcreate}, {"insert", tinsert},
-                                     {"pack", tpack},     {"unpack", tunpack}, {"remove", tremove},
-                                     {"move", tmove},     {"sort", sort},      {"push", lpush},
-                                     {"pop", lpop},       {NULL, NULL}};
+/* map_keys - receiver arg1, map arg2. Returns a list of all keys. */
+static int map_keys(lua_State *L) {
+  luaL_checktype(L, 2, LUA_TTABLE); /* map only */
+  lua_createarray(L, 0);            /* result list (grows via seti) */
+  int list_idx = lua_gettop(L);
+  lua_Integer n = 0;
+  lua_pushnil(L); /* first key */
+  while (lua_next(L, 2)) {
+    lua_pushvalue(L, -2);    /* copy key to top */
+    lua_seti(L, list_idx, n); /* list[n] = key */
+    n++;
+    lua_pop(L, 1); /* pop value, keep key for next iteration */
+  }
+  return 1;
+}
 
-LUAMOD_API int luaopen_table(lua_State *L) {
-  luaL_newlib(L, tab_funcs);
+/* map_values - receiver arg1, map arg2. Returns a list of all values. */
+static int map_values(lua_State *L) {
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_createarray(L, 0);
+  int list_idx = lua_gettop(L);
+  lua_Integer n = 0;
+  lua_pushnil(L);
+  while (lua_next(L, 2)) {
+    lua_pushvalue(L, -1);    /* copy value to top */
+    lua_seti(L, list_idx, n); /* list[n] = value */
+    n++;
+    lua_pop(L, 1); /* pop value, keep key */
+  }
+  return 1;
+}
+
+/* map_has - receiver arg1, map arg2, key arg3. Returns bool. */
+static int map_has(lua_State *L) {
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_pushvalue(L, 3); /* key */
+  lua_rawget(L, 2);    /* t[key] */
+  lua_pushboolean(L, !lua_isnil(L, -1));
+  return 1;
+}
+
+/* map_get - receiver arg1, map arg2, key arg3, [default arg4].
+ * Returns t[key], or default (null if absent and no default given). */
+static int map_get(lua_State *L) {
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_pushvalue(L, 3); /* key */
+  lua_rawget(L, 2);
+  if (lua_isnil(L, -1) && !lua_isnoneornil(L, 4)) {
+    lua_pop(L, 1);
+    lua_pushvalue(L, 4); /* default */
+  }
+  return 1;
+}
+
+/* map_set - receiver arg1, map arg2, key arg3, value arg4. */
+static int map_set(lua_State *L) {
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_pushvalue(L, 3); /* key */
+  lua_pushvalue(L, 4); /* value */
+  lua_rawset(L, 2);
+  return 0;
+}
+
+/* map_delete - receiver arg1, map arg2, key arg3. Removes key from map. */
+static int map_delete(lua_State *L) {
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_pushvalue(L, 3); /* key */
+  lua_pushnil(L);      /* nil value removes entry */
+  lua_rawset(L, 2);
+  return 0;
+}
+
+/* }====================================================== */
+
+static const luaL_Reg list_funcs[] = {{"concat", tconcat},   {"create", list_create},
+                                      {"insert", tinsert},   {"pack", tpack},
+                                      {"unpack", tunpack},   {"remove", tremove},
+                                      {"move", tmove},       {"sort", sort},
+                                      {"push", lpush},       {"pop", lpop},
+                                      {NULL, NULL}};
+
+static const luaL_Reg map_funcs[] = {{"create", map_create}, {"keys", map_keys},
+                                     {"values", map_values}, {"has", map_has},
+                                     {"get", map_get},       {"set", map_set},
+                                     {"delete", map_delete}, {NULL, NULL}};
+
+LUAMOD_API int luaopen_list(lua_State *L) {
+  luaL_newlib(L, list_funcs);
+  return 1;
+}
+
+LUAMOD_API int luaopen_map(lua_State *L) {
+  luaL_newlib(L, map_funcs);
   return 1;
 }

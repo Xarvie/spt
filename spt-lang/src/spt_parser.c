@@ -720,7 +720,10 @@ static AstNode *parse_primary(Parser *P) {
     n->u.lit_str.len = len;
     return n;
   }
-  case TOK_IDENTIFIER: {
+  case TOK_IDENTIFIER:
+  case TOK_LIST:
+  case TOK_MAP: {
+    /* list/map 作为表达式时是模块名标识符（类型上下文仍由 parse_type 处理）*/
     advance(P);
     AstNode *n = spt_ast_new(P->arena, NODE_IDENTIFIER, loc);
     n->u.ident.name = spt_arena_strndup(P->arena, t->lexeme, (size_t)t->length);
@@ -838,10 +841,12 @@ static int looks_like_declaration(Parser *P) {
   case TOK_BOOL:
   case TOK_VOID:
   case TOK_COROUTINE:
-  case TOK_LIST:
-  case TOK_MAP:
   case TOK_ANY:
     return 1;
+  case TOK_LIST:
+  case TOK_MAP:
+    /* list<T>/map<...>/list x/map x 是类型声明；list.xxx/map.xxx 是模块访问 */
+    return tok_at(P, i + 1)->kind == TOK_LT || tok_at(P, i + 1)->kind == TOK_IDENTIFIER;
   case TOK_AUTO:
     return tok_at(P, i + 1)->kind == TOK_IDENTIFIER;
   case TOK_FUNCTION:

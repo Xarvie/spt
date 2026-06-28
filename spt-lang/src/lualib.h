@@ -43,12 +43,16 @@ LUAMOD_API int(luaopen_os)(lua_State *L);
 #define LUA_STRLIBK (LUA_OSLIBK << 1)
 LUAMOD_API int(luaopen_string)(lua_State *L);
 
-#define LUA_TABLIBNAME "table"
-#define LUA_TABLIBK (LUA_STRLIBK << 1)
-LUAMOD_API int(luaopen_table)(lua_State *L);
+#define LUA_LISTLIBNAME "list"
+#define LUA_LISTLIBK (LUA_STRLIBK << 1)
+LUAMOD_API int(luaopen_list)(lua_State *L);
+
+#define LUA_MAPLIBNAME "map"
+#define LUA_MAPLIBK (LUA_LISTLIBK << 1)
+LUAMOD_API int(luaopen_map)(lua_State *L);
 
 #define LUA_UTF8LIBNAME "utf8"
-#define LUA_UTF8LIBK (LUA_TABLIBK << 1)
+#define LUA_UTF8LIBK (LUA_MAPLIBK << 1)
 LUAMOD_API int(luaopen_utf8)(lua_State *L);
 
 /* open selected libraries */

@@ -554,24 +554,25 @@ static int math_random(lua_State *L) {
     lua_pushnumber(L, I2d(rv));   /* float between 0 and 1 */
     return 1;
   }
-  case 1: { /* only upper limit */
-    low = 1;
-    up = luaL_checkinteger(L, 2);
-    if (up == 0) {                               /* single 0 as argument? */
-      lua_pushinteger(L, l_castU2S(I2UInt(rv))); /* full random integer */
+  case 1: { /* only upper limit (exclusive): returns [0, n) */
+    lua_Integer n = luaL_checkinteger(L, 2);
+    if (n == 0) {                                 /* single 0: full random integer */
+      lua_pushinteger(L, l_castU2S(I2UInt(rv)));
       return 1;
     }
+    low = 0;
+    up = n - 1; /* [0, n) == [0, n-1] internally (closed) */
     break;
   }
-  case 2: { /* lower and upper limits */
+  case 2: { /* lower and upper limits: returns [m, n) (upper exclusive) */
     low = luaL_checkinteger(L, 2);
-    up = luaL_checkinteger(L, 3);
+    up = luaL_checkinteger(L, 3) - 1; /* [m, n) == [m, n-1] internally (closed) */
     break;
   }
   default:
     return luaL_error(L, "wrong number of arguments");
   }
-  /* random integer in the interval [low, up] */
+  /* random integer in the closed interval [low, up] (up already adjusted for half-open) */
   luaL_argcheck(L, low <= up, 2, "interval is empty");
   /* project random integer into the interval [0, up - low] */
   p = project(I2UInt(rv), l_castS2U(up) - l_castS2U(low), state);
