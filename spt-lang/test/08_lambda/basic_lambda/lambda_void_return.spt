@@ -1,9 +1,9 @@
 // 测试: Lambda - void返回
-// 语法: lambdaExpression -> FUNCTION OP parameterList? CP ARROW (type | VARS) blockStatement
+// 语法: lambdaExpression -> FN OP parameterList? CP ARROW (type | VARS) blockStatement
 // 描述: 测试void返回类型的lambda
 
 int called = 0;
-auto f = function() -> void {
+auto f = fn() -> void {
     called = called + 1;
 };
 

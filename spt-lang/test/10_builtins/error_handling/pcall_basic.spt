@@ -2,11 +2,11 @@
 // 语法: pcall() 内置函数
 // 描述: 测试pcall保护调用
 
-vars ok, result = pcall(function() -> int { return 42; });
+vars ok, result = pcall(fn() -> int { return 42; });
 assert(ok == true, "ok should be true for success");
 assert(result == 42, "result should be 42");
 
-vars ok2, result2 = pcall(function() -> int { error("test error"); return 1; });
+vars ok2, result2 = pcall(fn() -> int { error("test error"); return 1; });
 assert(ok2 == false, "ok2 should be false for error");
 
 print("pcall_basic tests passed!");

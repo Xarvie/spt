@@ -2,60 +2,60 @@
 // 描述: 验证对非法操作数执行运算时，VM 抛出错误且 pcall 能正确捕获
 
 // ---- 取模零 ----
-vars ok1, err1 = pcall(function() -> int { return 10 % 0; });
+vars ok1, err1 = pcall(fn() -> int { return 10 % 0; });
 assert(ok1 == false, "10 % 0 should error");
 assert(typeof(err1) == "string", "error should be string");
 
 // ---- 零取模零 ----
-vars ok2, err2 = pcall(function() -> int { return 0 % 0; });
+vars ok2, err2 = pcall(fn() -> int { return 0 % 0; });
 assert(ok2 == false, "0 % 0 should error");
 
 // ---- 对 nil 取模 ----
-vars ok3, err3 = pcall(function() -> int { vars x = nil; return x % 2; });
+vars ok3, err3 = pcall(fn() -> int { vars x = nil; return x % 2; });
 assert(ok3 == false, "nil % 2 should error");
 
 // ---- 不同类型比较 ----
-vars ok4, err4 = pcall(function() -> bool { return 1 < "abc"; });
+vars ok4, err4 = pcall(fn() -> bool { return 1 < "abc"; });
 assert(ok4 == false, "1 < 'abc' should error: type mismatch");
 
 // ---- 对 nil 位运算 ----
-vars ok5, err5 = pcall(function() -> int { vars x = nil; return x & 1; });
+vars ok5, err5 = pcall(fn() -> int { vars x = nil; return x & 1; });
 assert(ok5 == false, "nil & 1 should error");
 
 // ---- 对 nil 拼接 ----
-vars ok6, err6 = pcall(function() -> str { vars x = nil; return x .. "abc"; });
+vars ok6, err6 = pcall(fn() -> str { vars x = nil; return x .. "abc"; });
 assert(ok6 == false, "nil .. 'abc' should error");
 
 // ---- 对 bool 拼接 ----
-vars ok7, err7 = pcall(function() -> str { bool b = true; return b .. "abc"; });
+vars ok7, err7 = pcall(fn() -> str { bool b = true; return b .. "abc"; });
 assert(ok7 == false, "true .. 'abc' should error");
 
 // ---- 对 nil 位或 ----
-vars ok8, err8 = pcall(function() -> int { vars x = nil; return x | 1; });
+vars ok8, err8 = pcall(fn() -> int { vars x = nil; return x | 1; });
 assert(ok8 == false, "nil | 1 should error");
 
 // ---- 对 nil 位异或 ----
-vars ok9, err9 = pcall(function() -> int { vars x = nil; return x ^ 1; });
+vars ok9, err9 = pcall(fn() -> int { vars x = nil; return x ^ 1; });
 assert(ok9 == false, "nil ^ 1 should error");
 
 // ---- 对 nil 左移 ----
-vars ok10, err10 = pcall(function() -> int { vars x = nil; return x << 1; });
+vars ok10, err10 = pcall(fn() -> int { vars x = nil; return x << 1; });
 assert(ok10 == false, "nil << 1 should error");
 
 // ---- 对 nil 右移 ----
-vars ok11, err11 = pcall(function() -> int { vars x = nil; return x >> 1; });
+vars ok11, err11 = pcall(fn() -> int { vars x = nil; return x >> 1; });
 assert(ok11 == false, "nil >> 1 should error");
 
 // ---- 对 string 算术 ----
-vars ok12, err12 = pcall(function() -> int { str s = "abc"; return s * 2; });
+vars ok12, err12 = pcall(fn() -> int { str s = "abc"; return s * 2; });
 assert(ok12 == false, "'abc' * 2 should error");
 
 // ---- 对 bool 算术 ----
-vars ok13, err13 = pcall(function() -> int { bool b = true; return b - 1; });
+vars ok13, err13 = pcall(fn() -> int { bool b = true; return b - 1; });
 assert(ok13 == false, "true - 1 should error");
 
 // ---- 对 nil 一元负号 ----
-vars ok14, err14 = pcall(function() -> int { vars x = nil; return -x; });
+vars ok14, err14 = pcall(fn() -> int { vars x = nil; return -x; });
 assert(ok14 == false, "-nil should error");
 
 // ---- 字符串比较正常工作（不应报错）----

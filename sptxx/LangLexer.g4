@@ -16,7 +16,7 @@ VOID: 'void';           // void 类型 (用于函数返回值)
 NULL_: 'null';           // null 空值
 LIST: 'list';           // list 容器类型
 MAP: 'map';             // map 容器类型
-FUNCTION: 'function';   // function 类型 (用于 lambda 定义和类型提示)
+FUNCTION: 'fn';   // fn 类型 (用于 lambda 定义和类型提示)
 COROUTINE: 'coro'; // 协程类型
 VARS: 'vars';     // 多返回值
 

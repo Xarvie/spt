@@ -6,7 +6,7 @@ int add(int a, int b) { return a + b; }
 void noop() { }
 
 // ---- 参数过少：缺失参数为 nil，触发运行时类型错误 ----
-vars ok1, err1 = pcall(function() -> int { return add(1); });
+vars ok1, err1 = pcall(fn() -> int { return add(1); });
 assert(ok1 == false, "add(1) should error: nil arithmetic");
 assert(typeof(err1) == "string", "error should be string");
 
@@ -15,7 +15,7 @@ vars result2 = add(1, 2, 3);
 assert(result2 == 3, "add(1,2,3) should return 3, ignoring extra");
 
 // ---- 零参数函数传参：多余参数被忽略 ----
-vars ok3 = pcall(function() -> void { noop(1, 2, 3); });
+vars ok3 = pcall(fn() -> void { noop(1, 2, 3); });
 assert(ok3 == true, "noop(1,2,3) should succeed, ignoring extra");
 
 // ---- 变参函数正常工作 ----
@@ -24,26 +24,26 @@ assert(vararg_fn(1, 2, 3, 4, 5) == 1, "vararg with many args");
 assert(vararg_fn(1) == 1, "vararg with one arg");
 
 // ---- 变参函数零参数：first 为 nil ----
-vars ok6, err6 = pcall(function() -> int { return vararg_fn(); });
+vars ok6, err6 = pcall(fn() -> int { return vararg_fn(); });
 assert(ok6 == true, "vararg_fn() should succeed (first=nil)");
 
 // ---- 嵌套调用中参数错误传播 ----
-vars ok7, err7 = pcall(function() -> int {
+vars ok7, err7 = pcall(fn() -> int {
     int r = add(1);
     return r * 2;
 });
 assert(ok7 == false, "nested call with missing arg should error");
 
 // ---- pcall 自身参数 ----
-vars ok8, err8 = pcall(function() -> void { error("direct"); });
+vars ok8, err8 = pcall(fn() -> void { error("direct"); });
 assert(ok8 == false, "pcall should catch direct error");
 
 // ---- assert 参数不足 ----
-vars ok9, err9 = pcall(function() -> void { assert(); });
+vars ok9, err9 = pcall(fn() -> void { assert(); });
 assert(ok9 == false, "assert() with no args should error");
 
 // ---- error 无参数 ----
-vars ok10, err10 = pcall(function() -> void { error(); });
+vars ok10, err10 = pcall(fn() -> void { error(); });
 assert(ok10 == false, "error() with no args should error");
 
 print("arity_error tests passed!");

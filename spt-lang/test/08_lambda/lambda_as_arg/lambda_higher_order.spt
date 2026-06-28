@@ -2,12 +2,12 @@
 // 语法: lambdaExpression
 // 描述: 测试lambda作为函数参数（高阶函数）
 
-int apply(function f, int x) {
+int apply(fn f, int x) {
     return f(x);
 }
 
-auto double = function(int n) -> int { return n * 2; };
-auto square = function(int n) -> int { return n * n; };
+auto double = fn(int n) -> int { return n * 2; };
+auto square = fn(int n) -> int { return n * n; };
 
 assert(apply(double, 5) == 10, "double(5) should be 10");
 assert(apply(square, 5) == 25, "square(5) should be 25");

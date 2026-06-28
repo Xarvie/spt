@@ -17,7 +17,7 @@ int main() {
 
     std::cout << "1. Using coroutine.resume (correct):" << std::endl;
     lua.do_string(R"(
-co1 = coroutine.create(function(int a, int b) -> int {
+co1 = coroutine.create(fn(int a, int b) -> int {
     return a + b;
 });
 vars ok, result1 = coroutine.resume(co1, 10, 20);
@@ -26,7 +26,7 @@ print('resume result: ' .. result1);
 
     std::cout << "\n2. Using coroutine.wrap:" << std::endl;
     lua.do_string(R"(
-co2 = coroutine.wrap(function(int a, int b) -> int {
+co2 = coroutine.wrap(fn(int a, int b) -> int {
     return a + b;
 });
 vars result2 = co2(10, 20);

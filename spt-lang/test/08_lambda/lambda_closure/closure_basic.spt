@@ -2,9 +2,9 @@
 // 语法: lambdaExpression
 // 描述: 测试lambda闭包捕获外部变量
 
-auto makeCounter = function() -> function {
+auto makeCounter = fn() -> fn {
     int count = 0;
-    return function() -> int {
+    return fn() -> int {
         count = count + 1;
         return count;
     };

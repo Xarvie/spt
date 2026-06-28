@@ -209,7 +209,7 @@ CreateDirectoryA，POSIX 用 mkdtemp）；ASan+UBSan（含泄漏）已通过。
   函数/类/变量声明提供 "Add 'export'" quickfix，生成插入 `export ` 前缀的 TextEdit。
 - **snippet 增强** ✅：补全项支持 `insertTextFormat=2`（Snippet）。
   函数/方法符号自动生成参数占位符调用模板（`add(${1:a}, ${2:b})$0`）；
-  关键字（class/declare/function/if/while/for/import/return/defer）生成结构化模板。
+  关键字（class/declare/fn/if/while/for/import/return/defer）生成结构化模板。
 - **增量同步** ✅：`textDocumentSync=2`（Incremental）。`didChange` 支持 range-based
   增量补丁（`doc_store_change_range` 按 LSP range 定位字节区间后替换），
   同时兼容 Full 变更（无 range 字段时整篇替换）。

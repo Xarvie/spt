@@ -15,10 +15,10 @@ int main() {
     // 注意：命名函数声明 `vars f() {...}` 在 do_string chunk 中不会注册为
     // LUA_TFUNCTION 类型的全局；改用 `f = function() -> vars {...};` 更可靠。
     lua.do_string(R"(
-        two_values = function() -> vars {
+        two_values = fn() -> vars {
             return 42, "hello";
         };
-        multi_fn = function(int n) -> vars {
+        multi_fn = fn(int n) -> vars {
             return n * 2, "doubled";
         };
     )");
@@ -71,7 +71,7 @@ int main() {
 
     // 5. 三返回值
     lua.do_string(R"(
-        three = function() -> vars {
+        three = fn() -> vars {
             return 1, 2, 3;
         };
     )");

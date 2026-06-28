@@ -7,7 +7,7 @@ int runCo(coro c) {
     return val;
 }
 
-coro myCo = coroutine.create(function() -> int {
+coro myCo = coroutine.create(fn() -> int {
     coroutine.yield(42);
     return -1;
 });

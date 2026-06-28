@@ -13,7 +13,7 @@ int main() {
     std::cout << "=== Testing Coroutine Support ===" << std::endl;
 
     std::cout << "\n1. Testing coroutine from Lua function..." << std::endl;
-    lua.do_string("co_func = function() -> int { vars x = 0; x = x + 1; coroutine.yield(x); x = x + 1; coroutine.yield(x); return x + 1; };");
+    lua.do_string("co_func = fn() -> int { vars x = 0; x = x + 1; coroutine.yield(x); x = x + 1; coroutine.yield(x); return x + 1; };");
 
     auto co = lua.create_coroutine_from_function("co_func");
     std::cout << "Created coroutine from Lua function" << std::endl;
@@ -42,7 +42,7 @@ int main() {
     }
 
     std::cout << "\n2. Testing coroutine status..." << std::endl;
-    lua.do_string("co2_func = function() -> int { coroutine.yield(1); coroutine.yield(2); return 0; };");
+    lua.do_string("co2_func = fn() -> int { coroutine.yield(1); coroutine.yield(2); return 0; };");
     auto co2 = lua.create_coroutine_from_function("co2_func");
 
     std::cout << "New coroutine status: " << co2.status_string() << std::endl;
@@ -64,7 +64,7 @@ int main() {
     }
 
     std::cout << "\n3. Testing error handling in coroutine..." << std::endl;
-    lua.do_string("error_co = function() -> void { error('Test error in coroutine'); };");
+    lua.do_string("error_co = fn() -> void { error('Test error in coroutine'); };");
     auto co3 = lua.create_coroutine_from_function("error_co");
 
     bool caught_error = false;
@@ -79,7 +79,7 @@ int main() {
     }
 
     std::cout << "\n4. Testing coroutine close..." << std::endl;
-    lua.do_string("co4_func = function() -> void { coroutine.yield(); coroutine.yield(); };");
+    lua.do_string("co4_func = fn() -> void { coroutine.yield(); coroutine.yield(); };");
     auto co4 = lua.create_coroutine_from_function("co4_func");
 
     co4.resume();
@@ -99,7 +99,7 @@ int main() {
     std::cout << "Invalid coroutine check passed" << std::endl;
 
     std::cout << "\n6. Testing yield with values..." << std::endl;
-    lua.do_string("co5_func = function() -> int { coroutine.yield(10); return 100; };");
+    lua.do_string("co5_func = fn() -> int { coroutine.yield(10); return 100; };");
     auto co5 = lua.create_coroutine_from_function("co5_func");
 
     yielded = co5.resume();
@@ -113,12 +113,12 @@ int main() {
     std::cout << "Final yielded: " << yielded << ", status: " << co5.status_string() << std::endl;
 
     std::cout << "\n7. Testing is_yieldable..." << std::endl;
-    lua.do_string("co6_func = function() -> bool { return coroutine.isyieldable(); };");
+    lua.do_string("co6_func = fn() -> bool { return coroutine.isyieldable(); };");
     auto co6 = lua.create_coroutine_from_function("co6_func");
     std::cout << "is_yieldable: " << co6.is_yieldable() << std::endl;
 
     std::cout << "\n8. Testing coroutine from script..." << std::endl;
-    auto co7 = lua.get_coroutine_from_script("return function() -> int { vars i = 0; while (i < 3) { i = i + 1; coroutine.yield(i); } return i; };");
+    auto co7 = lua.get_coroutine_from_script("return fn() -> int { vars i = 0; while (i < 3) { i = i + 1; coroutine.yield(i); } return i; };");
     
     for (int i = 1; i <= 3; i++) {
       yielded = co7.resume();

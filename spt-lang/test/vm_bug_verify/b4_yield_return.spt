@@ -1,6 +1,6 @@
 // 验证 B4: 协程 yield 返回值错位
 str received = "NOT_SET";
-coro co = coroutine.create(function() -> void {
+coro co = coroutine.create(fn() -> void {
     vars y = coroutine.yield("first");
     received = tostring(y);
 });

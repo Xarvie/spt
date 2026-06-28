@@ -21,7 +21,7 @@ int recurse_with_error(int n) {
     if (n <= 0) { error("bottom reached"); }
     return recurse_with_error(n - 1);
 }
-vars ok1, err1 = pcall(function() -> int { return recurse_with_error(500); });
+vars ok1, err1 = pcall(fn() -> int { return recurse_with_error(500); });
 assert(ok1 == false, "deep recursion with error should be caught");
 vars pos1, _ = string.find(err1, "bottom reached");
 assert(pos1 != null, "error message should contain 'bottom reached'");
@@ -31,9 +31,9 @@ int result3 = sum(500);
 assert(result3 == 125250, "sum(500) after error recovery");
 
 // ---- 多次 pcall 捕获深递归错误 ----
-vars ok2, err2 = pcall(function() -> int { return recurse_with_error(300); });
+vars ok2, err2 = pcall(fn() -> int { return recurse_with_error(300); });
 assert(ok2 == false, "second deep recursion error should be caught");
-vars ok3, err3 = pcall(function() -> int { return recurse_with_error(100); });
+vars ok3, err3 = pcall(fn() -> int { return recurse_with_error(100); });
 assert(ok3 == false, "third deep recursion error should be caught");
 
 // ---- 恢复后正常递归 ----
@@ -50,7 +50,7 @@ assert(outer_recurse(100) == 5050, "nested recursion should work");
 int counter = 0;
 int recurse_with_pcall(int n) {
     if (n <= 0) { return 0; }
-    vars ok, err = pcall(function() -> int {
+    vars ok, err = pcall(fn() -> int {
         if (n == 500) { error("mid error"); }
         return 0;
     });
@@ -70,8 +70,8 @@ assert(fib(20) == 6765, "fib(20) should be 6765");
 assert(fib(25) == 75025, "fib(25) should be 75025");
 
 // ---- 深递归后闭包仍正常 ----
-function make_adder(int n) {
-    return function(int x) -> int { return x + n; };
+fn make_adder(int n) {
+    return fn(int x) -> int { return x + n; };
 }
 vars add10 = make_adder(10);
 assert(add10(5) == 15, "closure after deep recursion");

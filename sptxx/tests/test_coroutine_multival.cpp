@@ -14,7 +14,7 @@ int main() {
     // 协程：多次 yield 多个值，最后 return 多个值
     // SPT 协程函数不接收参数；resume 的参数会成为 yield() 的返回值。
     auto co = lua.get_coroutine_from_script(R"(
-        return function() -> vars {
+        return fn() -> vars {
             coroutine.yield(1, "a");
             coroutine.yield(2, "b");
             return 3, "c";

@@ -200,7 +200,7 @@ static const Keyword KEYWORDS[] = {
     {"bool", TOK_BOOL},       {"any", TOK_ANY},
     {"void", TOK_VOID},       {"null", TOK_NULL},
     {"list", TOK_LIST},       {"map", TOK_MAP},
-    {"function", TOK_FUNCTION}, {"coro", TOK_COROUTINE},
+    {"fn", TOK_FUNCTION}, {"coro", TOK_COROUTINE},
     {"vars", TOK_VARS},       {"if", TOK_IF},
     {"else", TOK_ELSE},       {"while", TOK_WHILE},
     {"for", TOK_FOR},         {"break", TOK_BREAK},

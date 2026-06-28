@@ -6,7 +6,7 @@ map<any, any> watched = {};
 map<any, any> changes = {};
 
 setmetatable(watched, {
-    __newindex: function(str key, any val) -> void {
+    __newindex: fn(str key, any val) -> void {
         changes[key] = val;
     }
 });

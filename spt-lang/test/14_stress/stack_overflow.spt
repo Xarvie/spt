@@ -11,7 +11,7 @@ int sum(int n) {
 assert(sum(5000) == 12502500, "sum(5000)");
 
 // pcall 捕获运行时错误
-vars ok, err = pcall(function() -> void {
+vars ok, err = pcall(fn() -> void {
     error("test error");
 });
 assert(ok == false, "pcall should catch error");

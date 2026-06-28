@@ -1,11 +1,11 @@
-// 测试: 类型系统 - function类型
-// 语法: primitiveType -> FUNCTION
-// 描述: 测试function类型作为变量类型
+// 测试: 类型系统 - fn类型
+// 语法: primitiveType -> FN
+// 描述: 测试fn类型作为变量类型
 
-function add = function(int a, int b) -> int { return a + b; };
+fn add = fn(int a, int b) -> int { return a + b; };
 assert(add(3, 4) == 7, "add(3, 4) should be 7");
 
-function greet = function(str name) -> void { print("Hello, " .. name); };
+fn greet = fn(str name) -> void { print("Hello, " .. name); };
 greet("World");
 
 print("function_type tests passed!");

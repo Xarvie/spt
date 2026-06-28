@@ -2,7 +2,7 @@
 // 语法: coroutine.wrap()
 // 描述: 测试coroutine.wrap创建包装函数
 
-auto wrapped = coroutine.wrap(function() -> int {
+auto wrapped = coroutine.wrap(fn() -> int {
     coroutine.yield(10);
     coroutine.yield(20);
     return 30;

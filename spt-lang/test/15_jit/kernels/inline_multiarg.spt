@@ -1,4 +1,4 @@
-function add2(int a, int b) { return a + b * 2; }
+fn add2(int a, int b) { return a + b * 2; }
 int s = 0;
 for (int i = 0, 1000000) { s = s + add2(i, i % 7); }
 print(s);

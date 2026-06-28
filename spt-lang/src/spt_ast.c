@@ -146,7 +146,7 @@ const char *spt_token_name(SptTokenKind kind) {
   case TOK_NULL:           return "'null'";
   case TOK_LIST:           return "'list'";
   case TOK_MAP:            return "'map'";
-  case TOK_FUNCTION:       return "'function'";
+  case TOK_FUNCTION:       return "'fn'";
   case TOK_COROUTINE:      return "'coro'";
   case TOK_VARS:           return "'vars'";
   case TOK_IF:             return "'if'";

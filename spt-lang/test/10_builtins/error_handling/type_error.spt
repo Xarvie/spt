@@ -2,66 +2,66 @@
 // 描述: 验证对错误类型执行操作时，VM 抛出类型错误且 pcall 能正确捕获
 
 // ---- 对 nil 执行算术 ----
-vars ok1, err1 = pcall(function() -> int { vars x = nil; return x + 1; });
+vars ok1, err1 = pcall(fn() -> int { vars x = nil; return x + 1; });
 assert(ok1 == false, "nil + 1 should error");
 assert(typeof(err1) == "string", "error should be string");
 
 // ---- 对 nil 执行算术（右侧）----
-vars ok2, err2 = pcall(function() -> int { int x = 1; return x + nil; });
+vars ok2, err2 = pcall(fn() -> int { int x = 1; return x + nil; });
 assert(ok2 == false, "1 + nil should error");
 
 // ---- 对 string 执行算术 ----
-vars ok3, err3 = pcall(function() -> int { str s = "abc"; return s + 1; });
+vars ok3, err3 = pcall(fn() -> int { str s = "abc"; return s + 1; });
 assert(ok3 == false, "string + 1 should error");
 
 // ---- 对 nil 调用 ----
-vars ok4, err4 = pcall(function() -> void { vars x = nil; x(); });
+vars ok4, err4 = pcall(fn() -> void { vars x = nil; x(); });
 assert(ok4 == false, "calling nil should error");
 
 // ---- 对 number 调用 ----
-vars ok5, err5 = pcall(function() -> void { int x = 42; x(); });
+vars ok5, err5 = pcall(fn() -> void { int x = 42; x(); });
 assert(ok5 == false, "calling number should error");
 
 // ---- 对 string 调用 ----
-vars ok6, err6 = pcall(function() -> void { str s = "abc"; s(); });
+vars ok6, err6 = pcall(fn() -> void { str s = "abc"; s(); });
 assert(ok6 == false, "calling string should error");
 
 // ---- 对 nil 索引 ----
-vars ok7, err7 = pcall(function() -> void { vars x = nil; vars y = x[0]; });
+vars ok7, err7 = pcall(fn() -> void { vars x = nil; vars y = x[0]; });
 assert(ok7 == false, "indexing nil should error");
 
 // ---- 对 number 索引 ----
-vars ok8, err8 = pcall(function() -> void { int x = 42; vars y = x[0]; });
+vars ok8, err8 = pcall(fn() -> void { int x = 42; vars y = x[0]; });
 assert(ok8 == false, "indexing number should error");
 
 // ---- 对 nil 取长度 ----
-vars ok9, err9 = pcall(function() -> int { vars x = nil; return #x; });
+vars ok9, err9 = pcall(fn() -> int { vars x = nil; return #x; });
 assert(ok9 == false, "length of nil should error");
 
 // ---- 对 number 取长度 ----
-vars ok10, err10 = pcall(function() -> int { int x = 42; return #x; });
+vars ok10, err10 = pcall(fn() -> int { int x = 42; return #x; });
 assert(ok10 == false, "length of number should error");
 
 // ---- 对 nil 字段访问 ----
-vars ok11, err11 = pcall(function() -> void { vars x = nil; vars y = x.field; });
+vars ok11, err11 = pcall(fn() -> void { vars x = nil; vars y = x.field; });
 assert(ok11 == false, "field access on nil should error");
 
 // ---- 对 nil 字段赋值 ----
-vars ok12, err12 = pcall(function() -> void { vars x = nil; x.field = 1; });
+vars ok12, err12 = pcall(fn() -> void { vars x = nil; x.field = 1; });
 assert(ok12 == false, "field assign on nil should error");
 
 // ---- 对 bool 算术 ----
-vars ok13, err13 = pcall(function() -> int { bool b = true; return b + 1; });
+vars ok13, err13 = pcall(fn() -> int { bool b = true; return b + 1; });
 assert(ok13 == false, "bool + 1 should error");
 
 // ---- 错误对象保留 error() 的原始类型 ----
-vars ok14, err14 = pcall(function() -> void { error(42); });
+vars ok14, err14 = pcall(fn() -> void { error(42); });
 assert(ok14 == false, "error(42) should be caught");
 assert(typeof(err14) == "number", "error object should be number");
 assert(err14 == 42, "error object should be 42");
 
 // ---- error() 抛出字符串带位置前缀 ----
-vars ok15, err15 = pcall(function() -> void { error("my error"); });
+vars ok15, err15 = pcall(fn() -> void { error("my error"); });
 assert(ok15 == false, "error should be caught");
 assert(typeof(err15) == "string", "error should be string");
 

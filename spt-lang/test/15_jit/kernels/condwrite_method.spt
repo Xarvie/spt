@@ -84,8 +84,8 @@ print(iacc);
 float facc = 0.0;
 FMax fx = FMax(-1.0e30);
 for (int r = 0, 200000) { for (int j = 0, 20) { fx.track(0.25 * j - 2.0); } facc = facc + fx.get(); }          // float running max
-FMax fn = FMax(nan);
-for (int r = 0, 150000) { for (int j = 0, 12) { fn.track(0.5 * j); } facc = facc + fn.get(); }                 // NaN start: NaN-as-false
+FMax fm = FMax(nan);
+for (int r = 0, 150000) { for (int j = 0, 12) { fm.track(0.5 * j); } facc = facc + fm.get(); }                 // NaN start: NaN-as-false
 FMax fi = FMax(ninf);
 for (int r = 0, 150000) { for (int j = 0, 12) { fi.track(0.5 * j - 4.0); } facc = facc + fi.get(); }           // -inf start
 FSum fs = FSum();
