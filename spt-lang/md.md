@@ -314,3 +314,26 @@ list.pack 返回 list 无 .n。
   3. load("error('...');") + pcall(fn) 成功捕获错误，但之后执行其他 load 编译的
      函数会崩溃
 - 全量测试 394/394 通过（387 + 7 新增：6 个库测试 + load_loadfile）
+
+已实施（load 3 个 segfault bug 修复）：
+- bug 1（load 失败路径）：ldo.c f_parser 中 spt_frontend_parse 返回 NULL 时直接
+  luaD_throw 但未压错误消息，导致 luaD_seterrorobj 取栈顶垃圾值（chunkname 字符串）
+  作为 err_msg。release 模式下不 segfault 但 err_msg 是垃圾；debug 模式 lua_assert
+  触发 abort
+  修复：throw 前用 luaO_pushfstring 压入 "syntax error in <chunkname>"。
+  spt_frontend_parse 的详细诊断（行列号 + 源码片段）仍打 stderr，Lua err_msg
+  只含简短消息。后续可让 spt_frontend_parse 回传诊断字符串以提供更丰富 err_msg
+- bug 2（load("") 空字符串 segfault）：根因是 zgetc 宏与 luaZ_fill 的交互 bug。
+  zgetc 宏 `((z)->n--) > 0 ? *(z)->p++ : luaZ_fill(z)` 在 n=0 时先 n-- 导致
+  size_t 下溢成 SIZE_MAX，luaZ_fill 返回 EOZ 但不重置 z->n。第二次 zgetc 看到
+  SIZE_MAX > 0 而尝试读取 *(z->p)（p 为 NULL）→ segfault
+  f_parser 的原代码 `while ((c = zgetc(p->z)) != EOZ)` 在第一次 c=EOZ 后仍调用
+  zgetc，触发此 bug
+  修复：改为 `while (c != EOZ) { MY_ADD_CHAR(&p->buff, c); c = zgetc(p->z); }`
+  先写再读，确保 EOZ 后不再调用 zgetc。这是 ZIO 的固有约束（EOZ 后不可再读），
+  f_parser 必须遵守
+- bug 3（load + pcall + error 后续崩溃）：实为 bug 1/2 的衍生。之前的 segfault
+  损坏 Lua VM 状态，导致后续 load 编译的函数执行时崩溃。bug 1/2 修复后自动消失
+- load_loadfile.spt 启用失败路径测试：load 语法错误 / load("") / load+pcall+error
+  组合 / loadfile 不存在文件，全部通过
+- 全量测试 394/394 通过（无回归）

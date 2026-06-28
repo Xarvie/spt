@@ -1,13 +1,7 @@
 // 测试: base 库 load/loadfile（编译执行字符串/文件）
 // 语法: load(chunk, [chunkname, [mode, [env]]]), loadfile([fname, [mode, [env]]])
-// 描述: 覆盖动态编译执行成功路径
+// 描述: 覆盖动态编译执行成功路径 + 失败路径 + 错误传播
 // 返回值: 成功返回 fn（1 值），失败返回 (null, err)（2 值）
-//
-// 已知 bug（待修复）：
-// 1. load 失败路径（AST 解析错误）触发 segfault，前端错误未转成 Lua 错误
-// 2. load("") 空字符串编译成功，但后续操作（调用或访问）触发 segfault
-// 3. load 编译的函数中 error() 经 pcall 捕获后再执行其他 load 编译的函数会崩溃
-// 以上 bug 待修复后启用对应测试
 
 // ===== load 字符串编译执行 =====
 str code = "return 1 + 2;";
@@ -52,5 +46,52 @@ os.remove(tmpfile);
 // ===== load 只编译不执行 =====
 vars load_fn = load("return 999;");
 assert(typeof(load_fn) == "fn", "load returns function (not executed)");
+
+// ===== load 失败路径：语法错误返回 (null, err) =====
+// 之前 bug 1：f_parser 在 spt_frontend_parse 返回 NULL 时直接 luaD_throw
+// 但未压错误消息，导致 luaD_seterrorobj 取栈顶垃圾值
+// 修复后：压入 "syntax error in <chunkname>" 再 throw，pcall 能正确捕获
+vars bad_fn, bad_err = load("this is not valid syntax !!!");
+assert(bad_fn == null, "load invalid syntax returns null");
+assert(typeof(bad_err) == "str", "load invalid syntax returns err string");
+assert(string.find(bad_err, "syntax error") != null, "err_msg contains 'syntax error'");
+
+// load 失败不抛错，pcall 应成功
+vars pok, perr = pcall(fn() {
+    vars fn_or_err, err_msg = load("!!! bad !!!");
+    assert(fn_or_err == null, "load bad inside pcall returns null");
+    assert(typeof(err_msg) == "str", "load bad inside pcall returns err");
+});
+assert(pok == true, "pcall around failing load should succeed (load returns null, no throw)");
+
+// ===== load 空字符串：之前 bug 2，segfault =====
+// 根因：zgetc 宏在 n=0 时 n-- 导致 size_t 下溢，luaZ_fill 返回 EOZ 不重置 n，
+// 第二次 zgetc 看到 SIZE_MAX>0 读取 *NULL → segfault
+// 修复：while(c!=EOZ) 先写再读，确保 EOZ 后不再调用 zgetc
+vars empty_fn, empty_err = load("");
+// 空字符串：sourceCode 和 chunkname 都空，spt_frontend_parse 走 "both empty" 路径返回 NULL
+assert(empty_fn == null, "load('') returns null (treated as empty source)");
+assert(typeof(empty_err) == "str", "load('') returns err string");
+
+// ===== load + pcall + error 组合：之前 bug 3，后续崩溃 =====
+// 根因：bug 1/2 的 segfault 损坏状态，修复后正常
+vars fn_a = load("error('boom from a');");
+vars fn_b = load("return 42;");
+assert(typeof(fn_a) == "fn", "load error-throwing code returns fn");
+assert(typeof(fn_b) == "fn", "load normal code returns fn");
+
+vars aok, aerr = pcall(fn_a);
+assert(aok == false, "pcall(fn_a) catches error");
+assert(typeof(aerr) == "str", "pcall(fn_a) err is str");
+assert(string.find(aerr, "boom from a") != null, "pcall err contains error msg");
+
+// 关键：pcall 捕获 fn_a 的 error 后，fn_b 仍能正常执行
+int b_result = fn_b();
+assert(b_result == 42, "fn_b executes correctly after pcall(fn_a)");
+
+// ===== loadfile 不存在文件 =====
+vars nf_fn, nf_err = loadfile("nonexistent_file_xyz.spt");
+assert(nf_fn == null, "loadfile nonexistent returns null");
+assert(typeof(nf_err) == "str", "loadfile nonexistent returns err");
 
 print("load_loadfile tests passed!");

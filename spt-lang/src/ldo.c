@@ -1081,14 +1081,13 @@ static void f_parser(lua_State *L, void *ud) {
   }                                                                                                \
   (B)->buffer[(B)->n++] = (char)(ch)
 
-    // 把刚才为了检查签名预读的字符 c 放进去
-    if (c != EOZ) {
+    /* [bug 2 修复] zgetc 宏在 n=0 时会先 n-- (size_t 下溢成 SIZE_MAX)，
+     * luaZ_fill 返回 EOZ 但不重置 z->n。若在 EOZ 后再调用 zgetc，
+     * 会看到 SIZE_MAX > 0 而尝试读取 *NULL，触发 segfault。
+     * 修复：用 while (c != EOZ) 循环，先写再读，确保 EOZ 后不再调用 zgetc。*/
+    while (c != EOZ) {
       MY_ADD_CHAR(&p->buff, c);
-    }
-
-    // 循环读取剩余所有字符
-    while ((c = zgetc(p->z)) != EOZ) {
-      MY_ADD_CHAR(&p->buff, c);
+      c = zgetc(p->z);
     }
 
     // 添加字符串结束符 \0
@@ -1098,13 +1097,15 @@ static void f_parser(lua_State *L, void *ud) {
 
     const char *full_source = luaZ_buffer(&p->buff);
 
-    // --- 步骤 B: 调用你的 C++ 前端生成 AST ---
+    // --- 步骤 B: 调用 SPT 前端生成 AST ---
     struct AstNode *ast = spt_frontend_parse(full_source, p->name);
 
     if (ast == NULL) {
-      // 注意：spt_frontend_parse 返回 NULL 代表解析失败，通常需要抛出语法错误
-      // 这里没有具体的错误信息，暂时抛出通用语法错误
-      // 如果你的 spt_frontend_parse 能设置 lua error message 会更好
+      /* spt_frontend_parse 返回 NULL：源码解析失败。
+       * 诊断信息已由 spt_frontend_parse 打印到 stderr（含行列号），
+       * 这里向 Lua 栈压入一条简短错误消息再 throw，使 pcall 能正确捕获，
+       * 避免 luaD_seterrorobj 取到栈顶垃圾值（bug 1）。*/
+      luaO_pushfstring(L, "syntax error in %s", p->name);
       luaD_throw(L, LUA_ERRSYNTAX);
     }
 
