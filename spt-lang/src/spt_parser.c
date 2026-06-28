@@ -1315,6 +1315,28 @@ static AstNode *parse_for_var(Parser *P) {
   return n;
 }
 
+/* 构造 iter(nvars, expr) 的 NODE_FUNCTION_CALL AST 节点。
+   用于 for-each 语法糖：右侧单个非 call 表达式自动包成 iter(2, expr)。 */
+static AstNode *build_iter_call(Parser *P, SourceLocation loc,
+                                int nvars, AstNode *expr) {
+  /* func = identifier "iter" */
+  AstNode *func = spt_ast_new(P->arena, NODE_IDENTIFIER, loc);
+  func->u.ident.name = spt_arena_strndup(P->arena, "iter", 4);
+  /* arg1 = literal int nvars */
+  AstNode *nvars_lit = spt_ast_new(P->arena, NODE_LITERAL_INT, loc);
+  nvars_lit->u.lit_int.value = nvars;
+  /* arg2 = expr */
+  AstNode **args = (AstNode **)spt_arena_alloc(P->arena, 2 * sizeof(AstNode *));
+  args[0] = nvars_lit;
+  args[1] = expr;
+  AstList arg_list = spt_ast_list_from(P->arena, args, 2);
+  /* call node */
+  AstNode *call = spt_ast_new(P->arena, NODE_FUNCTION_CALL, loc);
+  call->u.call.func = func;
+  call->u.call.args = arg_list;
+  return call;
+}
+
 static AstNode *parse_for(Parser *P) {
   SourceLocation loc = cur_loc(P);
   expect2(P, TOK_FOR);
@@ -1346,10 +1368,38 @@ static AstNode *parse_for(Parser *P) {
   nv_push(&vars, var0);
   while (accept(P, TOK_COMMA))
     nv_push(&vars, parse_for_var(P));
+  int nvars = vars.count; /* 用户声明的循环变量数（1 或 2） */
   expect2(P, TOK_COLON);
   AstList iters = parse_expression_list(P);
   expect2(P, TOK_RPAREN);
   AstNode *body = parse_body(P);
+
+  /* 语法糖：右侧仅 1 个非 call 表达式 → 包成 iter(2, expr)
+     - call 表达式（如 pairs(l), io.lines(f)）透传，不包
+     - 多表达式（如 iter_fn, null, 0）透传，兼容旧式
+     - 1 变量时添加隐藏控制变量 __it_k，使 C=2：
+       SPT for-each 中第一个 loop var 绑到 R[A+3]=control=key，
+       若不加隐藏变量，用户的 v 会绑到 key（索引）而非 value。
+       加隐藏变量后 __it_k 绑 key，用户的 v 绑 R[A+4]=value。 */
+  if (iters.count == 1 && iters.items[0]->type != NODE_FUNCTION_CALL) {
+    if (nvars == 1) {
+      /* 在 vars 头部插入隐藏控制变量 __it_k */
+      AstNode *hidden = spt_ast_new(P->arena, NODE_PARAMETER_DECL, loc);
+      hidden->u.param.name = spt_arena_strndup(P->arena, "__it_k", 6);
+      hidden->u.param.type_annotation = NULL;
+      nv_push(&vars, NULL); /* 扩容（可能 realloc） */
+      for (int i = vars.count - 1; i > 0; i--)
+        vars.data[i] = vars.data[i - 1]; /* NodeVec 用 data 字段 */
+      vars.data[0] = hidden;
+    }
+    /* 构造 iter(2, expr) 替换原始表达式 */
+    AstNode *iter_call = build_iter_call(P, loc, 2, iters.items[0]);
+    AstNode **exprs = (AstNode **)spt_arena_alloc(P->arena, sizeof(AstNode *));
+    exprs[0] = iter_call;
+    iters.items = exprs;
+    iters.count = 1;
+  }
+
   AstNode *n = spt_ast_new(P->arena, NODE_FOR_EACH_STATEMENT, loc);
   n->u.for_each.loop_variables = nv_finish(&vars, P->arena);
   n->u.for_each.iterable_exprs = iters;
