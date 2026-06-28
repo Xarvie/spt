@@ -1,0 +1,18 @@
+// 测试: iter() 自动包 - map 2 变量（键 + 值）
+// parser 将 `for (auto k, v : m)` 包成 `for (auto k, v : iter(2, m))`
+// C=2，无需隐藏变量；k 绑 key，v 绑 value
+
+map<int, int> m = {1: 10, 2: 20};
+int sk = 0;
+int sv = 0;
+for (auto k, v : m) { sk += k; sv += v; }
+assert(sk == 3, "map 2var key sum");    // 1+2=3
+assert(sv == 30, "map 2var value sum"); // 10+20=30
+
+// 字符串 key
+map<str, int> m2 = {"x": 100, "y": 200};
+int s2 = 0;
+for (auto k, v : m2) { s2 += v; }
+assert(s2 == 300, "map 2var str-key value sum");
+
+print("iter_map_2var passed!");

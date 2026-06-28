@@ -1,0 +1,17 @@
+// 测试: iter() 自动包 - map 1 变量值迭代
+// parser 将 `for (auto v : m)` 包成 `for (auto __it_k, v : iter(2, m))`
+// 隐藏控制变量 __it_k 绑 key，用户的 v 绑 value
+// map 迭代顺序不保证，用 sum 验证（不依赖顺序）
+
+map<int, int> m = {1: 10, 2: 20, 3: 30};
+int sum = 0;
+for (auto v : m) { sum += v; }
+assert(sum == 60, "map 1var value sum");
+
+// 字符串 key
+map<str, int> m2 = {"a": 1, "b": 2};
+int s2 = 0;
+for (auto v : m2) { s2 += v; }
+assert(s2 == 3, "map 1var str-key value sum");
+
+print("iter_map_1var passed!");

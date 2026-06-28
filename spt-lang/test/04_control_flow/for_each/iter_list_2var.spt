@@ -1,0 +1,22 @@
+// 测试: iter() 自动包 - list 2 变量（索引 + 值）
+// parser 将 `for (auto i, v : l)` 包成 `for (auto i, v : iter(2, l))`
+// C=2，无需隐藏变量；i 绑 key（索引），v 绑 value
+
+list<int> l = [10, 20, 30];
+int si = 0;
+int sv = 0;
+for (auto i, v : l) { si += i; sv += v; }
+assert(si == 3, "list 2var index sum");   // 0+1+2=3
+assert(sv == 60, "list 2var value sum");  // 10+20+30=60
+
+// 验证索引从 0 开始
+list<int> l2 = [100, 200];
+int first_idx = -1;
+int first_val = 0;
+for (auto i, v : l2) {
+    if (i == 0) { first_idx = 0; first_val = v; }
+}
+assert(first_idx == 0, "list 2var first index is 0");
+assert(first_val == 100, "list 2var first value is 100");
+
+print("iter_list_2var passed!");

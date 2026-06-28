@@ -1,0 +1,15 @@
+// 测试: iter() 自动包 - call 表达式透传（不包）
+// 右侧是 NODE_FUNCTION_CALL（如 pairs(l)）时 parser 不包语法糖，透传
+
+list<int> l = [5, 10, 15];
+int sum = 0;
+for (auto k, v : pairs(l)) { sum += v; }
+assert(sum == 30, "call passthrough pairs list");
+
+// pairs 对 map
+map<int, int> m = {1: 100, 2: 200};
+int ms = 0;
+for (auto k, v : pairs(m)) { ms += v; }
+assert(ms == 300, "call passthrough pairs map");
+
+print("iter_call_passthrough passed!");

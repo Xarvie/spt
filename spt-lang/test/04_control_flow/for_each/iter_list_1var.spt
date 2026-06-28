@@ -1,0 +1,16 @@
+// 测试: iter() 自动包 - list 1 变量值迭代
+// parser 将 `for (auto v : l)` 包成 `for (auto __it_k, v : iter(2, l))`
+// 隐藏控制变量 __it_k 绑 key，用户的 v 绑 value
+
+list<int> l = [10, 20, 30, 40];
+int sum = 0;
+for (auto v : l) { sum += v; }
+assert(sum == 100, "list 1var value iteration");
+
+// 单元素
+list<int> single = [42];
+int s2 = 0;
+for (auto v : single) { s2 = v; }
+assert(s2 == 42, "list 1var single element");
+
+print("iter_list_1var passed!");

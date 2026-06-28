@@ -1,0 +1,23 @@
+// 测试: iter() 自动包 - 多表达式透传（兼容旧式）
+// 右侧 >1 个表达式时 parser 不包语法糖，透传为 (func, state, control)
+
+int count = 0;
+int iter_fn(any s, int c) {
+    if (c < 3) return c + 1;
+    return null;
+}
+for (auto x : iter_fn, null, 0) { count += 1; }
+assert(count == 3, "multi-expr passthrough 1var");
+
+// 多变量 + 多表达式
+int count2 = 0;
+int sum2 = 0;
+vars iter_fn2(any s, int c) {
+    if (c < 3) return c + 1, c * 10;
+    return null;
+}
+for (auto i, auto v : iter_fn2, null, 0) { count2 += 1; sum2 += v; }
+assert(count2 == 3, "multi-expr passthrough 2var count");
+assert(sum2 == 30, "multi-expr passthrough 2var sum"); // 0+10+20=30
+
+print("iter_multi_expr passed!");
