@@ -1,0 +1,88 @@
+// ============================================================
+// for_iter baseline — 现有 for-each 写法的性能基线
+//
+// 在引入 iter() 自动包之前，记录各场景的执行耗时。
+// 后续阶段会用相同负载对比 iter() 自动包 + JIT 优化后的性能。
+//
+// 场景：
+//   1. list 2 变量 pairs      — for (k, v : pairs(li))
+//   2. map 2 变量 pairs       — for (k, v : pairs(mi))
+//   3. 自定义迭代器           — for (auto x : iter_fn, null, 0)
+//   4. 数值 for（对照基准）   — for (int i = 0, 99)
+//
+// 负载：100 元素 × 100000 次外循环 = 10^7 次元素访问
+// ============================================================
+
+int REPS = 100000;
+int SIZE = 100;
+
+// 准备数据
+list<int> li = [];
+map<int, int> mi = {};
+for (int i = 0, SIZE - 1) {
+    table.push(li, i);
+    mi[i] = i * 2;
+}
+
+// 自定义迭代器：返回 0..99
+int iter_fn(any s, int c) {
+    if (c < SIZE - 1) return c + 1;
+    return null;
+}
+
+print("=== for_iter baseline ===");
+print("REPS=" .. tostring(REPS) .. " SIZE=" .. tostring(SIZE));
+
+// === 场景 1: list 2 变量 pairs ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto k, auto v : pairs(li)) {
+            s += v;
+        }
+    }
+    float t1 = os.clock();
+    print("list_2var_pairs: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+// === 场景 2: map 2 变量 pairs ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto k, auto v : pairs(mi)) {
+            s += v;
+        }
+    }
+    float t1 = os.clock();
+    print("map_2var_pairs: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+// === 场景 3: 自定义迭代器 ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (auto x : iter_fn, null, 0) {
+            s += x;
+        }
+    }
+    float t1 = os.clock();
+    print("custom_iter: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+// === 场景 4: 数值 for（对照基准） ===
+{
+    float t0 = os.clock();
+    int s = 0;
+    for (int rep = 0, REPS - 1) {
+        for (int i = 0, SIZE - 1) {
+            s += li[i];
+        }
+    }
+    float t1 = os.clock();
+    print("numeric_for: " .. tostring(t1 - t0) .. "s sum=" .. tostring(s));
+}
+
+print("=== baseline done ===");
