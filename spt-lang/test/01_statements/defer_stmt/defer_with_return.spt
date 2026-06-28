@@ -1,7 +1,45 @@
-// 测试: 语句 - defer与return交互
-// 语法: deferStatement, RETURN
-// 描述: 测试defer在return之前执行
+// 测试: defer 与 return 的交互
+// 语法: defer { ... }, return
+// 描述: 验证 defer 在 return 之后、函数退出之前执行
 
-assert(true, "defer return test placeholder");
+list<str> trace = [];
+
+fn early_return() {
+    defer {
+        list.push(trace, "defer");
+    }
+    list.push(trace, "before return");
+    return;
+    // 不会执行
+    list.push(trace, "after return");
+}
+early_return();
+assert(#trace == 2, "should have 2 events");
+assert(trace[0] == "before return", "body before return");
+assert(trace[1] == "defer", "defer runs after return");
+
+// ===== defer 修改 return 值之前的状态 =====
+list<int> counter = [0];
+fn compute() {
+    defer {
+        counter[0] = counter[0] + 100;  // 在 return 后执行
+    }
+    counter[0] = 1;
+    return counter[0];  // 返回 1（defer 还没执行）
+}
+int result = compute();
+assert(result == 1, "return value captured before defer");
+assert(counter[0] == 101, "defer modifies counter after return");
+
+// ===== defer 在异常路径执行 =====
+list<bool> cleanup = [false];
+vars ok, err = pcall(fn() {
+    defer {
+        cleanup[0] = true;
+    }
+    error("boom");
+});
+assert(ok == false, "should error");
+assert(cleanup[0] == true, "defer should run on error path");
 
 print("defer_with_return tests passed!");

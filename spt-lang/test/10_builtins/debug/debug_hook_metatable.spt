@@ -1,0 +1,128 @@
+// 测试: debug.sethook/gethook + debug.setmetatable/getmetatable
+// 语法: debug.sethook([co,] hook, mask, count), debug.gethook([co])
+//       debug.setmetatable(obj, mt), debug.getmetatable(obj)
+// 描述: 覆盖 debug 库剩余函数（slot-0 ABI）
+
+// ===== debug.getmetatable/setmetatable 基本操作 =====
+map<any, any> mt = {};
+mt["__name"] = "MyMap";
+
+map<any, any> obj = {};
+map<any, any> existing_mt = debug.getmetatable(obj);
+assert(existing_mt == null, "fresh map should have no metatable");
+
+// 设置 metatable
+map<any, any> set_result = debug.setmetatable(obj, mt);
+assert(set_result == obj, "setmetatable should return the object");
+
+// 验证已设置
+map<any, any> got_mt = debug.getmetatable(obj);
+assert(got_mt != null, "metatable should be set");
+assert(got_mt["__name"] == "MyMap", "metatable __name should match");
+
+// 用 null 移除 metatable
+map<any, any> obj2 = {};
+debug.setmetatable(obj2, mt);
+assert(debug.getmetatable(obj2) != null, "obj2 should have mt");
+map<any, any> removed = debug.setmetatable(obj2, null);
+assert(debug.getmetatable(obj2) == null, "obj2 should have no mt after null");
+
+// ===== debug.getmetatable 不同类型 =====
+int n = 42;
+assert(debug.getmetatable(n) == null, "int has no metatable");
+str s = "hello";
+// SPT 中字符串有 metatable（支持 s.len() 等方法调用），__index 指向 string 库
+map<any, any> str_mt = debug.getmetatable(s);
+assert(str_mt != null, "string has metatable for method dispatch");
+list<int> arr = [1, 2, 3];
+assert(debug.getmetatable(arr) == null, "list has no metatable by default");
+
+// ===== debug.sethook/gethook 基本 =====
+// 不带 coroutine 参数，作用于当前线程
+list<str> events = [];
+fn hook_fn(str ev) {
+    list.push(events, ev);
+}
+
+debug.sethook(hook_fn, "lr");  // line + return
+// 调用函数触发 hook
+fn hooked_func() {
+    int x = 10;
+    return x + 1;
+}
+int rv = hooked_func();
+assert(rv == 11, "hooked_func should return 11");
+
+// 关闭 hook
+debug.sethook(null, "");
+
+// 验证 events 至少捕获了一些事件
+assert(#events > 0, "should have captured some hook events");
+// 至少有 return 事件（hooked_func 返回时）
+bool has_return = false;
+for (auto ev : events) {
+    if (ev == "return") {
+        has_return = true;
+    }
+}
+assert(has_return, "should have at least one return event");
+
+// ===== debug.gethook 返回 hook 函数 =====
+fn my_hook(str ev) {
+    // empty
+}
+debug.sethook(my_hook, "l");  // line only
+vars got_hook, got_mask, got_count = debug.gethook();
+assert(typeof(got_hook) == "fn", "gethook should return function");
+assert(got_mask == "l", "mask should be 'l'");
+assert(got_count == 0, "count should be 0");
+
+// 关闭 hook
+debug.sethook(null, "");
+vars no_hook, no_mask, no_count = debug.gethook();
+assert(no_hook == null || no_hook == false, "gethook after clear should return null/false");
+
+// ===== debug.sethook 对指定协程 =====
+coro co = coroutine.create(fn() -> void {
+    coroutine.yield();
+    // 这里不会执行到（外层不会 resume 第二次）
+});
+
+list<str> co_events = [];
+fn co_hook(str ev) {
+    list.push(co_events, ev);
+}
+
+debug.sethook(co, co_hook, "l");
+// 协程的 hook 应该设置成功
+vars co_hook_got, co_mask_got, co_count_got = debug.gethook(co);
+assert(typeof(co_hook_got) == "fn", "coroutine gethook should return function");
+assert(co_mask_got == "l", "coroutine mask should be 'l'");
+
+// 清除协程 hook
+debug.sethook(co, null, "");
+vars co_no_hook, co_no_mask, co_no_count = debug.gethook(co);
+assert(co_no_hook == null || co_no_hook == false, "coroutine hook should be cleared");
+
+// ===== debug.sethook count 模式 =====
+int count_calls = 0;
+fn count_hook(str ev) {
+    count_calls = count_calls + 1;
+}
+debug.sethook(count_hook, "", 5);  // 每 5 条指令触发
+fn trivial() {
+    int x = 1;
+    int y = 2;
+    int z = x + y;
+}
+trivial();
+debug.sethook(null, "", 0);
+assert(count_calls > 0, "count hook should fire at least once");
+
+// ===== debug.sethook 错误参数 =====
+vars ok, err = pcall(fn() {
+    debug.sethook(42, "lr");  // hook 不是函数
+});
+assert(ok == false, "sethook with non-function should error");
+
+print("debug_hook_metatable tests passed!");

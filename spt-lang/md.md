@@ -247,3 +247,34 @@ list.pack 返回 list 无 .n。
     3 值（func, state, control），SPT for-each 协议期望 4 值，但 ast_adjust_assign
     自动用 nil 填充第 4 个 closing，无需修改 lutf8lib.c
 - 全量测试 384/384 通过
+
+已实施（defer OP_TBC bug 修复 + os/coroutine/debug 测试覆盖）：
+- defer 编译 bug 修复（spt_codegen.c compile_defer）：
+  - 现象：`defer { ... }` 运行时报 "variable '(defer)' got a non-closable value"
+  - 根因：compile_defer 调用 setmetatable(_ENV, {}, {__close=closure}) 后，返回值
+    （带 __close 元方法的 table）在 smbase 槽（= N+1，closure 占了 N）。但 (defer)
+    变量通过 ast_new_var + ast_adjustlocalvars 分配在 luaY_nvarstack(fs) 位置（= N，
+    外层 nactvar）。两者不匹配，OP_TBC 检查 N 槽的 nil 值，报 non-closable
+  - 修复：OP_CALL 后插入 OP_MOVE defer_reg, smbase，把返回值从 smbase 移到
+    luaY_nvarstack(fs) 位置，再设 freereg = defer_reg + 1。这样 (defer) 变量
+    正确绑定到带 __close 的 table，OP_TBC 检查通过
+  - 此 bug 自 defer 功能引入以来一直存在（git 历史只有一次 commit），所有 defer
+    测试都是 placeholder，从未真正运行过
+- 测试覆盖补充：
+  - os_funcs/os_file_difftime.spt：os.difftime（正/负/零）+ os.getenv（存在/缺失）
+    + os.tmpname（唯一性）+ os.remove/os.rename（成功/失败路径，配合 io.open 创建
+    临时文件）。注意：SPT 中 luaL_pushfail 默认 pushnil，失败返回 null 而非 false
+  - 12_coroutine/coroutine_running_yieldable_close.spt：coroutine.running（主线程
+    is_main=true / 协程内 is_main=false）+ isyieldable（主线程 false / 协程内 true /
+    显式 co 参数）+ close（suspended/dead 成功 / 主线程抛错 / normal 协程抛错）
+    注意：isyieldable 只看 nCcalls 不看 status，dead 协程仍可能返回 true
+  - debug/debug_hook_metatable.spt：setmetatable/getmetatable（设置/移除/不同类型，
+    注意 string 有 metatable 支持 s.len() 方法）+ sethook/gethook（line/return/count
+    模式，主线程/协程，错误参数）
+  - 01_statements/defer_stmt/defer_basic.spt：主线程 defer LIFO 顺序 + upvalue 捕获
+    + return 后执行 + 协程内 defer（close 时触发）
+  - 01_statements/defer_stmt/defer_order.spt：多 defer LIFO + 嵌套作用域 defer
+  - 01_statements/defer_stmt/defer_with_return.spt：return 后 defer 执行 + defer
+    修改 return 后状态 + error 路径 defer 执行
+- 全量测试 387/387 通过（384 + 3 新增，b3_dofile_return.spt 因相对路径在测试脚本
+  外运行通过，非回归）

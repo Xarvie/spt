@@ -2424,7 +2424,15 @@ static void compile_defer(CompileCtx *C, DeferStatementNode *n) {
     int smbase = sm.u.info;
     init_exp(&sm, VCALL, luaK_codeABC(fs, OP_CALL, smbase, 4, 2));
     luaK_fixline(fs, C->linenumber);
-    fs->freereg = cast_byte(smbase + 1);
+    /* [SPT 修复] setmetatable 返回值在 smbase 槽，但 (defer) 变量将分配在
+       luaY_nvarstack(fs) 位置（外层 nactvar）。两者通常不同：smbase = N+1
+       （closure 占了 N），(defer) 在 N。需要把返回值移动到 (defer) 位置，
+       否则 OP_TBC 检查 (defer) 槽（N）的 nil 值，报 "non-closable value"。 */
+    int defer_reg = (int)luaY_nvarstack(fs);
+    if (smbase != defer_reg) {
+      luaK_codeABC(fs, OP_MOVE, defer_reg, smbase, 0);
+    }
+    fs->freereg = cast_byte(defer_reg + 1);
   }
 
   /* Create to-be-closed local */

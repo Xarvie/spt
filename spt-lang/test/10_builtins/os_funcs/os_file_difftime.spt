@@ -1,0 +1,73 @@
+// 测试: os 剩余函数（difftime/getenv/remove/rename/tmpname）
+// 语法: os.difftime(t1, t2), os.getenv(name), os.remove(f), os.rename(a, b), os.tmpname()
+// 描述: 覆盖 os 库除 time/date/clock 外的函数（slot-0 ABI）
+
+// ===== os.difftime =====
+int t1 = 1000;
+int t2 = 100;
+float diff = os.difftime(t1, t2);
+assert(diff == 900.0, "os.difftime(1000, 100) should be 900");
+float diff_neg = os.difftime(t2, t1);
+assert(diff_neg == -900.0, "os.difftime(100, 1000) should be -900");
+float diff_zero = os.difftime(50, 50);
+assert(diff_zero == 0.0, "os.difftime(50, 50) should be 0");
+
+// ===== os.getenv =====
+// PATH 在 Windows/POSIX 都应该存在
+str path = os.getenv("PATH");
+assert(typeof(path) == "str" || path == null, "getenv returns string or null");
+// 不存在的环境变量返回 null
+str missing = os.getenv("DEFINITELY_NOT_EXISTS_VAR_XYZ_12345");
+assert(missing == null, "getenv of missing var should be null");
+
+// ===== os.tmpname =====
+str tmp1 = os.tmpname();
+assert(typeof(tmp1) == "str", "tmpname should return string");
+assert(#tmp1 > 0, "tmpname should be non-empty");
+str tmp2 = os.tmpname();
+assert(tmp1 != tmp2, "two tmpname calls should return different names");
+
+// ===== os.remove + os.rename =====
+// 创建临时文件再操作
+str fname = "os_test_rename_src.txt";
+str fname2 = "os_test_rename_dst.txt";
+
+// 用 io.open 写一个文件
+file f = io.open(fname, "w");
+assert(f != null, "open test file for write");
+f.write("hello os test\n");
+f.close();
+
+// os.rename 改名
+vars rok, rerr = os.rename(fname, fname2);
+assert(rok == true, "rename should succeed: " .. tostring(rerr));
+
+// 原文件应该不存在
+file fchk = io.open(fname, "r");
+assert(fchk == null, "original file should not exist after rename");
+if (fchk != null) { fchk.close(); }
+
+// 新文件应该存在并可读
+file f2 = io.open(fname2, "r");
+assert(f2 != null, "renamed file should exist");
+str content = f2.read("*a");
+assert(#content > 0, "renamed file should have content");
+f2.close();
+
+// os.remove 删除文件
+vars dok, derr = os.remove(fname2);
+assert(dok == true, "remove should succeed: " .. tostring(derr));
+
+// 再次删除应该失败（文件不存在）
+vars dok2, derr2 = os.remove(fname2);
+assert(dok2 == null, "remove non-existent file should fail (return null)");
+
+// 清理：如果 rename 失败也尝试删除原文件
+os.remove(fname);
+os.remove(fname2);
+
+// ===== os.remove 不存在文件返回 (nil, err) =====
+vars r3, e3 = os.remove("nonexistent_file_xyz_12345.txt");
+assert(r3 == null, "remove nonexistent should return null");
+
+print("os_file_difftime tests passed!");

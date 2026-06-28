@@ -1,7 +1,53 @@
-// 测试: 语句 - defer执行顺序
-// 语法: deferStatement -> DEFER blockStatement
-// 描述: 测试多个defer的执行顺序
+// 测试: 多个 defer 的执行顺序（LIFO）
+// 语法: defer { ... }
+// 描述: 验证多个 defer 按 LIFO（后进先出）顺序执行
 
-assert(true, "defer order test placeholder");
+list<int> seq = [];
+
+fn test_order() {
+    defer {
+        list.push(seq, 1);
+    }
+    defer {
+        list.push(seq, 2);
+    }
+    defer {
+        list.push(seq, 3);
+    }
+    list.push(seq, 0);  // body
+}
+test_order();
+
+// 期望：body(0) 先，然后 defer 按 LIFO：3, 2, 1
+assert(#seq == 4, "should have 4 events");
+assert(seq[0] == 0, "body runs first");
+assert(seq[1] == 3, "last defer runs first (LIFO)");
+assert(seq[2] == 2, "middle defer runs second");
+assert(seq[3] == 1, "first defer runs last");
+
+// 嵌套作用域的 defer
+list<int> nested = [];
+{
+    defer {
+        list.push(nested, 10);
+    }
+    list.push(nested, 1);
+    {
+        defer {
+            list.push(nested, 20);
+        }
+        list.push(nested, 2);
+    }
+    // 内层 defer 在这里执行（20）
+    list.push(nested, 3);
+}
+// 外层 defer 在这里执行（10）
+
+assert(#nested == 5, "should have 5 events");
+assert(nested[0] == 1, "outer body");
+assert(nested[1] == 2, "inner body");
+assert(nested[2] == 20, "inner defer at scope exit");
+assert(nested[3] == 3, "outer body after inner block");
+assert(nested[4] == 10, "outer defer at scope exit");
 
 print("defer_order tests passed!");

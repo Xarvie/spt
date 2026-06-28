@@ -1,9 +1,61 @@
-// 测试: 语句 - defer基本用法
-// 语法: deferStatement -> DEFER blockStatement #deferBlockStmt
-// 描述: 测试defer语句的基本用法
+// 测试: defer 语句基本用法 + 协程内 defer
+// 语法: defer { ... }
+// 描述: 验证 defer 在主线程和协程内的执行
 
-// defer语法可能尚未完全实现
-// 简单测试defer关键字是否被识别
-assert(true, "defer test placeholder");
+// ===== 主线程 defer 基本执行 =====
+list<str> order = [];
+{
+    defer {
+        list.push(order, "outer defer");
+    }
+    list.push(order, "outer body");
+    {
+        defer {
+            list.push(order, "inner defer");
+        }
+        list.push(order, "inner body");
+    }
+}
+// 期望顺序：outer body, inner body, inner defer, outer defer
+assert(#order == 4, "should have 4 events");
+assert(order[0] == "outer body", "first should be outer body");
+assert(order[1] == "inner body", "second should be inner body");
+assert(order[2] == "inner defer", "third should be inner defer (LIFO)");
+assert(order[3] == "outer defer", "fourth should be outer defer (LIFO)");
+
+// ===== defer 捕获外层变量（主线程）=====
+list<bool> flag = [false];
+{
+    defer {
+        flag[0] = true;
+    }
+}
+assert(flag[0] == true, "defer should set flag via upvalue");
+
+// ===== defer 在 return 前执行 =====
+fn with_defer() {
+    defer {
+        flag[0] = true;
+    }
+    flag[0] = false;
+    return 42;
+}
+flag[0] = false;
+int rv = with_defer();
+assert(rv == 42, "return value should be 42");
+assert(flag[0] == true, "defer should run after return value computed");
+
+// ===== 协程内 defer =====
+list<bool> co_flag = [false];
+coro co = coroutine.create(fn() -> void {
+    defer {
+        co_flag[0] = true;
+    }
+    coroutine.yield();
+});
+coroutine.resume(co);
+assert(co_flag[0] == false, "defer should not run while suspended");
+coroutine.close(co);
+assert(co_flag[0] == true, "defer should run on close");
 
 print("defer_basic tests passed!");
