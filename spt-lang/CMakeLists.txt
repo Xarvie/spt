@@ -206,7 +206,15 @@ if(BUILD_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     spt_apply_instrumentation(TestDeclare)
 
-    message(STATUS "Tests enabled: ${SPT_TESTS} spt tests + TestCApi + TestDeclare")
+    # ---- iter() 内置函数测试 ----
+    add_executable(TestIter tests/TestIter.c)
+    target_link_libraries(TestIter PRIVATE spt_core)
+    add_test(NAME TestIter
+        COMMAND $<TARGET_FILE:TestIter>
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    spt_apply_instrumentation(TestIter)
+
+    message(STATUS "Tests enabled: ${SPT_TESTS} spt tests + TestCApi + TestDeclare + TestIter")
 endif()
 
 # ----------------------------------------------------------------------

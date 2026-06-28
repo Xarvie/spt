@@ -327,18 +327,102 @@ static int ipairsaux(lua_State *L) {
   } else {
     i = luaL_intop(+, i, 1);
   }
+  /* SPT list (LUA_TARRAY): lua_geti raises an error on out-of-bounds
+     (does not return nil), so check the logical length first. */
+  if (lua_type(L, 2) == LUA_TARRAY) {
+    if (i >= lua_arraylen(L, 2)) { lua_pushnil(L); return 1; }
+  }
   lua_pushinteger(L, i);
   return (lua_geti(L, 2, i) == LUA_TNIL) ? 1 : 2;
 }
 
-/* luaB_ipairs - receiver is arg1, table is arg2 */
+/* luaB_ipairs - receiver is arg1, table is arg2.
+   Returns 4 values (func, state, control, closing_var) to match the SPT
+   for-each protocol (which uses 4 hidden vars, not 3 like standard Lua).
+   The 3rd value is the initial control; the 4th is the to-be-closed
+   object (nil = nothing to close). TFORPREP swaps R[A+2]↔R[A+3] then
+   makes R[A+2] a tbc upvalue, so the 4th return (closing_var) must be
+   nil or a closable object — NOT an integer like the control. */
 static int luaB_ipairs(lua_State *L) {
   luaL_checkany(L, 2);
   lua_pushcfunction(L, ipairsaux);
   lua_pushvalue(L, 2);    /* state (table) */
-  lua_pushinteger(L, -1); /* initial value */
-  return 3;
+  lua_pushinteger(L, -1); /* initial control (3rd return) */
+  lua_pushnil(L);         /* closing_var (4th return, nil = no close) */
+  return 4;
 }
+
+/* iter_list_next - receiver=arg1, state=arg2(list), prev_key=arg3.
+   Yields (new_key, value) or nil when done. Key sequence is 0,1,...,loglen-1
+   (same as luaB_next over a list), so the JIT can reuse the native index-loop
+   lowering. Independent from luaB_next so the JIT entry guard can distinguish
+   the iter() path from the pairs() path.
+   Uses only public C API (no internal VM types) for portability. */
+static int iter_list_next(lua_State *L) {
+  lua_settop(L, 3);
+  lua_Integer k;
+  if (lua_isnil(L, 3))            /* prev=nil -> start at 0 */
+    k = 0;
+  else {
+    k = luaL_checkinteger(L, 3) + 1;
+    if (k < 0) luaL_error(L, "invalid key to iter");
+  }
+  /* lua_geti on a list raises an error on out-of-bounds (does not return
+     nil), so check the logical length first — same pattern as ipairsaux. */
+  if (k >= lua_arraylen(L, 2)) { lua_pushnil(L); return 1; }
+  lua_pushinteger(L, k);          /* new key */
+  lua_geti(L, 2, k);             /* value (k < loglen, in bounds) */
+  return 2;
+}
+
+/* iter_map_next - receiver=arg1, state=arg2(map), prev_key=arg3.
+   Delegates to lua_next (handles array part + hash part + skips nils).
+   Independent function so a future map JIT can pin it by address. */
+static int iter_map_next(lua_State *L) {
+  lua_settop(L, 3);
+  if (lua_next(L, 2))
+    return 2;
+  lua_pushnil(L);
+  return 1;
+}
+
+/* luaB_iter - receiver=arg1, nvars=arg2(int 1 or 2), obj=arg3.
+   Returns 4 values (func, state, control, closing_var) for the SPT for-each
+   protocol. The 3rd value is the initial control (nil = start); the 4th is
+   the to-be-closed object (nil = nothing to close). Dispatches by obj type:
+     list -> (iter_list_next, list, nil, nil)
+     map  -> (iter_map_next,  map,  nil, nil)
+   Errors on nvars not in [1,2] or unsupported iterable type. */
+static int luaB_iter(lua_State *L) {
+  lua_Integer nvars = luaL_checkinteger(L, 2);
+  if (nvars < 1 || nvars > 2)
+    luaL_error(L, "iter nvars must be 1 or 2");
+  luaL_checkany(L, 3);
+
+  int t = lua_type(L, 3);
+  if (t == LUA_TARRAY) {
+    lua_pushcfunction(L, iter_list_next);
+    lua_pushvalue(L, 3); /* state = list */
+    lua_pushnil(L);      /* initial control (3rd return) */
+    lua_pushnil(L);      /* closing_var (4th return, nil = no close) */
+    return 4;
+  } else if (t == LUA_TTABLE) {
+    lua_pushcfunction(L, iter_map_next);
+    lua_pushvalue(L, 3); /* state = map */
+    lua_pushnil(L);      /* initial control (3rd return) */
+    lua_pushnil(L);      /* closing_var (4th return, nil = no close) */
+    return 4;
+  } else {
+    luaL_error(L, "iter: unsupported iterable type %s", lua_typename(L, t));
+    return 0;
+  }
+}
+
+/* Accessors for the JIT to pin iter_list_next / iter_map_next by address
+   (these are file-static, so the accessors must live here, like
+   spt_jit_pairs_next). */
+lua_CFunction spt_jit_iter_list_next(void) { return iter_list_next; }
+lua_CFunction spt_jit_iter_map_next(void) { return iter_map_next; }
 
 static int load_aux(lua_State *L, int status, int envidx) {
   if (l_likely(status == LUA_OK)) {
@@ -544,6 +628,7 @@ static const luaL_Reg base_funcs[] = {{"assert", luaB_assert},
                                       {"error", luaB_error},
                                       {"getmetatable", luaB_getmetatable},
                                       {"ipairs", luaB_ipairs},
+                                      {"iter", luaB_iter},
                                       {"loadfile", luaB_loadfile},
                                       {"load", luaB_load},
                                       {"next", luaB_next},
