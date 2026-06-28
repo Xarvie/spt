@@ -1,6 +1,20 @@
 // 验证 B3: dofile 返回值多 fname
 // b3_chunk.spt 内容为 "return 42;"，预创建
-vars a, b = dofile("b3_chunk.spt");
+// 通过 debug.getinfo 获取当前脚本完整路径，定位同目录的 b3_chunk.spt
+// （SPT sptscript 已改为 source 含完整路径，便于脚本定位自身目录）
+
+map<any, any> info = debug.getinfo(1, "S");
+str src = info["source"];  // @完整路径
+// 去掉 @ 前缀（0-based，从索引 1 开始）
+str self_path = string.sub(src, 1);
+// 提取目录部分（含末尾路径分隔符）
+str dir = string.match(self_path, "^(.*[/\\])");
+if (dir == null) {
+    dir = "";
+}
+str chunk_path = dir .. "b3_chunk.spt";
+
+vars a, b = dofile(chunk_path);
 print("B3 first return = " .. tostring(a));
 print("B3 second return = " .. tostring(b));
 print("B3 expected: a=42, b=null");

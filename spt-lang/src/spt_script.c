@@ -196,7 +196,6 @@ static int runScript(const char *path, char **args, int nargs) {
 
   char scriptDir[PATH_MAX];
   path_dirname(use_path, scriptDir, sizeof(scriptDir));
-  const char *filename = path_basename(use_path);
 
   lua_State *L = luaL_newstate();
   if (!L) {
@@ -209,7 +208,10 @@ static int runScript(const char *path, char **args, int nargs) {
   spt_register_module_loader(L, scriptDir);
   set_arg_table(L, args, nargs);
 
-  int result = runSource(source, filename, L);
+  /* [SPT] 用完整路径作 chunkname，使 debug.getinfo 的 source 字段包含目录
+   * 信息（@完整路径），便于脚本通过 debug.getinfo 定位自身路径加载同目录
+   * 文件。filename（basename）仍可用于 short_src 显示。 */
+  int result = runSource(source, use_path, L);
   lua_close(L);
   free(source);
   return result;
