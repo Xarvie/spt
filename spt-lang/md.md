@@ -276,5 +276,13 @@ list.pack 返回 list 无 .n。
   - 01_statements/defer_stmt/defer_order.spt：多 defer LIFO + 嵌套作用域 defer
   - 01_statements/defer_stmt/defer_with_return.spt：return 后 defer 执行 + defer
     修改 return 后状态 + error 路径 defer 执行
-- 全量测试 387/387 通过（384 + 3 新增，b3_dofile_return.spt 因相对路径在测试脚本
-  外运行通过，非回归）
+- 全量测试 387/387 通过（384 + 3 新增）
+
+已实施（b3_dofile_return 相对路径修复）：
+- spt_script.c runScript：chunkname 从 basename 改为完整路径（use_path），
+  使 debug.getinfo 的 source 字段含完整路径（@C:\...\script.spt），符合 Lua
+  惯例，便于脚本通过 debug.getinfo 定位自身目录
+- b3_dofile_return.spt：用 debug.getinfo(1, "S").source 获取脚本完整路径，
+  string.match 提取目录，dofile 同目录的 b3_chunk.spt。原 dofile("b3_chunk.spt")
+  只在 cwd=脚本目录时工作，现可在任意 cwd 运行
+- 全量测试 387/387 通过（从任意 cwd 运行均通过）
