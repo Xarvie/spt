@@ -1,0 +1,70 @@
+// 测试: string.pack/unpack/packsize（二进制打包）
+// 语法: string.pack(fmt, v1, v2, ...), string.unpack(fmt, s, [pos]), string.packsize(fmt)
+// 描述: 覆盖二进制打包/解包 + 格式说明符
+// 注意: SPT 0-based，string.unpack 的 pos 参数 0-based，返回的下一位置也是 0-based
+
+// ===== pack/unpack 基本整数 =====
+str packed = string.pack("i4", 0x12345678);
+assert(typeof(packed) == "str", "pack returns string");
+assert(#packed == 4, "i4 packs to 4 bytes");
+
+vars val, nextpos = string.unpack("i4", packed);
+assert(val == 0x12345678, "unpack recovers original value");
+assert(nextpos == 4, "nextpos after i4 = 4 (0-based, exclusive end)");
+
+// ===== packsize =====
+int sz = string.packsize("i4");
+assert(sz == 4, "packsize i4 = 4");
+int sz2 = string.packsize("i8");
+assert(sz2 == 8, "packsize i8 = 8");
+int sz3 = string.packsize("i4i4");
+assert(sz3 == 8, "packsize i4i4 = 8");
+
+// ===== 多值打包/解包 =====
+str multi = string.pack("i4i4", 100, 200);
+assert(#multi == 8, "i4i4 packs to 8 bytes");
+vars v1, v2, np = string.unpack("i4i4", multi);
+assert(v1 == 100 && v2 == 200, "unpack multi recovers values");
+assert(np == 8, "nextpos after i4i4 = 8");
+
+// ===== 字节打包 b =====
+str byte_packed = string.pack("bbb", 65, 66, 67);
+assert(#byte_packed == 3, "bbb packs to 3 bytes");
+vars b1, b2, b3, bnp = string.unpack("bbb", byte_packed);
+assert(b1 == 65 && b2 == 66 && b3 == 67, "unpack bbb recovers bytes");
+assert(bnp == 3, "nextpos after bbb = 3");
+
+// ===== 字符串打包 s/z =====
+// s = 长度前缀 + 字符串
+str s_packed = string.pack("s4", "hello");
+vars s_val, s_np = string.unpack("s4", s_packed);
+assert(s_val == "hello", "unpack s4 recovers string");
+
+// ===== unpack 带 pos 参数（0-based）=====
+str seq = string.pack("i4i4", 11, 22);
+// 从位置 4（0-based）开始解包第二个 i4
+vars second_val, second_np = string.unpack("i4", seq, 4);
+assert(second_val == 22, "unpack from pos 4 gets second value");
+assert(second_np == 8, "nextpos from pos 4 + i4 = 8");
+
+// ===== 小端/大端 =====
+// < 小端，> 大端
+str le = string.pack("<i4", 1);
+str be = string.pack(">i4", 1);
+// 小端 1 = 01 00 00 00，大端 1 = 00 00 00 01
+assert(string.byte(le, 0) == 1, "little-endian low byte first");
+assert(string.byte(be, 3) == 1, "big-endian high byte last");
+
+// ===== pack 错误：参数数量不匹配 =====
+vars ok, err = pcall(fn() {
+    string.pack("i4i4", 1);  // 缺少第二个参数
+});
+assert(ok == false, "pack with too few args should error");
+
+// ===== unpack 错误：数据太短 =====
+vars ok2, err2 = pcall(fn() {
+    string.unpack("i4", "ab");  // 只有 2 字节，不够 i4
+});
+assert(ok2 == false, "unpack short data should error");
+
+print("string_pack tests passed!");

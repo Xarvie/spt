@@ -1,0 +1,58 @@
+// 测试: base 库 collectgarbage（GC 控制）
+// 语法: collectgarbage(opt, [arg])
+// 描述: 覆盖 GC 各选项
+
+// ===== collectgarbage("count") 返回内存使用量（KB）=====
+float mem_before = collectgarbage("count");
+assert(typeof(mem_before) == "float", "count returns float");
+assert(mem_before > 0, "memory usage should be positive");
+
+// ===== collectgarbage("collect") 完整 GC =====
+vars cret = collectgarbage("collect");
+// collect 返回值（Lua 5.4 返回 0 或内存）
+// 主要验证不抛错
+
+// ===== collectgarbage("isrunning") 返回 bool =====
+bool running = collectgarbage("isrunning");
+assert(typeof(running) == "bool", "isrunning returns bool");
+// 默认 GC 开启
+assert(running == true, "GC should be running by default");
+
+// ===== collectgarbage("stop") / "restart" =====
+collectgarbage("stop");
+bool after_stop = collectgarbage("isrunning");
+assert(after_stop == false, "GC should be stopped after stop");
+collectgarbage("restart");
+bool after_restart = collectgarbage("isrunning");
+assert(after_restart == true, "GC should be running after restart");
+
+// ===== collectgarbage("step") 单步 GC =====
+vars step_ret = collectgarbage("step", 100);
+// step 返回 bool（是否完成一轮）
+assert(typeof(step_ret) == "bool", "step returns bool");
+
+// ===== collectgarbage("count") 分配后内存增加 =====
+collectgarbage("collect");
+float mem1 = collectgarbage("count");
+// 分配大量对象
+list<any> big = [];
+for (auto i = 0, 999) {
+    list.push(big, "string_" .. tostring(i));
+}
+float mem2 = collectgarbage("count");
+assert(mem2 >= mem1, "memory should increase after allocation");
+
+// 释放后 GC 回收
+big = null;
+collectgarbage("collect");
+collectgarbage("collect");  // 多次 collect 确保回收
+float mem3 = collectgarbage("count");
+assert(mem3 < mem2, "memory should decrease after GC");
+
+// ===== collectgarbage 无效选项抛错 =====
+vars ok, err = pcall(fn() {
+    collectgarbage("invalid_option_xyz");
+});
+assert(ok == false, "invalid gc option should error");
+
+print("collectgarbage_test tests passed!");

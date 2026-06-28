@@ -1,0 +1,56 @@
+// 测试: base 库 load/loadfile（编译执行字符串/文件）
+// 语法: load(chunk, [chunkname, [mode, [env]]]), loadfile([fname, [mode, [env]]])
+// 描述: 覆盖动态编译执行成功路径
+// 返回值: 成功返回 fn（1 值），失败返回 (null, err)（2 值）
+//
+// 已知 bug（待修复）：
+// 1. load 失败路径（AST 解析错误）触发 segfault，前端错误未转成 Lua 错误
+// 2. load("") 空字符串编译成功，但后续操作（调用或访问）触发 segfault
+// 3. load 编译的函数中 error() 经 pcall 捕获后再执行其他 load 编译的函数会崩溃
+// 以上 bug 待修复后启用对应测试
+
+// ===== load 字符串编译执行 =====
+str code = "return 1 + 2;";
+vars fn1 = load(code);
+assert(typeof(fn1) == "fn", "load valid string returns function");
+int result = fn1();
+assert(result == 3, "loaded function returns 3");
+
+// ===== load 带 chunkname =====
+vars fn2 = load("return 'hello';", "mychunk");
+assert(typeof(fn2) == "fn");
+str s = fn2();
+assert(s == "hello", "loaded function returns 'hello'");
+
+// ===== load 多返回值 =====
+vars fn6 = load("return 10, 20, 30;");
+assert(typeof(fn6) == "fn");
+int a6 = fn6();
+assert(a6 == 10, "loaded fn returns first value 10");
+
+// ===== loadfile 从文件加载 =====
+map<any, any> info = debug.getinfo(1, "S");
+str src = info["source"];
+str self_path = string.sub(src, 1);  // 去掉 @
+str dir = string.match(self_path, "^(.*[/\\])");
+if (dir == null) { dir = ""; }
+str tmpfile = dir .. "_loadfile_tmp.spt";
+
+file f = io.open(tmpfile, "w");
+assert(f != null, "create temp file for loadfile test");
+f.write("return 42 + 58;");
+f.close();
+
+vars lf_fn = loadfile(tmpfile);
+assert(typeof(lf_fn) == "fn", "loadfile valid file returns function");
+int lf_result = lf_fn();
+assert(lf_result == 100, "loadfile result executes to 100");
+
+// 清理
+os.remove(tmpfile);
+
+// ===== load 只编译不执行 =====
+vars load_fn = load("return 999;");
+assert(typeof(load_fn) == "fn", "load returns function (not executed)");
+
+print("load_loadfile tests passed!");

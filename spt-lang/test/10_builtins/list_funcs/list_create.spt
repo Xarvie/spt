@@ -1,0 +1,62 @@
+// 测试: list.create（创建空 list，容量提示）
+// 语法: list.create(n)
+// 描述: 覆盖 list.create 创建空 list + 容量预分配
+
+// ===== list.create 基本创建 =====
+list<int> empty = list.create(0);
+assert(typeof(empty) == "list", "create returns list");
+assert(#empty == 0, "created list is empty");
+
+// ===== list.create 带容量提示 =====
+list<int> with_cap = list.create(100);
+assert(#with_cap == 0, "capacity hint doesn't add elements");
+// 容量只是提示，不影响 #list
+list.push(with_cap, 1);
+list.push(with_cap, 2);
+assert(#with_cap == 2, "after push 2 elements, len = 2");
+
+// ===== list.create 不同类型 =====
+list<str> str_list = list.create(10);
+assert(typeof(str_list) == "list", "create str list");
+list.push(str_list, "a");
+assert(str_list[0] == "a", "str_list[0] == 'a'");
+
+list<any> any_list = list.create(5);
+list.push(any_list, 1);
+list.push(any_list, "two");
+list.push(any_list, true);
+assert(#any_list == 3, "any_list has 3 elements");
+assert(any_list[0] == 1, "any_list[0] == 1");
+assert(any_list[1] == "two", "any_list[1] == 'two'");
+assert(any_list[2] == true, "any_list[2] == true");
+
+// ===== list.create 后正常操作 =====
+list<int> ops = list.create(3);
+list.push(ops, 10);
+list.push(ops, 20);
+list.push(ops, 30);
+list.insert(ops, 0, 5);  // 头部插入
+assert(ops[0] == 5, "after insert at 0, ops[0] == 5");
+assert(ops[1] == 10, "ops[1] == 10");
+assert(#ops == 4, "ops has 4 elements");
+
+int popped = list.pop(ops);
+assert(popped == 30, "pop returns last (30)");
+assert(#ops == 3, "after pop, len = 3");
+
+// ===== list.create 用于批量预分配 =====
+list<int> batch = list.create(1000);
+for (auto i = 0, 999) {
+    list.push(batch, i);
+}
+assert(#batch == 1000, "batch has 1000 elements");
+assert(batch[0] == 0, "batch[0] == 0");
+assert(batch[999] == 999, "batch[999] == 999");
+
+// ===== list.create(0) 合法 =====
+list<int> zero = list.create(0);
+assert(#zero == 0, "create(0) gives empty list");
+list.push(zero, 42);
+assert(zero[0] == 42, "zero[0] == 42 after push");
+
+print("list_create tests passed!");

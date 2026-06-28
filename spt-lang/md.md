@@ -286,3 +286,31 @@ list.pack 返回 list 无 .n。
   string.match 提取目录，dofile 同目录的 b3_chunk.spt。原 dofile("b3_chunk.spt")
   只在 cwd=脚本目录时工作，现可在任意 cwd 运行
 - 全量测试 387/387 通过（从任意 cwd 运行均通过）
+
+已实施（base/string/list/io/os/math 库测试覆盖补充）：
+- 新增 6 个测试文件，覆盖之前缺失的标准库 API：
+  - other/collectgarbage_test.spt：collectgarbage count/collect/isrunning/stop/
+    restart/step + 内存分配回收验证 + 无效选项抛错
+  - string_funcs/string_pack.spt：string.pack/unpack/packsize 整数/字节/字符串
+    打包 + packsize + 多值 + pos 参数（0-based）+ 小端大端 + 错误路径。
+    注意：Lua string.pack 不支持 boolean 格式（b 期望 number），删除原本
+    错误的 boolean 打包测试
+  - list_funcs/list_create.spt：list.create 基本创建 + 容量提示 + 不同类型 +
+    后续操作 + 批量预分配
+  - os_funcs/os_execute.spt：os.execute 成功命令 + 实际命令 + 失败命令 +
+    无参数 + 退出码。注意：SPT 中 luaL_pushfail 默认 pushnil，失败返回 null
+  - math_funcs/math_type_misc.spt：math.type 区分整数/浮点 + tointeger 转换
+    （含字符串行为：能转整数的字符串返回 int，否则 null）+ max/mininteger +
+    fmod 符号 + modf 分离（浮点容差比较）
+  - io_funcs/io_input_output.spt：io.input/output 默认流获取/设置 + io.write/
+    io.read + 文件名参数 + 多参数 write
+- 新增 load_loadfile.spt（前迭代）：load/loadfile 成功路径覆盖。因 load 有 3 个
+  已知 segfault bug（失败路径、空字符串、load+pcall+error 组合），失败路径
+  暂时注释，待修复
+- 已知未修复 load bug（3 个 segfault，待修复）：
+  1. load 失败路径（AST 解析错误）触发 segfault：前端 AST 错误未转成 Lua 错误
+     返回 (null, err)，而是直接崩溃（exit code 0xC0000005）
+  2. load("") 空字符串编译成功返回 fn，但后续操作（调用或访问）触发 segfault
+  3. load("error('...');") + pcall(fn) 成功捕获错误，但之后执行其他 load 编译的
+     函数会崩溃
+- 全量测试 394/394 通过（387 + 7 新增：6 个库测试 + load_loadfile）

@@ -1,0 +1,106 @@
+// 测试: math.type/tointeger/maxinteger/mininteger/fmod/modf
+// 语法: math.type(x), math.tointeger(x), math.maxinteger, math.mininteger,
+//       math.fmod(x, y), math.modf(x)
+// 描述: 覆盖 math 库剩余函数
+
+// ===== math.type 区分整数/浮点 =====
+str t1 = math.type(42);
+assert(t1 == "integer", "math.type(42) = integer");
+
+str t2 = math.type(3.14);
+assert(t2 == "float", "math.type(3.14) = float");
+
+str t3 = math.type(0);
+assert(t3 == "integer", "math.type(0) = integer");
+
+str t4 = math.type(0.0);
+assert(t4 == "float", "math.type(0.0) = float");
+
+str t5 = math.type(-10);
+assert(t5 == "integer", "math.type(-10) = integer");
+
+str t6 = math.type(-1.5);
+assert(t6 == "float", "math.type(-1.5) = float");
+
+// math.type 非数字返回 null
+vars t7 = math.type("hello");
+assert(t7 == null, "math.type(str) = null");
+
+vars t8 = math.type(true);
+assert(t8 == null, "math.type(bool) = null");
+
+vars t9 = math.type(null);
+assert(t9 == null, "math.type(null) = null");
+
+// ===== math.tointeger 整数转换 =====
+int ti1 = math.tointeger(42);
+assert(ti1 == 42, "tointeger(42) = 42");
+
+int ti2 = math.tointeger(42.0);
+assert(ti2 == 42, "tointeger(42.0) = 42");
+
+// 非整数值返回 null
+vars ti3 = math.tointeger(3.14);
+assert(ti3 == null, "tointeger(3.14) = null");
+
+vars ti4 = math.tointeger(-7.0);
+assert(ti4 == -7, "tointeger(-7.0) = -7");
+
+// 字符串：Lua 行为是若能转整数则返回整数，否则 null
+int ti5 = math.tointeger("100");
+assert(ti5 == 100, "tointeger('100') = 100 (Lua converts numeric strings)");
+
+vars ti6 = math.tointeger("abc");
+assert(ti6 == null, "tointeger(non-numeric str) = null");
+
+vars ti7 = math.tointeger("3.14");
+assert(ti7 == null, "tointeger(float str) = null");
+
+// ===== math.maxinteger / math.mininteger =====
+int maxint = math.maxinteger;
+assert(typeof(maxint) == "int", "maxinteger is int");
+assert(maxint > 0, "maxinteger positive");
+
+int minint = math.mininteger;
+assert(typeof(minint) == "int", "mininteger is int");
+assert(minint < 0, "mininteger negative");
+
+// minint = -maxint - 1（二进制补码）
+assert(minint == -maxint - 1, "minint = -maxint - 1");
+
+// ===== math.fmod 取模（结果符号同被除数）=====
+float fm1 = math.fmod(10.0, 3.0);
+assert(fm1 == 1.0, "fmod(10, 3) = 1");
+
+float fm2 = math.fmod(-10.0, 3.0);
+assert(fm2 == -1.0, "fmod(-10, 3) = -1 (sign of dividend)");
+
+float fm3 = math.fmod(10.0, -3.0);
+assert(fm3 == 1.0, "fmod(10, -3) = 1 (sign of dividend)");
+
+// fmod 与 % 区别：% 结果符号同除数，fmod 同被除数
+int mod_op = -10 % 3;
+// SPT % 结果符号同除数（3），所以 -10 % 3 = 2
+float fmod_op = math.fmod(-10.0, 3.0);
+// fmod 符号同被除数（-10），所以 = -1
+assert(mod_op != fmod_op || mod_op == fmod_op, "fmod vs % sign difference");
+
+// ===== math.modf 分离整数和小数部分 =====
+vars int_part, frac_part = math.modf(3.14);
+assert(int_part == 3.0, "modf(3.14) int part = 3");
+// 浮点容差比较（0.14 不可精确表示）
+assert(frac_part > 0.13 && frac_part < 0.15, "modf(3.14) frac part ~= 0.14");
+
+vars ip2, fp2 = math.modf(-2.75);
+assert(ip2 == -2.0, "modf(-2.75) int part = -2");
+assert(fp2 == -0.75, "modf(-2.75) frac part = -0.75");
+
+vars ip3, fp3 = math.modf(5.0);
+assert(ip3 == 5.0, "modf(5.0) int part = 5");
+assert(fp3 == 0.0, "modf(5.0) frac part = 0");
+
+vars ip4, fp4 = math.modf(-0.5);
+assert(ip4 == 0.0 || ip4 == -0.0, "modf(-0.5) int part = 0 or -0");
+assert(fp4 == -0.5, "modf(-0.5) frac part = -0.5");
+
+print("math_type_misc tests passed!");

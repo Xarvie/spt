@@ -1,0 +1,101 @@
+// 测试: io.input/output（默认输入输出流）
+// 语法: io.input([file]), io.output([file])
+// 描述: 覆盖默认输入输出流的获取/设置
+
+// ===== io.input/output 默认返回当前流 =====
+file default_in = io.input();
+assert(typeof(default_in) == "file" || io.type(default_in) == "file",
+       "io.input() returns default input file");
+file default_out = io.output();
+assert(typeof(default_out) == "file" || io.type(default_out) == "file",
+       "io.output() returns default output file");
+
+// ===== io.output 设置输出流 =====
+str tmpfile = "_io_output_test.txt";
+file f = io.open(tmpfile, "w");
+assert(f != null, "open tmp file for output test");
+
+// 设置 f 为默认输出
+file prev_out = io.output(f);
+assert(io.type(prev_out) == "file", "io.output returns previous output");
+
+// 用 io.write 写到默认输出（即 f）
+io.write("hello output\n");
+f.close();
+
+// 验证内容
+file f2 = io.open(tmpfile, "r");
+assert(f2 != null, "reopen for read");
+str content = f2.read("*a");
+assert(string.find(content, "hello output") != null, "io.write went to set output");
+f2.close();
+
+// 恢复默认输出
+io.output(default_out);
+os.remove(tmpfile);
+
+// ===== io.input 设置输入流 =====
+str infile = "_io_input_test.txt";
+file wf = io.open(infile, "w");
+wf.write("line1\nline2\n");
+wf.close();
+
+file rf = io.open(infile, "r");
+assert(rf != null, "open for input test");
+
+// 设置 rf 为默认输入
+file prev_in = io.input(rf);
+assert(io.type(prev_in) == "file", "io.input returns previous input");
+
+// 用 io.read 从默认输入读
+str line1 = io.read("*l");
+assert(line1 == "line1", "io.read from set input gets line1");
+str line2 = io.read("*l");
+assert(line2 == "line2", "io.read gets line2");
+
+rf.close();
+io.input(default_in);
+os.remove(infile);
+
+// ===== io.input 用文件名参数（打开文件）=====
+str infile2 = "_io_input2.txt";
+file wf2 = io.open(infile2, "w");
+wf2.write("named input\n");
+wf2.close();
+
+// io.input(filename) 打开文件设为默认输入
+file prev_in2 = io.input(infile2);
+// 现在 io.read 从 infile2 读
+str named_line = io.read("*l");
+assert(named_line == "named input", "io.input(filename) + io.read");
+
+io.input(default_in);
+os.remove(infile2);
+
+// ===== io.read "*a" 读全部 =====
+str allfile = "_io_all.txt";
+file wfa = io.open(allfile, "w");
+wfa.write("all content here");
+wfa.close();
+
+io.input(allfile);
+str all = io.read("*a");
+assert(string.find(all, "all content here") != null, "io.read *a gets all");
+io.input(default_in);
+os.remove(allfile);
+
+// ===== io.write 多参数 =====
+str multiparm = "_io_multiparm.txt";
+file wfm = io.open(multiparm, "w");
+io.output(wfm);
+io.write("a", "b", "c", 123);
+wfm.close();
+
+file rfm = io.open(multiparm, "r");
+str multi_content = rfm.read("*a");
+assert(string.find(multi_content, "abc") != null, "io.write multi params concatenated");
+rfm.close();
+io.output(default_out);
+os.remove(multiparm);
+
+print("io_input_output tests passed!");

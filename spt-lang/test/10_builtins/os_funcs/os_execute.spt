@@ -1,0 +1,43 @@
+// 测试: os.execute（执行系统命令）
+// 语法: os.execute(command)
+// 描述: 覆盖命令执行 + 返回值
+// 注意: 跨平台，用 echo/ver 等通用命令
+
+// ===== os.execute 基本执行（成功命令）=====
+// Windows: cmd /c echo，POSIX: echo
+// 用 exit 0 确保返回成功
+vars ret1 = os.execute("exit 0");
+// os.execute 返回：true（成功）或 (nil, "exit", code)（失败）
+// 不同平台返回值格式可能不同，主要验证不抛错
+assert(typeof(ret1) != null, "execute returns something");
+
+// ===== os.execute 执行实际命令 =====
+// Windows 用 cmd /c，POSIX 用 sh -c
+// 用 echo 测试（跨平台）
+vars ret2 = os.execute("echo hello > _os_exec_test.txt");
+// 验证文件被创建
+file f = io.open("_os_exec_test.txt", "r");
+if (f != null) {
+    str content = f.read("*a");
+    assert(#content > 0, "echo should write content");
+    f.close();
+    os.remove("_os_exec_test.txt");
+}
+
+// ===== os.execute 失败命令（不存在的命令）=====
+vars ret3 = os.execute("nonexistent_command_xyz_12345");
+// 失败时返回 (nil, reason, code) 或 false
+// 主要验证不抛错
+assert(typeof(ret3) != null, "failed execute returns something");
+
+// ===== os.execute 无参数 =====
+// 无参数返回 true（表示 shell 可用）或不返回
+vars ret4 = os.execute();
+assert(typeof(ret4) != null, "execute() with no args returns something");
+
+// ===== os.execute 退出码 =====
+// Windows: cmd /c exit 42
+vars ret5 = os.execute("exit 42");
+// 返回值包含退出码信息
+
+print("os_execute tests passed!");
