@@ -264,11 +264,27 @@ static int luaB_collectgarbage(lua_State *L) {
   return 1;
 }
 
-/* luaB_type - receiver is arg1, value is arg2 */
+/* luaB_type - receiver is arg1, value is arg2.
+ * SPT 类型名（spec md.md §2.1）：
+ *   null / bool / int / float / str / list / map / fn / coro / userdata
+ * 永不返回 "table" 或 "array"（旧 Lua 名字）。数字用 lua_isinteger 区分 int/float。
+ * 注册名 typeof（不改 lua_typename / luaT_typenames_，那是 C API 层）。 */
 static int luaB_type(lua_State *L) {
   int t = lua_type(L, 2);
   luaL_argcheck(L, t != LUA_TNONE, 2, "value expected");
-  lua_pushstring(L, lua_typename(L, t));
+  switch (t) {
+    case LUA_TNIL:           lua_pushliteral(L, "null"); break;
+    case LUA_TBOOLEAN:       lua_pushliteral(L, "bool"); break;
+    case LUA_TNUMBER:        lua_pushstring(L, lua_isinteger(L, 2) ? "int" : "float"); break;
+    case LUA_TSTRING:        lua_pushliteral(L, "str"); break;
+    case LUA_TTABLE:         lua_pushliteral(L, "map"); break;
+    case LUA_TARRAY:         lua_pushliteral(L, "list"); break;
+    case LUA_TFUNCTION:      lua_pushliteral(L, "fn"); break;
+    case LUA_TTHREAD:        lua_pushliteral(L, "coro"); break;
+    case LUA_TUSERDATA:
+    case LUA_TLIGHTUSERDATA: lua_pushliteral(L, "userdata"); break;
+    default:                 lua_pushliteral(L, "no value"); break;
+  }
   return 1;
 }
 

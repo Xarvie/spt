@@ -4,7 +4,7 @@
 
 map<str, int> empty = {};
 assert(#empty == 0, "#empty should be 0");
-assert(typeof(empty) == "table", "empty map should be 'table'");
+assert(typeof(empty) == "map", "empty map should be 'map'");
 
 map<any, any> e2 = {};
 e2["key"] = 1;

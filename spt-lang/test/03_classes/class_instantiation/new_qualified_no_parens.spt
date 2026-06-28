@@ -10,6 +10,6 @@ map<any, any> NS = {};
 NS.Inner = Inner;
 
 auto obj = NS.Inner;
-assert(typeof(obj) == "table", "obj should be the class itself");
+assert(typeof(obj) == "map", "obj should be the class itself");
 
 print("qualified_no_parens tests passed!");

@@ -8,6 +8,6 @@ class Empty2 {
 }
 
 auto e = Empty2();
-assert(typeof(e) == "table", "typeof(class instance) should be 'table'");
+assert(typeof(e) == "map", "typeof(class instance) should be 'map'");
 
 print("class_with_semicolon tests passed!");

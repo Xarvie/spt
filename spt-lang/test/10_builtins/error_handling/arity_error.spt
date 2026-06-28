@@ -8,7 +8,7 @@ void noop() { }
 // ---- 参数过少：缺失参数为 nil，触发运行时类型错误 ----
 vars ok1, err1 = pcall(fn() -> int { return add(1); });
 assert(ok1 == false, "add(1) should error: nil arithmetic");
-assert(typeof(err1) == "string", "error should be string");
+assert(typeof(err1) == "str", "error should be str");
 
 // ---- 参数过多：多余参数被静默忽略 ----
 vars result2 = add(1, 2, 3);

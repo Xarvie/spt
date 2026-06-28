@@ -4,7 +4,7 @@
 // ---- 取模零 ----
 vars ok1, err1 = pcall(fn() -> int { return 10 % 0; });
 assert(ok1 == false, "10 % 0 should error");
-assert(typeof(err1) == "string", "error should be string");
+assert(typeof(err1) == "str", "error should be str");
 
 // ---- 零取模零 ----
 vars ok2, err2 = pcall(fn() -> int { return 0 % 0; });

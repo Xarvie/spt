@@ -2,11 +2,11 @@
 // 语法: typeof() 内置函数
 // 描述: 测试typeof内置函数
 
-assert(typeof(42) == "number", "typeof(42) should be 'number'");
-assert(typeof(3.14) == "number", "typeof(3.14) should be 'number'");
-assert(typeof("hello") == "string", "typeof('hello') should be 'string'");
-assert(typeof(true) == "boolean", "typeof(true) should be 'boolean'");
-assert(typeof([1, 2, 3]) == "array", "typeof(list) should be 'array'");
-assert(typeof({}) == "table", "typeof(map) should be 'table'");
+assert(typeof(42) == "int", "typeof(42) should be 'int'");
+assert(typeof(3.14) == "float", "typeof(3.14) should be 'float'");
+assert(typeof("hello") == "str", "typeof('hello') should be 'str'");
+assert(typeof(true) == "bool", "typeof(true) should be 'bool'");
+assert(typeof([1, 2, 3]) == "list", "typeof(list) should be 'list'");
+assert(typeof({}) == "map", "typeof(map) should be 'map'");
 
 print("builtin_typeof tests passed!");

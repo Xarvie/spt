@@ -96,12 +96,12 @@ assert(greet("world") == "hello world", "global function should work");
 // ---- 错误对象类型保留 ----
 vars ok9, err9 = pcall(fn() -> int { error(42); return 0; });
 assert(ok9 == false, "should fail");
-assert(typeof(err9) == "number", "error object should preserve number type");
+assert(typeof(err9) == "int", "error object should preserve int type");
 assert(err9 == 42, "error object value should be 42");
 
 vars ok10, err10 = pcall(fn() -> int { error({"code": 500}); return 0; });
 assert(ok10 == false, "should fail");
-assert(typeof(err10) == "table", "error object should preserve table type");
+assert(typeof(err10) == "map", "error object should preserve map type");
 assert(err10["code"] == 500, "error table code should be 500");
 
 // ---- pcall 捕获后能立即再次 pcall 同一函数 ----

@@ -5,6 +5,6 @@
 class Empty {}
 
 auto e = Empty();
-assert(typeof(e) == "table", "typeof(class instance) should be 'table'");
+assert(typeof(e) == "map", "typeof(class instance) should be 'map'");
 
 print("empty_class tests passed!");

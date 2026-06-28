@@ -8,6 +8,6 @@ class Point {
 }
 
 auto p = Point;
-assert(typeof(p) == "table", "p should be the class itself");
+assert(typeof(p) == "map", "p should be the class itself");
 
 print("no_parens tests passed!");
