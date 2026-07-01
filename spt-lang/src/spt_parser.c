@@ -790,7 +790,35 @@ static AstList parse_parameter_list(Parser *P, int *out_variadic) {
   return nv_finish(&v, P->arena);
 }
 
-/* lambda: FUNCTION OP parameterList? CP (ARROW (type | VARS))? blockStatement
+/* 解析 -> 后的返回类型注解：type (COMMA type)* | VARS
+ * 已消费 ARROW。返回单个类型节点或 NODE_TYPE_MULTIRETURN。 */
+static AstNode *parse_return_type_annotation(Parser *P) {
+  if (at(P, TOK_VARS)) {
+    /* 旧语法 -> vars（类型未知） */
+    SourceLocation vloc = cur_loc(P);
+    advance(P);
+    AstNode *m = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, vloc);
+    m->u.type_multi.types = (AstList){NULL, 0};
+    return m;
+  }
+  /* 解析第一个类型 */
+  AstNode *first = parse_type(P);
+  if (!at(P, TOK_COMMA))
+    return first; /* 单返回类型 */
+  /* 多返回类型：-> type, type, ... */
+  SourceLocation mloc = first->loc;
+  AstNode *m = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, mloc);
+  /* 收集类型列表 */
+  NodeVec tv;
+  nv_init(&tv);
+  nv_push(&tv, first);
+  while (accept(P, TOK_COMMA))
+    nv_push(&tv, parse_type(P));
+  m->u.type_multi.types = nv_finish(&tv, P->arena);
+  return m;
+}
+
+/* lambda: FUNCTION OP parameterList? CP (ARROW retType)? blockStatement
  * 返回类型注解可选：省略时 return_type 为 NULL（codegen 不依赖该字段，
  * 仅用于 LSP/类型检查显示）。降低单表达式匿名函数的书写摩擦。 */
 static AstNode *parse_lambda(Parser *P) {
@@ -803,13 +831,7 @@ static AstNode *parse_lambda(Parser *P) {
   AstNode *ret = NULL;
   if (at(P, TOK_ARROW)) {
     advance(P);
-    if (at(P, TOK_VARS)) {
-      SourceLocation vloc = cur_loc(P);
-      advance(P);
-      ret = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, vloc);
-    } else {
-      ret = parse_type(P);
-    }
+    ret = parse_return_type_annotation(P);
   }
   AstNode *body = parse_block(P);
   AstNode *n = spt_ast_new(P->arena, NODE_LAMBDA, loc);
@@ -981,7 +1003,7 @@ static AstNode *parse_class_decl(Parser *P) {
     int is_const = accept(P, TOK_CONST) ? 1 : 0;
     AstNode *inner = NULL;
     if (at(P, TOK_VARS)) {
-      /* 多返回方法：VARS IDENT ( params ) block */
+      /* 多返回方法（旧语法）：VARS IDENT ( params ) block */
       advance(P);
       const SptToken *mn = expect2(P, TOK_IDENTIFIER);
       expect2(P, TOK_LPAREN);
@@ -992,7 +1014,34 @@ static AstNode *parse_class_decl(Parser *P) {
       inner = spt_ast_new(P->arena, NODE_FUNCTION_DECL, mloc);
       inner->u.func_decl.name = spt_arena_strndup(P->arena, mn->lexeme, (size_t)mn->length);
       inner->u.func_decl.params = params;
-      inner->u.func_decl.return_type = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, mloc);
+      AstNode *mrt = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, mloc);
+      mrt->u.type_multi.types = (AstList){NULL, 0};
+      inner->u.func_decl.return_type = mrt;
+      inner->u.func_decl.body = body;
+      inner->u.func_decl.is_static = is_static != 0;
+      inner->u.func_decl.is_const = is_const != 0;
+      inner->u.func_decl.is_variadic = variadic != 0;
+    } else if (at(P, TOK_FUNCTION) && tok_at(P, P->pos + 1)->kind == TOK_IDENTIFIER &&
+               (tok_at(P, P->pos + 2)->kind == TOK_LPAREN ||
+                tok_at(P, P->pos + 2)->kind == TOK_DOT)) {
+      /* fn 方法（新语法）：fn IDENT ( params ) (-> retType)? block
+       * 仅当 fn IDENT 后跟 '(' 或 '.' 时才视为方法；否则 fn 作为类型 → 字段 */
+      advance(P); /* fn */
+      const SptToken *mn = expect2(P, TOK_IDENTIFIER);
+      expect2(P, TOK_LPAREN);
+      int variadic = 0;
+      AstList params = parse_parameter_list(P, &variadic);
+      expect2(P, TOK_RPAREN);
+      AstNode *ret = NULL;
+      if (at(P, TOK_ARROW)) {
+        advance(P);
+        ret = parse_return_type_annotation(P);
+      }
+      AstNode *body = parse_block(P);
+      inner = spt_ast_new(P->arena, NODE_FUNCTION_DECL, mloc);
+      inner->u.func_decl.name = spt_arena_strndup(P->arena, mn->lexeme, (size_t)mn->length);
+      inner->u.func_decl.params = params;
+      inner->u.func_decl.return_type = ret;
       inner->u.func_decl.body = body;
       inner->u.func_decl.is_static = is_static != 0;
       inner->u.func_decl.is_const = is_const != 0;
@@ -1074,11 +1123,105 @@ static AstNode *parse_multi_var_decl(Parser *P, SourceLocation loc) {
       vars = (MultiDeclVar *)realloc(vars, sizeof(MultiDeclVar) * (size_t)cap);
     }
     vars[cnt].name = spt_arena_strndup(P->arena, id->lexeme, (size_t)id->length);
+    vars[cnt].type_annotation = NULL; /* vars 旧语法无类型注解 */
     vars[cnt].is_global = g != 0;
     vars[cnt].is_const = c != 0;
     cnt++;
     if (!accept(P, TOK_COMMA))
       break;
+  }
+  AstNode *init = NULL;
+  if (accept(P, TOK_ASSIGN))
+    init = parse_expression(P);
+  expect2(P, TOK_SEMICOLON);
+  MultiDeclVar *arr = (MultiDeclVar *)spt_arena_alloc(P->arena, sizeof(MultiDeclVar) * (size_t)cnt);
+  memcpy(arr, vars, sizeof(MultiDeclVar) * (size_t)cnt);
+  free(vars);
+  AstNode *n = spt_ast_new(P->arena, NODE_MUTI_VARIABLE_DECL, loc);
+  n->u.muti_var.vars = arr;
+  n->u.muti_var.count = cnt;
+  n->u.muti_var.initializer = init;
+  return n;
+}
+
+/* 当前 token 是否看起来像「类型注解 + 变量名」中的类型部分。
+ * 用于在多变量声明的后续项中区分 "type IDENT"（带类型）与 "IDENT"（无类型）。
+ * - 显式类型关键字（int/str/...）必为类型
+ * - list<...>/map<...> 必为类型
+ * - auto 必为类型
+ * - IDENT 仅当后跟另一个 IDENT 时才算用户类型（"MyType x"），否则是无类型变量名 */
+static int looks_like_type_start(Parser *P) {
+  SptTokenKind k = cur_kind(P);
+  if (k == TOK_AUTO || k == TOK_LIST || k == TOK_MAP)
+    return 1;
+  switch (k) {
+  case TOK_INT:
+  case TOK_FLOAT:
+  case TOK_NUMBER:
+  case TOK_STR:
+  case TOK_BOOL:
+  case TOK_VOID:
+  case TOK_NULL:
+  case TOK_COROUTINE:
+  case TOK_FUNCTION:
+  case TOK_ANY:
+    return 1;
+  case TOK_IDENTIFIER: {
+    /* IDENT (. IDENT)* IDENT 才是 type+name；IDENT 后非 IDENT 则是无类型变量名 */
+    int j = P->pos + 1;
+    while (tok_at(P, j)->kind == TOK_DOT && tok_at(P, j + 1)->kind == TOK_IDENTIFIER)
+      j += 2;
+    return tok_at(P, j)->kind == TOK_IDENTIFIER;
+  }
+  default:
+    return 0;
+  }
+}
+
+/* 带类型的多变量声明：已解析第一个 (type, name)，继续收集后续 (COMMA type? IDENT)*
+ * type0/name0 是第一个变量的类型和名字。is_global0/is_const0 是第一个变量的修饰。
+ * 语法：type0 name0, (type IDENT | IDENT)* (= expr)? ; */
+static AstNode *parse_typed_multi_var_decl(Parser *P, SourceLocation loc,
+                                           AstNode *type0, const char *name0,
+                                           int is_global0, int is_const0) {
+  int cap = 4, cnt = 0;
+  MultiDeclVar *vars = (MultiDeclVar *)malloc(sizeof(MultiDeclVar) * (size_t)cap);
+  /* 第一个变量 */
+  vars[cnt].name = name0;
+  vars[cnt].type_annotation = type0;
+  vars[cnt].is_global = is_global0 != 0;
+  vars[cnt].is_const = is_const0 != 0;
+  cnt++;
+  /* 后续变量 */
+  while (accept(P, TOK_COMMA)) {
+    int g = accept(P, TOK_GLOBAL) ? 1 : 0;
+    int c = accept(P, TOK_CONST) ? 1 : 0;
+    AstNode *type = NULL;
+    const char *name;
+    /* 尝试解析类型：auto 或显式类型后跟 IDENT → 带类型；仅 IDENT → 无类型 */
+    if (at(P, TOK_AUTO)) {
+      SourceLocation tl = cur_loc(P);
+      advance(P);
+      type = spt_ast_new(P->arena, NODE_TYPE_AUTO, tl);
+      const SptToken *id = expect2(P, TOK_IDENTIFIER);
+      name = spt_arena_strndup(P->arena, id->lexeme, (size_t)id->length);
+    } else if (looks_like_type_start(P)) {
+      type = parse_type(P);
+      const SptToken *id = expect2(P, TOK_IDENTIFIER);
+      name = spt_arena_strndup(P->arena, id->lexeme, (size_t)id->length);
+    } else {
+      const SptToken *id = expect2(P, TOK_IDENTIFIER);
+      name = spt_arena_strndup(P->arena, id->lexeme, (size_t)id->length);
+    }
+    if (cnt >= cap) {
+      cap *= 2;
+      vars = (MultiDeclVar *)realloc(vars, sizeof(MultiDeclVar) * (size_t)cap);
+    }
+    vars[cnt].name = name;
+    vars[cnt].type_annotation = type;
+    vars[cnt].is_global = g != 0;
+    vars[cnt].is_const = c != 0;
+    cnt++;
   }
   AstNode *init = NULL;
   if (accept(P, TOK_ASSIGN))
@@ -1119,7 +1262,36 @@ static AstNode *parse_func_decl_vars(Parser *P, SourceLocation loc, int is_globa
   AstNode *n = spt_ast_new(P->arena, NODE_FUNCTION_DECL, loc);
   n->u.func_decl.name = name;
   n->u.func_decl.params = params;
-  n->u.func_decl.return_type = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, loc);
+  AstNode *m = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, loc);
+  m->u.type_multi.types = (AstList){NULL, 0};
+  n->u.func_decl.return_type = m;
+  n->u.func_decl.body = body;
+  n->u.func_decl.is_global = is_global != 0;
+  n->u.func_decl.is_const = is_const != 0;
+  n->u.func_decl.is_variadic = variadic != 0;
+  return n;
+}
+
+/* 函数声明（FN 形式）：FUNCTION qualifiedIdent ( params ) (ARROW retType)? block
+ * 新语法：fn name(params) -> int, str { }
+ * 无 -> 时 return_type 为 NULL（等同 void/auto）。 */
+static AstNode *parse_func_decl_fn(Parser *P, SourceLocation loc, int is_global, int is_const) {
+  expect2(P, TOK_FUNCTION);
+  const char *name = parse_qualified_name(P);
+  expect2(P, TOK_LPAREN);
+  int variadic = 0;
+  AstList params = parse_parameter_list(P, &variadic);
+  expect2(P, TOK_RPAREN);
+  AstNode *ret = NULL;
+  if (at(P, TOK_ARROW)) {
+    advance(P);
+    ret = parse_return_type_annotation(P);
+  }
+  AstNode *body = parse_block(P);
+  AstNode *n = spt_ast_new(P->arena, NODE_FUNCTION_DECL, loc);
+  n->u.func_decl.name = name;
+  n->u.func_decl.params = params;
+  n->u.func_decl.return_type = ret;
   n->u.func_decl.body = body;
   n->u.func_decl.is_global = is_global != 0;
   n->u.func_decl.is_const = is_const != 0;
@@ -1139,12 +1311,33 @@ static AstNode *parse_var_or_func(Parser *P, SourceLocation loc) {
     return parse_multi_var_decl(P, loc);
   }
 
+  /* fn name(params) -> ret { } —— 新函数声明语法。
+   * 注意：fn 既是类型关键字也是函数声明前缀，需区分：
+   *   fn name ( ... )   → 函数声明
+   *   fn name . ... ( ... ) → 限定名函数声明
+   *   fn name = ...     → 变量声明（fn 作为类型）
+   *   fn name ;         → 变量声明（fn 作为类型，无初始化器）
+   *   fn name , ...     → 多变量声明（fn 作为类型）
+   *   fn ( ... )        → lambda 表达式语句 */
+  if (at(P, TOK_FUNCTION)) {
+    SptTokenKind k1 = tok_at(P, P->pos + 1)->kind;
+    SptTokenKind k2 = tok_at(P, P->pos + 2)->kind;
+    if (k1 == TOK_IDENTIFIER && (k2 == TOK_LPAREN || k2 == TOK_DOT))
+      return parse_func_decl_fn(P, loc, is_global, is_const);
+    /* 否则 fall through：fn 作为类型注解（变量声明或 lambda 表达式语句） */
+  }
+
   if (at(P, TOK_AUTO)) {
-    /* 变量：auto IDENT (= expr)? ; */
+    /* 变量：auto IDENT (= expr)? ;  或多变量：auto IDENT, auto IDENT, ... = expr ; */
     SourceLocation tl = cur_loc(P);
     advance(P);
     AstNode *type = spt_ast_new(P->arena, NODE_TYPE_AUTO, tl);
     const SptToken *id = expect2(P, TOK_IDENTIFIER);
+    if (at(P, TOK_COMMA)) {
+      /* 带类型的多变量声明：auto name, auto name, ... = expr ; */
+      const char *name0 = spt_arena_strndup(P->arena, id->lexeme, (size_t)id->length);
+      return parse_typed_multi_var_decl(P, loc, type, name0, is_global, is_const);
+    }
     AstNode *init = NULL;
     if (accept(P, TOK_ASSIGN))
       init = parse_expression(P);
@@ -1158,9 +1351,15 @@ static AstNode *parse_var_or_func(Parser *P, SourceLocation loc) {
     return n;
   }
 
-  /* 有显式类型：可能是变量或函数 */
+  /* 有显式类型：可能是变量、函数、或多变量 */
   AstNode *type = parse_type(P);
   const SptToken *id = expect2(P, TOK_IDENTIFIER);
+
+  if (at(P, TOK_COMMA)) {
+    /* 带类型的多变量声明：type name, type name, ... = expr ; */
+    const char *name0 = spt_arena_strndup(P->arena, id->lexeme, (size_t)id->length);
+    return parse_typed_multi_var_decl(P, loc, type, name0, is_global, is_const);
+  }
 
   if (at(P, TOK_DOT) || at(P, TOK_LPAREN)) {
     /* 函数声明：type qualifiedIdent ( params ) block。
@@ -1544,7 +1743,7 @@ static AstNode *parse_decl_class(Parser *P, SourceLocation loc, const char *doc)
     int is_const = accept(P, TOK_CONST) ? 1 : 0;
     AstNode *inner = NULL;
     if (at(P, TOK_VARS)) {
-      /* 多返回方法签名：vars IDENT ( params ) ; */
+      /* 多返回方法签名（旧语法）：vars IDENT ( params ) ; */
       advance(P);
       const SptToken *mn = expect2(P, TOK_IDENTIFIER);
       expect2(P, TOK_LPAREN);
@@ -1555,7 +1754,36 @@ static AstNode *parse_decl_class(Parser *P, SourceLocation loc, const char *doc)
       inner = spt_ast_new(P->arena, NODE_FUNCTION_DECL, mloc);
       inner->u.func_decl.name = spt_arena_strndup(P->arena, mn->lexeme, (size_t)mn->length);
       inner->u.func_decl.params = params;
-      inner->u.func_decl.return_type = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, mloc);
+      AstNode *mrt = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, mloc);
+      mrt->u.type_multi.types = (AstList){NULL, 0};
+      inner->u.func_decl.return_type = mrt;
+      inner->u.func_decl.body = NULL;
+      inner->u.func_decl.is_static = is_static != 0;
+      inner->u.func_decl.is_const = is_const != 0;
+      inner->u.func_decl.is_variadic = variadic != 0;
+      inner->u.func_decl.is_ambient = true;
+      inner->u.func_decl.doc = mdoc;
+    } else if (at(P, TOK_FUNCTION) && tok_at(P, P->pos + 1)->kind == TOK_IDENTIFIER &&
+               (tok_at(P, P->pos + 2)->kind == TOK_LPAREN ||
+                tok_at(P, P->pos + 2)->kind == TOK_DOT)) {
+      /* fn 方法签名（新语法）：fn IDENT ( params ) (-> retType)? ;
+       * 仅当 fn IDENT 后跟 '(' 或 '.' 时才视为方法签名；否则 fn 作为类型 → 字段签名 */
+      advance(P); /* fn */
+      const SptToken *mn = expect2(P, TOK_IDENTIFIER);
+      expect2(P, TOK_LPAREN);
+      int variadic = 0;
+      AstList params = parse_parameter_list(P, &variadic);
+      expect2(P, TOK_RPAREN);
+      AstNode *ret = NULL;
+      if (at(P, TOK_ARROW)) {
+        advance(P);
+        ret = parse_return_type_annotation(P);
+      }
+      expect2(P, TOK_SEMICOLON);
+      inner = spt_ast_new(P->arena, NODE_FUNCTION_DECL, mloc);
+      inner->u.func_decl.name = spt_arena_strndup(P->arena, mn->lexeme, (size_t)mn->length);
+      inner->u.func_decl.params = params;
+      inner->u.func_decl.return_type = ret;
       inner->u.func_decl.body = NULL;
       inner->u.func_decl.is_static = is_static != 0;
       inner->u.func_decl.is_const = is_const != 0;
@@ -1627,7 +1855,7 @@ static AstNode *parse_decl_member(Parser *P) {
   int is_const = accept(P, TOK_CONST) ? 1 : 0;
 
   if (at(P, TOK_VARS)) {
-    /* 多返回函数签名：vars qualifiedIdent ( params ) ; */
+    /* 多返回函数签名（旧语法）：vars qualifiedIdent ( params ) ; */
     advance(P);
     const char *name = parse_qualified_name(P);
     expect2(P, TOK_LPAREN);
@@ -1638,7 +1866,39 @@ static AstNode *parse_decl_member(Parser *P) {
     AstNode *n = spt_ast_new(P->arena, NODE_FUNCTION_DECL, loc);
     n->u.func_decl.name = name;
     n->u.func_decl.params = params;
-    n->u.func_decl.return_type = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, loc);
+    AstNode *mrt = spt_ast_new(P->arena, NODE_TYPE_MULTIRETURN, loc);
+    mrt->u.type_multi.types = (AstList){NULL, 0};
+    n->u.func_decl.return_type = mrt;
+    n->u.func_decl.body = NULL;
+    n->u.func_decl.is_global = is_global != 0;
+    n->u.func_decl.is_const = is_const != 0;
+    n->u.func_decl.is_variadic = variadic != 0;
+    n->u.func_decl.is_ambient = true;
+    n->u.func_decl.doc = doc;
+    return n;
+  }
+
+  /* fn 函数签名（新语法）：fn qualifiedIdent ( params ) (-> retType)? ;
+   * 仅当 fn IDENT 后跟 '(' 或 '.' 时才视为函数签名；否则 fn 作为类型 → 变量签名 */
+  if (at(P, TOK_FUNCTION) && tok_at(P, P->pos + 1)->kind == TOK_IDENTIFIER &&
+      (tok_at(P, P->pos + 2)->kind == TOK_LPAREN ||
+       tok_at(P, P->pos + 2)->kind == TOK_DOT)) {
+    advance(P); /* fn */
+    const char *name = parse_qualified_name(P);
+    expect2(P, TOK_LPAREN);
+    int variadic = 0;
+    AstList params = parse_parameter_list(P, &variadic);
+    expect2(P, TOK_RPAREN);
+    AstNode *ret = NULL;
+    if (at(P, TOK_ARROW)) {
+      advance(P);
+      ret = parse_return_type_annotation(P);
+    }
+    expect2(P, TOK_SEMICOLON);
+    AstNode *n = spt_ast_new(P->arena, NODE_FUNCTION_DECL, loc);
+    n->u.func_decl.name = name;
+    n->u.func_decl.params = params;
+    n->u.func_decl.return_type = ret;
     n->u.func_decl.body = NULL;
     n->u.func_decl.is_global = is_global != 0;
     n->u.func_decl.is_const = is_const != 0;

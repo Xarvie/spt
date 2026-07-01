@@ -1,0 +1,42 @@
+// 测试: lambda 多返回类型 fn(params) -> type, type { }
+// 语法: lambda multi-return
+// 描述: 测试 lambda 的 -> type, type 多返回类型注解
+
+// lambda 多返回
+var f = fn(int x) -> int, int {
+    return x, x + 1;
+};
+int a, int b = f(10);
+assert(a == 10, "a should be 10");
+assert(b == 11, "b should be 11");
+
+// lambda 单返回类型（原有功能不破坏）
+var g = fn(int x) -> int {
+    return x * 2;
+};
+assert(g(21) == 42, "g(21) should be 42");
+
+// lambda 无返回类型注解（原有功能不破坏）
+var h = fn(int x) {
+    return x + 1;
+};
+assert(h(5) == 6, "h(5) should be 6");
+
+// lambda 3 个返回值
+var triple = fn(int x) -> int, int, int {
+    return x, x * 2, x * 3;
+};
+int r1, int r2, int r3 = triple(5);
+assert(r1 == 5, "r1 should be 5");
+assert(r2 == 10, "r2 should be 10");
+assert(r3 == 15, "r3 should be 15");
+
+// 旧语法 -> vars 仍然兼容
+var old_style = fn(int x) -> vars {
+    return x, x + 1;
+};
+int c, int d = old_style(100);
+assert(c == 100, "c should be 100");
+assert(d == 101, "d should be 101");
+
+print("lambda_multi_return tests passed!");

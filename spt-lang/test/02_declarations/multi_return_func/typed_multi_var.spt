@@ -1,0 +1,45 @@
+// 测试: 带类型的多变量声明 type a, type b = expr
+// 语法: typed multi-var
+// 描述: 测试 int a, str b = call() 替代 vars a, b = call()
+
+fn two_values() -> int, str {
+    return 42, "hello";
+}
+
+// 带类型的多变量声明
+int x, str y = two_values();
+assert(x == 42, "x should be 42");
+assert(y == "hello", "y should be 'hello'");
+
+// auto 类型推断的多变量声明
+auto a, auto b = two_values();
+assert(a == 42, "a should be 42");
+assert(b == "hello", "b should be 'hello'");
+
+// 混合类型
+int p, auto q = two_values();
+assert(p == 42, "p should be 42");
+assert(q == "hello", "q should be 'hello'");
+
+// 3 个变量
+fn three_nums() -> int, int, int {
+    return 10, 20, 30;
+}
+int n1, int n2, int n3 = three_nums();
+assert(n1 == 10, "n1 should be 10");
+assert(n2 == 20, "n2 should be 20");
+assert(n3 == 30, "n3 should be 30");
+
+// 无初始化器的多变量声明
+int r, int s;
+r = 100;
+s = 200;
+assert(r == 100, "r should be 100");
+assert(s == 200, "s should be 200");
+
+// vars 旧语法仍然兼容
+vars u, v = two_values();
+assert(u == 42, "u should be 42");
+assert(v == "hello", "v should be 'hello'");
+
+print("typed_multi_var tests passed!");

@@ -1,0 +1,44 @@
+// 测试: fn 声明多返回值函数 fn f() -> int, str { }
+// 语法: fn multi-return
+// 描述: 测试 fn 关键字声明多返回值函数，替代 vars f() {}
+
+fn split_name(str s) -> str, str {
+    return "hello", "world";
+}
+
+str first, str rest = split_name("hello world");
+assert(first == "hello", "first should be 'hello'");
+assert(rest == "world", "rest should be 'world'");
+
+// 无返回类型注解的 fn 声明（等同 void）
+fn greet(str name) {
+    print("hello, " .. name);
+}
+greet("spt");
+
+// 单返回类型
+fn double_it(int x) -> int {
+    return x * 2;
+}
+assert(double_it(21) == 42, "double_it(21) should be 42");
+
+// 多返回：3 个值
+fn three_values() -> int, str, bool {
+    return 1, "two", true;
+}
+
+int a, str b, bool c = three_values();
+assert(a == 1, "a should be 1");
+assert(b == "two", "b should be 'two'");
+assert(c == true, "c should be true");
+
+// 多返回类型 + 参数
+fn compute(int x, int y) -> int, int {
+    return x + y, x * y;
+}
+
+int sum, int product = compute(3, 4);
+assert(sum == 7, "sum should be 7");
+assert(product == 12, "product should be 12");
+
+print("fn_multi_return tests passed!");

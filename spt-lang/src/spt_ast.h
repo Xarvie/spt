@@ -150,9 +150,10 @@ typedef struct {
   int count;
 } AstList;
 
-/* `vars a, b = expr;` 中单个变量的信息（取代 MultiDeclVariableInfo）。 */
+/* `vars a, b = expr;` 或 `int a, str b = expr;` 中单个变量的信息。 */
 typedef struct {
   const char *name;
+  AstNode *type_annotation; /* 可空（vars 旧语法 / 无类型注解） */
   bool is_global;
   bool is_const;
 } MultiDeclVar;
@@ -346,7 +347,11 @@ struct AstNode {
     struct {
       PrimitiveTypeKind kind;
     } type_prim;
-    /* NODE_TYPE_ANY / AUTO / FUNCTION_KW / COROUTINE_KW / MULTIRETURN: 无负载 */
+    /* NODE_TYPE_ANY / AUTO / FUNCTION_KW / COROUTINE_KW: 无负载 */
+    struct {
+      AstList types; /* NODE_TYPE_MULTIRETURN: 逗号分隔的返回类型列表；
+                      * 空列表表示旧语法 -> vars（类型未知） */
+    } type_multi;
     struct {
       AstNode *element; /* 可空（裸 list） */
     } type_list;

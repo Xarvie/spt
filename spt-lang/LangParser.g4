@@ -82,6 +82,7 @@ declarationMember
     : GLOBAL? CONST? type IDENTIFIER SEMICOLON                        #declVarMember
     | CONST? type qualifiedIdentifier OP parameterList? CP SEMICOLON  #declFuncMember
     | CONST? VARS  qualifiedIdentifier OP parameterList? CP SEMICOLON #declMultiFuncMember
+    | CONST? FUNCTION qualifiedIdentifier OP parameterList? CP (ARROW returnType)? SEMICOLON #declFnFuncMember
     | CLASS IDENTIFIER OCB declClassMember* CCB                       #declClassMember
     | SEMICOLON                                                       #declEmptyMember
     ;
@@ -91,6 +92,7 @@ declClassMember
     : STATIC? CONST? type IDENTIFIER SEMICOLON                          #declFieldMember
     | STATIC? CONST? type IDENTIFIER OP parameterList? CP SEMICOLON     #declMethodMember
     | STATIC? CONST? VARS IDENTIFIER OP parameterList? CP SEMICOLON     #declMultiMethodMember
+    | STATIC? CONST? FUNCTION IDENTIFIER OP parameterList? CP (ARROW returnType)? SEMICOLON #declFnMethodMember
     | SEMICOLON                                                         #declClassEmptyMember
     ;
 
@@ -131,11 +133,13 @@ declaration
  * 变量声明 (强制显式类型或 auto):
  * 每个变量都需要自己的类型注解。
  * 支持可选的初始化赋值 。
+ * 形式一/二为单变量；形式三为带类型的多变量声明 (int a, str b = expr;)
  */
 variableDeclaration
     :
     //语言支持多个声明
     GLOBAL? CONST? declaration_item (ASSIGN expression)? #variableDeclarationDef
+    | GLOBAL? CONST? declaration_item (COMMA declaration_item)+ (ASSIGN expression)? #typedMultiVariableDeclarationDef
     | VARS GLOBAL? CONST? IDENTIFIER (COMMA GLOBAL? CONST? IDENTIFIER)* (ASSIGN expression)? #mutiVariableDeclarationDef
     ;
 
@@ -144,10 +148,14 @@ declaration_item
     : (type | AUTO) IDENTIFIER
     ;
 
-/** 函数声明/定义 (支持 global/const 和 qualifiedIdentifier, 仅支持单一返回类型或 void) */
+/** 函数声明/定义 (支持 global/const 和 qualifiedIdentifier)
+ *  形式一: type name(params) { } —— 单一返回类型
+ *  形式二: vars name(params) { } —— 多返回值 (旧语法，类型未知)
+ *  形式三: fn name(params) (-> retType)? { } —— 新语法，可选多返回类型注解 */
 functionDeclaration
      : GLOBAL? CONST? type qualifiedIdentifier OP parameterList? CP blockStatement #functionDeclarationDef
      | GLOBAL? CONST? VARS qualifiedIdentifier OP parameterList? CP blockStatement #multiReturnFunctionDeclarationDef
+     | GLOBAL? CONST? FUNCTION qualifiedIdentifier OP parameterList? CP (ARROW returnType)? blockStatement #fnFunctionDeclarationDef
      ;
 
 /** 类声明/定义 */
@@ -162,6 +170,8 @@ classMember
     // 静态或实例方法声明
     | STATIC? CONST? type IDENTIFIER OP parameterList? CP blockStatement #classMethodMember
     | STATIC? CONST? VARS IDENTIFIER OP parameterList? CP blockStatement #multiReturnClassMethodMember
+    // fn 方法 (新语法): fn name(params) (-> retType)? { }
+    | STATIC? CONST? FUNCTION IDENTIFIER OP parameterList? CP (ARROW returnType)? blockStatement #fnClassMethodMember
     // 空成员 (允许只有分号)
     | SEMICOLON #classEmptyMember
     ;
@@ -304,11 +314,18 @@ atomexp
     : NULL_ | TRUE | FALSE | INTEGER | FLOAT_LITERAL | STRING_LITERAL
     ;
 
-/** Lambda/匿名函数表达式: function (parameterList?) (-> type)? { body }
- * 返回类型注解可选：省略时由上下文/LSP 推断，codegen 不依赖该字段。 */
+/** Lambda/匿名函数表达式: function (parameterList?) (-> returnType)? { body }
+ * 返回类型注解可选：省略时由上下文/LSP 推断，codegen 不依赖该字段。
+ * 支持多返回类型: fn(int x) -> int, str { } */
 lambdaExpression
-	: FUNCTION OP parameterList? CP (ARROW (type | VARS))? blockStatement #lambdaExprDef
+	: FUNCTION OP parameterList? CP (ARROW returnType)? blockStatement #lambdaExprDef
 	;
+
+/** 返回类型注解: 单类型 | 多类型 (逗号分隔) | VARS (旧语法，类型未知) */
+returnType
+    : VARS                                #returnTypeVars
+    | type (COMMA type)*                  #returnTypeTyped
+    ;
 
 /** List 字面量: [elem1, elem2, ...] */
 listExpression

@@ -84,7 +84,22 @@ void sem_type_string(const AstNode *t, char *out, size_t cap) {
   case NODE_TYPE_AUTO: snprintf(out, cap, "auto"); break;
   case NODE_TYPE_FUNCTION_KW: snprintf(out, cap, "function"); break;
   case NODE_TYPE_COROUTINE_KW: snprintf(out, cap, "coro"); break;
-  case NODE_TYPE_MULTIRETURN: snprintf(out, cap, "vars"); break;
+  case NODE_TYPE_MULTIRETURN: {
+    /* 有具体类型列表时渲染为 "int, str"；空列表 (旧语法 -> vars) 渲染为 "vars" */
+    const AstList *tl = &t->u.type_multi.types;
+    if (tl->count > 0) {
+      size_t pos = 0;
+      for (int i = 0; i < tl->count; i++) {
+        char et[256];
+        sem_type_string(tl->items[i], et, sizeof et);
+        sappend(out, cap, &pos, "%s%s", i ? ", " : "", et);
+      }
+      if (pos == 0) snprintf(out, cap, "vars");
+    } else {
+      snprintf(out, cap, "vars");
+    }
+    break;
+  }
   case NODE_TYPE_LIST: {
     if (t->u.type_list.element) {
       char el[256];
