@@ -12,10 +12,13 @@ jobs:
           sudo apt-get install -y clang llvm ninja-build
       - name: Configure (Coverage)
         run: cmake --preset clang-coverage
+        working-directory: spt-lang
       - name: Build
         run: cmake --build --preset clang-coverage
+        working-directory: spt-lang
       - name: Test
         run: ctest --preset clang-coverage
+        working-directory: spt-lang
       - name: Generate Coverage Report
         run: |
           # 收集所有 .profraw 文件并合并
@@ -24,8 +27,9 @@ jobs:
             -instr-profile=coverage.profdata \
             build-cov/bin/sptscript \
             src/vm/ src/codegen/ src/frontend/
+        working-directory: spt-lang
       - name: Upload Coverage
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage-report/
+          path: spt-lang/coverage-report/

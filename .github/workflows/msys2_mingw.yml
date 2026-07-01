@@ -39,19 +39,19 @@ jobs:
       - name: Configure CMake
         shell: msys2 {0}
         run: |
-          cd /C/_
+          cd /C/_/spt-lang
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         shell: msys2 {0}
         run: |
-          cd /C/_
+          cd /C/_/spt-lang
           cmake --build build --config Release
 
       - name: Run tests
         shell: msys2 {0}
         run: |
-          cd /C/_
+          cd /C/_/spt-lang
           cd build
           ctest --output-on-failure -j4
 
@@ -60,4 +60,4 @@ jobs:
         if: always()
         with:
           name: test-results
-          path: C:/_/build/Testing/**/*.xml
+          path: C:/_/spt-lang/build/Testing/**/*.xml
