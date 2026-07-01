@@ -1065,7 +1065,14 @@ static AstNode *parse_class_decl(Parser *P) {
     } else {
       /* type IDENT ... -> 方法或字段 */
       AstNode *type = parse_type(P);
-      const SptToken *mn = expect2(P, TOK_IDENTIFIER);
+      /* 允许 fn 关键字作为成员名（如 int fn() { ... }），
+       * 避免 fn 作为关键字时 expect2(IDENT) 失败导致 synchronize 无限循环。 */
+      const SptToken *mn;
+      if (at(P, TOK_IDENTIFIER) || at(P, TOK_FUNCTION)) {
+        mn = advance(P);
+      } else {
+        mn = expect2(P, TOK_IDENTIFIER);
+      }
       if (at(P, TOK_LPAREN)) {
         /* 方法 */
         advance(P);
@@ -1793,7 +1800,13 @@ static AstNode *parse_decl_class(Parser *P, SourceLocation loc, const char *doc)
     } else {
       /* type IDENT ... -> 方法签名或字段签名（无 auto） */
       AstNode *type = parse_type(P);
-      const SptToken *mn = expect2(P, TOK_IDENTIFIER);
+      /* 允许 fn 关键字作为成员名（如 int fn()），避免 synchronize 无限循环。 */
+      const SptToken *mn;
+      if (at(P, TOK_IDENTIFIER) || at(P, TOK_FUNCTION)) {
+        mn = advance(P);
+      } else {
+        mn = expect2(P, TOK_IDENTIFIER);
+      }
       if (at(P, TOK_LPAREN)) {
         advance(P);
         int variadic = 0;
@@ -1911,7 +1924,13 @@ static AstNode *parse_decl_member(Parser *P) {
   /* type 后跟名字：函数签名或变量签名（不允许 auto / 初始化器 / 函数体）。
      注意：parse_type 不接受 'auto'，故 `declare auto x;` 会在此报错并使解析失败。 */
   AstNode *type = parse_type(P);
-  const SptToken *id = expect2(P, TOK_IDENTIFIER);
+  /* 允许 fn 关键字作为名字（如 declare int fn();），保持与类成员一致。 */
+  const SptToken *id;
+  if (at(P, TOK_IDENTIFIER) || at(P, TOK_FUNCTION)) {
+    id = advance(P);
+  } else {
+    id = expect2(P, TOK_IDENTIFIER);
+  }
 
   if (at(P, TOK_DOT) || at(P, TOK_LPAREN)) {
     /* 函数签名：type qualifiedIdent ( params ) ; —— 名字可能点号限定 */
