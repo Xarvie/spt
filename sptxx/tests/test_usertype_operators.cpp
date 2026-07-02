@@ -87,8 +87,8 @@ int main() {
 
     vec3.set_add([](const Vector3 &a, const Vector3 &b) -> Vector3 { return a + b; });
     vec3.set_sub([](const Vector3 &a, const Vector3 &b) -> Vector3 { return a - b; });
-    vec3.set_mul([](const Vector3 &v, float s) -> Vector3 { return v * s; });
-    vec3.set_div([](const Vector3 &v, float s) -> Vector3 { return v / s; });
+    vec3.set_mul([](const Vector3 &v, lua_Number s) -> Vector3 { return v * static_cast<float>(s); });
+    vec3.set_div([](const Vector3 &v, lua_Number s) -> Vector3 { return v / static_cast<float>(s); });
     vec3.set_unm([](const Vector3 &v) -> Vector3 { return -v; });
     vec3.set_eq([](const Vector3 &a, const Vector3 &b) -> bool { return a == b; });
     vec3.set_lt([](const Vector3 &a, const Vector3 &b) -> bool { return a < b; });
@@ -148,14 +148,14 @@ int main() {
     intbox.set_bor([](const IntBox &a, const IntBox &b) -> IntBox { return IntBox(a.value | b.value); });
     intbox.set_bxor([](const IntBox &a, const IntBox &b) -> IntBox { return IntBox(a.value ^ b.value); });
     intbox.set_bnot([](const IntBox &a) -> IntBox { return IntBox(~a.value); });
-    intbox.set_shl([](const IntBox &a, int s) -> IntBox { return IntBox(a.value << s); });
+    intbox.set_shl([](const IntBox &a, lua_Integer s) -> IntBox { return IntBox(a.value << static_cast<int>(s)); });
 
     intbox.set_concat([](const IntBox &a, const IntBox &b) -> IntBox { 
       std::string s = std::to_string(a.value) + std::to_string(b.value);
       return IntBox(std::stoi(s));
     });
-    intbox.set_len([](const IntBox &a) -> int { 
-      return std::to_string(std::abs(a.value)).length(); 
+    intbox.set_len([](const IntBox &a) -> int {
+      return static_cast<int>(std::to_string(std::abs(a.value)).length());
     });
 
     intbox.set_eq([](const IntBox &a, const IntBox &b) -> bool { return a.value == b.value; });

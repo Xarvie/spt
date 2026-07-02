@@ -247,6 +247,8 @@ public:
       const char *name = lua_tostring(L, lua_upvalueindex(1));
       try {
         void *ud = lua_newuserdatauv(L, sizeof(T *), 0);
+        *static_cast<T **>(ud) = nullptr; // 先置空：若下方 extract/construct 抛异常，
+                                          // __gc 会读到 nullptr 而跳过 delete，避免 UB
         luaL_getmetatable(L, name);
         lua_setmetatable(L, -2);
 
@@ -748,18 +750,22 @@ private:
         auto result = (*func)(*a, *b);
         stack::push(L, std::move(result));
         return 1;
-      } else if constexpr (std::is_invocable_v<FuncType, const T &, lua_Integer>) {
-        lua_Integer b = lua_tointeger(L, 2);
-        auto result = (*func)(*a, b);
-        stack::push(L, std::move(result));
-        return 1;
-      } else if constexpr (std::is_invocable_v<FuncType, const T &, lua_Number>) {
-        lua_Number b = lua_tonumber(L, 2);
-        auto result = (*func)(*a, b);
-        stack::push(L, std::move(result));
-        return 1;
       } else if constexpr (std::is_invocable_v<FuncType, lua_State *, const T &>) {
         return (*func)(L, *a);
+      } else if constexpr (detail::function_traits<FuncType>::arity >= 2) {
+        // 标量第二操作数：按函数参数类型选择 lua_tointeger/lua_tonumber，
+        // 用 static_cast 显式转换，避免 lua_Integer→float/double 的 C4244 隐式窄化警告
+        using SecondArg = std::decay_t<
+            std::tuple_element_t<1, typename detail::function_traits<FuncType>::args_tuple>>;
+        if constexpr (std::is_floating_point_v<SecondArg>) {
+          auto result = (*func)(*a, static_cast<SecondArg>(lua_tonumber(L, 2)));
+          stack::push(L, std::move(result));
+          return 1;
+        } else {
+          auto result = (*func)(*a, static_cast<SecondArg>(lua_tointeger(L, 2)));
+          stack::push(L, std::move(result));
+          return 1;
+        }
       } else {
         return (*func)(L, *a);
       }

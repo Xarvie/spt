@@ -147,7 +147,7 @@ int main() {
     {
       auto p1 = lua["a"]["b"];
       auto p2 = p1; // 拷贝
-      int v = p2["c"]["d"].get<std::string>().size(); // d 现在是 "text"
+      int v = static_cast<int>(p2["c"]["d"].get<std::string>().size()); // d 现在是 "text"
       CHECK(v == 4, "copied proxy still works, len=\"text\" = " << v);
     }
 

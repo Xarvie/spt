@@ -44,7 +44,7 @@ int main() {
   lua_State *L = luaL_newstate();
   luaL_requiref(L, "_G", luaopen_base, 1);
   lua_pop(L, 1);
-  luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1);
+  luaL_requiref(L, LUA_LISTLIBNAME, luaopen_list, 1);
   lua_pop(L, 1);
 
   std::cout << "\nTest 1: Direct C function call (verify Slot 0)" << std::endl;
