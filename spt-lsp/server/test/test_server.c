@@ -9,12 +9,12 @@
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
     if (!(cond)) {                                                                                 \
       printf("  FAIL: %s\n", msg);                                                                 \
       failed++;                                                                                    \
-    }                                                                                             \
+    }                                                                                              \
   } while (0)
 
 static cJSON *request(int id, const char *method) {
@@ -24,12 +24,14 @@ static cJSON *request(int id, const char *method) {
   cJSON_AddStringToObject(o, "method", method);
   return o;
 }
+
 static cJSON *notification(const char *method) {
   cJSON *o = cJSON_CreateObject();
   cJSON_AddStringToObject(o, "jsonrpc", "2.0");
   cJSON_AddStringToObject(o, "method", method);
   return o;
 }
+
 /* 取响应的 error.code，无 error 返回 0。 */
 static int err_code(const cJSON *resp) {
   cJSON *e = cJSON_GetObjectItemCaseSensitive((cJSON *)resp, "error");
@@ -38,6 +40,7 @@ static int err_code(const cJSON *resp) {
   cJSON *c = cJSON_GetObjectItemCaseSensitive(e, "code");
   return c ? c->valueint : 0;
 }
+
 static int has_result(const cJSON *resp) {
   return cJSON_GetObjectItemCaseSensitive((cJSON *)resp, "result") != NULL;
 }

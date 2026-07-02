@@ -13,20 +13,20 @@
  *   - 非法形式被拒绝: auto / 初始化器 / 函数体
  */
 
-#include "spt_frontend.h"
 #include "spt_ast.h"
+#include "spt_frontend.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                             \
-  do {                                                                                              \
-    if (!(cond)) {                                                                                  \
-      printf("  FAIL: %s\n", msg);                                                                  \
-      failed++;                                                                                     \
-    }                                                                                               \
+#define CHECK(cond, msg)                                                                           \
+  do {                                                                                             \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
 static int streq(const char *a, const char *b) {
@@ -47,7 +47,8 @@ static AstNode *stmt(AstNode *root, int i) {
 /* ---- 1. 环境函数声明 + 多行行文档 ---- */
 static void test_ambient_func_with_doc(void) {
   printf("Testing: ambient func + doc...\n");
-  AstNode *root = spt_frontend_parse("/// hello doc\n/// second line\ndeclare int foo(int x);\n", "t1");
+  AstNode *root =
+      spt_frontend_parse("/// hello doc\n/// second line\ndeclare int foo(int x);\n", "t1");
   CHECK(root != NULL, "spt_frontend_parse should succeed");
   if (!root)
     return;
@@ -59,8 +60,7 @@ static void test_ambient_func_with_doc(void) {
     CHECK(streq(s0->u.func_decl.name, "foo"), "func name 'foo'");
     CHECK(streq(s0->u.func_decl.doc, "hello doc\nsecond line"), "multi-line doc accumulated");
     CHECK(s0->u.func_decl.params.count == 1, "one param");
-    CHECK(s0->u.func_decl.return_type &&
-              s0->u.func_decl.return_type->type == NODE_TYPE_PRIMITIVE,
+    CHECK(s0->u.func_decl.return_type && s0->u.func_decl.return_type->type == NODE_TYPE_PRIMITIVE,
           "return type primitive (int)");
   }
   spt_frontend_destroy(root);
@@ -142,8 +142,7 @@ static void test_declare_module(void) {
       CHECK(inner0 && inner0->type == NODE_FUNCTION_DECL &&
                 streq(inner0->u.func_decl.name, "Destroy"),
             "Window.Destroy method");
-      CHECK(inner1 && inner1->type == NODE_VARIABLE_DECL &&
-                streq(inner1->u.var_decl.name, "w"),
+      CHECK(inner1 && inner1->type == NODE_VARIABLE_DECL && streq(inner1->u.var_decl.name, "w"),
             "Window.w field");
     }
   }

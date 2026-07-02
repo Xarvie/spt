@@ -10,13 +10,13 @@
 #define _DEFAULT_SOURCE 1
 #define _XOPEN_SOURCE 700
 
-#include "server.h"
-#include "workspace.h"
+#include "diagnostics.h"
+#include "lsp_features.h"
 #include "module_resolve.h"
 #include "semantic.h"
+#include "server.h"
 #include "spt_lsp_bridge.h"
-#include "lsp_features.h"
-#include "diagnostics.h"
+#include "workspace.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,12 +31,18 @@
 #endif
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 /* ---- 跨平台临时目录工具 ---- */
 static void write_file(const char *dir, const char *name, const char *content) {
@@ -47,20 +53,26 @@ static void write_file(const char *dir, const char *name, const char *content) {
   snprintf(path, sizeof path, "%s/%s", dir, name);
 #endif
   FILE *f = fopen(path, "wb");
-  if (f) { fputs(content, f); fclose(f); }
+  if (f) {
+    fputs(content, f);
+    fclose(f);
+  }
 }
 
 static char *make_temp_dir(char *out, size_t cap) {
 #ifdef _WIN32
   char base[MAX_PATH];
-  if (!GetTempPathA(MAX_PATH, base)) return NULL;
+  if (!GetTempPathA(MAX_PATH, base))
+    return NULL;
   snprintf(out, cap, "%ssptp3_%lu", base, (unsigned long)GetCurrentProcessId());
-  if (!CreateDirectoryA(out, NULL)) return NULL;
+  if (!CreateDirectoryA(out, NULL))
+    return NULL;
   return out;
 #else
   (void)cap;
   snprintf(out, cap, "/tmp/sptp3_%d", (int)getpid());
-  if (mkdir(out, 0777) != 0) return NULL;
+  if (mkdir(out, 0777) != 0)
+    return NULL;
   return out;
 #endif
 }
@@ -74,11 +86,14 @@ static void remove_dir_recursive(const char *path) {
   if (h != INVALID_HANDLE_VALUE) {
     do {
       const char *nm = fd.cFileName;
-      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0) continue;
+      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0)
+        continue;
       char full[MAX_PATH];
       snprintf(full, sizeof full, "%s\\%s", path, nm);
-      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) remove_dir_recursive(full);
-      else DeleteFileA(full);
+      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        remove_dir_recursive(full);
+      else
+        DeleteFileA(full);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
   }
@@ -86,7 +101,8 @@ static void remove_dir_recursive(const char *path) {
 #else
   char cmd[4200];
   snprintf(cmd, sizeof cmd, "rm -rf %s", path);
-  if (system(cmd) != 0) { /* best-effort */ }
+  if (system(cmd) != 0) { /* best-effort */
+  }
 #endif
 }
 
@@ -95,10 +111,18 @@ static LspPos pos_of(const char *text, const char *substr, int occ) {
   LspPos p = {0, 0};
   int line = 0, col = 0, found = 0;
   for (size_t i = 0; text[i]; i++) {
-    if (text[i] == '\n') { line++; col = 0; continue; }
+    if (text[i] == '\n') {
+      line++;
+      col = 0;
+      continue;
+    }
     if (strncmp(text + i, substr, strlen(substr)) == 0) {
       found++;
-      if (found == occ) { p.line = line; p.character = col; return p; }
+      if (found == occ) {
+        p.line = line;
+        p.character = col;
+        return p;
+      }
     }
     col++;
   }
@@ -142,31 +166,31 @@ int main(void) {
   char tmpl[4096];
   char *dir = make_temp_dir(tmpl, sizeof tmpl);
   CHECK(dir != NULL, "make_temp_dir ok");
-  if (!dir) { printf("=== abort ===\n"); return 1; }
+  if (!dir) {
+    printf("=== abort ===\n");
+    return 1;
+  }
 
   /* ---- 创建测试文件 ---- */
   /* b.spt: 导出函数 add */
   write_file(dir, "b.spt",
-    "export int add(int a, int b) {\n"
-    "  return a + b;\n"
-    "}\n"
-  );
+             "export int add(int a, int b) {\n"
+             "  return a + b;\n"
+             "}\n");
   /* a.spt: 导入 add 并调用 */
-  const char *a_text =
-    "import { add } from \"b\";\n"
-    "int caller() {\n"
-    "  return add(1, 2);\n"
-    "}\n";
+  const char *a_text = "import { add } from \"b\";\n"
+                       "int caller() {\n"
+                       "  return add(1, 2);\n"
+                       "}\n";
   write_file(dir, "a.spt", a_text);
   /* diag.spt: 未定义名 + arity 不符 */
   write_file(dir, "diag.spt",
-    "int f(int x) {\n"
-    "  return x;\n"
-    "}\n"
-    "int g() {\n"
-    "  return f(1, 2, 3, 4);\n"
-    "}\n"
-  );
+             "int f(int x) {\n"
+             "  return x;\n"
+             "}\n"
+             "int g() {\n"
+             "  return f(1, 2, 3, 4);\n"
+             "}\n");
 
   char a_path[4096], b_path[4096], diag_path[4096], a_uri[4096], b_uri[4096], diag_uri[4096];
 #ifdef _WIN32
@@ -217,7 +241,8 @@ int main(void) {
     cJSON_AddNumberToObject(td, "version", 1);
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON *resp = lsp_dispatch(&srv, make_notif("textDocument/didOpen", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* ---- 3a. 跨文件签名帮助 ---- */
@@ -226,8 +251,8 @@ int main(void) {
     /* 光标在 add( 的 '(' 之后 */
     LspPos pos = pos_of(a_text, "add(", 1);
     pos.character += 4; /* 指向 ( 之后 */
-    cJSON *resp = lsp_dispatch(&srv, make_req(2, "textDocument/signatureHelp",
-                                               td_params(a_uri, pos)));
+    cJSON *resp =
+        lsp_dispatch(&srv, make_req(2, "textDocument/signatureHelp", td_params(a_uri, pos)));
     CHECK(resp != NULL, "signatureHelp response");
     if (resp) {
       cJSON *result = cJSON_GetObjectItemCaseSensitive(resp, "result");
@@ -312,13 +337,12 @@ int main(void) {
   printf("--- 3d: structural diagnostics ---\n");
   {
     /* didOpen diag.spt */
-    const char *diag_text =
-      "int f(int x) {\n"
-      "  return x;\n"
-      "}\n"
-      "int g() {\n"
-      "  return f(1, 2, 3, 4);\n"
-      "}\n";
+    const char *diag_text = "int f(int x) {\n"
+                            "  return x;\n"
+                            "}\n"
+                            "int g() {\n"
+                            "  return f(1, 2, 3, 4);\n"
+                            "}\n";
     cJSON *params = cJSON_CreateObject();
     cJSON *td = cJSON_CreateObject();
     cJSON_AddStringToObject(td, "uri", diag_uri);
@@ -326,7 +350,8 @@ int main(void) {
     cJSON_AddNumberToObject(td, "version", 1);
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON *resp = lsp_dispatch(&srv, make_notif("textDocument/didOpen", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
 
     /* 直接调用 diagnostics_compute */
     Document *d = doc_store_get(&srv.docs, diag_uri);

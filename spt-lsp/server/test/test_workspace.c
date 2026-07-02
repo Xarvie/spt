@@ -20,12 +20,18 @@
 #endif
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static void write_file(const char *dir, const char *name, const char *content) {
   char path[4096];
@@ -35,21 +41,27 @@ static void write_file(const char *dir, const char *name, const char *content) {
   snprintf(path, sizeof path, "%s/%s", dir, name);
 #endif
   FILE *f = fopen(path, "wb");
-  if (f) { fputs(content, f); fclose(f); }
+  if (f) {
+    fputs(content, f);
+    fclose(f);
+  }
 }
 
 /* 跨平台创建唯一临时目录，返回路径（写入 out）。失败返回 NULL。 */
 static char *make_temp_dir(char *out, size_t cap) {
 #ifdef _WIN32
   char base[MAX_PATH];
-  if (!GetTempPathA(MAX_PATH, base)) return NULL;
+  if (!GetTempPathA(MAX_PATH, base))
+    return NULL;
   snprintf(out, cap, "%ssptws_%lu", base, (unsigned long)GetCurrentProcessId());
-  if (!CreateDirectoryA(out, NULL)) return NULL;
+  if (!CreateDirectoryA(out, NULL))
+    return NULL;
   return out;
 #else
   (void)cap;
   snprintf(out, cap, "/tmp/sptws_%d", (int)getpid());
-  if (mkdir(out, 0777) != 0) return NULL;
+  if (mkdir(out, 0777) != 0)
+    return NULL;
   return out;
 #endif
 }
@@ -64,11 +76,14 @@ static void remove_dir_recursive(const char *path) {
   if (h != INVALID_HANDLE_VALUE) {
     do {
       const char *nm = fd.cFileName;
-      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0) continue;
+      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0)
+        continue;
       char full[MAX_PATH];
       snprintf(full, sizeof full, "%s\\%s", path, nm);
-      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) remove_dir_recursive(full);
-      else DeleteFileA(full);
+      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        remove_dir_recursive(full);
+      else
+        DeleteFileA(full);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
   }
@@ -76,7 +91,8 @@ static void remove_dir_recursive(const char *path) {
 #else
   char cmd[4200];
   snprintf(cmd, sizeof cmd, "rm -rf %s", path);
-  if (system(cmd) != 0) { /* best-effort */ }
+  if (system(cmd) != 0) { /* best-effort */
+  }
 #endif
 }
 
@@ -85,7 +101,8 @@ static int has_named(cJSON *arr, const char *name) {
   for (int i = 0; i < n; i++) {
     cJSON *it = cJSON_GetArrayItem(arr, i);
     cJSON *nm = cJSON_GetObjectItemCaseSensitive(it, "name");
-    if (nm && nm->valuestring && strcmp(nm->valuestring, name) == 0) return 1;
+    if (nm && nm->valuestring && strcmp(nm->valuestring, name) == 0)
+      return 1;
   }
   return 0;
 }
@@ -98,9 +115,11 @@ int main(void) {
     char p[1024], u[1024];
 #ifdef _WIN32
     spt_uri_to_path("file:///C%3A/a%20b/x.spt", p, sizeof p);
-    CHECK(strcmp(p, "C:\\a b\\x.spt") == 0, "uri_to_path decodes %20/%3A, strips scheme, drive + backslash");
+    CHECK(strcmp(p, "C:\\a b\\x.spt") == 0,
+          "uri_to_path decodes %20/%3A, strips scheme, drive + backslash");
     spt_path_to_uri("C:\\a b\\x.spt", u, sizeof u);
-    CHECK(strcmp(u, "file:///C%3A/a%20b/x.spt") == 0, "path_to_uri encodes space/colon, flips backslash");
+    CHECK(strcmp(u, "file:///C%3A/a%20b/x.spt") == 0,
+          "path_to_uri encodes space/colon, flips backslash");
 #else
     spt_uri_to_path("file:///tmp/a%20b/x.spt", p, sizeof p);
     CHECK(strcmp(p, "/tmp/a b/x.spt") == 0, "uri_to_path decodes %20 and strips scheme");
@@ -112,7 +131,10 @@ int main(void) {
   char tmpl[4096];
   char *dir = make_temp_dir(tmpl, sizeof tmpl);
   CHECK(dir != NULL, "make_temp_dir ok");
-  if (!dir) { printf("=== abort ===\n"); return 1; }
+  if (!dir) {
+    printf("=== abort ===\n");
+    return 1;
+  }
 
   write_file(dir, "a.spt",
              "int foo(int n) { return n; }\n"
@@ -144,10 +166,13 @@ int main(void) {
   cJSON_AddStringToObject(ip, "rootUri", rootUri);
   cJSON_AddItemToObject(im, "params", ip);
   cJSON *ir = lsp_dispatch(&s, im);
-  cJSON *caps = ir ? cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(ir, "result"), "capabilities") : NULL;
+  cJSON *caps = ir ? cJSON_GetObjectItemCaseSensitive(
+                         cJSON_GetObjectItemCaseSensitive(ir, "result"), "capabilities")
+                   : NULL;
   CHECK(caps && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(caps, "workspaceSymbolProvider")),
         "advertises workspaceSymbolProvider");
-  cJSON_Delete(ir); cJSON_Delete(im);
+  cJSON_Delete(ir);
+  cJSON_Delete(im);
 
   /* workspace/symbol query "" -> all */
   cJSON *qm = cJSON_CreateObject();
@@ -184,7 +209,8 @@ int main(void) {
       }
     }
   }
-  cJSON_Delete(qm); cJSON_Delete(qr);
+  cJSON_Delete(qm);
+  cJSON_Delete(qr);
 
   /* query "ba" -> Bar, baz only (case-insensitive substring) */
   printf("Testing: filtered query 'ba'...\n");
@@ -201,7 +227,8 @@ int main(void) {
   CHECK(has_named(fres, "baz"), "query 'ba' matches baz");
   CHECK(!has_named(fres, "foo"), "query 'ba' excludes foo");
   CHECK(!has_named(fres, "qux"), "query 'ba' excludes qux");
-  cJSON_Delete(fm); cJSON_Delete(fr);
+  cJSON_Delete(fm);
+  cJSON_Delete(fr);
 
   /* ---- 打开文档覆盖索引：didOpen 用改动后的文本，workspace/symbol 反映新符号 ---- */
   printf("Testing: open-document overlay on index...\n");
@@ -232,7 +259,8 @@ int main(void) {
     cJSON_AddStringToObject(om, "method", "textDocument/didOpen");
     cJSON_AddItemToObject(om, "params", op);
     cJSON *orr = lsp_dispatch(&s, om);
-    if (orr) cJSON_Delete(orr);
+    if (orr)
+      cJSON_Delete(orr);
     cJSON_Delete(om);
 
     /* 查询：overlay_only 应在（仅存在于打开文档），foo 应不在（被覆盖移除） */
@@ -250,7 +278,8 @@ int main(void) {
     CHECK(!has_named(ores, "foo"), "overlay: disk-only 'foo' replaced by open doc");
     /* b.spt 的符号不受影响 */
     CHECK(has_named(ores, "qux"), "overlay: other files unaffected (qux still indexed)");
-    cJSON_Delete(om2); cJSON_Delete(orr2);
+    cJSON_Delete(om2);
+    cJSON_Delete(orr2);
   }
 
   lsp_server_free(&s);
@@ -258,7 +287,10 @@ int main(void) {
   /* cleanup */
   remove_dir_recursive(dir);
 
-  if (failed == 0) { printf("=== TestWorkspace: ALL PASS ===\n"); return 0; }
+  if (failed == 0) {
+    printf("=== TestWorkspace: ALL PASS ===\n");
+    return 0;
+  }
   printf("=== TestWorkspace: %d CHECK(s) FAILED ===\n", failed);
   return 1;
 }

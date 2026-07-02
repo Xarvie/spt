@@ -16,13 +16,19 @@
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
 /* 丢弃服务器主动通知（诊断）。 */
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static int next_id = 100;
 
@@ -39,7 +45,8 @@ static void open_doc(LspServer *s, const char *uri, const char *text) {
   cJSON_AddStringToObject(m, "method", "textDocument/didOpen");
   cJSON_AddItemToObject(m, "params", p);
   cJSON *r = lsp_dispatch(s, m);
-  if (r) cJSON_Delete(r);
+  if (r)
+    cJSON_Delete(r);
   cJSON_Delete(m);
 }
 
@@ -64,54 +71,53 @@ static cJSON *docp(const char *uri) {
 }
 
 /* 录制文件原文：spt-lsp-backup/test/test_phase1_1.spt */
-static const char *DOC_PHASE1_1 =
-    "// Phase 1.1 变量声明与类型推断测试\n"
-    "\n"
-    "// 测试1: 基本类型声明\n"
-    "// 预期: hover显示int类型，点击a可跳转到定义\n"
-    "int a = 10;\n"
-    "\n"
-    "// 测试2: auto类型推断\n"
-    "// 预期: hover显示推断类型int\n"
-    "auto b = 10;\n"
-    "\n"
-    "// 测试3: auto推断字符串\n"
-    "// 预期: hover显示推断类型str\n"
-    "auto s = \"hello\";\n"
-    "\n"
-    "// 测试4: const声明\n"
-    "// 预期: hover显示const int\n"
-    "const int c = 100;\n"
-    "\n"
-    "// 测试5: 多变量声明\n"
-    "// 预期: 每个变量独立跳转\n"
-    "vars x, y, z;\n"
-    "\n"
-    "// 测试6: global声明\n"
-    "// 预期: 正确识别全局变量\n"
-    "global int g = 1;\n"
-    "\n"
-    "// 测试7: 浮点类型\n"
-    "float f = 3.14;\n"
-    "\n"
-    "// 测试8: 字符串类型\n"
-    "str name = \"test\";\n"
-    "\n"
-    "// 测试9: 布尔类型\n"
-    "bool flag = true;\n"
-    "\n"
-    "// 测试10: 变量引用测试\n"
-    "// 预期: 点击a可跳转到上面的定义\n"
-    "void testFunc() {\n"
-    "    a = 20;\n"
-    "    b = a + 1;\n"
-    "    s = \"world\";\n"
-    "    c = 200;\n"
-    "    g = 2;\n"
-    "    x = 1;\n"
-    "    y = 2;\n"
-    "    z = 3;\n"
-    "}\n";
+static const char *DOC_PHASE1_1 = "// Phase 1.1 变量声明与类型推断测试\n"
+                                  "\n"
+                                  "// 测试1: 基本类型声明\n"
+                                  "// 预期: hover显示int类型，点击a可跳转到定义\n"
+                                  "int a = 10;\n"
+                                  "\n"
+                                  "// 测试2: auto类型推断\n"
+                                  "// 预期: hover显示推断类型int\n"
+                                  "auto b = 10;\n"
+                                  "\n"
+                                  "// 测试3: auto推断字符串\n"
+                                  "// 预期: hover显示推断类型str\n"
+                                  "auto s = \"hello\";\n"
+                                  "\n"
+                                  "// 测试4: const声明\n"
+                                  "// 预期: hover显示const int\n"
+                                  "const int c = 100;\n"
+                                  "\n"
+                                  "// 测试5: 多变量声明\n"
+                                  "// 预期: 每个变量独立跳转\n"
+                                  "vars x, y, z;\n"
+                                  "\n"
+                                  "// 测试6: global声明\n"
+                                  "// 预期: 正确识别全局变量\n"
+                                  "global int g = 1;\n"
+                                  "\n"
+                                  "// 测试7: 浮点类型\n"
+                                  "float f = 3.14;\n"
+                                  "\n"
+                                  "// 测试8: 字符串类型\n"
+                                  "str name = \"test\";\n"
+                                  "\n"
+                                  "// 测试9: 布尔类型\n"
+                                  "bool flag = true;\n"
+                                  "\n"
+                                  "// 测试10: 变量引用测试\n"
+                                  "// 预期: 点击a可跳转到上面的定义\n"
+                                  "void testFunc() {\n"
+                                  "    a = 20;\n"
+                                  "    b = a + 1;\n"
+                                  "    s = \"world\";\n"
+                                  "    c = 200;\n"
+                                  "    g = 2;\n"
+                                  "    x = 1;\n"
+                                  "    y = 2;\n"
+                                  "    z = 3;\n"
+                                  "}\n";
 
 int main(void) {
   printf("=== TestCrashSemtok: 复现 semanticTokens/full 崩溃 ===\n");

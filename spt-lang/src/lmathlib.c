@@ -556,7 +556,7 @@ static int math_random(lua_State *L) {
   }
   case 1: { /* only upper limit (exclusive): returns [0, n) */
     lua_Integer n = luaL_checkinteger(L, 2);
-    if (n == 0) {                                 /* single 0: full random integer */
+    if (n == 0) { /* single 0: full random integer */
       lua_pushinteger(L, l_castU2S(I2UInt(rv)));
       return 1;
     }
@@ -683,15 +683,24 @@ static int math_log10(lua_State *L) {
    double), and the FMATH codegen operates in double, so the bare names are also
    the type-correct choice regardless of which l_mathop branch a build selects. */
 typedef double (*spt_unary_libm_fn)(double);
+
 spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f) {
-  if (f == math_sqrt) return sqrt;
-  if (f == math_sin)  return sin;
-  if (f == math_cos)  return cos;
-  if (f == math_tan)  return tan;
-  if (f == math_exp)  return exp;
-  if (f == math_asin) return asin;
-  if (f == math_acos) return acos;
-  if (f == math_log)  return log;   /* math.log(x) single-arg only; base arg aborts */
+  if (f == math_sqrt)
+    return sqrt;
+  if (f == math_sin)
+    return sin;
+  if (f == math_cos)
+    return cos;
+  if (f == math_tan)
+    return tan;
+  if (f == math_exp)
+    return exp;
+  if (f == math_asin)
+    return asin;
+  if (f == math_acos)
+    return acos;
+  if (f == math_log)
+    return log; /* math.log(x) single-arg only; base arg aborts */
   return NULL;
 }
 
@@ -702,11 +711,14 @@ spt_unary_libm_fn spt_jit_unary_math(lua_CFunction f) {
    (FMATH2 with a kflt(1.0) second operand). math.fmod has an integer fast path
    and is deferred. */
 typedef double (*spt_binary_libm_fn)(double, double);
+
 spt_binary_libm_fn spt_jit_binary_math(lua_CFunction f) {
 #if defined(LUA_COMPAT_MATHLIB)
-  if (f == math_pow) return pow;
+  if (f == math_pow)
+    return pow;
 #endif
-  if (f == math_atan) return atan2;
+  if (f == math_atan)
+    return atan2;
   return NULL;
 }
 
@@ -714,8 +726,10 @@ spt_binary_libm_fn spt_jit_binary_math(lua_CFunction f) {
    `math.min(a,b)` / `math.max(a,b)` to a branchless select. Mirrors
    spt_jit_unary_math. Returns 1 for math_min, 2 for math_max, else 0. */
 int spt_jit_math_minmax(lua_CFunction f) {
-  if (f == math_min) return 1;
-  if (f == math_max) return 2;
+  if (f == math_min)
+    return 1;
+  if (f == math_max)
+    return 2;
   return 0;
 }
 
@@ -724,7 +738,8 @@ int spt_jit_math_minmax(lua_CFunction f) {
    the float path's SPTIR_FMATH) when f is math_abs, else NULL. Mirrors
    spt_jit_unary_math; the integer path is lowered to a branchless select. */
 spt_unary_libm_fn spt_jit_math_abs(lua_CFunction f) {
-  if (f == math_abs) return fabs;
+  if (f == math_abs)
+    return fabs;
   return NULL;
 }
 
@@ -733,8 +748,10 @@ spt_unary_libm_fn spt_jit_math_abs(lua_CFunction f) {
    Mirrors spt_jit_math_minmax. Returns 1 for math_floor, 2 for math_ceil,
    else 0. */
 int spt_jit_math_floorceil(lua_CFunction f) {
-  if (f == math_floor) return 1;
-  if (f == math_ceil)  return 2;
+  if (f == math_floor)
+    return 1;
+  if (f == math_ceil)
+    return 2;
   return 0;
 }
 

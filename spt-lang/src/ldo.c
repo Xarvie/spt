@@ -33,8 +33,8 @@
 #include "lzio.h"
 
 /* SPT 前端：源码 -> AST -> 字节码 */
-#include "spt_frontend.h"
 #include "spt_codegen.h"
+#include "spt_frontend.h"
 
 #define errorstatus(s) ((s) > LUA_YIELD)
 
@@ -657,7 +657,7 @@ retry:
   default: {                             /* not a function */
     status = tryfuncTM(L, func, status); /* try '__call' metamethod */
     /* L->top.p unchanged by tryfuncTM — narg1 stays the same */
-    goto retry;                          /* try again */
+    goto retry; /* try again */
   }
   }
 }

@@ -292,7 +292,7 @@ static void printobj(global_State *g, GCObject *o) {
          : isblack(o) ? 'b'
          : iswhite(o) ? 'w'
                       : 'g',
-         "ns01oTt"[getage(o)], o -> marked);
+         "ns01oTt"[getage(o)], o->marked);
   if (o->tt == LUA_VSHRSTR || o->tt == LUA_VLNGSTR)
     printf(" '%s'", getstr(gco2ts(o)));
 }

@@ -10,25 +10,31 @@
 #define _DEFAULT_SOURCE 1
 #define _XOPEN_SOURCE 700
 
-#include "server.h"
-#include "workspace.h"
+#include "diagnostics.h"
+#include "lsp_features.h"
 #include "module_resolve.h"
 #include "semantic.h"
+#include "server.h"
 #include "spt_lsp_bridge.h"
-#include "lsp_features.h"
-#include "diagnostics.h"
+#include "workspace.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static cJSON *make_req(int id, const char *method, cJSON *params) {
   cJSON *m = cJSON_CreateObject();
@@ -52,10 +58,18 @@ static LspPos pos_of(const char *text, const char *substr, int occ) {
   LspPos p = {0, 0};
   int line = 0, col = 0, found = 0;
   for (size_t i = 0; text[i]; i++) {
-    if (text[i] == '\n') { line++; col = 0; continue; }
+    if (text[i] == '\n') {
+      line++;
+      col = 0;
+      continue;
+    }
     if (strncmp(text + i, substr, strlen(substr)) == 0) {
       found++;
-      if (found == occ) { p.line = line; p.character = col; return p; }
+      if (found == occ) {
+        p.line = line;
+        p.character = col;
+        return p;
+      }
     }
     col++;
   }
@@ -85,7 +99,8 @@ int main(void) {
       cJSON *result = cJSON_GetObjectItemCaseSensitive(resp, "result");
       cJSON *caps = result ? cJSON_GetObjectItemCaseSensitive(result, "capabilities") : NULL;
       cJSON *sync = caps ? cJSON_GetObjectItemCaseSensitive(caps, "textDocumentSync") : NULL;
-      CHECK(sync && cJSON_IsNumber(sync) && sync->valueint == 2, "textDocumentSync=2 (Incremental)");
+      CHECK(sync && cJSON_IsNumber(sync) && sync->valueint == 2,
+            "textDocumentSync=2 (Incremental)");
       /* 验证 codeActionProvider 已声明 */
       cJSON *ca = caps ? cJSON_GetObjectItemCaseSensitive(caps, "codeActionProvider") : NULL;
       CHECK(ca && cJSON_IsTrue(ca), "codeActionProvider declared");
@@ -96,10 +111,9 @@ int main(void) {
   /* ---- 4a. snippet 补全 ---- */
   printf("--- 4a: snippet completion ---\n");
   {
-    const char *text =
-      "int add(int a, int b) {\n"
-      "  return a + b;\n"
-      "}\n";
+    const char *text = "int add(int a, int b) {\n"
+                       "  return a + b;\n"
+                       "}\n";
     cJSON *params = cJSON_CreateObject();
     cJSON *td = cJSON_CreateObject();
     cJSON_AddStringToObject(td, "uri", "file:///test_snip.spt");
@@ -107,7 +121,8 @@ int main(void) {
     cJSON_AddNumberToObject(td, "version", 1);
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON *resp = lsp_dispatch(&srv, make_notif("textDocument/didOpen", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
 
     /* 在文件末尾请求补全（应看到 add 函数和 class 关键字） */
     LspPos pos = {3, 0}; /* 最后一行之后 */
@@ -127,7 +142,8 @@ int main(void) {
         for (int i = 0; i < n; i++) {
           cJSON *item = cJSON_GetArrayItem(result, i);
           cJSON *label = cJSON_GetObjectItemCaseSensitive(item, "label");
-          if (!label || !label->valuestring) continue;
+          if (!label || !label->valuestring)
+            continue;
           cJSON *itf = cJSON_GetObjectItemCaseSensitive(item, "insertTextFormat");
           cJSON *it = cJSON_GetObjectItemCaseSensitive(item, "insertText");
           if (strcmp(label->valuestring, "add") == 0) {
@@ -154,13 +170,12 @@ int main(void) {
   printf("--- 4b: format indentation normalization ---\n");
   {
     /* 混合 tab 和 space 缩进 */
-    const char *text =
-      "int f() {\n"
-      "\treturn 1;   \n"
-      "  \t  if (true) {\n"
-      "\t\treturn 2;\n"
-      "  }\n"
-      "}\n";
+    const char *text = "int f() {\n"
+                       "\treturn 1;   \n"
+                       "  \t  if (true) {\n"
+                       "\t\treturn 2;\n"
+                       "  }\n"
+                       "}\n";
     cJSON *params = cJSON_CreateObject();
     cJSON *td = cJSON_CreateObject();
     cJSON_AddStringToObject(td, "uri", "file:///test_fmt.spt");
@@ -168,7 +183,8 @@ int main(void) {
     cJSON_AddNumberToObject(td, "version", 1);
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON *resp = lsp_dispatch(&srv, make_notif("textDocument/didOpen", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
 
     /* 请求格式化，options: tabSize=4, insertSpaces=true */
     cJSON *fparams = cJSON_CreateObject();
@@ -193,7 +209,8 @@ int main(void) {
           int has_trailing = 0;
           /* 检查是否有行尾空白（' ' 或 '\t' 紧跟 '\n'） */
           for (const char *p = nt->valuestring; *p; p++) {
-            if ((*p == ' ' || *p == '\t') && p[1] == '\n') has_trailing = 1;
+            if ((*p == ' ' || *p == '\t') && p[1] == '\n')
+              has_trailing = 1;
           }
           /* 第二行应为 "    return 1;\n"（4 空格缩进） */
           int has_4space_return = (strstr(nt->valuestring, "    return 1;\n") != NULL);
@@ -209,10 +226,9 @@ int main(void) {
   /* ---- 4c. codeAction ---- */
   printf("--- 4c: codeAction (add export) ---\n");
   {
-    const char *text =
-      "int add(int a, int b) {\n"
-      "  return a + b;\n"
-      "}\n";
+    const char *text = "int add(int a, int b) {\n"
+                       "  return a + b;\n"
+                       "}\n";
     cJSON *params = cJSON_CreateObject();
     cJSON *td = cJSON_CreateObject();
     cJSON_AddStringToObject(td, "uri", "file:///test_ca.spt");
@@ -220,7 +236,8 @@ int main(void) {
     cJSON_AddNumberToObject(td, "version", 1);
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON *resp = lsp_dispatch(&srv, make_notif("textDocument/didOpen", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
 
     /* 请求 codeAction，range 覆盖第一行（add 函数声明） */
     cJSON *caparams = cJSON_CreateObject();
@@ -269,10 +286,9 @@ int main(void) {
   /* ---- 4d. 增量同步 ---- */
   printf("--- 4d: incremental sync (didChange range) ---\n");
   {
-    const char *text =
-      "int f() {\n"
-      "  return 1;\n"
-      "}\n";
+    const char *text = "int f() {\n"
+                       "  return 1;\n"
+                       "}\n";
     cJSON *params = cJSON_CreateObject();
     cJSON *td = cJSON_CreateObject();
     cJSON_AddStringToObject(td, "uri", "file:///test_inc.spt");
@@ -280,7 +296,8 @@ int main(void) {
     cJSON_AddNumberToObject(td, "version", 1);
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON *resp = lsp_dispatch(&srv, make_notif("textDocument/didOpen", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
 
     /* 发送增量变更：将 "return 1;" 中的 "1" 替换为 "42" */
     cJSON *dparams = cJSON_CreateObject();
@@ -297,7 +314,8 @@ int main(void) {
     cJSON_AddItemToArray(changes, change);
     cJSON_AddItemToObject(dparams, "contentChanges", changes);
     cJSON *dresp = lsp_dispatch(&srv, make_notif("textDocument/didChange", dparams));
-    if (dresp) cJSON_Delete(dresp);
+    if (dresp)
+      cJSON_Delete(dresp);
 
     /* 验证文档内容已更新 */
     Document *d = doc_store_get(&srv.docs, "file:///test_inc.spt");
@@ -306,8 +324,7 @@ int main(void) {
     if (d) {
       /* 应为 "int f() {\n  return 42;\n}\n" */
       const char *expected = "int f() {\n  return 42;\n}\n";
-      if (d->text_len == strlen(expected) &&
-          memcmp(d->text, expected, d->text_len) == 0)
+      if (d->text_len == strlen(expected) && memcmp(d->text, expected, d->text_len) == 0)
         inc_ok = 1;
     }
     CHECK(inc_ok, "incremental didChange applied correctly (1->42)");

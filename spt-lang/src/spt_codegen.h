@@ -95,7 +95,7 @@ LUALIB_API LClosure *astY_compile(lua_State *L, AstNode *root, Dyndata *dyd, con
 ** Mostly internal, but exposed for testing / REPL use.
 */
 LUALIB_API Proto *astY_compileFunction(lua_State *L, FuncState *parent_fs, Dyndata *dyd,
-                                      AstNode *funcNode, const char *name);
+                                       AstNode *funcNode, const char *name);
 
 #ifdef __cplusplus
 }

@@ -14,10 +14,13 @@ cJSON *feature_selection_range(const Document *d, LspPos pos) {
   if (u) {
     for (int i = 0; i < u->token_count; i++) {
       const SptToken *t = &u->tokens[i];
-      if (t->kind != TOK_IDENTIFIER) continue;
+      if (t->kind != TOK_IDENTIFIER)
+        continue;
       int l = t->line - 1;
-      if (l < 0) l = 0;
-      if (l >= d->line_count) continue;
+      if (l < 0)
+        l = 0;
+      if (l >= d->line_count)
+        continue;
       size_t s = d->line_starts[l] + (size_t)(t->column > 0 ? t->column - 1 : 0);
       size_t e = s + (size_t)t->length;
       if (off >= s && off <= e) {
@@ -31,7 +34,8 @@ cJSON *feature_selection_range(const Document *d, LspPos pos) {
   if (!res) {
     /* 光标不在标识符上：返回单字符区间（合法降级）。 */
     size_t s = off;
-    if (s >= d->text_len) s = d->text_len > 0 ? d->text_len - 1 : 0;
+    if (s >= d->text_len)
+      s = d->text_len > 0 ? d->text_len - 1 : 0;
     res = cJSON_CreateObject();
     cJSON_AddItemToObject(res, "range", lsp_range_to_json(doc_range(d, s, s)));
   }

@@ -39,11 +39,11 @@ LUALIB_API void(luaL_checkversion_)(lua_State *L, lua_Number ver, size_t sz);
 
 LUALIB_API int(luaL_getmetafield)(lua_State *L, int obj, const char *e);
 LUALIB_API int(luaL_callmeta)(lua_State *L, int obj, const char *e);
-LUALIB_API const char *(luaL_tolstring)(lua_State *L, int idx, size_t *len);
+LUALIB_API const char *(luaL_tolstring)(lua_State * L, int idx, size_t *len);
 LUALIB_API int(luaL_argerror)(lua_State *L, int arg, const char *extramsg);
 LUALIB_API int(luaL_typeerror)(lua_State *L, int arg, const char *tname);
-LUALIB_API const char *(luaL_checklstring)(lua_State *L, int arg, size_t *l);
-LUALIB_API const char *(luaL_optlstring)(lua_State *L, int arg, const char *def, size_t *l);
+LUALIB_API const char *(luaL_checklstring)(lua_State * L, int arg, size_t *l);
+LUALIB_API const char *(luaL_optlstring)(lua_State * L, int arg, const char *def, size_t *l);
 LUALIB_API lua_Number(luaL_checknumber)(lua_State *L, int arg);
 LUALIB_API lua_Number(luaL_optnumber)(lua_State *L, int arg, lua_Number def);
 
@@ -56,8 +56,8 @@ LUALIB_API void(luaL_checkany)(lua_State *L, int arg);
 
 LUALIB_API int(luaL_newmetatable)(lua_State *L, const char *tname);
 LUALIB_API void(luaL_setmetatable)(lua_State *L, const char *tname);
-LUALIB_API void *(luaL_testudata)(lua_State *L, int ud, const char *tname);
-LUALIB_API void *(luaL_checkudata)(lua_State *L, int ud, const char *tname);
+LUALIB_API void *(luaL_testudata)(lua_State * L, int ud, const char *tname);
+LUALIB_API void *(luaL_checkudata)(lua_State * L, int ud, const char *tname);
 
 LUALIB_API void(luaL_where)(lua_State *L, int lvl);
 LUALIB_API int(luaL_error)(lua_State *L, const char *fmt, ...);
@@ -91,7 +91,7 @@ LUALIB_API unsigned luaL_makeseed(lua_State *L);
 LUALIB_API lua_Integer(luaL_len)(lua_State *L, int idx);
 
 LUALIB_API void(luaL_addgsub)(luaL_Buffer *b, const char *s, const char *p, const char *r);
-LUALIB_API const char *(luaL_gsub)(lua_State *L, const char *s, const char *p, const char *r);
+LUALIB_API const char *(luaL_gsub)(lua_State * L, const char *s, const char *p, const char *r);
 
 LUALIB_API void(luaL_setfuncs)(lua_State *L, const luaL_Reg *l, int nup);
 
@@ -174,13 +174,13 @@ struct luaL_Buffer {
 #define luaL_buffsub(B, s) ((B)->n -= (s))
 
 LUALIB_API void(luaL_buffinit)(lua_State *L, luaL_Buffer *B);
-LUALIB_API char *(luaL_prepbuffsize)(luaL_Buffer *B, size_t sz);
+LUALIB_API char *(luaL_prepbuffsize)(luaL_Buffer * B, size_t sz);
 LUALIB_API void(luaL_addlstring)(luaL_Buffer *B, const char *s, size_t l);
 LUALIB_API void(luaL_addstring)(luaL_Buffer *B, const char *s);
 LUALIB_API void(luaL_addvalue)(luaL_Buffer *B);
 LUALIB_API void(luaL_pushresult)(luaL_Buffer *B);
 LUALIB_API void(luaL_pushresultsize)(luaL_Buffer *B, size_t sz);
-LUALIB_API char *(luaL_buffinitsize)(lua_State *L, luaL_Buffer *B, size_t sz);
+LUALIB_API char *(luaL_buffinitsize)(lua_State * L, luaL_Buffer *B, size_t sz);
 
 #define luaL_prepbuffer(B) luaL_prepbuffsize(B, LUAL_BUFFERSIZE)
 

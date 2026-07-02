@@ -13,7 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { cJSON *edits; const Document *d; const char *new_name; } RenCtx;
+typedef struct {
+  cJSON *edits;
+  const Document *d;
+  const char *new_name;
+} RenCtx;
+
 static void ren_cb(void *ctx, size_t s, size_t e) {
   RenCtx *c = (RenCtx *)ctx;
   cJSON *ed = cJSON_CreateObject();
@@ -24,7 +29,13 @@ static void ren_cb(void *ctx, size_t s, size_t e) {
 
 /* 在目标文件中查找所有匹配 name 的标识符 token，产出 TextEdit。
    Phase 5b: 若 ws 的引用倒排索引可用，直接查表（O(1)），否则回退到线性扫描。 */
-typedef struct { cJSON *edits; const Document *d; const char *new_name; const char *name; } CrossCtx;
+typedef struct {
+  cJSON *edits;
+  const Document *d;
+  const char *new_name;
+  const char *name;
+} CrossCtx;
+
 static void cross_ref_cb(void *ctx, size_t s, size_t e) {
   CrossCtx *c = (CrossCtx *)ctx;
   cJSON *ed = cJSON_CreateObject();
@@ -34,13 +45,20 @@ static void cross_ref_cb(void *ctx, size_t s, size_t e) {
 }
 
 /* Phase 5b: 由倒排索引直接产出 TextEdit（offset/length 已知，无需再扫 token）。 */
-typedef struct { cJSON *edits; const Document *d; const char *new_name; } IdxCtx;
+typedef struct {
+  cJSON *edits;
+  const Document *d;
+  const char *new_name;
+} IdxCtx;
+
 static void idx_occ_cb(void *ctx, const char *uri, size_t offset, int length) {
   (void)uri;
   IdxCtx *c = (IdxCtx *)ctx;
-  if (!c->d) return;
+  if (!c->d)
+    return;
   cJSON *ed = cJSON_CreateObject();
-  cJSON_AddItemToObject(ed, "range", lsp_range_to_json(doc_range(c->d, offset, offset + (size_t)length)));
+  cJSON_AddItemToObject(ed, "range",
+                        lsp_range_to_json(doc_range(c->d, offset, offset + (size_t)length)));
   cJSON_AddStringToObject(ed, "newText", c->new_name);
   cJSON_AddItemToArray(c->edits, ed);
 }
@@ -49,18 +67,23 @@ static void idx_occ_cb(void *ctx, const char *uri, size_t offset, int length) {
    返回写入的编辑数。 */
 static int collect_token_edits(const WsUnit *wu, const char *name, const char *new_name,
                                cJSON *cross_edits) {
-  if (!wu->unit || !wu->doc) return 0;
+  if (!wu->unit || !wu->doc)
+    return 0;
   CrossCtx cc = {cross_edits, wu->doc, new_name, name};
   size_t nl = strlen(name);
   int n = 0;
   for (int ti = 0; ti < wu->unit->token_count; ti++) {
     const SptToken *t = &wu->unit->tokens[ti];
-    if (t->kind != TOK_IDENTIFIER) continue;
-    if ((size_t)t->length != nl || memcmp(t->lexeme, name, nl) != 0) continue;
+    if (t->kind != TOK_IDENTIFIER)
+      continue;
+    if ((size_t)t->length != nl || memcmp(t->lexeme, name, nl) != 0)
+      continue;
     size_t s = 0, e = 0;
     int li = t->line - 1;
-    if (li < 0) li = 0;
-    if (li >= wu->doc->line_count) continue;
+    if (li < 0)
+      li = 0;
+    if (li >= wu->doc->line_count)
+      continue;
     s = wu->doc->line_starts[li] + (size_t)(t->column > 0 ? t->column - 1 : 0);
     e = s + (size_t)t->length;
     cross_ref_cb(&cc, s, e);
@@ -70,15 +93,43 @@ static int collect_token_edits(const WsUnit *wu, const char *name, const char *n
 }
 
 /* Phase 5b/5c: 候选 URI 集合（用于收集导入者 / 包含名字的文件）。 */
-typedef struct { char (*uris)[4096]; int count, cap; } UriSet;
-static void uriset_init(UriSet *s, int cap) { s->uris = (char(*)[4096])calloc(cap, 4096); s->count = 0; s->cap = cap; }
-static void uriset_free(UriSet *s) { free(s->uris); s->uris = NULL; s->count = s->cap = 0; }
-static void uriset_add(UriSet *s, const char *uri) {
-  for (int i = 0; i < s->count; i++) if (strcmp(s->uris[i], uri) == 0) return;
-  if (s->count < s->cap) { strncpy(s->uris[s->count], uri, 4095); s->uris[s->count][4095] = '\0'; s->count++; }
+typedef struct {
+  char (*uris)[4096];
+  int count, cap;
+} UriSet;
+
+static void uriset_init(UriSet *s, int cap) {
+  s->uris = (char (*)[4096])calloc(cap, 4096);
+  s->count = 0;
+  s->cap = cap;
 }
-static void importer_cb(void *ctx, const char *importer_uri) { uriset_add((UriSet *)ctx, importer_uri); }
-static void occ_uri_cb(void *ctx, const char *uri, size_t off, int len) { (void)off; (void)len; uriset_add((UriSet *)ctx, uri); }
+
+static void uriset_free(UriSet *s) {
+  free(s->uris);
+  s->uris = NULL;
+  s->count = s->cap = 0;
+}
+
+static void uriset_add(UriSet *s, const char *uri) {
+  for (int i = 0; i < s->count; i++)
+    if (strcmp(s->uris[i], uri) == 0)
+      return;
+  if (s->count < s->cap) {
+    strncpy(s->uris[s->count], uri, 4095);
+    s->uris[s->count][4095] = '\0';
+    s->count++;
+  }
+}
+
+static void importer_cb(void *ctx, const char *importer_uri) {
+  uriset_add((UriSet *)ctx, importer_uri);
+}
+
+static void occ_uri_cb(void *ctx, const char *uri, size_t off, int len) {
+  (void)off;
+  (void)len;
+  uriset_add((UriSet *)ctx, uri);
+}
 
 cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char *new_name,
                       Workspace *ws) {
@@ -102,8 +153,8 @@ cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char
        注意：sem_resolve 会把 import 绑定也当作 has_def=1 的定义，
        所以必须先检查 sem_import_binding_path 来区分两种情况。 */
     int do_cross = 0;
-    char def_mod_path[256] = {0};  /* 定义所在模块路径（情况 B 用） */
-    char def_uri[4096] = {0};      /* 定义文件 URI（情况 B 用） */
+    char def_mod_path[256] = {0}; /* 定义所在模块路径（情况 B 用） */
+    char def_uri[4096] = {0};     /* 定义文件 URI（情况 B 用） */
 
     if (ws && !r.is_member && !r.is_ambient) {
       /* 先检查是否为导入符号（情况 B）。 */
@@ -158,7 +209,8 @@ cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char
       if (got == 0) {
         for (int i = 0; i < ws->sym_count; i++) {
           const char *other_uri = ws->syms[i].uri;
-          if (!other_uri) continue;
+          if (!other_uri)
+            continue;
           uriset_add(&cand, other_uri);
         }
       }
@@ -166,25 +218,31 @@ cJSON *feature_rename(const Document *d, LspPos pos, const char *uri, const char
       for (int ci = 0; ci < cand.count; ci++) {
         const char *other_uri = cand.uris[ci];
         /* 跳过当前文件（已处理）和定义文件（情况 B 已处理）。 */
-        if (strcmp(other_uri, uri) == 0) continue;
-        if (def_uri[0] && strcmp(other_uri, def_uri) == 0) continue;
+        if (strcmp(other_uri, uri) == 0)
+          continue;
+        if (def_uri[0] && strcmp(other_uri, def_uri) == 0)
+          continue;
 
         char other_path[4096];
         spt_uri_to_path(other_uri, other_path, sizeof other_path);
         WsUnit wu = workspace_get_unit(ws, other_path);
-        if (!wu.unit || !wu.doc) continue;
+        if (!wu.unit || !wu.doc)
+          continue;
 
         /* 检查该文件是否导入了此符号，且导入目标匹配。 */
         char mod_path[256];
         int imported = sem_import_binding_path(wu.unit, r.name, mod_path, sizeof mod_path);
         if (!imported)
           imported = sem_namespace_import_path(wu.unit, r.name, mod_path, sizeof mod_path);
-        if (!imported) continue;
+        if (!imported)
+          continue;
 
         /* 验证导入目标模块解析后等于 target_uri。 */
         char tgt_uri[4096];
-        if (!workspace_resolve_module(ws, other_uri, mod_path, tgt_uri, sizeof tgt_uri)) continue;
-        if (strcmp(tgt_uri, target_uri) != 0) continue;
+        if (!workspace_resolve_module(ws, other_uri, mod_path, tgt_uri, sizeof tgt_uri))
+          continue;
+        if (strcmp(tgt_uri, target_uri) != 0)
+          continue;
 
         cJSON *cross_edits = cJSON_CreateArray();
         collect_token_edits(&wu, r.name, new_name, cross_edits);

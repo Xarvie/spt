@@ -181,8 +181,10 @@ static int str_byte(lua_State *L) {
    can lower `string.len(s)` / `string.byte(s,i)` to SLEN / SBYTE. Mirrors
    lmathlib's spt_jit_unary_math. Returns 1 for str_len, 2 for str_byte, else 0. */
 int spt_jit_str_op(lua_CFunction f) {
-  if (f == (lua_CFunction)str_len)  return 1;
-  if (f == (lua_CFunction)str_byte) return 2;
+  if (f == (lua_CFunction)str_len)
+    return 1;
+  if (f == (lua_CFunction)str_byte)
+    return 2;
   return 0;
 }
 

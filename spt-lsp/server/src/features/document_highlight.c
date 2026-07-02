@@ -7,7 +7,11 @@
 #include "semantic.h"
 #include "spt_lsp_bridge.h"
 
-typedef struct { cJSON *arr; const Document *d; } HlCtx;
+typedef struct {
+  cJSON *arr;
+  const Document *d;
+} HlCtx;
+
 static void hl_cb(void *ctx, size_t start, size_t end) {
   HlCtx *c = (HlCtx *)ctx;
   cJSON *it = cJSON_CreateObject();

@@ -28,12 +28,12 @@
 #include "server.h"
 
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
-#include <windows.h>
 #include <io.h>
+#include <windows.h>
 #else
 #include <dirent.h>
 #endif
@@ -41,12 +41,19 @@
 static int failed = 0;
 static int passed = 0;
 
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; return; }                               \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+      return;                                                                                      \
+    }                                                                                              \
   } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static int next_id = 200;
 
@@ -83,28 +90,37 @@ static cJSON *posp(const char *uri, int line, int ch) {
 
 static char *read_file(const char *path, long *out_len) {
   FILE *f = fopen(path, "rb");
-  if (!f) return NULL;
+  if (!f)
+    return NULL;
   fseek(f, 0, SEEK_END);
   long len = ftell(f);
   fseek(f, 0, SEEK_SET);
   char *buf = (char *)malloc((size_t)len + 1);
-  if (!buf) { fclose(f); return NULL; }
+  if (!buf) {
+    fclose(f);
+    return NULL;
+  }
   size_t rd = fread(buf, 1, (size_t)len, f);
   fclose(f);
   buf[rd] = '\0';
-  if (out_len) *out_len = (long)rd;
+  if (out_len)
+    *out_len = (long)rd;
   return buf;
 }
 
 /* 从 hover 响应中提取 contents.value 字符串 */
 static const char *extract_hover_value(cJSON *resp) {
-  if (!resp) return NULL;
+  if (!resp)
+    return NULL;
   cJSON *result = cJSON_GetObjectItem(resp, "result");
-  if (!result) return NULL;
+  if (!result)
+    return NULL;
   cJSON *contents = cJSON_GetObjectItem(result, "contents");
-  if (!contents) return NULL;
+  if (!contents)
+    return NULL;
   cJSON *value = cJSON_GetObjectItem(contents, "value");
-  if (!value || !cJSON_IsString(value)) return NULL;
+  if (!value || !cJSON_IsString(value))
+    return NULL;
   return value->valuestring;
 }
 
@@ -153,7 +169,8 @@ static void test_one_file(const char *path, const char *name) {
     cJSON_AddStringToObject(m, "method", "textDocument/didOpen");
     cJSON_AddItemToObject(m, "params", p);
     cJSON *r = lsp_dispatch(&s, m);
-    if (r) cJSON_Delete(r);
+    if (r)
+      cJSON_Delete(r);
     cJSON_Delete(m);
   }
 
@@ -271,7 +288,8 @@ static void test_one_file(const char *path, const char *name) {
   {
     cJSON *result = cJSON_GetObjectItem(sym_resp, "result");
     int nsyms = 0;
-    if (result && cJSON_IsArray(result)) nsyms = cJSON_GetArraySize(result);
+    if (result && cJSON_IsArray(result))
+      nsyms = cJSON_GetArraySize(result);
     if (nsyms < 3) {
       printf("FAIL: documentSymbol returned only %d symbols (want >= 3)\n", nsyms);
       type_ok = 0;
@@ -300,7 +318,8 @@ static void run_dir(const char *dir) {
     return;
   }
   do {
-    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+      continue;
     char path[MAX_PATH];
     snprintf(path, sizeof(path), "%s\\%s", dir, fd.cFileName);
     test_one_file(path, fd.cFileName);
@@ -317,7 +336,8 @@ static void run_dir(const char *dir) {
   struct dirent *e;
   while ((e = readdir(d))) {
     size_t len = strlen(e->d_name);
-    if (len < 5 || strcmp(e->d_name + len - 4, ".spt") != 0) continue;
+    if (len < 5 || strcmp(e->d_name + len - 4, ".spt") != 0)
+      continue;
     char path[1024];
     snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
     test_one_file(path, e->d_name);
@@ -334,12 +354,7 @@ int main(void) {
   const char *dir = "test/incomplete";
 
   /* 尝试几个可能的路径 */
-  const char *dirs[] = {
-    "test/incomplete",
-    "../test/incomplete",
-    "../../test/incomplete",
-    NULL
-  };
+  const char *dirs[] = {"test/incomplete", "../test/incomplete", "../../test/incomplete", NULL};
 
   int found = 0;
   for (int i = 0; dirs[i]; i++) {
@@ -348,7 +363,8 @@ int main(void) {
     if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
 #else
     DIR *test = opendir(dirs[i]);
-    if (test) { closedir(test);
+    if (test) {
+      closedir(test);
 #endif
       dir = dirs[i];
       found = 1;

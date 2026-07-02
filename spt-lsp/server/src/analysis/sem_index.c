@@ -15,7 +15,8 @@
 /* ---- djb2 散列 ---- */
 static unsigned sem_hash_str(const char *s) {
   unsigned h = 5381;
-  for (; *s; s++) h = h * 33 + (unsigned char)*s;
+  for (; *s; s++)
+    h = h * 33 + (unsigned char)*s;
   return h;
 }
 
@@ -35,7 +36,8 @@ static void hash_free(SemHash *h) {
 /* 插入：同名覆盖（后插入者胜，匹配 sem_find_function 的"后声明优先"近似）。
    name 为 NULL 的槽位视为空。 */
 static void hash_insert(SemHash *h, const char *name, const AstNode *node, int kind) {
-  if (!name) return;
+  if (!name)
+    return;
   if (h->count * 10 >= h->capacity * 7) {
     /* 扩容：重新插入所有已有条目。 */
     SemSlot *old = h->slots;
@@ -44,7 +46,8 @@ static void hash_insert(SemHash *h, const char *name, const AstNode *node, int k
     for (int i = 0; i < oldcap; i++) {
       if (old[i].name) {
         unsigned k = sem_hash_str(old[i].name) & (unsigned)(h->capacity - 1);
-        while (h->slots[k].name) k = (k + 1) & (h->capacity - 1);
+        while (h->slots[k].name)
+          k = (k + 1) & (h->capacity - 1);
         h->slots[k] = old[i];
         h->count++;
       }
@@ -68,10 +71,12 @@ static void hash_insert(SemHash *h, const char *name, const AstNode *node, int k
 }
 
 static const SemSlot *hash_lookup(const SemHash *h, const char *name) {
-  if (!h->slots || !name) return NULL;
+  if (!h->slots || !name)
+    return NULL;
   unsigned k = sem_hash_str(name) & (unsigned)(h->capacity - 1);
   while (h->slots[k].name) {
-    if (strcmp(h->slots[k].name, name) == 0) return &h->slots[k];
+    if (strcmp(h->slots[k].name, name) == 0)
+      return &h->slots[k];
     k = (k + 1) & (h->capacity - 1);
   }
   return NULL;
@@ -91,14 +96,16 @@ static void index_class_members(SemIndex *idx, const AstNode *cls) {
   const AstList *m = &cls->u.class_decl.members;
   for (int i = 0; i < m->count; i++) {
     AstNode *decl = m->items[i]->u.class_member.member_declaration;
-    if (!decl) continue;
+    if (!decl)
+      continue;
     if (decl->type == NODE_FUNCTION_DECL && decl->u.func_decl.name)
       hash_insert(&idx->funcs, decl->u.func_decl.name, decl, SK_METHOD);
   }
 }
 
 SemIndex *sem_index_build(const AstNode *root) {
-  if (!root || root->type != NODE_BLOCK) return NULL;
+  if (!root || root->type != NODE_BLOCK)
+    return NULL;
   SemIndex *idx = (SemIndex *)calloc(1, sizeof *idx);
   hash_init(&idx->defs, 64);
   hash_init(&idx->classes, 32);
@@ -140,7 +147,8 @@ SemIndex *sem_index_build(const AstNode *root) {
         AstNode *spec = sp->items[k];
         const char *nm = spec->u.import_spec.alias ? spec->u.import_spec.alias
                                                    : spec->u.import_spec.imported_name;
-        if (nm) hash_insert(&idx->defs, nm, spec, SK_VARIABLE);
+        if (nm)
+          hash_insert(&idx->defs, nm, spec, SK_VARIABLE);
       }
       break;
     }
@@ -155,14 +163,16 @@ SemIndex *sem_index_build(const AstNode *root) {
       }
       break;
     }
-    default: break;
+    default:
+      break;
     }
   }
   return idx;
 }
 
 void sem_index_free(SemIndex *idx) {
-  if (!idx) return;
+  if (!idx)
+    return;
   hash_free(&idx->defs);
   hash_free(&idx->classes);
   hash_free(&idx->funcs);

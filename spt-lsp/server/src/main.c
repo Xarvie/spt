@@ -14,19 +14,32 @@
 
 int main(void) {
   FILE *dbg = spt_open_log();
-  if (dbg) { fprintf(dbg, "main start\n"); fflush(dbg); }
+  if (dbg) {
+    fprintf(dbg, "main start\n");
+    fflush(dbg);
+  }
 #ifdef _WIN32
   _setmode(_fileno(stdin), _O_BINARY);
   _setmode(_fileno(stdout), _O_BINARY);
-  if (dbg) { fprintf(dbg, "setmode done\n"); fflush(dbg); }
+  if (dbg) {
+    fprintf(dbg, "setmode done\n");
+    fflush(dbg);
+  }
 #endif
 
   LspServer s;
   lsp_server_init(&s);
-  if (dbg) { fprintf(dbg, "init done\n"); fflush(dbg); }
+  if (dbg) {
+    fprintf(dbg, "init done\n");
+    fflush(dbg);
+  }
   int rc = lsp_run(&s, stdin, stdout);
-  if (dbg) { fprintf(dbg, "run done rc=%d\n", rc); fflush(dbg); }
+  if (dbg) {
+    fprintf(dbg, "run done rc=%d\n", rc);
+    fflush(dbg);
+  }
   lsp_server_free(&s);
-  if (dbg) fclose(dbg);
+  if (dbg)
+    fclose(dbg);
   return rc;
 }

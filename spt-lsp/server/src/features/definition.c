@@ -42,7 +42,8 @@ cJSON *feature_definition(const Document *d, LspPos pos, const char *uri, Worksp
         if (sem_resolve_declare_member(u, d, t.module_path, t.symbol_name, &dr) && dr.has_def) {
           res = cJSON_CreateObject();
           cJSON_AddStringToObject(res, "uri", uri);
-          cJSON_AddItemToObject(res, "range", lsp_range_to_json(doc_range(d, dr.def_start, dr.def_end)));
+          cJSON_AddItemToObject(res, "range",
+                                lsp_range_to_json(doc_range(d, dr.def_start, dr.def_end)));
         }
       }
     }

@@ -18,8 +18,8 @@
 #ifndef SPT_JIT_H
 #define SPT_JIT_H
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Forward declarations from VM */
 typedef struct lua_State lua_State;
@@ -114,8 +114,8 @@ typedef l_uint32 Instruction;
    incremented. After MAX_RUNTIME_FAILS discards the entry is fully blacklisted.
    CHECK_INTERVAL amortizes the O(nsnaps) scan; SIDE_EXITS is the threshold. */
 #define SPT_JIT_BLACKLIST_CHECK_INTERVAL 256
-#define SPT_JIT_BLACKLIST_SIDE_EXITS   10000
-#define SPT_JIT_MAX_RUNTIME_FAILS         3
+#define SPT_JIT_BLACKLIST_SIDE_EXITS 10000
+#define SPT_JIT_MAX_RUNTIME_FAILS 3
 
 /* Maximum distinct live-in slots tracked for the per-entry type recheck.
    Loops rarely carry more than a handful of typed live-ins; a trace exceeding
@@ -155,7 +155,7 @@ typedef l_uint32 Instruction;
 enum SPTJitMode {
   SPT_JIT_MODE_OFF = 0,
   SPT_JIT_MODE_ON = 1,
-  SPT_JIT_MODE_RECORD = 2,  /* currently recording a trace */
+  SPT_JIT_MODE_RECORD = 2, /* currently recording a trace */
 };
 
 /* =====================================================================

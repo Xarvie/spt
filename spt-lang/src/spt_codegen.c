@@ -27,8 +27,8 @@
 #include "spt_codegen.h"
 #include <assert.h>
 #include <stdarg.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "lcode.h"
 #include "ldebug.h"
@@ -537,8 +537,7 @@ static void ast_adjust_assign(CompileCtx *C, int nvars, int nexps, expdesc *e) {
  * Reads ParameterDeclNode list and the isVariadic flag from the
  * enclosing LambdaNode / FunctionDeclNode.
  *=====================================================================*/
-static void compile_params(CompileCtx *C, FuncState *new_fs,
-                           AstList params, bool isVariadic,
+static void compile_params(CompileCtx *C, FuncState *new_fs, AstList params, bool isVariadic,
                            bool isMethod) {
   /*------------------------------------------------------------
    * Implicit 'this' parameter — ALWAYS occupies Slot 0.
@@ -586,7 +585,7 @@ static void compile_params(CompileCtx *C, FuncState *new_fs,
     // 处理所有用户参数 (从 Slot 1 开始)
     int nparams = 0;
     for (int _pi = 0; _pi < params.count; _pi++) {
-    AstNode *p = params.items[_pi];
+      AstNode *p = params.items[_pi];
       TString *pname = mkstr(C, p->u.param.name);
       ast_new_localvar(C, pname);
       nparams++;
@@ -945,8 +944,8 @@ static void compile_lambda(CompileCtx *C, AstNode *n, expdesc *e) {
  * Prevents exceeding MAX_FSTACK (255) register limit for large lists. */
 static int list_maxtostore(FuncState *fs) {
   int numfreeregs = MAX_FSTACK - fs->freereg;
-  if (numfreeregs >= 160)   /* "lots" of registers? */
-    return numfreeregs / 5; /* use up to 1/5 of them */
+  if (numfreeregs >= 160)     /* "lots" of registers? */
+    return numfreeregs / 5;   /* use up to 1/5 of them */
   else if (numfreeregs >= 80) /* still "enough" registers? */
     return 10;                /* one 'SETLIST' instruction for each 10 values */
   else                        /* save registers for potential more nesting */
@@ -1290,13 +1289,14 @@ static void compile_assignment(CompileCtx *C, AstNode *n) {
   int nlvals = (int)n->u.assign.lvalues.count;
   int nrvals = (int)n->u.assign.rvalues.count;
 
-  /* 多目标赋值的左值表达式数组：小数量用栈，大数量用堆（避免 VLA，MSVC 不支持）。 */
-  #define ASSIGN_LHS_STACK_MAX 16
+/* 多目标赋值的左值表达式数组：小数量用栈，大数量用堆（避免 VLA，MSVC 不支持）。 */
+#define ASSIGN_LHS_STACK_MAX 16
   expdesc lhs_stack[ASSIGN_LHS_STACK_MAX];
   expdesc *lhs = lhs_stack;
   if (nlvals > ASSIGN_LHS_STACK_MAX) {
     lhs = (expdesc *)malloc(sizeof(expdesc) * (size_t)nlvals);
-    if (!lhs) compile_error(C, "out of memory in assignment");
+    if (!lhs)
+      compile_error(C, "out of memory in assignment");
   }
   for (int i = 0; i < nlvals; i++) {
     compile_expression(C, n->u.assign.lvalues.items[i], &lhs[i]);
@@ -1339,7 +1339,7 @@ static void compile_assignment(CompileCtx *C, AstNode *n) {
 
   if (lhs != lhs_stack)
     free(lhs);
-  #undef ASSIGN_LHS_STACK_MAX
+#undef ASSIGN_LHS_STACK_MAX
 }
 
 /*-----------------------------------------------------------------------
@@ -1458,7 +1458,8 @@ static void compile_if(CompileCtx *C, AstNode *n) {
     if (clause->u.if_clause.body)
       compile_block(C, clause->u.if_clause.body);
 
-    if (clause != n->u.if_stmt.else_if_clauses.items[n->u.if_stmt.else_if_clauses.count - 1] || n->u.if_stmt.else_block)
+    if (clause != n->u.if_stmt.else_if_clauses.items[n->u.if_stmt.else_if_clauses.count - 1] ||
+        n->u.if_stmt.else_block)
       luaK_concat(fs, &escapelist, luaK_jump(fs));
 
     luaK_patchtohere(fs, condtrue);
@@ -1996,7 +1997,8 @@ static void compile_class_decl(CompileCtx *C, AstNode *n) {
         new_fs.f->linedefined = C->linenumber;
         ast_open_func(C, &new_fs, &bl);
 
-        compile_params(C, &new_fs, fdecl->u.func_decl.params, fdecl->u.func_decl.is_variadic, !isStatic);
+        compile_params(C, &new_fs, fdecl->u.func_decl.params, fdecl->u.func_decl.is_variadic,
+                       !isStatic);
 
         if (fdecl->u.func_decl.body)
           compile_block(C, fdecl->u.func_decl.body);
@@ -2147,9 +2149,10 @@ static void compile_class_decl(CompileCtx *C, AstNode *n) {
        * Instance field default values: obj.field = initializer
        * ---------------------------------------------------------- */
       for (int _mi = 0; _mi < n->u.class_decl.members.count; _mi++) {
-    AstNode *member = n->u.class_decl.members.items[_mi];
+        AstNode *member = n->u.class_decl.members.items[_mi];
         if (member->u.class_member.member_declaration &&
-            member->u.class_member.member_declaration->type == NODE_VARIABLE_DECL && !member->u.class_member.is_static) {
+            member->u.class_member.member_declaration->type == NODE_VARIABLE_DECL &&
+            !member->u.class_member.is_static) {
           AstNode *vdecl = (member->u.class_member.member_declaration);
           if (vdecl->u.var_decl.initializer) {
             expdesc iobj;
@@ -2334,7 +2337,8 @@ static void compile_import_named(CompileCtx *C, AstNode *n) {
   for (int _spi = 0; _spi < n->u.import_named.specifiers.count; _spi++) {
     AstNode *spec = n->u.import_named.specifiers.items[_spi];
     /* getLocalName() returns alias if present, otherwise importedName */
-    TString *localname = mkstr(C, spec->u.import_spec.alias ? spec->u.import_spec.alias : spec->u.import_spec.imported_name);
+    TString *localname = mkstr(C, spec->u.import_spec.alias ? spec->u.import_spec.alias
+                                                            : spec->u.import_spec.imported_name);
     ast_new_localvar(C, localname);
 
     expdesc tmp;

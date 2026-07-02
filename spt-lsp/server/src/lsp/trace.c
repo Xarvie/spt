@@ -13,4 +13,5 @@ static FILE *open_env(const char *var) {
 }
 
 FILE *spt_open_log(void) { return open_env("SPT_LSP_LOG"); }
+
 FILE *spt_open_record(void) { return open_env("SPT_LSP_RECORD"); }

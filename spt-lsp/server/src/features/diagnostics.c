@@ -26,12 +26,13 @@ static int token_byte_len_at(const SptLspUnit *u, int line1, int col1) {
 }
 
 /* 添加一条诊断。 */
-static void add_diag(cJSON *arr, const Document *d, int line1, int col1, int len,
-                     int severity, const char *msg) {
+static void add_diag(cJSON *arr, const Document *d, int line1, int col1, int len, int severity,
+                     const char *msg) {
   LspPos start = doc_pos_from_frontend(d, line1, col1);
   size_t sb = doc_offset_at(d, start);
   size_t eb = sb + (len > 0 ? (size_t)len : 1);
-  if (eb > d->text_len) eb = d->text_len;
+  if (eb > d->text_len)
+    eb = d->text_len;
   LspPos end = doc_pos_at(d, eb);
   LspRange r = {start, end};
 
@@ -48,13 +49,13 @@ static void add_diag(cJSON *arr, const Document *d, int line1, int col1, int len
 /* 已知内建函数名（不报未定义）。 */
 static int is_builtin_name(const char *name) {
   static const char *builtins[] = {
-    "print", "assert", "type", "len", "push", "pop", "keys", "values",
-    "has", "delete", "error", "tostring", "toint", "tofloat", "str",
-    "int", "float", "bool", "sqrt", "pow", "abs", "min", "max", "sum",
-    "range", "open", "close", "read", "write", "clock", "time", NULL
-  };
+      "print", "assert", "type",  "len",      "push",  "pop",     "keys", "values",
+      "has",   "delete", "error", "tostring", "toint", "tofloat", "str",  "int",
+      "float", "bool",   "sqrt",  "pow",      "abs",   "min",     "max",  "sum",
+      "range", "open",   "close", "read",     "write", "clock",   "time", NULL};
   for (int i = 0; builtins[i]; i++)
-    if (strcmp(name, builtins[i]) == 0) return 1;
+    if (strcmp(name, builtins[i]) == 0)
+      return 1;
   return 0;
 }
 
@@ -63,8 +64,10 @@ static int is_in_import(const SptLspUnit *u, int ti) {
   /* 向前查找，遇到 import/from 关键字且中间无 ; 则认为在 import 语句中。 */
   for (int j = ti - 1; j >= 0; j--) {
     SptTokenKind k = u->tokens[j].kind;
-    if (k == TOK_SEMICOLON) return 0;
-    if (k == TOK_IMPORT || k == TOK_FROM || k == TOK_AS) return 1;
+    if (k == TOK_SEMICOLON)
+      return 0;
+    if (k == TOK_IMPORT || k == TOK_FROM || k == TOK_AS)
+      return 1;
   }
   return 0;
 }
@@ -72,31 +75,37 @@ static int is_in_import(const SptLspUnit *u, int ti) {
 static void check_undefined_names(const SptLspUnit *u, const Document *d, cJSON *arr) {
   for (int i = 0; i < u->token_count; i++) {
     const SptToken *t = &u->tokens[i];
-    if (t->kind != TOK_IDENTIFIER) continue;
+    if (t->kind != TOK_IDENTIFIER)
+      continue;
 
     /* 跳过成员访问（前驱为 . 或 :）。 */
     if (i > 0) {
       SptTokenKind pk = u->tokens[i - 1].kind;
-      if (pk == TOK_DOT || pk == TOK_COLON) continue;
+      if (pk == TOK_DOT || pk == TOK_COLON)
+        continue;
     }
 
     /* 跳过 import 语句中的标识符。 */
-    if (is_in_import(u, i)) continue;
+    if (is_in_import(u, i))
+      continue;
 
     /* 提取名字。 */
     char name[256];
     size_t nl = (size_t)t->length;
-    if (nl >= sizeof name) nl = sizeof name - 1;
+    if (nl >= sizeof name)
+      nl = sizeof name - 1;
     memcpy(name, t->lexeme, nl);
     name[nl] = '\0';
 
     /* 跳过内建函数。 */
-    if (is_builtin_name(name)) continue;
+    if (is_builtin_name(name))
+      continue;
 
     /* 用 sem_resolve 检查是否可解析。 */
     size_t byte_off = 0;
     int li = t->line - 1;
-    if (li < 0) li = 0;
+    if (li < 0)
+      li = 0;
     if (li < d->line_count)
       byte_off = d->line_starts[li] + (size_t)(t->column > 0 ? t->column - 1 : 0);
 
@@ -123,21 +132,26 @@ static void arity_walk_block(ArityCtx *c, const AstNode *block);
 
 static void check_call_arity(ArityCtx *c, const AstNode *call) {
   const AstNode *callee = call->u.call.func;
-  if (!callee || callee->type != NODE_IDENTIFIER || !callee->u.ident.name) return;
+  if (!callee || callee->type != NODE_IDENTIFIER || !callee->u.ident.name)
+    return;
 
   const AstNode *fn = sem_find_function(c->u, callee->u.ident.name);
-  if (!fn) return;
+  if (!fn)
+    return;
 
   int nargs = call->u.call.args.count;
   int nparams = fn->u.func_decl.params.count;
 
   /* 变参函数不检查。 */
-  if (fn->u.func_decl.is_variadic) return;
+  if (fn->u.func_decl.is_variadic)
+    return;
 
   /* 差值 > 1 才报告（克制）。 */
   int diff = nargs - nparams;
-  if (diff < 0) diff = -diff;
-  if (diff <= 1) return;
+  if (diff < 0)
+    diff = -diff;
+  if (diff <= 1)
+    return;
 
   char msg[300];
   snprintf(msg, sizeof msg, "参数数量不符: 期望 %d 个, 实际 %d 个", nparams, nargs);
@@ -145,7 +159,8 @@ static void check_call_arity(ArityCtx *c, const AstNode *call) {
 }
 
 static void arity_walk_expr(ArityCtx *c, const AstNode *expr) {
-  if (!expr) return;
+  if (!expr)
+    return;
   switch (expr->type) {
   case NODE_FUNCTION_CALL:
     check_call_arity(c, expr);
@@ -173,7 +188,8 @@ static void arity_walk_expr(ArityCtx *c, const AstNode *expr) {
 }
 
 static void arity_walk_stmt(ArityCtx *c, const AstNode *stmt) {
-  if (!stmt) return;
+  if (!stmt)
+    return;
   switch (stmt->type) {
   case NODE_BLOCK:
     arity_walk_block(c, stmt);
@@ -238,7 +254,8 @@ static void arity_walk_stmt(ArityCtx *c, const AstNode *stmt) {
 }
 
 static void arity_walk_block(ArityCtx *c, const AstNode *block) {
-  if (!block || block->type != NODE_BLOCK) return;
+  if (!block || block->type != NODE_BLOCK)
+    return;
   const AstList *st = &block->u.block.statements;
   for (int i = 0; i < st->count; i++)
     arity_walk_stmt(c, st->items[i]);

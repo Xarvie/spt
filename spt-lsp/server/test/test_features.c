@@ -7,13 +7,19 @@
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
 /* 丢弃服务器主动通知（诊断）。 */
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static int next_id = 100;
 
@@ -30,7 +36,8 @@ static void open_doc(LspServer *s, const char *uri, const char *text) {
   cJSON_AddStringToObject(m, "method", "textDocument/didOpen");
   cJSON_AddItemToObject(m, "params", p);
   cJSON *r = lsp_dispatch(s, m);
-  if (r) cJSON_Delete(r);
+  if (r)
+    cJSON_Delete(r);
   cJSON_Delete(m);
 }
 
@@ -60,47 +67,53 @@ static cJSON *posp(const char *uri, int line, int ch) {
 }
 
 static cJSON *find_by_name(cJSON *arr, const char *name) {
-  if (!arr) return NULL;
+  if (!arr)
+    return NULL;
   int n = cJSON_GetArraySize(arr);
   for (int i = 0; i < n; i++) {
     cJSON *it = cJSON_GetArrayItem(arr, i);
     cJSON *nm = cJSON_GetObjectItemCaseSensitive(it, "name");
-    if (nm && nm->valuestring && strcmp(nm->valuestring, name) == 0) return it;
+    if (nm && nm->valuestring && strcmp(nm->valuestring, name) == 0)
+      return it;
   }
   return NULL;
 }
+
 static int array_has_label(cJSON *arr, const char *label) {
-  if (!arr) return 0;
+  if (!arr)
+    return 0;
   int n = cJSON_GetArraySize(arr);
   for (int i = 0; i < n; i++) {
     cJSON *it = cJSON_GetArrayItem(arr, i);
     cJSON *l = cJSON_GetObjectItemCaseSensitive(it, "label");
-    if (l && l->valuestring && strcmp(l->valuestring, label) == 0) return 1;
+    if (l && l->valuestring && strcmp(l->valuestring, label) == 0)
+      return 1;
   }
   return 0;
 }
 
-static const char *DOC =
-    "/// Adds two integers.\n"      /* 0 */
-    "int add(int a, int b) {\n"      /* 1 */
-    "  int sum = a + b;\n"           /* 2 */
-    "  return sum;\n"                /* 3 */
-    "}\n"                            /* 4 */
-    "\n"                             /* 5 */
-    "class Point {\n"                /* 6 */
-    "  int x;\n"                     /* 7 */
-    "  int getX() {\n"               /* 8 */
-    "    return x;\n"                /* 9 */
-    "  }\n"                          /* 10 */
-    "}\n"                            /* 11 */
-    "\n"                             /* 12 */
-    "int main() {\n"                 /* 13 */
-    "  int r = add(1, 2);\n"         /* 14 */
-    "  return r;\n"                  /* 15 */
-    "}\n";                           /* 16 */
+static const char *DOC = "/// Adds two integers.\n"  /* 0 */
+                         "int add(int a, int b) {\n" /* 1 */
+                         "  int sum = a + b;\n"      /* 2 */
+                         "  return sum;\n"           /* 3 */
+                         "}\n"                       /* 4 */
+                         "\n"                        /* 5 */
+                         "class Point {\n"           /* 6 */
+                         "  int x;\n"                /* 7 */
+                         "  int getX() {\n"          /* 8 */
+                         "    return x;\n"           /* 9 */
+                         "  }\n"                     /* 10 */
+                         "}\n"                       /* 11 */
+                         "\n"                        /* 12 */
+                         "int main() {\n"            /* 13 */
+                         "  int r = add(1, 2);\n"    /* 14 */
+                         "  return r;\n"             /* 15 */
+                         "}\n";                      /* 16 */
 
 int main(void) {
-  printf("=== TestFeatures: documentSymbol/hover/definition/references/completion/signature/rename/semanticTokens/format + documentHighlight/foldingRange/selectionRange/prepareRename ===\n");
+  printf("=== TestFeatures: "
+         "documentSymbol/hover/definition/references/completion/signature/rename/semanticTokens/"
+         "format + documentHighlight/foldingRange/selectionRange/prepareRename ===\n");
   LspServer s;
   lsp_server_init(&s);
   lsp_server_set_emit(&s, sink_emit, NULL);
@@ -112,11 +125,17 @@ int main(void) {
   cJSON_AddStringToObject(im, "method", "initialize");
   cJSON *ir = lsp_dispatch(&s, im);
   /* 顺带检查能力广告 */
-  cJSON *caps = ir ? cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(ir, "result"), "capabilities") : NULL;
-  CHECK(caps && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(caps, "hoverProvider")), "advertises hoverProvider");
-  CHECK(caps && cJSON_GetObjectItemCaseSensitive(caps, "completionProvider"), "advertises completionProvider");
-  CHECK(caps && cJSON_GetObjectItemCaseSensitive(caps, "semanticTokensProvider"), "advertises semanticTokensProvider");
-  cJSON_Delete(ir); cJSON_Delete(im);
+  cJSON *caps = ir ? cJSON_GetObjectItemCaseSensitive(
+                         cJSON_GetObjectItemCaseSensitive(ir, "result"), "capabilities")
+                   : NULL;
+  CHECK(caps && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(caps, "hoverProvider")),
+        "advertises hoverProvider");
+  CHECK(caps && cJSON_GetObjectItemCaseSensitive(caps, "completionProvider"),
+        "advertises completionProvider");
+  CHECK(caps && cJSON_GetObjectItemCaseSensitive(caps, "semanticTokensProvider"),
+        "advertises semanticTokensProvider");
+  cJSON_Delete(ir);
+  cJSON_Delete(im);
 
   const char *URI = "file:///main.spt";
   open_doc(&s, URI, DOC);
@@ -145,7 +164,8 @@ int main(void) {
     cJSON *c = cJSON_GetObjectItemCaseSensitive(res, "contents");
     cJSON *v = c ? cJSON_GetObjectItemCaseSensitive(c, "value") : NULL;
     CHECK(v && strstr(v->valuestring, "add("), "hover shows signature add(");
-    if (v && strstr(v->valuestring, "Adds")) printf("    (doc-comment surfaced in hover)\n");
+    if (v && strstr(v->valuestring, "Adds"))
+      printf("    (doc-comment surfaced in hover)\n");
   }
   cJSON_Delete(resp);
 
@@ -242,7 +262,8 @@ int main(void) {
     cJSON *data = cJSON_GetObjectItemCaseSensitive(res, "data");
     int len = data ? cJSON_GetArraySize(data) : 0;
     CHECK(len > 0 && (len % 5) == 0, "semantic tokens data non-empty, multiple of 5");
-  } else CHECK(0, "semanticTokens returns object");
+  } else
+    CHECK(0, "semanticTokens returns object");
   cJSON_Delete(resp);
 
   /* ---- formatting ---- */
@@ -321,7 +342,10 @@ int main(void) {
   }
 
   lsp_server_free(&s);
-  if (failed == 0) { printf("=== TestFeatures: ALL PASS ===\n"); return 0; }
+  if (failed == 0) {
+    printf("=== TestFeatures: ALL PASS ===\n");
+    return 0;
+  }
   printf("=== TestFeatures: %d CHECK(s) FAILED ===\n", failed);
   return 1;
 }

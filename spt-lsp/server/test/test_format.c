@@ -7,10 +7,10 @@
 #define _DEFAULT_SOURCE 1
 #define _XOPEN_SOURCE 700
 
+#include "documents.h"
+#include "lsp_features.h"
 #include "server.h"
 #include "workspace.h"
-#include "lsp_features.h"
-#include "documents.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,12 +24,20 @@
 #endif
 
 static int failed = 0;
-#define CHECK(cond, msg) do { \
-  if (!(cond)) { printf("  FAIL: %s\n", msg); failed = 1; } \
-  else { printf("  OK: %s\n", msg); } \
-} while(0)
+#define CHECK(cond, msg)                                                                           \
+  do {                                                                                             \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed = 1;                                                                                  \
+    } else {                                                                                       \
+      printf("  OK: %s\n", msg);                                                                   \
+    }                                                                                              \
+  } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static cJSON *make_req(int id, const char *method, cJSON *params) {
   cJSON *m = cJSON_CreateObject();
@@ -56,47 +64,50 @@ static void write_file(const char *dir, const char *name, const char *content) {
   snprintf(path, sizeof path, "%s/%s", dir, name);
 #endif
   FILE *f = fopen(path, "wb");
-  if (f) { fputs(content, f); fclose(f); }
+  if (f) {
+    fputs(content, f);
+    fclose(f);
+  }
 }
 
 /* 录制自日志：format_demo.spt 的完整内容 */
 static const char *FORMAT_DEMO_TEXT =
-  "/* format_demo.spt — 格式化测试（P4b）\n"
-  "**\n"
-  "** 测试要点：\n"
-  "**   P4b: 打开此文件后执行 Format Document (Shift+Alt+F)\n"
-  "**   验证：tab 被转为 4 空格，行尾空白被去除，缩进层级正确\n"
-  "**\n"
-  "** 格式化前：包含 tab/space 混合缩进 + 行尾空白 + 不规范缩进\n"
-  "*/\n"
-  "\n"
-  "int f() {\n"
-  "\treturn 1;\n"
-  "  int x = 2;\n"
-  "\tif (true) {\n"
-  "\t\treturn 2;\n"
-  "  }\n"
-  "  for (int i = 0, 10) {\n"
-  "    print(i);\n"
-  "  }\n"
-  "}\n"
-  "\n"
-  "class Demo {\n"
-  "\tint x;\n"
-  "\tint y;\n"
-  "\tvoid __init(int x, int y) {\n"
-  "\t\tthis.x = x;\n"
-  "    this.y = y;\n"
-  "\t}\n"
-  "\tint getX() {\n"
-  "\t\treturn this.x;\n"
-  "\t}\n"
-  "}\n"
-  "\n"
-  "int g(int a,\n"
-  "  int b) {\n"
-  "    return a + b;\n"
-  "  }\n";
+    "/* format_demo.spt — 格式化测试（P4b）\n"
+    "**\n"
+    "** 测试要点：\n"
+    "**   P4b: 打开此文件后执行 Format Document (Shift+Alt+F)\n"
+    "**   验证：tab 被转为 4 空格，行尾空白被去除，缩进层级正确\n"
+    "**\n"
+    "** 格式化前：包含 tab/space 混合缩进 + 行尾空白 + 不规范缩进\n"
+    "*/\n"
+    "\n"
+    "int f() {\n"
+    "\treturn 1;\n"
+    "  int x = 2;\n"
+    "\tif (true) {\n"
+    "\t\treturn 2;\n"
+    "  }\n"
+    "  for (int i = 0, 10) {\n"
+    "    print(i);\n"
+    "  }\n"
+    "}\n"
+    "\n"
+    "class Demo {\n"
+    "\tint x;\n"
+    "\tint y;\n"
+    "\tvoid __init(int x, int y) {\n"
+    "\t\tthis.x = x;\n"
+    "    this.y = y;\n"
+    "\t}\n"
+    "\tint getX() {\n"
+    "\t\treturn this.x;\n"
+    "\t}\n"
+    "}\n"
+    "\n"
+    "int g(int a,\n"
+    "  int b) {\n"
+    "    return a + b;\n"
+    "  }\n";
 
 int main(void) {
   printf("=== TestFormat: formatting replay from IDE log ===\n");
@@ -138,7 +149,8 @@ int main(void) {
     cJSON *params = cJSON_CreateObject();
     cJSON_AddStringToObject(params, "rootUri", rootUri);
     cJSON *resp = lsp_dispatch(&srv, make_req(1, "initialize", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* 触发 workspace 索引 */
@@ -146,7 +158,8 @@ int main(void) {
     cJSON *params = cJSON_CreateObject();
     cJSON_AddStringToObject(params, "query", "");
     cJSON *resp = lsp_dispatch(&srv, make_req(2, "workspace/symbol", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   char file_uri[4096];
@@ -170,7 +183,8 @@ int main(void) {
     cJSON *params = cJSON_CreateObject();
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON *resp = lsp_dispatch(&srv, make_notif("textDocument/didOpen", params));
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* 录制自日志 id=26: textDocument/formatting, insertSpaces=false */
@@ -206,14 +220,21 @@ int main(void) {
           int line = 0;
           while (*p && line < 25) {
             int tabs = 0, spaces = 0;
-            while (*p == '\t') { tabs++; p++; }
-            while (*p == ' ') { spaces++; p++; }
+            while (*p == '\t') {
+              tabs++;
+              p++;
+            }
+            while (*p == ' ') {
+              spaces++;
+              p++;
+            }
             const char *content = p;
-            while (*p && *p != '\n') p++;
-            if (*p == '\n') p++;
+            while (*p && *p != '\n')
+              p++;
+            if (*p == '\n')
+              p++;
             int col = tabs * 4 + spaces;
-            printf("  L%-2d: tabs=%d spaces=%d col=%d  %.*s\n",
-                   line, tabs, spaces, col,
+            printf("  L%-2d: tabs=%d spaces=%d col=%d  %.*s\n", line, tabs, spaces, col,
                    (int)(p - content > 40 ? 40 : p - content), content);
             line++;
           }
@@ -223,8 +244,7 @@ int main(void) {
           /* "    print(i);" (4 spaces, col=4) → "\tprint(i);" (1 tab) */
           const char *pos = strstr(text, "print(i)");
           if (pos) {
-            CHECK(pos > text && pos[-1] == '\t',
-                  "4 spaces before print(i) converted to 1 tab");
+            CHECK(pos > text && pos[-1] == '\t', "4 spaces before print(i) converted to 1 tab");
           } else {
             CHECK(0, "print(i) not found");
           }
@@ -232,8 +252,7 @@ int main(void) {
           /* "    this.y = y;" (4 spaces, col=4) → "\tthis.y = y;" (1 tab) */
           pos = strstr(text, "this.y = y");
           if (pos) {
-            CHECK(pos > text && pos[-1] == '\t',
-                  "4 spaces before this.y converted to 1 tab");
+            CHECK(pos > text && pos[-1] == '\t', "4 spaces before this.y converted to 1 tab");
           } else {
             CHECK(0, "this.y = y not found");
           }
@@ -241,8 +260,7 @@ int main(void) {
           /* "    return a + b;" (4 spaces, col=4) → "\treturn a + b;" (1 tab) */
           pos = strstr(text, "return a + b");
           if (pos) {
-            CHECK(pos > text && pos[-1] == '\t',
-                  "4 spaces before return a+b converted to 1 tab");
+            CHECK(pos > text && pos[-1] == '\t', "4 spaces before return a+b converted to 1 tab");
           } else {
             CHECK(0, "return a + b not found");
           }
@@ -250,8 +268,7 @@ int main(void) {
           /* "  int x = 2;" (2 spaces, col=2) → "\tint x = 2;" (1 tab, 向上对齐到 col=4) */
           pos = strstr(text, "int x = 2");
           if (pos) {
-            CHECK(pos > text && pos[-1] == '\t',
-                  "2 spaces before int x=2 aligned up to 1 tab");
+            CHECK(pos > text && pos[-1] == '\t', "2 spaces before int x=2 aligned up to 1 tab");
           }
 
           /* 行尾空白去除 */
@@ -259,13 +276,16 @@ int main(void) {
           const char *q = text;
           while (*q) {
             const char *eol = q;
-            while (*eol && *eol != '\n') eol++;
+            while (*eol && *eol != '\n')
+              eol++;
             if (eol > q && (eol[-1] == ' ' || eol[-1] == '\t')) {
               trailing_ws = 1;
               break;
             }
-            if (*eol == '\n') q = eol + 1;
-            else break;
+            if (*eol == '\n')
+              q = eol + 1;
+            else
+              break;
           }
           CHECK(!trailing_ws, "no trailing whitespace in formatted text");
         }
@@ -298,15 +318,18 @@ int main(void) {
           /* tab 应转为 4 spaces: "return 1" 前应有 4 spaces */
           const char *pos = strstr(text, "return 1");
           if (pos) {
-            CHECK(pos >= text + 4 && pos[-1] == ' ' && pos[-2] == ' ' &&
-                       pos[-3] == ' ' && pos[-4] == ' ',
+            CHECK(pos >= text + 4 && pos[-1] == ' ' && pos[-2] == ' ' && pos[-3] == ' ' &&
+                      pos[-4] == ' ',
                   "tab before return 1 converted to 4 spaces");
           }
 
           /* 不应有 tab 字符 */
           int has_tab = 0;
           for (size_t i = 0; text[i]; i++) {
-            if (text[i] == '\t') { has_tab = 1; break; }
+            if (text[i] == '\t') {
+              has_tab = 1;
+              break;
+            }
           }
           CHECK(!has_tab, "no tab characters when insertSpaces=true");
         }

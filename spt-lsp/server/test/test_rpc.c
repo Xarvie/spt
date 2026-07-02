@@ -8,12 +8,12 @@
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
     if (!(cond)) {                                                                                 \
       printf("  FAIL: %s\n", msg);                                                                 \
       failed++;                                                                                    \
-    }                                                                                             \
+    }                                                                                              \
   } while (0)
 
 /* 构造一个测试消息：{"jsonrpc":"2.0","id":<id>,"method":<m>} */

@@ -11,12 +11,12 @@
 #define _DEFAULT_SOURCE 1
 #define _XOPEN_SOURCE 700
 
-#include "server.h"
-#include "workspace.h"
-#include "semantic.h"
-#include "spt_lsp_bridge.h"
-#include "lsp_features.h"
 #include "documents.h"
+#include "lsp_features.h"
+#include "semantic.h"
+#include "server.h"
+#include "spt_lsp_bridge.h"
+#include "workspace.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,12 +31,18 @@
 #endif
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static cJSON *make_req(int id, const char *method, cJSON *params) {
   cJSON *m = cJSON_CreateObject();
@@ -64,20 +70,26 @@ static void write_file(const char *dir, const char *name, const char *content) {
   snprintf(path, sizeof path, "%s/%s", dir, name);
 #endif
   FILE *f = fopen(path, "wb");
-  if (f) { fputs(content, f); fclose(f); }
+  if (f) {
+    fputs(content, f);
+    fclose(f);
+  }
 }
 
 static char *make_temp_dir(char *out, size_t cap) {
 #ifdef _WIN32
   char base[MAX_PATH];
-  if (!GetTempPathA(MAX_PATH, base)) return NULL;
+  if (!GetTempPathA(MAX_PATH, base))
+    return NULL;
   snprintf(out, cap, "%ssptp6_%lu", base, (unsigned long)GetCurrentProcessId());
-  if (!CreateDirectoryA(out, NULL)) return NULL;
+  if (!CreateDirectoryA(out, NULL))
+    return NULL;
   return out;
 #else
   (void)cap;
   snprintf(out, cap, "/tmp/sptp6_%d", (int)getpid());
-  if (mkdir(out, 0777) != 0) return NULL;
+  if (mkdir(out, 0777) != 0)
+    return NULL;
   return out;
 #endif
 }
@@ -91,11 +103,14 @@ static void remove_dir_recursive(const char *path) {
   if (h != INVALID_HANDLE_VALUE) {
     do {
       const char *nm = fd.cFileName;
-      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0) continue;
+      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0)
+        continue;
       char full[MAX_PATH];
       snprintf(full, sizeof full, "%s\\%s", path, nm);
-      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) remove_dir_recursive(full);
-      else DeleteFileA(full);
+      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        remove_dir_recursive(full);
+      else
+        DeleteFileA(full);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
   }
@@ -103,7 +118,8 @@ static void remove_dir_recursive(const char *path) {
 #else
   char cmd[4200];
   snprintf(cmd, sizeof cmd, "rm -rf %s", path);
-  if (system(cmd) != 0) { /* best-effort */ }
+  if (system(cmd) != 0) { /* best-effort */
+  }
 #endif
 }
 
@@ -124,24 +140,27 @@ int main(void) {
   char tmpl[4096];
   char *dir = make_temp_dir(tmpl, sizeof tmpl);
   CHECK(dir != NULL, "make_temp_dir ok");
-  if (!dir) { printf("=== abort ===\n"); return 1; }
+  if (!dir) {
+    printf("=== abort ===\n");
+    return 1;
+  }
 
   /* 项目结构：
      mod.spt    — 定义 class Foo + 函数 bar
      user.spt   — import { bar } from "./mod"; 使用 Foo 类型注解 + 调用 bar
   */
   write_file(dir, "mod.spt",
-    "class Foo {\n"
-    "  int x;\n"
-    "  int get() { return x; }\n"
-    "}\n"
-    "export int bar(int n) { return n + 1; }\n");
+             "class Foo {\n"
+             "  int x;\n"
+             "  int get() { return x; }\n"
+             "}\n"
+             "export int bar(int n) { return n + 1; }\n");
   write_file(dir, "user.spt",
-    "import { bar } from \"./mod\";\n"
-    "int caller() {\n"
-    "  Foo f = Foo(1);\n"
-    "  return bar(f.get());\n"
-    "}\n");
+             "import { bar } from \"./mod\";\n"
+             "int caller() {\n"
+             "  Foo f = Foo(1);\n"
+             "  return bar(f.get());\n"
+             "}\n");
 
   LspServer srv;
   lsp_server_init(&srv);
@@ -171,7 +190,8 @@ int main(void) {
       CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(caps, "documentRangeFormattingProvider")),
             "documentRangeFormattingProvider declared");
     }
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* 打开 user.spt */
@@ -189,22 +209,24 @@ int main(void) {
 
   {
     cJSON *resp = open_doc(&srv, user_uri,
-      "import { bar } from \"./mod\";\n"
-      "int caller() {\n"
-      "  Foo f = Foo(1);\n"
-      "  return bar(f.get());\n"
-      "}\n");
-    if (resp) cJSON_Delete(resp);
+                           "import { bar } from \"./mod\";\n"
+                           "int caller() {\n"
+                           "  Foo f = Foo(1);\n"
+                           "  return bar(f.get());\n"
+                           "}\n");
+    if (resp)
+      cJSON_Delete(resp);
   }
   /* 也打开 mod.spt 以便跨文件功能工作 */
   {
     cJSON *resp = open_doc(&srv, mod_uri,
-      "class Foo {\n"
-      "  int x;\n"
-      "  int get() { return x; }\n"
-      "}\n"
-      "export int bar(int n) { return n + 1; }\n");
-    if (resp) cJSON_Delete(resp);
+                           "class Foo {\n"
+                           "  int x;\n"
+                           "  int get() { return x; }\n"
+                           "}\n"
+                           "export int bar(int n) { return n + 1; }\n");
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* ---- 6a: typeDefinition ---- */
@@ -241,7 +263,8 @@ int main(void) {
         printf("  typeDefinition uri = %s\n", uri->valuestring);
       }
     }
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* ---- 6b: declaration ---- */
@@ -264,9 +287,11 @@ int main(void) {
     if (result && cJSON_IsObject(result)) {
       cJSON *uri = cJSON_GetObjectItemCaseSensitive(result, "uri");
       CHECK(uri && cJSON_IsString(uri), "declaration has uri");
-      if (uri) printf("  declaration uri = %s\n", uri->valuestring);
+      if (uri)
+        printf("  declaration uri = %s\n", uri->valuestring);
     }
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* ---- 6c: documentLink ---- */
@@ -288,10 +313,12 @@ int main(void) {
         cJSON *link = cJSON_GetArrayItem(result, 0);
         cJSON *target = cJSON_GetObjectItemCaseSensitive(link, "target");
         CHECK(target && cJSON_IsString(target), "documentLink has target");
-        if (target) printf("  documentLink target = %s\n", target->valuestring);
+        if (target)
+          printf("  documentLink target = %s\n", target->valuestring);
       }
     }
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* ---- 6d: callHierarchy ---- */
@@ -324,7 +351,8 @@ int main(void) {
         /* outgoingCalls：caller 调用了 bar 和 Foo */
         cJSON *out_params = cJSON_CreateObject();
         cJSON_AddItemToObject(out_params, "item", cJSON_Duplicate(item, 1));
-        cJSON *out_resp = lsp_dispatch(&srv, make_req(14, "callHierarchy/outgoingCalls", out_params));
+        cJSON *out_resp =
+            lsp_dispatch(&srv, make_req(14, "callHierarchy/outgoingCalls", out_params));
         CHECK(out_resp != NULL, "outgoingCalls response");
         cJSON *out_result = cJSON_GetObjectItemCaseSensitive(out_resp, "result");
         if (out_result && cJSON_IsArray(out_result)) {
@@ -332,17 +360,20 @@ int main(void) {
           printf("  outgoingCalls count = %d\n", on);
           CHECK(on >= 1, "outgoingCalls returns at least one call");
         }
-        if (out_resp) cJSON_Delete(out_resp);
+        if (out_resp)
+          cJSON_Delete(out_resp);
 
         /* incomingCalls：谁调用了 caller？（目前无人调用，应为空） */
         cJSON *in_params = cJSON_CreateObject();
         cJSON_AddItemToObject(in_params, "item", cJSON_Duplicate(item, 1));
         cJSON *in_resp = lsp_dispatch(&srv, make_req(15, "callHierarchy/incomingCalls", in_params));
         CHECK(in_resp != NULL, "incomingCalls response");
-        if (in_resp) cJSON_Delete(in_resp);
+        if (in_resp)
+          cJSON_Delete(in_resp);
       }
     }
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* ---- 6e: rangeFormatting + semanticTokens/range ---- */
@@ -371,7 +402,8 @@ int main(void) {
     CHECK(resp != NULL, "rangeFormatting response");
     cJSON *result = cJSON_GetObjectItemCaseSensitive(resp, "result");
     CHECK(result && cJSON_IsArray(result), "rangeFormatting result is array");
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
 
     /* semanticTokens/range：只返回 range 内的 token。 */
     cJSON *st_params = cJSON_CreateObject();
@@ -388,16 +420,19 @@ int main(void) {
     cJSON_AddItemToObject(st_rng, "start", st_start);
     cJSON_AddItemToObject(st_rng, "end", st_end);
     cJSON_AddItemToObject(st_params, "range", st_rng);
-    cJSON *st_resp = lsp_dispatch(&srv, make_req(17, "textDocument/semanticTokens/range", st_params));
+    cJSON *st_resp =
+        lsp_dispatch(&srv, make_req(17, "textDocument/semanticTokens/range", st_params));
     CHECK(st_resp != NULL, "semanticTokens/range response");
     cJSON *st_result = cJSON_GetObjectItemCaseSensitive(st_resp, "result");
     CHECK(st_result && cJSON_IsObject(st_result), "semanticTokens/range result is object");
     if (st_result) {
       cJSON *data = cJSON_GetObjectItemCaseSensitive(st_result, "data");
       CHECK(data && cJSON_IsArray(data), "semanticTokens/range has data array");
-      if (data) printf("  semanticTokens/range data count = %d\n", cJSON_GetArraySize(data));
+      if (data)
+        printf("  semanticTokens/range data count = %d\n", cJSON_GetArraySize(data));
     }
-    if (st_resp) cJSON_Delete(st_resp);
+    if (st_resp)
+      cJSON_Delete(st_resp);
   }
 
   lsp_server_free(&srv);

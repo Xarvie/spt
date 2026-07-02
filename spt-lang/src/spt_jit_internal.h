@@ -21,10 +21,10 @@ typedef int (*lua_CFunction)(lua_State *L);
    receiver is loop-invariant, so at entry we pin its metatable (the class) and
    re-resolve the method name to the same proto. */
 typedef struct SPTMethodId {
-  int recv_slot;     /* absolute receiver slot (R[B] of SELF) */
-  void *class_mt;    /* Table* of the expected class metatable */
-  void *key;         /* TString* of the method name */
-  Proto *proto;      /* expected resolved method proto */
+  int recv_slot;  /* absolute receiver slot (R[B] of SELF) */
+  void *class_mt; /* Table* of the expected class metatable */
+  void *key;      /* TString* of the method name */
+  Proto *proto;   /* expected resolved method proto */
 } SPTMethodId;
 
 /* Field layout entry for multi-write method traces: each this.<field> accessed
@@ -35,8 +35,8 @@ typedef struct SPTMethodId {
    write restriction is lifted). The receiver is identified by methods[0]
    (multi-write traces are single-method). */
 typedef struct {
-  void *key;            /* TString* field name */
-  uint8_t value_type;   /* expected SPTType at trace entry */
+  void *key;          /* TString* field name */
+  uint8_t value_type; /* expected SPTType at trace entry */
 } SPTFieldLayout;
 
 /* One saved caller frame for nested inlining. Pushed at OP_CALL inline entry,
@@ -47,17 +47,17 @@ typedef struct {
    stub pushes a real callee CI so the interpreter resumes at the in-callee exit
    PC without re-executing the call. */
 typedef struct SPTInlineFrame {
-  Proto *p;                        /* caller proto */
-  const TValue *k;                 /* caller constant table */
-  LClosure *cl;                    /* caller closure */
-  const Instruction *pc;           /* caller PC just after the CALL */
-  int frame_base;                  /* caller frame_base */
-  int call_result_slot;            /* absolute reg_map slot for return value */
-  const Instruction *method_self_pc;  /* SELF PC for resume-at-SELF (callee) */
-  int method_resume_snap;          /* shared snapshot for in-method guards */
-  int multiwrite_mode;             /* multi-write mode for callee body */
-  Proto *callee_proto;             /* callee proto (for resume-at-call) */
-  int nresults;                    /* nresults from CALL (C operand - 1) */
+  Proto *p;                          /* caller proto */
+  const TValue *k;                   /* caller constant table */
+  LClosure *cl;                      /* caller closure */
+  const Instruction *pc;             /* caller PC just after the CALL */
+  int frame_base;                    /* caller frame_base */
+  int call_result_slot;              /* absolute reg_map slot for return value */
+  const Instruction *method_self_pc; /* SELF PC for resume-at-SELF (callee) */
+  int method_resume_snap;            /* shared snapshot for in-method guards */
+  int multiwrite_mode;               /* multi-write mode for callee body */
+  Proto *callee_proto;               /* callee proto (for resume-at-call) */
+  int nresults;                      /* nresults from CALL (C operand - 1) */
 } SPTInlineFrame;
 
 /* Per-snapshot resume-at-call info. When a guard inside an inlined callee body
@@ -65,13 +65,13 @@ typedef struct SPTInlineFrame {
    interpreter resumes at the in-callee exit PC. callee_proto == NULL means no
    resume-at-call (root-frame exit, or resume-at-SELF method inline). */
 typedef struct {
-  Proto *callee_proto;        /* NULL = no resume-at-call */
-  int callee_frame_base;      /* absolute slot offset of callee's base (func+1) */
-  const Instruction *caller_resume_pc;  /* caller PC after CALL */
-  int nresults;               /* expected return values from CALL */
-  LClosure *callee_cl;        /* callee closure to write to func slot (the CALL's
-                                 A register may have been overwritten by the
-                                 inlined result in the snapshot) */
+  Proto *callee_proto;                 /* NULL = no resume-at-call */
+  int callee_frame_base;               /* absolute slot offset of callee's base (func+1) */
+  const Instruction *caller_resume_pc; /* caller PC after CALL */
+  int nresults;                        /* expected return values from CALL */
+  LClosure *callee_cl;                 /* callee closure to write to func slot (the CALL's
+                                          A register may have been overwritten by the
+                                          inlined result in the snapshot) */
 } SPTResumeInfo;
 
 /* =====================================================================
@@ -79,11 +79,11 @@ typedef struct {
 ** ===================================================================== */
 
 struct SPTTrace {
-  Proto *proto;            /* Proto this trace was recorded from */
-  int pc_offset;           /* PC offset from proto->code (loop header) */
-  void *code;              /* executable code */
-  size_t code_size;        /* code size */
-  int nrefs;               /* reference count */
+  Proto *proto;     /* Proto this trace was recorded from */
+  int pc_offset;    /* PC offset from proto->code (loop header) */
+  void *code;       /* executable code */
+  size_t code_size; /* code size */
+  int nrefs;        /* reference count */
 
   /* IR (kept for debugging/recompilation) */
   SPTIRBuilder ir;
@@ -173,10 +173,10 @@ typedef struct {
   Proto *proto;
   int pc_offset;
   uint16_t counter;
-  uint16_t aborts;  /* times recording aborted here; blacklist once it's high */
+  uint16_t aborts;        /* times recording aborted here; blacklist once it's high */
   uint16_t runtime_fails; /* times a compiled trace was discarded for excessive
                               runtime guard failures; contributes to blacklist */
-  SPTTrace *trace;  /* compiled trace, if any */
+  SPTTrace *trace;        /* compiled trace, if any */
 } SPTHotEntry;
 
 /* =====================================================================
@@ -184,19 +184,19 @@ typedef struct {
 ** ===================================================================== */
 
 struct SPTJitState {
-  int mode;                /* SPT_JIT_MODE_* */
+  int mode; /* SPT_JIT_MODE_* */
   SPTJitStats stats;
 
-  uint16_t hot_threshold;  /* trips before recording (configurable) */
+  uint16_t hot_threshold;      /* trips before recording (configurable) */
   uint32_t side_hot_threshold; /* parent-exit taken-count before a side trace */
-  int side_min_ir;         /* min IR size to keep a side trace (amortize linking) */
-  int unroll_max;          /* max inner-loop trip count to unroll inline (0=off) */
-  int debug;               /* emit diagnostics to stderr */
+  int side_min_ir;             /* min IR size to keep a side trace (amortize linking) */
+  int unroll_max;              /* max inner-loop trip count to unroll inline (0=off) */
+  int debug;                   /* emit diagnostics to stderr */
 
   /* Hot loop detection: hash table keyed by (proto, pc_offset) */
   SPTHotEntry *hot_table;
-  int hot_size;            /* number of slots (power of 2) */
-  int hot_count;           /* number of entries */
+  int hot_size;  /* number of slots (power of 2) */
+  int hot_count; /* number of entries */
 
   /* Trace free list (for reuse) */
   SPTTrace *trace_freelist;
@@ -209,7 +209,7 @@ struct SPTJitState {
   int rec_inst_count;
 
   /* Executable code arena */
-  uint8_t *code_buf;       /* executable memory pool */
+  uint8_t *code_buf; /* executable memory pool */
   size_t code_buf_size;
   size_t code_buf_used;
 };

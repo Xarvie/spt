@@ -913,7 +913,8 @@ LUALIB_API const char *luaL_tolstring(lua_State *L, int idx, size_t *len) {
       luaL_addchar(&b, '[');
       lua_Integer n = (lua_Integer)lua_rawlen(L, idx);
       for (lua_Integer i = 0; i < n; i++) {
-        if (i > 0) luaL_addlstring(&b, ", ", 2);
+        if (i > 0)
+          luaL_addlstring(&b, ", ", 2);
         lua_geti(L, idx, i);
         luaL_tolstring(L, -1, NULL);
         lua_remove(L, -2);
@@ -930,15 +931,16 @@ LUALIB_API const char *luaL_tolstring(lua_State *L, int idx, size_t *len) {
       lua_Integer count = 0;
       lua_pushnil(L);
       while (lua_next(L, idx)) {
-        if (count > 0) luaL_addlstring(&b, ", ", 2);
-        lua_pushvalue(L, -2);          /* copy key */
-        luaL_tolstring(L, -1, NULL);   /* key string */
-        lua_remove(L, -2);             /* remove key copy */
-        luaL_addvalue(&b);             /* pop key string */
+        if (count > 0)
+          luaL_addlstring(&b, ", ", 2);
+        lua_pushvalue(L, -2);        /* copy key */
+        luaL_tolstring(L, -1, NULL); /* key string */
+        lua_remove(L, -2);           /* remove key copy */
+        luaL_addvalue(&b);           /* pop key string */
         luaL_addlstring(&b, ": ", 2);
-        luaL_tolstring(L, -1, NULL);   /* value string */
-        luaL_addvalue(&b);             /* pop value string */
-        lua_pop(L, 1);                 /* pop value, keep key */
+        luaL_tolstring(L, -1, NULL); /* value string */
+        luaL_addvalue(&b);           /* pop value string */
+        lua_pop(L, 1);               /* pop value, keep key */
         count++;
       }
       luaL_addchar(&b, '}');
@@ -1008,9 +1010,9 @@ LUALIB_API void luaL_requiref(lua_State *L, const char *modname, lua_CFunction o
   if (!lua_toboolean(L, -1)) {  /* package not already loaded? */
     lua_pop(L, 1);              /* remove field */
     lua_pushcfunction(L, openf);
-    lua_pushnil(L);                   /* receiver 垫片 (slot 0) */
-    lua_pushstring(L, modname);       /* argument to open function */
-    lua_call(L, 2, 1);               /* 2 args: receiver + modname */
+    lua_pushnil(L);               /* receiver 垫片 (slot 0) */
+    lua_pushstring(L, modname);   /* argument to open function */
+    lua_call(L, 2, 1);            /* 2 args: receiver + modname */
     lua_pushvalue(L, -1);         /* make copy of module (call result) */
     lua_setfield(L, -3, modname); /* LOADED[modname] = module */
   }

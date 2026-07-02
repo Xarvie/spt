@@ -21,18 +21,13 @@
 ** Standard Libraries. (Must be listed in the same ORDER of their
 ** respective constants LUA_<libname>K.)
 */
-static const luaL_Reg stdlibs[] = {{LUA_GNAME, luaopen_base},
-                                   {LUA_LOADLIBNAME, luaopen_package},
-                                   {LUA_COLIBNAME, luaopen_coroutine},
-                                   {LUA_DBLIBNAME, luaopen_debug},
-                                   {LUA_IOLIBNAME, luaopen_io},
-                                   {LUA_MATHLIBNAME, luaopen_math},
-                                   {LUA_OSLIBNAME, luaopen_os},
-                                   {LUA_STRLIBNAME, luaopen_string},
-                                   {LUA_LISTLIBNAME, luaopen_list},
-                                   {LUA_MAPLIBNAME, luaopen_map},
-                                   {LUA_UTF8LIBNAME, luaopen_utf8},
-                                   {NULL, NULL}};
+static const luaL_Reg stdlibs[] = {
+    {LUA_GNAME, luaopen_base},          {LUA_LOADLIBNAME, luaopen_package},
+    {LUA_COLIBNAME, luaopen_coroutine}, {LUA_DBLIBNAME, luaopen_debug},
+    {LUA_IOLIBNAME, luaopen_io},        {LUA_MATHLIBNAME, luaopen_math},
+    {LUA_OSLIBNAME, luaopen_os},        {LUA_STRLIBNAME, luaopen_string},
+    {LUA_LISTLIBNAME, luaopen_list},    {LUA_MAPLIBNAME, luaopen_map},
+    {LUA_UTF8LIBNAME, luaopen_utf8},    {NULL, NULL}};
 
 /*
 ** require and preload selected standard libraries

@@ -292,17 +292,37 @@ static int luaB_type(lua_State *L) {
   int t = lua_type(L, 2);
   luaL_argcheck(L, t != LUA_TNONE, 2, "value expected");
   switch (t) {
-    case LUA_TNIL:           lua_pushliteral(L, "null"); break;
-    case LUA_TBOOLEAN:       lua_pushliteral(L, "bool"); break;
-    case LUA_TNUMBER:        lua_pushstring(L, lua_isinteger(L, 2) ? "int" : "float"); break;
-    case LUA_TSTRING:        lua_pushliteral(L, "str"); break;
-    case LUA_TTABLE:         lua_pushliteral(L, "map"); break;
-    case LUA_TARRAY:         lua_pushliteral(L, "list"); break;
-    case LUA_TFUNCTION:      lua_pushliteral(L, "fn"); break;
-    case LUA_TTHREAD:        lua_pushliteral(L, "coro"); break;
-    case LUA_TUSERDATA:
-    case LUA_TLIGHTUSERDATA: lua_pushliteral(L, "userdata"); break;
-    default:                 lua_pushliteral(L, "no value"); break;
+  case LUA_TNIL:
+    lua_pushliteral(L, "null");
+    break;
+  case LUA_TBOOLEAN:
+    lua_pushliteral(L, "bool");
+    break;
+  case LUA_TNUMBER:
+    lua_pushstring(L, lua_isinteger(L, 2) ? "int" : "float");
+    break;
+  case LUA_TSTRING:
+    lua_pushliteral(L, "str");
+    break;
+  case LUA_TTABLE:
+    lua_pushliteral(L, "map");
+    break;
+  case LUA_TARRAY:
+    lua_pushliteral(L, "list");
+    break;
+  case LUA_TFUNCTION:
+    lua_pushliteral(L, "fn");
+    break;
+  case LUA_TTHREAD:
+    lua_pushliteral(L, "coro");
+    break;
+  case LUA_TUSERDATA:
+  case LUA_TLIGHTUSERDATA:
+    lua_pushliteral(L, "userdata");
+    break;
+  default:
+    lua_pushliteral(L, "no value");
+    break;
   }
   return 1;
 }
@@ -365,7 +385,10 @@ static int ipairsaux(lua_State *L) {
   /* SPT list (LUA_TARRAY): lua_geti raises an error on out-of-bounds
      (does not return nil), so check the logical length first. */
   if (lua_type(L, 2) == LUA_TARRAY) {
-    if (i >= lua_arraylen(L, 2)) { lua_pushnil(L); return 1; }
+    if (i >= lua_arraylen(L, 2)) {
+      lua_pushnil(L);
+      return 1;
+    }
   }
   lua_pushinteger(L, i);
   return (lua_geti(L, 2, i) == LUA_TNIL) ? 1 : 2;
@@ -396,17 +419,21 @@ static int luaB_ipairs(lua_State *L) {
 static int iter_list_next(lua_State *L) {
   lua_settop(L, 3);
   lua_Integer k;
-  if (lua_isnil(L, 3))            /* prev=nil -> start at 0 */
+  if (lua_isnil(L, 3)) /* prev=nil -> start at 0 */
     k = 0;
   else {
     k = luaL_checkinteger(L, 3) + 1;
-    if (k < 0) luaL_error(L, "invalid key to iter");
+    if (k < 0)
+      luaL_error(L, "invalid key to iter");
   }
   /* lua_geti on a list raises an error on out-of-bounds (does not return
      nil), so check the logical length first — same pattern as ipairsaux. */
-  if (k >= lua_arraylen(L, 2)) { lua_pushnil(L); return 1; }
-  lua_pushinteger(L, k);          /* new key */
-  lua_geti(L, 2, k);             /* value (k < loglen, in bounds) */
+  if (k >= lua_arraylen(L, 2)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushinteger(L, k); /* new key */
+  lua_geti(L, 2, k);     /* value (k < loglen, in bounds) */
   return 2;
 }
 
@@ -457,6 +484,7 @@ static int luaB_iter(lua_State *L) {
    (these are file-static, so the accessors must live here, like
    spt_jit_pairs_next). */
 lua_CFunction spt_jit_iter_list_next(void) { return iter_list_next; }
+
 lua_CFunction spt_jit_iter_map_next(void) { return iter_map_next; }
 
 static int load_aux(lua_State *L, int status, int envidx) {
@@ -554,7 +582,7 @@ static int dofilecont(lua_State *L, int d1, lua_KContext d2) {
 /* luaB_dofile - receiver is arg1, fname is arg2 */
 static int luaB_dofile(lua_State *L) {
   const char *fname = luaL_optstring(L, 2, NULL);
-  lua_settop(L, 1);  /* keep only receiver; fname already captured as C string */
+  lua_settop(L, 1); /* keep only receiver; fname already captured as C string */
   if (l_unlikely(luaL_loadfile(L, fname) != LUA_OK))
     return lua_error(L);
   lua_callk(L, 0, LUA_MULTRET, 0, dofilecont);

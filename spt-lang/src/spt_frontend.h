@@ -11,7 +11,7 @@
 #ifndef SPT_FRONTEND_H
 #define SPT_FRONTEND_H
 
-#include "luaconf.h"  /* for LUALIB_API */
+#include "luaconf.h" /* for LUALIB_API */
 
 struct AstNode;
 

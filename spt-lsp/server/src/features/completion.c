@@ -14,21 +14,28 @@
 #include <string.h>
 
 static const char *const KEYWORDS[] = {
-    "int", "float", "number", "str", "bool", "any", "void", "null", "list", "map",
-    "function", "coro", "vars", "if", "else", "while", "for", "break", "continue",
-    "return", "defer", "true", "false", "const", "auto", "global", "static",
-    "import", "as", "from", "export", "declare", "class"};
+    "int",      "float",    "number", "str",    "bool",    "any",   "void",  "null",   "list",
+    "map",      "function", "coro",   "vars",   "if",      "else",  "while", "for",    "break",
+    "continue", "return",   "defer",  "true",   "false",   "const", "auto",  "global", "static",
+    "import",   "as",       "from",   "export", "declare", "class"};
 static const int NKW = (int)(sizeof(KEYWORDS) / sizeof(KEYWORDS[0]));
 
 static int sym_to_cik(int kind) {
   switch (kind) {
-  case LSP_SK_FUNCTION: return LSP_CIK_FUNCTION;
-  case LSP_SK_METHOD: return LSP_CIK_METHOD;
-  case LSP_SK_CLASS: return LSP_CIK_CLASS;
-  case LSP_SK_FIELD: return LSP_CIK_FIELD;
-  case LSP_SK_CONSTANT: return LSP_CIK_CONSTANT;
-  case LSP_SK_MODULE: return LSP_CIK_MODULE;
-  default: return LSP_CIK_VARIABLE;
+  case LSP_SK_FUNCTION:
+    return LSP_CIK_FUNCTION;
+  case LSP_SK_METHOD:
+    return LSP_CIK_METHOD;
+  case LSP_SK_CLASS:
+    return LSP_CIK_CLASS;
+  case LSP_SK_FIELD:
+    return LSP_CIK_FIELD;
+  case LSP_SK_CONSTANT:
+    return LSP_CIK_CONSTANT;
+  case LSP_SK_MODULE:
+    return LSP_CIK_MODULE;
+  default:
+    return LSP_CIK_VARIABLE;
   }
 }
 
@@ -37,10 +44,12 @@ static int sym_to_cik(int kind) {
 /* 从函数 detail（如 "int add(int a, int b)"）提取参数名，生成调用 snippet。
    输出如 "add(${1:a}, ${2:b})"。失败时返回 0（调用方退化为纯 label）。 */
 static int func_call_snippet(const char *name, const char *detail, char *out, size_t cap) {
-  if (!detail) return 0;
+  if (!detail)
+    return 0;
   /* 找到 '(' */
   const char *lp = strchr(detail, '(');
-  if (!lp) return 0;
+  if (!lp)
+    return 0;
   /* 提取括号内参数列表 */
   const char *rp = strrchr(lp, ')');
   if (!rp || rp == lp + 1) {
@@ -60,21 +69,26 @@ static int func_call_snippet(const char *name, const char *detail, char *out, si
     const char *comma = strchr(p, ',');
     const char *end = comma ? comma : rp;
     /* 跳过前导空白 */
-    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    while (p < end && (*p == ' ' || *p == '\t'))
+      p++;
     /* 跳过 "..." 变参 */
-    if (end - p == 3 && strncmp(p, "...", 3) == 0) break;
+    if (end - p == 3 && strncmp(p, "...", 3) == 0)
+      break;
     /* 取最后的标识符部分作为参数名 */
     const char *pname_end = end;
-    while (pname_end > p && (pname_end[-1] == ' ' || pname_end[-1] == '\t')) pname_end--;
+    while (pname_end > p && (pname_end[-1] == ' ' || pname_end[-1] == '\t'))
+      pname_end--;
     const char *pname = pname_end;
-    while (pname > p && (isalnum((unsigned char)pname[-1]) || pname[-1] == '_')) pname--;
+    while (pname > p && (isalnum((unsigned char)pname[-1]) || pname[-1] == '_'))
+      pname--;
     if (pname == pname_end || pname == p) {
       /* 无参数名，用占位符 */
       snprintf(out + pos, cap - pos, "%s${%d:arg%d}", idx > 1 ? ", " : "", idx, idx);
     } else {
       char pname_buf[128];
       size_t pnl = (size_t)(pname_end - pname);
-      if (pnl >= sizeof pname_buf) pnl = sizeof pname_buf - 1;
+      if (pnl >= sizeof pname_buf)
+        pnl = sizeof pname_buf - 1;
       memcpy(pname_buf, pname, pnl);
       pname_buf[pnl] = '\0';
       snprintf(out + pos, cap - pos, "%s${%d:%s}", idx > 1 ? ", " : "", idx, pname_buf);
@@ -110,14 +124,19 @@ static const char *keyword_snippet(const char *kw) {
   return NULL;
 }
 
-typedef struct { cJSON *arr; } CompCtx;
+typedef struct {
+  cJSON *arr;
+} CompCtx;
+
 static void comp_cb(void *ctx, const char *name, int kind, const char *detail) {
-  if (!name) return;
+  if (!name)
+    return;
   cJSON *it = cJSON_CreateObject();
   cJSON_AddStringToObject(it, "label", name);
   int cik = sym_to_cik(kind);
   cJSON_AddNumberToObject(it, "kind", cik);
-  if (detail && detail[0]) cJSON_AddStringToObject(it, "detail", detail);
+  if (detail && detail[0])
+    cJSON_AddStringToObject(it, "detail", detail);
 
   /* Phase 4: 函数/方法生成调用 snippet。 */
   if (cik == LSP_CIK_FUNCTION || cik == LSP_CIK_METHOD) {
@@ -133,15 +152,19 @@ static void comp_cb(void *ctx, const char *name, int kind, const char *detail) {
 /* 从 dot_pos（点号字节位置）向前取接收者标识符名，写入 out。失败返回 0。 */
 static int recv_name(const char *text, size_t dot_pos, char *out, size_t cap) {
   size_t i = dot_pos;
-  while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t')) i--;
+  while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t'))
+    i--;
   size_t end = i;
   while (i > 0) {
     char c = text[i - 1];
-    if (isalnum((unsigned char)c) || c == '_') i--;
-    else break;
+    if (isalnum((unsigned char)c) || c == '_')
+      i--;
+    else
+      break;
   }
   size_t n = end - i;
-  if (n == 0 || n >= cap) return 0;
+  if (n == 0 || n >= cap)
+    return 0;
   memcpy(out, text + i, n);
   out[n] = '\0';
   return 1;
@@ -158,7 +181,10 @@ cJSON *feature_completion(const Document *d, LspPos pos, Workspace *ws) {
     size_t i = off;
     while (i > 0) {
       char c = d->text[i - 1];
-      if (c == ' ' || c == '\t') { i--; continue; }
+      if (c == ' ' || c == '\t') {
+        i--;
+        continue;
+      }
       member = (c == '.' || c == ':');
       dot_pos = i - 1;
       break;
@@ -195,7 +221,8 @@ cJSON *feature_completion(const Document *d, LspPos pos, Workspace *ws) {
         handled = sem_members_of_receiver(u, d, rn, dot_pos, comp_cb, &c);
     }
     /* 兜底：全文件类成员 + declare 模块成员。 */
-    if (!handled) sem_all_members(u, comp_cb, &c);
+    if (!handled)
+      sem_all_members(u, comp_cb, &c);
   } else {
     sem_visible_symbols(u, d, off, comp_cb, &c);
     for (int i = 0; i < NKW; i++) {

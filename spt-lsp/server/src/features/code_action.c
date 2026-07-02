@@ -13,10 +13,10 @@
 
 /* 检查声明节点是否在字节范围内，且缺少 export 前缀。
    返回 1=可修复，0=跳过。kind_out 输出声明类型名（用于标题）。 */
-static int check_export_missing(const AstNode *n, size_t off_s, size_t off_e,
-                                const Document *d, const char **kind_out,
-                                size_t *insert_off_out) {
-  if (!n) return 0;
+static int check_export_missing(const AstNode *n, size_t off_s, size_t off_e, const Document *d,
+                                const char **kind_out, size_t *insert_off_out) {
+  if (!n)
+    return 0;
   size_t decl_off = 0;
   int has_export = 0;
   int is_root = 0;
@@ -45,9 +45,11 @@ static int check_export_missing(const AstNode *n, size_t off_s, size_t off_e,
     return 0;
   }
 
-  if (has_export || !is_root) return 0;
+  if (has_export || !is_root)
+    return 0;
   /* 检查声明位置是否在请求范围内。 */
-  if (decl_off < off_s || decl_off > off_e) return 0;
+  if (decl_off < off_s || decl_off > off_e)
+    return 0;
 
   *kind_out = kind;
   *insert_off_out = decl_off;
@@ -57,7 +59,10 @@ static int check_export_missing(const AstNode *n, size_t off_s, size_t off_e,
 cJSON *feature_code_action(const Document *d, LspRange range) {
   SptLspUnit *u = spt_lsp_parse(d->text, d->text_len);
   cJSON *arr = cJSON_CreateArray();
-  if (!u || !u->root) { spt_lsp_unit_free(u); return arr; }
+  if (!u || !u->root) {
+    spt_lsp_unit_free(u);
+    return arr;
+  }
 
   size_t off_s = doc_offset_at(d, range.start);
   size_t off_e = doc_offset_at(d, range.end);
@@ -68,7 +73,8 @@ cJSON *feature_code_action(const Document *d, LspRange range) {
     AstNode *n = st->items[i];
     const char *kind = NULL;
     size_t insert_off = 0;
-    if (!check_export_missing(n, off_s, off_e, d, &kind, &insert_off)) continue;
+    if (!check_export_missing(n, off_s, off_e, d, &kind, &insert_off))
+      continue;
 
     /* 构造 CodeAction。 */
     cJSON *action = cJSON_CreateObject();

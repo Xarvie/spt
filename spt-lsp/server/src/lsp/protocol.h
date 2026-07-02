@@ -27,12 +27,7 @@ LspPos lsp_pos_from_json(const cJSON *o); /* 读取 {line,character}，缺失为
 LspRange lsp_range_from_json(const cJSON *o);
 
 /* DiagnosticSeverity */
-enum {
-  LSP_SEV_ERROR = 1,
-  LSP_SEV_WARNING = 2,
-  LSP_SEV_INFO = 3,
-  LSP_SEV_HINT = 4
-};
+enum { LSP_SEV_ERROR = 1, LSP_SEV_WARNING = 2, LSP_SEV_INFO = 3, LSP_SEV_HINT = 4 };
 
 /* SymbolKind（LSP 规范子集；我们用到的） */
 enum {

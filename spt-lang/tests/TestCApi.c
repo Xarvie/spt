@@ -111,7 +111,7 @@ int main() {
   lua_pushinteger(L, 30);
   lua_seti(L, -2, 2);
   lua_arraysetlen(L, -1, 3);
-  
+
   lua_getarrayrange(L, -1, 0, 3);
   if (lua_gettop(L) != 4) { /* array + 3 values */
     FAIL("should push 3 values");
@@ -136,7 +136,7 @@ int main() {
   lua_pushinteger(L, 200);
   lua_pushinteger(L, 300);
   lua_setarrayrange(L, -4, 0, 3); /* array at -4, set 3 values starting at 0 */
-  
+
   lua_Integer len = lua_arraylen(L, -1);
   if (len != 3) {
     FAIL("length should be 3");
@@ -167,10 +167,10 @@ int main() {
   lua_pushinteger(L, 2);
   lua_pushinteger(L, 3);
   lua_setarrayrange(L, -4, 0, 3);
-  
+
   lua_createarray(L, 10);
   lua_movearray(L, -2, -1, 0, 0, 3); /* move from first array to second */
-  
+
   lua_Integer len2 = lua_arraylen(L, -1);
   if (len2 != 3) {
     FAIL("destination length should be 3");
@@ -204,7 +204,7 @@ int main() {
   lua_pushinteger(L, 30);
   lua_seti(L, -2, 2);
   lua_arraysetlen(L, -1, 3);
-  
+
   lua_Integer cursor = -1;
   int count = 0;
   lua_Integer sum = 0;
@@ -215,7 +215,7 @@ int main() {
     count++;
     lua_pop(L, 2); /* pop key and value */
   }
-  
+
   if (count != 3 || sum != 60) {
     FAIL("should iterate 3 elements with sum 60");
   } else {
@@ -281,7 +281,7 @@ int main() {
   lua_pushinteger(L, 3);
   lua_seti(L, -2, 2);
   lua_arraysetlen(L, -1, 3);
-  
+
   lua_Unsigned rawlen_val = lua_rawlen(L, -1);
   if (rawlen_val != 3) {
     FAIL("rawlen should be 3");
@@ -331,10 +331,10 @@ int main() {
   lua_pushinteger(L, 4);
   lua_pushinteger(L, 5);
   lua_setarrayrange(L, -6, 0, 5);
-  
+
   /* Move elements from 0-4 to 2-6 (overlapping) */
   lua_movearray(L, -1, -1, 0, 2, 5);
-  
+
   lua_geti(L, -1, 2);
   lua_Integer v1 = lua_tointeger(L, -1);
   lua_pop(L, 1);
@@ -350,7 +350,7 @@ int main() {
   lua_geti(L, -1, 6);
   lua_Integer v5 = lua_tointeger(L, -1);
   lua_pop(L, 1);
-  
+
   if (v1 != 1 || v2 != 2 || v3 != 3 || v4 != 4 || v5 != 5) {
     FAIL("overlapping move should preserve values");
   } else {
@@ -369,7 +369,7 @@ int main() {
   /* Skip index 1 (leave it empty/nil) */
   lua_pushinteger(L, 300);
   lua_seti(L, -2, 2);
-  
+
   lua_getarrayrange(L, -1, 0, 3);
   if (lua_gettop(L) != 4) {
     FAIL("should push 3 values");

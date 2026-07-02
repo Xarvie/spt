@@ -10,25 +10,25 @@
 ** same loop, the compiled trace is entered directly.
 */
 #include "spt_jit.h"
-#include "spt_jit_ir.h"
 #include "spt_jit_asm.h"
 #include "spt_jit_internal.h"
+#include "spt_jit_ir.h"
 
 /* VM internals */
-#include "lua.h"
+#include "ldebug.h"
 #include "lobject.h"
-#include "lstate.h"
 #include "lopcodes.h"
 #include "lopnames.h"
+#include "lstate.h"
 #include "ltable.h"
 #include "ltm.h"
+#include "lua.h"
 #include "lvm.h"
-#include "ldebug.h"
 
-#include <stdlib.h>
-#include <string.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Maps a math-library C function to its unary libm function (double->double),
    or NULL if not a JIT-lowerable strictly-unary math fn. Defined in lmathlib.c
@@ -74,13 +74,14 @@ int sptjit_profiling_active = 0;
 /* The loop currently being profiled and a small per-branch tally keyed by the
 ** comparison instruction's PC offset. Only one loop profiles at a time. */
 #define SPT_PROF_MAX_BRANCH 32
-#define SPT_PROF_ITERS 64      /* branch-direction samples before recording */
-#define SPT_PROF_BUDGET 512    /* abandon a stalled profile after this many hot ticks */
+#define SPT_PROF_ITERS 64   /* branch-direction samples before recording */
+#define SPT_PROF_BUDGET 512 /* abandon a stalled profile after this many hot ticks */
+
 static struct {
   Proto *proto;
-  int pc_start, pc_end;        /* loop body PC-offset range [start, end) */
-  int iters;                   /* samples gathered on the profiled loop */
-  int budget;                  /* remaining hot ticks before abandoning */
+  int pc_start, pc_end; /* loop body PC-offset range [start, end) */
+  int iters;            /* samples gathered on the profiled loop */
+  int budget;           /* remaining hot ticks before abandoning */
   int n;
   int br_pc[SPT_PROF_MAX_BRANCH];   /* comparison PC offset */
   uint32_t ft[SPT_PROF_MAX_BRANCH]; /* fall-through count */
@@ -89,16 +90,22 @@ static struct {
 
 void sptjit_profile_cond(lua_State *L, const Instruction *pc, int fall_through) {
   CallInfo *ci = L->ci;
-  if (!ci) return;
+  if (!ci)
+    return;
   LClosure *cl = clLvalue(s2v(ci->func.p));
-  if (!cl || cl->p != g_prof.proto) return;        /* not the profiled proto */
+  if (!cl || cl->p != g_prof.proto)
+    return; /* not the profiled proto */
   /* `pc` points at the JMP that follows the comparison; the comparison is the
      instruction before it. */
   int cmp_off = (int)((pc - 1) - g_prof.proto->code);
-  if (cmp_off < g_prof.pc_start || cmp_off >= g_prof.pc_end) return;
+  if (cmp_off < g_prof.pc_start || cmp_off >= g_prof.pc_end)
+    return;
   for (int k = 0; k < g_prof.n; k++) {
     if (g_prof.br_pc[k] == cmp_off) {
-      if (fall_through) g_prof.ft[k]++; else g_prof.tk[k]++;
+      if (fall_through)
+        g_prof.ft[k]++;
+      else
+        g_prof.tk[k]++;
       return;
     }
   }
@@ -115,26 +122,26 @@ void sptjit_profile_cond(lua_State *L, const Instruction *pc, int fall_through) 
 ** ===================================================================== */
 
 /* Use offsetof to get exact offsets for struct field access in generated code. */
-#define OFF_L_TOP       offsetof(lua_State, top)
-#define OFF_L_CI        offsetof(lua_State, ci)
-#define OFF_CI_FUNC     offsetof(CallInfo, func)
-#define OFF_CI_TOP      offsetof(CallInfo, top)
-#define OFF_CI_SAVEDPC  offsetof(CallInfo, u.l.savedpc)
-#define OFF_CI_NEXTRA   offsetof(CallInfo, u.l.nextraargs)
-#define OFF_LCLOSURE_P  offsetof(LClosure, p)
-#define OFF_PROTO_K     offsetof(Proto, k)
-#define OFF_PROTO_CODE  offsetof(Proto, code)
+#define OFF_L_TOP offsetof(lua_State, top)
+#define OFF_L_CI offsetof(lua_State, ci)
+#define OFF_CI_FUNC offsetof(CallInfo, func)
+#define OFF_CI_TOP offsetof(CallInfo, top)
+#define OFF_CI_SAVEDPC offsetof(CallInfo, u.l.savedpc)
+#define OFF_CI_NEXTRA offsetof(CallInfo, u.l.nextraargs)
+#define OFF_LCLOSURE_P offsetof(LClosure, p)
+#define OFF_PROTO_K offsetof(Proto, k)
+#define OFF_PROTO_CODE offsetof(Proto, code)
 #define OFF_PROTO_SIZECODE offsetof(Proto, sizecode)
 #define OFF_PROTO_MAXSTACK offsetof(Proto, maxstacksize)
-#define OFF_TVALUE_VAL  offsetof(TValue, value_)
-#define OFF_TVALUE_TT   offsetof(TValue, tt_)
+#define OFF_TVALUE_VAL offsetof(TValue, value_)
+#define OFF_TVALUE_TT offsetof(TValue, tt_)
 #define OFF_TABLE_ASIZE offsetof(Table, asize)
 #define OFF_TABLE_LOGLEN offsetof(Table, loglen)
 #define OFF_TABLE_ARRAY offsetof(Table, array)
-#define OFF_TABLE_MODE  offsetof(Table, mode)
+#define OFF_TABLE_MODE offsetof(Table, mode)
 #define OFF_TABLE_FLAGS offsetof(Table, flags)
 #define OFF_TABLE_METATABLE offsetof(Table, metatable)
-#define OFF_UPVAL_V     offsetof(UpVal, v)
+#define OFF_UPVAL_V offsetof(UpVal, v)
 #define OFF_LCLOSURE_UPVALS offsetof(LClosure, upvals)
 
 /* Stack slot size = sizeof(StackValue) = 16 bytes */
@@ -157,7 +164,8 @@ static uint32_t hot_hash(Proto *p, int pc_offset) {
 
 SPTJitState *sptjit_create(void) {
   SPTJitState *js = (SPTJitState *)calloc(1, sizeof(SPTJitState));
-  if (!js) return NULL;
+  if (!js)
+    return NULL;
   js->mode = SPT_JIT_MODE_OFF;
   js->hot_size = 256; /* power of 2 */
   js->hot_table = (SPTHotEntry *)calloc(js->hot_size, sizeof(SPTHotEntry));
@@ -184,8 +192,7 @@ SPTJitState *sptjit_create(void) {
       /* Enable on "1", "on", "true", "yes" (case-insensitive). Any other
          non-empty value disables. This avoids the ambiguity where 'o' could
          mean both "on" and "off". */
-      if (e[0] == '1' || e[0] == 't' || e[0] == 'T' ||
-          e[0] == 'y' || e[0] == 'Y' ||
+      if (e[0] == '1' || e[0] == 't' || e[0] == 'T' || e[0] == 'y' || e[0] == 'Y' ||
           (e[0] == 'o' && e[1] == 'n') || (e[0] == 'O' && e[1] == 'N')) {
         js->mode = SPT_JIT_MODE_ON;
       }
@@ -194,22 +201,26 @@ SPTJitState *sptjit_create(void) {
     const char *h = getenv("SPT_JIT_HOT");
     if (h && *h) {
       int v = atoi(h);
-      if (v > 0) js->hot_threshold = (uint16_t)(v > 0xFFFE ? 0xFFFE : v);
+      if (v > 0)
+        js->hot_threshold = (uint16_t)(v > 0xFFFE ? 0xFFFE : v);
     }
     const char *sh = getenv("SPT_JIT_SIDE_HOT");
     if (sh && *sh) {
       int v = atoi(sh);
-      if (v > 0) js->side_hot_threshold = (uint32_t)v;
+      if (v > 0)
+        js->side_hot_threshold = (uint32_t)v;
     }
     const char *smi = getenv("SPT_JIT_SIDE_MIN_IR");
     if (smi && *smi) {
       int v = atoi(smi);
-      if (v >= 0) js->side_min_ir = v;
+      if (v >= 0)
+        js->side_min_ir = v;
     }
     const char *um = getenv("SPT_JIT_UNROLL_MAX");
     if (um && *um) {
       int v = atoi(um);
-      if (v >= 0) js->unroll_max = v;
+      if (v >= 0)
+        js->unroll_max = v;
     }
     const char *d = getenv("SPT_JIT_DEBUG");
     js->debug = (d && *d) ? atoi(d) : 0;
@@ -218,14 +229,16 @@ SPTJitState *sptjit_create(void) {
 }
 
 void sptjit_destroy(SPTJitState *js) {
-  if (!js) return;
+  if (!js)
+    return;
   if (js->debug) {
     /* Aggregate per-trace exit counters into the global total (traces live in
        the hot table until shutdown, so this captures every exit taken). */
     js->stats.trace_exits = 0;
     for (int i = 0; i < js->hot_size; i++) {
       SPTTrace *t = js->hot_table[i].trace;
-      if (!t) continue;
+      if (!t)
+        continue;
       for (int s = 0; s < t->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++)
         js->stats.trace_exits += t->exit_count[s];
     }
@@ -235,8 +248,7 @@ void sptjit_destroy(SPTJitState *js) {
             (unsigned long long)js->stats.traces_recorded,
             (unsigned long long)js->stats.traces_compiled,
             (unsigned long long)js->stats.traces_aborted,
-            (unsigned long long)js->stats.trace_entries,
-            (unsigned long long)js->stats.trace_exits,
+            (unsigned long long)js->stats.trace_entries, (unsigned long long)js->stats.trace_exits,
             (unsigned long long)js->stats.trace_guard_fail);
     /* Per-exit breakdown: which exit points are hot. A trace that loops well
        concentrates its exits on the loop-end snapshot; a hot *side* exit marks
@@ -244,19 +256,22 @@ void sptjit_destroy(SPTJitState *js) {
     if (js->debug >= 2) {
       for (int i = 0; i < js->hot_size; i++) {
         SPTTrace *t = js->hot_table[i].trace;
-        if (!t) continue;
+        if (!t)
+          continue;
         int any = 0;
         for (int s = 0; s < t->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++)
-          if (t->exit_count[s]) { any = 1; break; }
-        if (!any) continue;
-        fprintf(stderr, "[JIT] trace proto=%p pc@%d exits:",
-                (void *)t->proto, t->pc_offset);
+          if (t->exit_count[s]) {
+            any = 1;
+            break;
+          }
+        if (!any)
+          continue;
+        fprintf(stderr, "[JIT] trace proto=%p pc@%d exits:", (void *)t->proto, t->pc_offset);
         for (int s = 0; s < t->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++) {
-          if (!t->exit_count[s]) continue;
-          int epc = (t->exit_pcs[s] && t->proto)
-                        ? (int)(t->exit_pcs[s] - t->proto->code) : -1;
-          fprintf(stderr, " [snap%d->pc%d:%llu]", s, epc,
-                  (unsigned long long)t->exit_count[s]);
+          if (!t->exit_count[s])
+            continue;
+          int epc = (t->exit_pcs[s] && t->proto) ? (int)(t->exit_pcs[s] - t->proto->code) : -1;
+          fprintf(stderr, " [snap%d->pc%d:%llu]", s, epc, (unsigned long long)t->exit_count[s]);
         }
         fprintf(stderr, "\n");
       }
@@ -276,16 +291,26 @@ void sptjit_destroy(SPTJitState *js) {
   free(js);
 }
 
-void sptjit_enable(SPTJitState *js) { if (js) js->mode = SPT_JIT_MODE_ON; }
-void sptjit_disable(SPTJitState *js) { if (js) js->mode = SPT_JIT_MODE_OFF; }
+void sptjit_enable(SPTJitState *js) {
+  if (js)
+    js->mode = SPT_JIT_MODE_ON;
+}
+
+void sptjit_disable(SPTJitState *js) {
+  if (js)
+    js->mode = SPT_JIT_MODE_OFF;
+}
+
 int sptjit_is_enabled(const SPTJitState *js) { return js && js->mode != SPT_JIT_MODE_OFF; }
 
 void sptjit_get_stats(const SPTJitState *js, SPTJitStats *stats) {
-  if (js && stats) *stats = js->stats;
+  if (js && stats)
+    *stats = js->stats;
 }
 
 void sptjit_flush_all(SPTJitState *js) {
-  if (!js) return;
+  if (!js)
+    return;
   for (int i = 0; i < js->hot_size; i++) {
     SPTTrace *t = js->hot_table[i].trace;
     if (t) {
@@ -299,7 +324,8 @@ void sptjit_flush_all(SPTJitState *js) {
 }
 
 void sptjit_invalidate_proto(SPTJitState *js, Proto *p) {
-  if (!js) return;
+  if (!js)
+    return;
   for (int i = 0; i < js->hot_size; i++) {
     if (js->hot_table[i].proto == p) {
       SPTTrace *t = js->hot_table[i].trace;
@@ -343,12 +369,12 @@ typedef struct {
   CallInfo *ci;
   LClosure *cl;
   Proto *p;
-  const TValue *k;        /* constants */
-  const Instruction *start_pc;  /* loop header PC */
-  const Instruction *pc;  /* current PC */
-  SPTIRBuilder *ir;       /* IR builder */
-  int inst_count;         /* instructions recorded */
-  int aborted;            /* recording aborted */
+  const TValue *k;             /* constants */
+  const Instruction *start_pc; /* loop header PC */
+  const Instruction *pc;       /* current PC */
+  SPTIRBuilder *ir;            /* IR builder */
+  int inst_count;              /* instructions recorded */
+  int aborted;                 /* recording aborted */
   const Instruction *abort_pc; /* PC where abort happened */
   /* Call inlining: absolute base of the frame currently being recorded.
      0 for the root function; when a pure straight-line leaf call is inlined,
@@ -367,7 +393,7 @@ typedef struct {
   /* Single inlined-call entry check, set on the first inlined CALL. The trace
      may only be entered when this stack slot still holds this exact proto;
      all inlined calls in one trace must share the same (slot, proto). */
-  int inline_fn_slot;       /* -1 = no inlined call yet */
+  int inline_fn_slot; /* -1 = no inlined call yet */
   Proto *inline_fn_proto;
   /* Saved caller state stack for nested inlining (depth <= SPT_JIT_MAX_INLINE_DEPTH).
      Each entry holds the caller's p/k/cl/pc/frame_base/call_result_slot plus the
@@ -379,18 +405,18 @@ typedef struct {
   /* Pending unary-math call set up by an OP_SELF that resolved a known libm
      math method (e.g. math.sqrt): the immediately following OP_CALL on this
      slot is lowered to an SPTIR_FMATH instead of a real call. -1 slot = none. */
-  void *pending_cfn_libm;   /* libm double(*)(double), baked into the FMATH */
-  int pending_cfn_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  void *pending_cfn_libm; /* libm double(*)(double), baked into the FMATH */
+  int pending_cfn_slot;   /* absolute slot R[A] of the SELF/CALL; -1 = none */
   /* Pending binary-math call armed by a preceding SELF (e.g. math.pow): the
      next OP_CALL on this slot is lowered to SPTIR_FMATH2. -1 slot = none. */
-  void *pending_cfn2_libm;  /* libm double(*)(double,double), baked into FMATH2 */
-  int pending_cfn2_slot;    /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  void *pending_cfn2_libm; /* libm double(*)(double,double), baked into FMATH2 */
+  int pending_cfn2_slot;   /* absolute slot R[A] of the SELF/CALL; -1 = none */
   /* Pending string-module call armed by an OP_SELF that resolved string.len /
      string.byte to its C function. The next CALL on this slot lowers to SLEN /
      SBYTE instead of a real call. pending_str_op: 1 = SLEN (string.len(s)),
      2 = SBYTE (string.byte(s,i)). -1 slot = none. */
-  int pending_str_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
-  int pending_str_op;       /* 1 = str_len -> SLEN, 2 = str_byte -> SBYTE */
+  int pending_str_slot; /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  int pending_str_op;   /* 1 = str_len -> SLEN, 2 = str_byte -> SBYTE */
   /* SELF instruction PC, so the SLEN/SBYTE short-string (and SBYTE bounds) guard
      resumes at the SELF -- the interpreter re-executes SELF+CALL and runs the
      real string.len/byte for a long string (or errors identically for an out-of-
@@ -416,7 +442,7 @@ typedef struct {
      strand the outer. CALLs pop in LIFO order (well-nested). */
   int pending_minmax_slot[8];
   int pending_minmax_op[8];
-  int pending_minmax_top;   /* number of live entries; 0 = none */
+  int pending_minmax_top; /* number of live entries; 0 = none */
   /* When a min/max CALL has its result consumed as the trailing argument of an
      enclosing call (a nested clamp), Lua emits the inner call with c == 0
      (multiret: 1 result left on the stack) and the outer call with b == 0 (args
@@ -431,8 +457,8 @@ typedef struct {
      +0.0 and is also correct for NaN). Composes with min/max via the shared
      minmax_multiret_top (abs of a nested clamp, or abs feeding min/max).
      -1 slot = none. */
-  int pending_abs_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
-  void *pending_abs_fabs;   /* libm fabs double(*)(double), for the float path */
+  int pending_abs_slot;   /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  void *pending_abs_fabs; /* libm fabs double(*)(double), for the float path */
   /* Pending math.floor / math.ceil armed by an OP_SELF. The next CALL on this
      slot lowers to a rounding convert: INT arg -> identity (integer is its own
      floor/ceil), FLOAT arg -> SPTIR_TOINT (roundsd + range guard; out-of-range
@@ -449,15 +475,15 @@ typedef struct {
   /* for-each over a List specialized to a native index loop (OP_TFORCALL).
      The iterator function is loop-invariant; the trace pins it to luaB_next
      with a once-per-entry C guard (analogous to inline_fn). -1 slot = none. */
-  int forin_iter_slot;      /* absolute slot of the iterator fn (ra+0); -1 = none */
+  int forin_iter_slot;         /* absolute slot of the iterator fn (ra+0); -1 = none */
   lua_CFunction forin_iter_fn; /* expected iterator (= luaB_next) */
   /* Pending user-method call armed by an OP_SELF that resolved `obj.method` to a
      Lua closure via the class metatable. The next CALL on this slot inlines the
      method's proto with the receiver as callee slot 0. -1 slot = none. */
-  int pending_method_slot;     /* absolute slot R[A] of the SELF/CALL; -1 = none */
-  Proto *pending_method_proto; /* resolved method proto to inline */
-  void *pending_method_cl;     /* the method LClosure (callee_cl for the inline) */
-  const Instruction *pending_method_self_pc;  /* SELF PC, set by SELF, consumed by CALL push */
+  int pending_method_slot;                   /* absolute slot R[A] of the SELF/CALL; -1 = none */
+  Proto *pending_method_proto;               /* resolved method proto to inline */
+  void *pending_method_cl;                   /* the method LClosure (callee_cl for the inline) */
+  const Instruction *pending_method_self_pc; /* SELF PC, set by SELF, consumed by CALL push */
   /* Method entry-guard identities (copied onto the trace). A trace may inline
      several distinct methods (`a.foo(); a.bar()`); each receiver is loop-
      invariant, and at entry we pin its metatable (the class) and re-resolve the
@@ -482,9 +508,9 @@ typedef struct {
      entry; invalidated by any call / array-or-generic write that could alias.
      A non-forwardable GETFIELD after a write in a method body aborts (it would be
      a guard after the write -> double-write risk). */
-  int fwd_base;             /* IR ref of the last SETFIELD's base table; -1 = none */
-  void *fwd_key;            /* TString* key of the last SETFIELD */
-  int fwd_val;              /* IR ref of the last SETFIELD's written value */
+  int fwd_base;  /* IR ref of the last SETFIELD's base table; -1 = none */
+  void *fwd_key; /* TString* key of the last SETFIELD */
+  int fwd_val;   /* IR ref of the last SETFIELD's written value */
   /* Multi-write method mode: when set, GETFIELD/SETFIELD in the current inlined
      method body emit guard-free (entry field-layout guards verify key + type).
      Set at method-inline entry if proto_is_multiwrite_method_inlinable.
@@ -509,20 +535,31 @@ static int condreturn_method_op_ok(OpCode o);
 /* Get current type of a register from the actual stack value. */
 static SPTType rec_value_type(const TValue *v) {
   switch (ttypetag(v)) {
-    case LUA_VNIL:     return SPTT_NIL;
-    case LUA_VFALSE:   return SPTT_FALSE;
-    case LUA_VTRUE:    return SPTT_TRUE;
-    case LUA_VNUMINT:  return SPTT_INT;
-    case LUA_VNUMFLT:  return SPTT_FLT;
-    case LUA_VSHRSTR:
-    case LUA_VLNGSTR:  return SPTT_STR;
-    case LUA_VARRAY:   return SPTT_ARR;
-    case LUA_VTABLE:   return SPTT_TAB;
-    case LUA_VLCL:
-    case LUA_VLCF:
-    case LUA_VCCL:     return SPTT_FUNC;
-    case LUA_VUSERDATA: return SPTT_UD;
-    default:           return SPTT_ANY;
+  case LUA_VNIL:
+    return SPTT_NIL;
+  case LUA_VFALSE:
+    return SPTT_FALSE;
+  case LUA_VTRUE:
+    return SPTT_TRUE;
+  case LUA_VNUMINT:
+    return SPTT_INT;
+  case LUA_VNUMFLT:
+    return SPTT_FLT;
+  case LUA_VSHRSTR:
+  case LUA_VLNGSTR:
+    return SPTT_STR;
+  case LUA_VARRAY:
+    return SPTT_ARR;
+  case LUA_VTABLE:
+    return SPTT_TAB;
+  case LUA_VLCL:
+  case LUA_VLCF:
+  case LUA_VCCL:
+    return SPTT_FUNC;
+  case LUA_VUSERDATA:
+    return SPTT_UD;
+  default:
+    return SPTT_ANY;
   }
 }
 
@@ -536,7 +573,8 @@ static const TValue *rec_table_getstr(Table *t, TString *key) {
     if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key)
       return &n->i_val;
     int nx = (int)n->u.next;
-    if (nx == 0) return NULL;
+    if (nx == 0)
+      return NULL;
     n += nx;
   }
 }
@@ -572,7 +610,8 @@ static int rec_load_reg(SPTRecCtx *rc, int reg) {
     sptir_guard(ir, SPTIR_GUARD_T, ref, (int64_t)t, rec_guard_pc(rc));
   }
 
-  if (reg > ir->maxslot) ir->maxslot = reg;
+  if (reg > ir->maxslot)
+    ir->maxslot = reg;
   return ref;
 }
 
@@ -581,14 +620,21 @@ static int rec_load_k(SPTRecCtx *rc, int kidx) {
   SPTIRBuilder *ir = rc->ir;
   const TValue *v = &rc->k[kidx];
   switch (ttypetag(v)) {
-    case LUA_VNIL:    return sptir_emit(ir, SPTIR_NIL, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
-    case LUA_VFALSE:  return sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
-    case LUA_VTRUE:   return sptir_emit(ir, SPTIR_TRUE, SPTT_TRUE, SPTIR_NULL, SPTIR_NULL, 0);
-    case LUA_VNUMINT: return sptir_kint(ir, ivalue(v));
-    case LUA_VNUMFLT: return sptir_kflt(ir, fltvalue(v));
-    case LUA_VSHRSTR:
-    case LUA_VLNGSTR: return sptir_kstr(ir, (void*)tsvalue(v));
-    default:          return sptir_kptr(ir, (void*)gcvalue(v));
+  case LUA_VNIL:
+    return sptir_emit(ir, SPTIR_NIL, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
+  case LUA_VFALSE:
+    return sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
+  case LUA_VTRUE:
+    return sptir_emit(ir, SPTIR_TRUE, SPTT_TRUE, SPTIR_NULL, SPTIR_NULL, 0);
+  case LUA_VNUMINT:
+    return sptir_kint(ir, ivalue(v));
+  case LUA_VNUMFLT:
+    return sptir_kflt(ir, fltvalue(v));
+  case LUA_VSHRSTR:
+  case LUA_VLNGSTR:
+    return sptir_kstr(ir, (void *)tsvalue(v));
+  default:
+    return sptir_kptr(ir, (void *)gcvalue(v));
   }
 }
 
@@ -606,11 +652,18 @@ static int rec_load_rkc(SPTRecCtx *rc, Instruction i) {
 /* Recover the record-time integer behind an IR ref (constant or stack load). */
 static int rec_eval_int(SPTRecCtx *rc, int ref, lua_Integer *out) {
   SPTIRInst *in = sptir_get(rc->ir, ref);
-  if (!in) return 0;
-  if (in->op == SPTIR_KINT) { *out = (lua_Integer)in->aux; return 1; }
+  if (!in)
+    return 0;
+  if (in->op == SPTIR_KINT) {
+    *out = (lua_Integer)in->aux;
+    return 1;
+  }
   if (in->op == SPTIR_SLOAD) {
     TValue *v = s2v((rc->ci->func.p + 1) + (int)in->aux);
-    if (ttisinteger(v)) { *out = ivalue(v); return 1; }
+    if (ttisinteger(v)) {
+      *out = ivalue(v);
+      return 1;
+    }
   }
   return 0;
 }
@@ -626,33 +679,39 @@ static int rec_eval_int(SPTRecCtx *rc, int ref, lua_Integer *out) {
    level checks the matching tag before using avalue()/hvalue(). */
 static int rec_eval_container(SPTRecCtx *rc, int ref, TValue *out) {
   SPTIRInst *in = sptir_get(rc->ir, ref);
-  if (!in) return 0;
+  if (!in)
+    return 0;
   switch (in->op) {
-    case SPTIR_SLOAD: {
-      *out = *s2v((rc->ci->func.p + 1) + (int)in->aux);
-      return 1;
-    }
-    case SPTIR_GETI: {                       /* element of a List */
-      TValue cont;
-      if (!rec_eval_container(rc, in->op1, &cont) || !ttisarray(&cont)) return 0;
-      Table *arr = avalue(&cont);
-      lua_Integer idx;
-      if (!rec_eval_int(rc, in->op2, &idx)) return 0;
-      if (idx < 0 || (lua_Unsigned)idx >= arr->loglen) return 0;
-      out->tt_ = *getArrTag(arr, (lua_Unsigned)idx);
-      out->value_ = *getArrVal(arr, (lua_Unsigned)idx);
-      return 1;
-    }
-    case SPTIR_GETFIELD: {                   /* field of a Map by interned key */
-      TValue cont;
-      if (!rec_eval_container(rc, in->op1, &cont) || !ttistable(&cont)) return 0;
-      TString *key = (TString *)(intptr_t)in->aux;
-      /* Fills *out with the field value (or a nil tag if absent); the caller's
-         ttisarray/ttistable check then rejects an absent or wrong-typed field. */
-      luaH_getshortstr(rc->L, hvalue(&cont), key, out);
-      return 1;
-    }
-    default: return 0;
+  case SPTIR_SLOAD: {
+    *out = *s2v((rc->ci->func.p + 1) + (int)in->aux);
+    return 1;
+  }
+  case SPTIR_GETI: { /* element of a List */
+    TValue cont;
+    if (!rec_eval_container(rc, in->op1, &cont) || !ttisarray(&cont))
+      return 0;
+    Table *arr = avalue(&cont);
+    lua_Integer idx;
+    if (!rec_eval_int(rc, in->op2, &idx))
+      return 0;
+    if (idx < 0 || (lua_Unsigned)idx >= arr->loglen)
+      return 0;
+    out->tt_ = *getArrTag(arr, (lua_Unsigned)idx);
+    out->value_ = *getArrVal(arr, (lua_Unsigned)idx);
+    return 1;
+  }
+  case SPTIR_GETFIELD: { /* field of a Map by interned key */
+    TValue cont;
+    if (!rec_eval_container(rc, in->op1, &cont) || !ttistable(&cont))
+      return 0;
+    TString *key = (TString *)(intptr_t)in->aux;
+    /* Fills *out with the field value (or a nil tag if absent); the caller's
+       ttisarray/ttistable check then rejects an absent or wrong-typed field. */
+    luaH_getshortstr(rc->L, hvalue(&cont), key, out);
+    return 1;
+  }
+  default:
+    return 0;
   }
 }
 
@@ -660,7 +719,8 @@ static int rec_eval_container(SPTRecCtx *rc, int ref, TValue *out) {
    does not resolve to a List value. */
 static Table *rec_eval_array(SPTRecCtx *rc, int ref) {
   TValue v;
-  if (!rec_eval_container(rc, ref, &v)) return NULL;
+  if (!rec_eval_container(rc, ref, &v))
+    return NULL;
   return ttisarray(&v) ? avalue(&v) : NULL;
 }
 
@@ -676,7 +736,7 @@ static int rec_snap(SPTRecCtx *rc) {
     if (f->method_resume_snap >= 0)
       return f->method_resume_snap;
   }
-  if (rc->call_arg_self_pc != NULL)            /* arg-load window: resume at the SELF */
+  if (rc->call_arg_self_pc != NULL) /* arg-load window: resume at the SELF */
     return sptir_snapshot(rc->ir, rc->call_arg_self_pc);
   int snap = sptir_snapshot(rc->ir, rc->pc);
   /* §10.68c: if this snapshot is inside a free-function inlined callee body
@@ -691,7 +751,7 @@ static int rec_snap(SPTRecCtx *rc) {
       ri->callee_frame_base = rc->frame_base;
       ri->caller_resume_pc = f->pc;
       ri->nresults = f->nresults;
-      ri->callee_cl = rc->cl;  /* callee closure (rc->cl is callee's after push) */
+      ri->callee_cl = rc->cl; /* callee closure (rc->cl is callee's after push) */
     }
   }
   return snap;
@@ -707,7 +767,7 @@ static const Instruction *rec_guard_pc(SPTRecCtx *rc) {
     if (f->method_self_pc != NULL)
       return f->method_self_pc;
   }
-  if (rc->call_arg_self_pc != NULL)            /* arg-load window: resume at the SELF */
+  if (rc->call_arg_self_pc != NULL) /* arg-load window: resume at the SELF */
     return rc->call_arg_self_pc;
   return rc->pc;
 }
@@ -733,7 +793,8 @@ static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
      each inner iteration -- the same correct path the variable-index m[i][j]
      already uses. */
   Table *t = rec_eval_array(rc, rc->ir->reg_map[rc->frame_base + areg]);
-  if (!t) return SPTT_ANY;
+  if (!t)
+    return SPTT_ANY;
   /* The index is predicted from the index slot's stack value, but one-pass
      recording reads it at the back-edge (end of iteration). If the compiler
      reused the index register for another value (e.g. the loop accumulator),
@@ -742,7 +803,8 @@ static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
      type-guarded, so correctness holds regardless of which element is loaded
      (a misprediction merely side-exits). Empty arrays still can't predict. */
   if (idx < 0 || (lua_Unsigned)idx >= t->loglen) {
-    if (t->loglen == 0) return SPTT_ANY;
+    if (t->loglen == 0)
+      return SPTT_ANY;
     idx = 0;
   }
   lu_byte tag = *getArrTag(t, (lua_Unsigned)idx);
@@ -753,13 +815,15 @@ static SPTType rec_array_elem_type(SPTRecCtx *rc, int areg, lua_Integer idx) {
 }
 
 /* Forward declaration: the branch helpers below emit comparison guards. */
-static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
-                       SPTType a_type, SPTType b_type);
+static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_type,
+                       SPTType b_type);
 
 /* Numeric value of a TValue as double, for record-time branch evaluation. */
 static double rec_num_as_double(const TValue *v) {
-  if (ttisinteger(v)) return (double)ivalue(v);
-  if (ttisfloat(v)) return fltvalue(v);
+  if (ttisinteger(v))
+    return (double)ivalue(v);
+  if (ttisfloat(v))
+    return fltvalue(v);
   return 0.0;
 }
 
@@ -774,12 +838,26 @@ static double rec_num_as_double(const TValue *v) {
    'reg' < 0 means the operand has no stack slot (a pure immediate/constant). */
 static int rec_pred_num(SPTRecCtx *rc, int ref, int reg, double *out) {
   SPTIRInst *in = sptir_get(rc->ir, ref);
-  if (in && in->op == SPTIR_KINT) { *out = (double)(int64_t)in->aux; return 1; }
-  if (in && in->op == SPTIR_KFLT) { double d; memcpy(&d, &in->aux, sizeof d); *out = d; return 1; }
+  if (in && in->op == SPTIR_KINT) {
+    *out = (double)(int64_t)in->aux;
+    return 1;
+  }
+  if (in && in->op == SPTIR_KFLT) {
+    double d;
+    memcpy(&d, &in->aux, sizeof d);
+    *out = d;
+    return 1;
+  }
   if (reg >= 0) {
     TValue *v = s2v((rc->ci->func.p + 1) + reg);
-    if (ttisinteger(v)) { *out = (double)ivalue(v); return 1; }
-    if (ttisfloat(v))   { *out = fltvalue(v); return 1; }
+    if (ttisinteger(v)) {
+      *out = (double)ivalue(v);
+      return 1;
+    }
+    if (ttisfloat(v)) {
+      *out = fltvalue(v);
+      return 1;
+    }
   }
   return 0;
 }
@@ -789,46 +867,74 @@ static int rec_pred_num(SPTRecCtx *rc, int ref, int reg, double *out) {
    pins truthiness (everything except SPTT_ANY) is decidable too. */
 static int rec_ref_truthy(SPTRecCtx *rc, int ref, int *out) {
   SPTIRInst *in = sptir_get(rc->ir, ref);
-  if (!in) return 0;
+  if (!in)
+    return 0;
   switch (in->op) {
-    case SPTIR_NIL: case SPTIR_FALSE: *out = 0; return 1;
-    case SPTIR_TRUE: *out = 1; return 1;
-    case SPTIR_SLOAD: {
-      TValue *v = s2v((rc->ci->func.p + 1) + (int)in->aux);
-      *out = !l_isfalse(v); return 1;
-    }
-    default: break;
+  case SPTIR_NIL:
+  case SPTIR_FALSE:
+    *out = 0;
+    return 1;
+  case SPTIR_TRUE:
+    *out = 1;
+    return 1;
+  case SPTIR_SLOAD: {
+    TValue *v = s2v((rc->ci->func.p + 1) + (int)in->aux);
+    *out = !l_isfalse(v);
+    return 1;
+  }
+  default:
+    break;
   }
   switch ((SPTType)in->type) {
-    case SPTT_NIL: case SPTT_FALSE: *out = 0; return 1;
-    case SPTT_ANY: return 0;
-    default:       *out = 1; return 1; /* int/flt/str/arr/tab/func/ud/true */
+  case SPTT_NIL:
+  case SPTT_FALSE:
+    *out = 0;
+    return 1;
+  case SPTT_ANY:
+    return 0;
+  default:
+    *out = 1;
+    return 1; /* int/flt/str/arr/tab/func/ud/true */
   }
 }
 
 /* Evaluate a numeric comparison at record time. */
 static int rec_eval_num_cmp(SPTIROp op, double a, double b) {
   switch (op) {
-    case SPTIR_LT: return a < b;
-    case SPTIR_LE: return a <= b;
-    case SPTIR_GT: return a > b;
-    case SPTIR_GE: return a >= b;
-    case SPTIR_EQ: return a == b;
-    case SPTIR_NE: return a != b;
-    default:       return 0;
+  case SPTIR_LT:
+    return a < b;
+  case SPTIR_LE:
+    return a <= b;
+  case SPTIR_GT:
+    return a > b;
+  case SPTIR_GE:
+    return a >= b;
+  case SPTIR_EQ:
+    return a == b;
+  case SPTIR_NE:
+    return a != b;
+  default:
+    return 0;
   }
 }
 
 /* The opposite comparison (used when the branch, not the fall-through, runs). */
 static SPTIROp rec_negate_cmp(SPTIROp op) {
   switch (op) {
-    case SPTIR_LT: return SPTIR_GE;
-    case SPTIR_GE: return SPTIR_LT;
-    case SPTIR_LE: return SPTIR_GT;
-    case SPTIR_GT: return SPTIR_LE;
-    case SPTIR_EQ: return SPTIR_NE;
-    case SPTIR_NE: return SPTIR_EQ;
-    default:       return op;
+  case SPTIR_LT:
+    return SPTIR_GE;
+  case SPTIR_GE:
+    return SPTIR_LT;
+  case SPTIR_LE:
+    return SPTIR_GT;
+  case SPTIR_GT:
+    return SPTIR_LE;
+  case SPTIR_EQ:
+    return SPTIR_NE;
+  case SPTIR_NE:
+    return SPTIR_EQ;
+  default:
+    return op;
   }
 }
 
@@ -848,18 +954,28 @@ static int rec_inst(SPTRecCtx *rc); /* fwd decl: if-conversion records arm ops *
    Excludes DIV/IDIV/MOD/POW (can trap), all control flow, calls, and memory. */
 static int opcode_is_ifconv_safe(OpCode o) {
   switch (o) {
-    case OP_MOVE:
-    case OP_LOADI:
-    case OP_ADD: case OP_SUB: case OP_MUL:
-    case OP_ADDI:
-    case OP_ADDK: case OP_SUBK: case OP_MULK:
-    case OP_BAND: case OP_BOR: case OP_BXOR:
-    case OP_BANDK: case OP_BORK: case OP_BXORK:
-    case OP_SHL: case OP_SHR:
-    case OP_BNOT: case OP_UNM:
-      return 1;
-    default:
-      return 0;
+  case OP_MOVE:
+  case OP_LOADI:
+  case OP_ADD:
+  case OP_SUB:
+  case OP_MUL:
+  case OP_ADDI:
+  case OP_ADDK:
+  case OP_SUBK:
+  case OP_MULK:
+  case OP_BAND:
+  case OP_BOR:
+  case OP_BXOR:
+  case OP_BANDK:
+  case OP_BORK:
+  case OP_BXORK:
+  case OP_SHL:
+  case OP_SHR:
+  case OP_BNOT:
+  case OP_UNM:
+    return 1;
+  default:
+    return 0;
   }
 }
 
@@ -878,38 +994,60 @@ static int ifconv_arm_flt_result(SPTRecCtx *rc, const Instruction *op_pc);
    an operand that was written earlier in THIS arm (an intra-arm dependency would
    make the pre-recording type check unreliable), and more than IFCONV_MAX_SLOTS
    slots. Returns 1 on success (and only if the arm writes at least one slot). */
-static int parse_ifconv_arm(SPTRecCtx *rc, const Instruction *start,
-                            const Instruction *end, int *wslots, int *nw,
-                            int is_flt) {
-  int local[16], nlocal = 0;          /* slots written so far within this arm */
+static int parse_ifconv_arm(SPTRecCtx *rc, const Instruction *start, const Instruction *end,
+                            int *wslots, int *nw, int is_flt) {
+  int local[16], nlocal = 0; /* slots written so far within this arm */
   int wrote = 0, nops = 0;
   for (const Instruction *pc = start; pc < end; pc++) {
     OpCode o = GET_OPCODE(*pc);
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (++nops > 16) return 0;
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
+    if (++nops > 16)
+      return 0;
     if (is_flt) {
-      if (!opcode_is_ifconv_safe_flt(o)) return 0;
-      if (!ifconv_arm_flt_result(rc, pc)) return 0;
+      if (!opcode_is_ifconv_safe_flt(o))
+        return 0;
+      if (!ifconv_arm_flt_result(rc, pc))
+        return 0;
     } else {
-      if (!opcode_is_ifconv_safe(o)) return 0;
-      if (!ifconv_arm_int_result(rc, pc)) return 0;
+      if (!opcode_is_ifconv_safe(o))
+        return 0;
+      if (!ifconv_arm_int_result(rc, pc))
+        return 0;
     }
     int b = GETARG_B(*pc), c = GETARG_C(*pc);
     int checkB = (o != OP_LOADI && o != OP_LOADF && o != OP_LOADK);
-    int checkC = (o == OP_ADD || o == OP_SUB || o == OP_MUL || o == OP_DIV ||
-                  o == OP_BAND || o == OP_BOR || o == OP_BXOR ||
-                  o == OP_SHL || o == OP_SHR);
+    int checkC = (o == OP_ADD || o == OP_SUB || o == OP_MUL || o == OP_DIV || o == OP_BAND ||
+                  o == OP_BOR || o == OP_BXOR || o == OP_SHL || o == OP_SHR);
     for (int k = 0; k < nlocal; k++) {
-      if (checkB && local[k] == b) return 0;
-      if (checkC && local[k] == c) return 0;
+      if (checkB && local[k] == b)
+        return 0;
+      if (checkC && local[k] == c)
+        return 0;
     }
     int a = GETARG_A(*pc);
     int seen = 0;
-    for (int k = 0; k < nlocal; k++) if (local[k] == a) { seen = 1; break; }
-    if (!seen) { if (nlocal >= 16) return 0; local[nlocal++] = a; }
+    for (int k = 0; k < nlocal; k++)
+      if (local[k] == a) {
+        seen = 1;
+        break;
+      }
+    if (!seen) {
+      if (nlocal >= 16)
+        return 0;
+      local[nlocal++] = a;
+    }
     seen = 0;
-    for (int k = 0; k < *nw; k++) if (wslots[k] == a) { seen = 1; break; }
-    if (!seen) { if (*nw >= IFCONV_MAX_SLOTS) return 0; wslots[(*nw)++] = a; }
+    for (int k = 0; k < *nw; k++)
+      if (wslots[k] == a) {
+        seen = 1;
+        break;
+      }
+    if (!seen) {
+      if (*nw >= IFCONV_MAX_SLOTS)
+        return 0;
+      wslots[(*nw)++] = a;
+    }
     wrote = 1;
   }
   return wrote;
@@ -926,7 +1064,8 @@ static int ifconv_reg_is_int(SPTRecCtx *rc, int reg) {
   /* Not materialized. Inside an inlined callee (frame_base != 0) the live stack
      slot is NOT at (ci->func+1)+reg -- that addresses the root frame -- so we
      cannot determine the type and must bail (the caller falls back cleanly). */
-  if (rc->frame_base != 0) return 0;
+  if (rc->frame_base != 0)
+    return 0;
   return ttisinteger(s2v((rc->ci->func.p + 1) + reg));
 }
 
@@ -942,17 +1081,31 @@ static int ifconv_arm_int_result(SPTRecCtx *rc, const Instruction *op_pc) {
      register, so reading reg B's type would index off the end of the stack
      (caught by ASan). */
   switch (o) {
-    case OP_LOADI: return 1;
-    case OP_MOVE: case OP_UNM: case OP_BNOT: case OP_ADDI:
-      return ifconv_reg_is_int(rc, b);
-    case OP_ADD: case OP_SUB: case OP_MUL:
-    case OP_BAND: case OP_BOR: case OP_BXOR:
-    case OP_SHL: case OP_SHR:
-      return ifconv_reg_is_int(rc, b) && ifconv_reg_is_int(rc, c);
-    case OP_ADDK: case OP_SUBK: case OP_MULK:
-    case OP_BANDK: case OP_BORK: case OP_BXORK:
-      return ifconv_reg_is_int(rc, b) && ttisinteger(&rc->p->k[c]);
-    default: return 0;
+  case OP_LOADI:
+    return 1;
+  case OP_MOVE:
+  case OP_UNM:
+  case OP_BNOT:
+  case OP_ADDI:
+    return ifconv_reg_is_int(rc, b);
+  case OP_ADD:
+  case OP_SUB:
+  case OP_MUL:
+  case OP_BAND:
+  case OP_BOR:
+  case OP_BXOR:
+  case OP_SHL:
+  case OP_SHR:
+    return ifconv_reg_is_int(rc, b) && ifconv_reg_is_int(rc, c);
+  case OP_ADDK:
+  case OP_SUBK:
+  case OP_MULK:
+  case OP_BANDK:
+  case OP_BORK:
+  case OP_BXORK:
+    return ifconv_reg_is_int(rc, b) && ttisinteger(&rc->p->k[c]);
+  default:
+    return 0;
   }
 }
 
@@ -961,7 +1114,8 @@ static int ifconv_reg_is_flt(SPTRecCtx *rc, int reg) {
   SPTIRBuilder *ir = rc->ir;
   if (ir->reg_map[rc->frame_base + reg] >= 0)
     return ir->reg_type[rc->frame_base + reg] == SPTT_FLT;
-  if (rc->frame_base != 0) return 0;
+  if (rc->frame_base != 0)
+    return 0;
   return ttisfloat(s2v((rc->ci->func.p + 1) + reg));
 }
 
@@ -970,12 +1124,21 @@ static int ifconv_reg_is_flt(SPTRecCtx *rc, int reg) {
    whose untaken side is still evaluated -- unlike the integer case. */
 static int opcode_is_ifconv_safe_flt(OpCode o) {
   switch (o) {
-    case OP_MOVE: case OP_LOADF: case OP_LOADK:
-    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-    case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
-    case OP_UNM:
-      return 1;
-    default: return 0;
+  case OP_MOVE:
+  case OP_LOADF:
+  case OP_LOADK:
+  case OP_ADD:
+  case OP_SUB:
+  case OP_MUL:
+  case OP_DIV:
+  case OP_ADDK:
+  case OP_SUBK:
+  case OP_MULK:
+  case OP_DIVK:
+  case OP_UNM:
+    return 1;
+  default:
+    return 0;
   }
 }
 
@@ -997,46 +1160,62 @@ static int ifconv_arm_flt_result(SPTRecCtx *rc, const Instruction *op_pc) {
      field, not a register, so reading reg B's type would run off the stack
      (caught by ASan). */
   switch (o) {
-    case OP_LOADF: return 1;
-    case OP_LOADK: return ttisfloat(&rc->p->k[GETARG_Bx(ins)]);
-    case OP_MOVE: case OP_UNM:
-      return ifconv_reg_is_flt(rc, b);
-    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-      return ifconv_reg_is_flt(rc, b) && ifconv_reg_is_flt(rc, c);
-    case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
-      return ifconv_reg_is_flt(rc, b) && ttisfloat(&rc->p->k[c]);
-    default: return 0;
+  case OP_LOADF:
+    return 1;
+  case OP_LOADK:
+    return ttisfloat(&rc->p->k[GETARG_Bx(ins)]);
+  case OP_MOVE:
+  case OP_UNM:
+    return ifconv_reg_is_flt(rc, b);
+  case OP_ADD:
+  case OP_SUB:
+  case OP_MUL:
+  case OP_DIV:
+    return ifconv_reg_is_flt(rc, b) && ifconv_reg_is_flt(rc, c);
+  case OP_ADDK:
+  case OP_SUBK:
+  case OP_MULK:
+  case OP_DIVK:
+    return ifconv_reg_is_flt(rc, b) && ttisfloat(&rc->p->k[c]);
+  default:
+    return 0;
   }
 }
 
 /* Try to if-convert the comparison at rc->pc. Returns 1 if it took the
    conversion path (caller returns 1 unless rc->aborted got set), 0 if not
    applicable (caller falls back to the guarded branch, leaving state untouched). */
-static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
-                          SPTType at, SPTType bt) {
+static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref, SPTType at, SPTType bt) {
   /* A comparison counts as float if EITHER operand is float -- LTI/LEI/GTI/GEI
      pass an integer immediate for the second operand even when the first is a
      float (e.g. `v < 0.0` compiles to `LTI v, 0`), so the int side is promoted
      to double below for the mask. Both must be numeric. */
-  if (!(sptt_isnum(at) && sptt_isnum(bt))) return 0;
+  if (!(sptt_isnum(at) && sptt_isnum(bt)))
+    return 0;
   int is_flt_cmp = (at == SPTT_FLT || bt == SPTT_FLT);
   SPTIRBuilder *ir = rc->ir;
-  int fb = rc->frame_base;                         /* 0 at root; nonzero in an inlined callee */
+  int fb = rc->frame_base; /* 0 at root; nonzero in an inlined callee */
   const Instruction *cmp_pc = rc->pc;
   const Instruction *jmp = cmp_pc + 1;
-  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
+  if (GET_OPCODE(*jmp) != OP_JMP)
+    return 0;
   const Instruction *T1 = jmp + 1 + GETARG_sJ(*jmp); /* JMP1 target */
-  if (T1 <= cmp_pc + 2) return 0;                 /* must skip forward over the then-arm */
+  if (T1 <= cmp_pc + 2)
+    return 0; /* must skip forward over the then-arm */
 
   const Instruction *then_start = cmp_pc + 2, *then_end, *else_start = NULL, *merge;
   int is_ifelse = 0;
-  if (GET_OPCODE(T1[-1]) == OP_JMP) {             /* if-else: JMP2 just before else */
+  if (GET_OPCODE(T1[-1]) == OP_JMP) { /* if-else: JMP2 just before else */
     const Instruction *jmp2 = T1 - 1;
     merge = jmp2 + 1 + GETARG_sJ(*jmp2);
-    if (merge <= T1) return 0;                    /* JMP2 must skip forward over the else-arm */
-    is_ifelse = 1; then_end = jmp2; else_start = T1;
-  } else {                                        /* if-only */
-    merge = T1; then_end = T1;
+    if (merge <= T1)
+      return 0; /* JMP2 must skip forward over the else-arm */
+    is_ifelse = 1;
+    then_end = jmp2;
+    else_start = T1;
+  } else { /* if-only */
+    merge = T1;
+    then_end = T1;
   }
 
   /* Decide int vs float select from what the arms WRITE, not just the
@@ -1048,7 +1227,8 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   int arm_is_flt = 0;
   for (const Instruction *pc = then_start; pc < then_end; pc++) {
     OpCode o = GET_OPCODE(*pc);
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
     arm_is_flt = ifconv_reg_is_flt(rc, GETARG_A(*pc));
     break;
   }
@@ -1057,50 +1237,75 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
 
   /* Parse both arms, unioning the set of written slots. An arm that does not
      write a given slot leaves it unchanged (its select input is the old value). */
-  int wslots[IFCONV_MAX_SLOTS]; int nw = 0;
-  if (!parse_ifconv_arm(rc, then_start, then_end, wslots, &nw, is_flt)) return 0;
-  if (is_ifelse && !parse_ifconv_arm(rc, else_start, merge, wslots, &nw, is_flt)) return 0;
+  int wslots[IFCONV_MAX_SLOTS];
+  int nw = 0;
+  if (!parse_ifconv_arm(rc, then_start, then_end, wslots, &nw, is_flt))
+    return 0;
+  if (is_ifelse && !parse_ifconv_arm(rc, else_start, merge, wslots, &nw, is_flt))
+    return 0;
 
   /* Every written slot must currently hold the expected type: an if-only arm
      leaves the other branch as the slot's old value, and arms may read the slot
      (s=s+1). Inside a callee an unmaterialized slot bails here (the type probe
      returns 0), so the rec_load_reg below never hits its callee-frame abort. */
   for (int k = 0; k < nw; k++)
-    if (!(is_flt ? ifconv_reg_is_flt(rc, wslots[k])
-                 : ifconv_reg_is_int(rc, wslots[k]))) return 0;
+    if (!(is_flt ? ifconv_reg_is_flt(rc, wslots[k]) : ifconv_reg_is_int(rc, wslots[k])))
+      return 0;
 
   /* ---- commit. Make all written slots resident (load + type-guard live-ins),
      then record each arm against a forked copy and build one select per slot. */
   int old_ref[IFCONV_MAX_SLOTS], then_ref[IFCONV_MAX_SLOTS], else_ref[IFCONV_MAX_SLOTS];
   for (int k = 0; k < nw; k++) {
     old_ref[k] = rec_load_reg(rc, wslots[k]);
-    if (rc->aborted) return 1;
+    if (rc->aborted)
+      return 1;
   }
 
-  rc->pc = then_start;                              /* record the then-arm */
-  while (rc->pc < then_end) { if (!rec_inst(rc)) return 1; }
-  if (rc->pc != then_end) { rc->aborted = 1; return 1; }
+  rc->pc = then_start; /* record the then-arm */
+  while (rc->pc < then_end) {
+    if (!rec_inst(rc))
+      return 1;
+  }
+  if (rc->pc != then_end) {
+    rc->aborted = 1;
+    return 1;
+  }
   for (int k = 0; k < nw; k++) {
-    if (ir->reg_type[fb + wslots[k]] != want) { rc->aborted = 1; return 1; }
+    if (ir->reg_type[fb + wslots[k]] != want) {
+      rc->aborted = 1;
+      return 1;
+    }
     then_ref[k] = ir->reg_map[fb + wslots[k]];
   }
   for (int k = 0; k < nw; k++) {
-    ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = want;
+    ir->reg_map[fb + wslots[k]] = old_ref[k];
+    ir->reg_type[fb + wslots[k]] = want;
   }
 
-  if (is_ifelse) {                                  /* record the else-arm */
+  if (is_ifelse) { /* record the else-arm */
     rc->pc = else_start;
-    while (rc->pc < merge) { if (!rec_inst(rc)) return 1; }
-    if (rc->pc != merge) { rc->aborted = 1; return 1; }
+    while (rc->pc < merge) {
+      if (!rec_inst(rc))
+        return 1;
+    }
+    if (rc->pc != merge) {
+      rc->aborted = 1;
+      return 1;
+    }
     for (int k = 0; k < nw; k++) {
-      if (ir->reg_type[fb + wslots[k]] != want) { rc->aborted = 1; return 1; }
+      if (ir->reg_type[fb + wslots[k]] != want) {
+        rc->aborted = 1;
+        return 1;
+      }
       else_ref[k] = ir->reg_map[fb + wslots[k]];
     }
     for (int k = 0; k < nw; k++) {
-      ir->reg_map[fb + wslots[k]] = old_ref[k]; ir->reg_type[fb + wslots[k]] = want;
+      ir->reg_map[fb + wslots[k]] = old_ref[k];
+      ir->reg_type[fb + wslots[k]] = want;
     }
   } else {
-    for (int k = 0; k < nw; k++) else_ref[k] = old_ref[k];
+    for (int k = 0; k < nw; k++)
+      else_ref[k] = old_ref[k];
   }
 
   if (is_flt) {
@@ -1115,21 +1320,31 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
     int mask;
     if (is_flt_cmp) {
       int ca = aref, cb = bref;
-      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
-      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
-      int ma = ca, mb = cb; SPTIROp mop = fop;
-      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
-      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      if (at == SPTT_INT)
+        ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT)
+        cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb;
+      SPTIROp mop = fop;
+      if (fop == SPTIR_GT) {
+        mop = SPTIR_LT;
+        ma = cb;
+        mb = ca;
+      } else if (fop == SPTIR_GE) {
+        mop = SPTIR_LE;
+        ma = cb;
+        mb = ca;
+      }
       mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
     } else {
       mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
     }
     for (int k = 0; k < nw; k++) {
-      int sel = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT,
-                           then_ref[k], else_ref[k], (int64_t)mask);
+      int sel = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT, then_ref[k], else_ref[k], (int64_t)mask);
       ir->reg_map[fb + wslots[k]] = sel;
       ir->reg_type[fb + wslots[k]] = SPTT_FLT;
-      if (fb + wslots[k] > ir->maxslot) ir->maxslot = fb + wslots[k];
+      if (fb + wslots[k] > ir->maxslot)
+        ir->maxslot = fb + wslots[k];
     }
   } else {
     /* select_k = else_k + (then_k - else_k) * cond,  cond in {0,1} (one shared cmp) */
@@ -1137,10 +1352,11 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
     for (int k = 0; k < nw; k++) {
       int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, then_ref[k], else_ref[k], 0);
       int prod = sptir_emit(ir, SPTIR_MUL, SPTT_INT, diff, cref, 0);
-      int res  = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref[k], prod, 0);
+      int res = sptir_emit(ir, SPTIR_ADD, SPTT_INT, else_ref[k], prod, 0);
       ir->reg_map[fb + wslots[k]] = res;
       ir->reg_type[fb + wslots[k]] = SPTT_INT;
-      if (fb + wslots[k] > ir->maxslot) ir->maxslot = fb + wslots[k];
+      if (fb + wslots[k] > ir->maxslot)
+        ir->maxslot = fb + wslots[k];
     }
   }
   rc->pc = merge;
@@ -1165,40 +1381,50 @@ static int rec_try_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
    condition under which the THEN-arm (fall-through) is taken, exactly as the
    handlers pass to rec_cond_branch. Handles the ordered + equality forms that
    appear in clamp-style chains; returns 0 for anything else (caller aborts). */
-static int op_is_comparison(OpCode o);     /* defined below, used by the chained recorder */
-static int decode_compare(SPTRecCtx *rc, const Instruction *pc,
-                          SPTIROp *fop, int *aref, int *bref, SPTType *at, SPTType *bt) {
+static int op_is_comparison(OpCode o); /* defined below, used by the chained recorder */
+
+static int decode_compare(SPTRecCtx *rc, const Instruction *pc, SPTIROp *fop, int *aref, int *bref,
+                          SPTType *at, SPTType *bt) {
   SPTIRBuilder *ir = rc->ir;
   Instruction i = *pc;
   OpCode o = GET_OPCODE(i);
   int a = GETARG_A(i), k = GETARG_k(i);
   int fb = rc->frame_base;
   switch (o) {
-    case OP_LT: case OP_LE: case OP_EQ: {
-      int b = GETARG_B(i);
-      *aref = rec_load_reg(rc, a);
-      *bref = rec_load_reg(rc, b);
-      *at = ir->reg_type[fb + a]; *bt = ir->reg_type[fb + b];
-      if (o == OP_EQ && (*at == SPTT_STR || *bt == SPTT_STR)) return 0;  /* string EQ unsafe here */
-      *fop = (o == OP_LT) ? (k ? SPTIR_GE : SPTIR_LT)
+  case OP_LT:
+  case OP_LE:
+  case OP_EQ: {
+    int b = GETARG_B(i);
+    *aref = rec_load_reg(rc, a);
+    *bref = rec_load_reg(rc, b);
+    *at = ir->reg_type[fb + a];
+    *bt = ir->reg_type[fb + b];
+    if (o == OP_EQ && (*at == SPTT_STR || *bt == SPTT_STR))
+      return 0; /* string EQ unsafe here */
+    *fop = (o == OP_LT)   ? (k ? SPTIR_GE : SPTIR_LT)
            : (o == OP_LE) ? (k ? SPTIR_GT : SPTIR_LE)
                           : (k ? SPTIR_NE : SPTIR_EQ);
-      return 1;
-    }
-    case OP_LTI: case OP_LEI: case OP_GTI: case OP_GEI: case OP_EQI: {
-      int sb = GETARG_sB(i);
-      *aref = rec_load_reg(rc, a);
-      *bref = sptir_kint(ir, sb);
-      *at = ir->reg_type[fb + a]; *bt = SPTT_INT;
-      *fop = (o == OP_LTI) ? (k ? SPTIR_GE : SPTIR_LT)
+    return 1;
+  }
+  case OP_LTI:
+  case OP_LEI:
+  case OP_GTI:
+  case OP_GEI:
+  case OP_EQI: {
+    int sb = GETARG_sB(i);
+    *aref = rec_load_reg(rc, a);
+    *bref = sptir_kint(ir, sb);
+    *at = ir->reg_type[fb + a];
+    *bt = SPTT_INT;
+    *fop = (o == OP_LTI)   ? (k ? SPTIR_GE : SPTIR_LT)
            : (o == OP_LEI) ? (k ? SPTIR_GT : SPTIR_LE)
            : (o == OP_GTI) ? (k ? SPTIR_LE : SPTIR_GT)
            : (o == OP_GEI) ? (k ? SPTIR_LT : SPTIR_GE)
                            : (k ? SPTIR_NE : SPTIR_EQ);
-      return 1;
-    }
-    default:
-      return 0;
+    return 1;
+  }
+  default:
+    return 0;
   }
 }
 
@@ -1210,8 +1436,8 @@ static int decode_compare(SPTRecCtx *rc, const Instruction *pc,
    Factored out for the chained cond-return fold; the single if-converters keep
    their own inline copy untouched. */
 static int emit_select(SPTRecCtx *rc, SPTIROp fop, int aref, int bref, SPTType at, SPTType bt,
-                       int then_ref, SPTType then_t, int else_ref, SPTType else_t,
-                       int *out_ref, SPTType *out_t) {
+                       int then_ref, SPTType then_t, int else_ref, SPTType else_t, int *out_ref,
+                       SPTType *out_t) {
   SPTIRBuilder *ir = rc->ir;
   if (then_t == SPTT_INT && else_t == SPTT_INT && at == SPTT_INT && bt == SPTT_INT) {
     int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
@@ -1226,11 +1452,21 @@ static int emit_select(SPTRecCtx *rc, SPTIROp fop, int aref, int bref, SPTType a
     int mask;
     if (is_flt_cmp) {
       int ca = aref, cb = bref;
-      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
-      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
-      int ma = ca, mb = cb; SPTIROp mop = fop;
-      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
-      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      if (at == SPTT_INT)
+        ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT)
+        cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb;
+      SPTIROp mop = fop;
+      if (fop == SPTIR_GT) {
+        mop = SPTIR_LT;
+        ma = cb;
+        mb = ca;
+      } else if (fop == SPTIR_GE) {
+        mop = SPTIR_LE;
+        ma = cb;
+        mb = ca;
+      }
       mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
     } else {
       mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
@@ -1243,60 +1479,101 @@ static int emit_select(SPTRecCtx *rc, SPTIROp fop, int aref, int bref, SPTType a
   return 0;
 }
 
-static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
-                                     SPTType at, SPTType bt) {
-  if (rc->frame_base == 0) return 0;              /* only inside an inlined callee */
-  if (!sptt_isnum(at) || !sptt_isnum(bt)) return 0; /* numeric compare (int/float) */
+static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref, SPTType at,
+                                     SPTType bt) {
+  if (rc->frame_base == 0)
+    return 0; /* only inside an inlined callee */
+  if (!sptt_isnum(at) || !sptt_isnum(bt))
+    return 0; /* numeric compare (int/float) */
   SPTIRBuilder *ir = rc->ir;
   int fb = rc->frame_base;
   const Instruction *cmp_pc = rc->pc;
   const Instruction *jmp = cmp_pc + 1;
-  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
+  if (GET_OPCODE(*jmp) != OP_JMP)
+    return 0;
   const Instruction *T1 = jmp + 1 + GETARG_sJ(*jmp);
   const Instruction *cend = rc->p->code + rc->p->sizecode;
-  if (T1 <= cmp_pc + 2 || T1 >= cend) return 0;
-  if (GET_OPCODE(T1[-1]) != OP_RETURN1) return 0; /* then-arm ends in a return */
+  if (T1 <= cmp_pc + 2 || T1 >= cend)
+    return 0;
+  if (GET_OPCODE(T1[-1]) != OP_RETURN1)
+    return 0; /* then-arm ends in a return */
   const Instruction *then_ret = T1 - 1;
   for (const Instruction *q = cmp_pc + 2; q < then_ret; q++) {
     /* condreturn_method_op_ok is the superset (ifconv-safe + GETFIELD/LEN); a
        free-function callee was already gated to ifconv-safe-only by
        proto_is_condreturn_inlinable, so it never carries a field read here. */
-    if (!condreturn_method_op_ok(GET_OPCODE(*q))) return 0;
+    if (!condreturn_method_op_ok(GET_OPCODE(*q)))
+      return 0;
   }
-  const Instruction *else_ret = NULL;             /* else-arm: first return */
+  const Instruction *else_ret = NULL; /* else-arm: first return */
   for (const Instruction *q = T1; q < cend; q++) {
     OpCode o = GET_OPCODE(*q);
-    if (o == OP_RETURN1) { else_ret = q; break; }
-    if (!condreturn_method_op_ok(o)) return 0;
+    if (o == OP_RETURN1) {
+      else_ret = q;
+      break;
+    }
+    if (!condreturn_method_op_ok(o))
+      return 0;
   }
-  if (!else_ret) return 0;
+  if (!else_ret)
+    return 0;
   int then_reg = GETARG_A(*then_ret), else_reg = GETARG_A(*else_ret);
 
   int cmax = rc->p->maxstacksize;
-  if (cmax > 64) return 0;
-  int save_map[64]; SPTType save_type[64];
-  for (int k = 0; k < cmax; k++) { save_map[k] = ir->reg_map[fb+k]; save_type[k] = ir->reg_type[fb+k]; }
+  if (cmax > 64)
+    return 0;
+  int save_map[64];
+  SPTType save_type[64];
+  for (int k = 0; k < cmax; k++) {
+    save_map[k] = ir->reg_map[fb + k];
+    save_type[k] = ir->reg_type[fb + k];
+  }
 
   /* ---- commit: record the then-arm's value computation against a forked frame */
   rc->pc = cmp_pc + 2;
-  while (rc->pc < then_ret) { if (!rec_inst(rc)) return 1; }
-  if (rc->pc != then_ret) { rc->aborted = 1; return 1; }
+  while (rc->pc < then_ret) {
+    if (!rec_inst(rc))
+      return 1;
+  }
+  if (rc->pc != then_ret) {
+    rc->aborted = 1;
+    return 1;
+  }
   int then_ref = ir->reg_map[fb + then_reg];
   SPTType then_t = ir->reg_type[fb + then_reg];
-  if (then_ref < 0 || !sptt_isnum(then_t)) { rc->aborted = 1; return 1; }
-  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+  if (then_ref < 0 || !sptt_isnum(then_t)) {
+    rc->aborted = 1;
+    return 1;
+  }
+  for (int k = 0; k < cmax; k++) {
+    ir->reg_map[fb + k] = save_map[k];
+    ir->reg_type[fb + k] = save_type[k];
+  }
 
   /* ---- record the else-arm's value computation */
   rc->pc = T1;
-  while (rc->pc < else_ret) { if (!rec_inst(rc)) return 1; }
-  if (rc->pc != else_ret) { rc->aborted = 1; return 1; }
+  while (rc->pc < else_ret) {
+    if (!rec_inst(rc))
+      return 1;
+  }
+  if (rc->pc != else_ret) {
+    rc->aborted = 1;
+    return 1;
+  }
   int else_ref = ir->reg_map[fb + else_reg];
   SPTType else_t = ir->reg_type[fb + else_reg];
-  if (else_ref < 0 || !sptt_isnum(else_t)) { rc->aborted = 1; return 1; }
-  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+  if (else_ref < 0 || !sptt_isnum(else_t)) {
+    rc->aborted = 1;
+    return 1;
+  }
+  for (int k = 0; k < cmax; k++) {
+    ir->reg_map[fb + k] = save_map[k];
+    ir->reg_type[fb + k] = save_type[k];
+  }
 
   /* ---- branchless select, bind to caller, resume in caller */
-  int res; SPTType res_t;
+  int res;
+  SPTType res_t;
   if (then_t == SPTT_INT && else_t == SPTT_INT && at == SPTT_INT && bt == SPTT_INT) {
     /* integer: result = else + (then-else)*cond, cond in {0,1} (one shared cmp) */
     int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
@@ -1314,11 +1591,21 @@ static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int b
     int mask;
     if (is_flt_cmp) {
       int ca = aref, cb = bref;
-      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
-      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
-      int ma = ca, mb = cb; SPTIROp mop = fop;
-      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
-      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      if (at == SPTT_INT)
+        ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT)
+        cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb;
+      SPTIROp mop = fop;
+      if (fop == SPTIR_GT) {
+        mop = SPTIR_LT;
+        ma = cb;
+        mb = ca;
+      } else if (fop == SPTIR_GE) {
+        mop = SPTIR_LE;
+        ma = cb;
+        mb = ca;
+      }
       mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
     } else {
       mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
@@ -1326,13 +1613,15 @@ static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int b
     res = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT, then_ref, else_ref, (int64_t)mask);
     res_t = SPTT_FLT;
   } else {
-    rc->aborted = 1; return 1;            /* mixed arms / int-arms-under-float-cmp: fall back */
+    rc->aborted = 1;
+    return 1; /* mixed arms / int-arms-under-float-cmp: fall back */
   }
   {
     SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
     ir->reg_map[f->call_result_slot] = res;
     ir->reg_type[f->call_result_slot] = res_t;
-    if (f->call_result_slot > ir->maxslot) ir->maxslot = f->call_result_slot;
+    if (f->call_result_slot > ir->maxslot)
+      ir->maxslot = f->call_result_slot;
   }
   rec_inline_pop(rc);
   return 1;
@@ -1351,11 +1640,16 @@ static int rec_try_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int b
    emit_select. Bit-exact: int segments use the rounding-free integer select, float
    segments the masked blend; mixed-type arms abort cleanly. */
 #define SPT_MAXCHAIN 8
+
 static int rec_try_chained_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop0, int aref0, int bref0,
                                              SPTType at0, SPTType bt0) {
-  if (rc->frame_base == 0) return 0;              /* only inside an inlined callee */
-  if (!sptt_isnum(at0) || !sptt_isnum(bt0)) return 0;
-  (void)fop0; (void)aref0; (void)bref0;           /* seg0 is re-decoded uniformly below */
+  if (rc->frame_base == 0)
+    return 0; /* only inside an inlined callee */
+  if (!sptt_isnum(at0) || !sptt_isnum(bt0))
+    return 0;
+  (void)fop0;
+  (void)aref0;
+  (void)bref0; /* seg0 is re-decoded uniformly below */
   SPTIRBuilder *ir = rc->ir;
   int fb = rc->frame_base;
   const Instruction *cend = rc->p->code + rc->p->sizecode;
@@ -1363,83 +1657,179 @@ static int rec_try_chained_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop0, int ar
   /* --- structural peek: chain only if the else-arm at T1 is itself a cond-return. */
   const Instruction *cmp1 = rc->pc;
   const Instruction *jmp1 = cmp1 + 1;
-  if (GET_OPCODE(*jmp1) != OP_JMP) return 0;
+  if (GET_OPCODE(*jmp1) != OP_JMP)
+    return 0;
   const Instruction *t1 = jmp1 + 1 + GETARG_sJ(*jmp1);
-  if (t1 <= cmp1 + 2 || t1 >= cend) return 0;
-  if (GET_OPCODE(t1[-1]) != OP_RETURN1) return 0;
+  if (t1 <= cmp1 + 2 || t1 >= cend)
+    return 0;
+  if (GET_OPCODE(t1[-1]) != OP_RETURN1)
+    return 0;
   int is_chain = 0;
   for (const Instruction *q = t1; q < cend; q++) {
     OpCode o = GET_OPCODE(*q);
-    if (op_is_comparison(o)) { is_chain = 1; break; }
-    if (o == OP_RETURN1 || o == OP_RETURN0 || o == OP_RETURN) break;
+    if (op_is_comparison(o)) {
+      is_chain = 1;
+      break;
+    }
+    if (o == OP_RETURN1 || o == OP_RETURN0 || o == OP_RETURN)
+      break;
   }
-  if (!is_chain) return 0;                         /* single cond-return -> untouched path */
+  if (!is_chain)
+    return 0; /* single cond-return -> untouched path */
 
   int cmax = rc->p->maxstacksize;
-  if (cmax > 64) return 0;
-  int save_map[64]; SPTType save_type[64];
+  if (cmax > 64)
+    return 0;
+  int save_map[64];
+  SPTType save_type[64];
 
-  SPTIROp s_fop[SPT_MAXCHAIN]; int s_aref[SPT_MAXCHAIN], s_bref[SPT_MAXCHAIN];
+  SPTIROp s_fop[SPT_MAXCHAIN];
+  int s_aref[SPT_MAXCHAIN], s_bref[SPT_MAXCHAIN];
   SPTType s_at[SPT_MAXCHAIN], s_bt[SPT_MAXCHAIN];
-  int s_A[SPT_MAXCHAIN]; SPTType s_At[SPT_MAXCHAIN];
+  int s_A[SPT_MAXCHAIN];
+  SPTType s_At[SPT_MAXCHAIN];
   int nseg = 0;
-  int final_ref = -1; SPTType final_t = SPTT_NIL;
+  int final_ref = -1;
+  SPTType final_t = SPTT_NIL;
   const Instruction *cur = cmp1;
 
   for (;;) {
-    const Instruction *ci = NULL, *ri = NULL;     /* next compare or return at/after cur */
+    const Instruction *ci = NULL, *ri = NULL; /* next compare or return at/after cur */
     for (const Instruction *q = cur; q < cend; q++) {
       OpCode o = GET_OPCODE(*q);
-      if (op_is_comparison(o)) { ci = q; break; }
-      if (o == OP_RETURN1 || o == OP_RETURN0 || o == OP_RETURN) { ri = q; break; }
+      if (op_is_comparison(o)) {
+        ci = q;
+        break;
+      }
+      if (o == OP_RETURN1 || o == OP_RETURN0 || o == OP_RETURN) {
+        ri = q;
+        break;
+      }
     }
-    if (ci) {                                      /* a cond-return segment */
-      if (nseg >= SPT_MAXCHAIN) { rc->aborted = 1; return 1; }
+    if (ci) { /* a cond-return segment */
+      if (nseg >= SPT_MAXCHAIN) {
+        rc->aborted = 1;
+        return 1;
+      }
       const Instruction *jmp = ci + 1;
-      if (GET_OPCODE(*jmp) != OP_JMP) { rc->aborted = 1; return 1; }
+      if (GET_OPCODE(*jmp) != OP_JMP) {
+        rc->aborted = 1;
+        return 1;
+      }
       const Instruction *t = jmp + 1 + GETARG_sJ(*jmp);
-      if (t <= ci + 2 || t > cend) { rc->aborted = 1; return 1; }
-      if (GET_OPCODE(t[-1]) != OP_RETURN1) { rc->aborted = 1; return 1; }
+      if (t <= ci + 2 || t > cend) {
+        rc->aborted = 1;
+        return 1;
+      }
+      if (GET_OPCODE(t[-1]) != OP_RETURN1) {
+        rc->aborted = 1;
+        return 1;
+      }
       const Instruction *then_ret = t - 1;
-      for (int kk = 0; kk < cmax; kk++) { save_map[kk]=ir->reg_map[fb+kk]; save_type[kk]=ir->reg_type[fb+kk]; }
-      rc->pc = cur;                                /* record the compare's compute prefix */
-      while (rc->pc < ci) { if (!rec_inst(rc)) return 1; }
-      if (rc->pc != ci) { rc->aborted = 1; return 1; }
-      SPTIROp fp; int ar, br; SPTType a_t, b_t;
-      if (!decode_compare(rc, ci, &fp, &ar, &br, &a_t, &b_t)) { rc->aborted = 1; return 1; }
-      if (!sptt_isnum(a_t) || !sptt_isnum(b_t)) { rc->aborted = 1; return 1; }
-      rc->pc = ci + 2;                             /* record the then-arm's compute of A */
-      while (rc->pc < then_ret) { if (!rec_inst(rc)) return 1; }
-      if (rc->pc != then_ret) { rc->aborted = 1; return 1; }
+      for (int kk = 0; kk < cmax; kk++) {
+        save_map[kk] = ir->reg_map[fb + kk];
+        save_type[kk] = ir->reg_type[fb + kk];
+      }
+      rc->pc = cur; /* record the compare's compute prefix */
+      while (rc->pc < ci) {
+        if (!rec_inst(rc))
+          return 1;
+      }
+      if (rc->pc != ci) {
+        rc->aborted = 1;
+        return 1;
+      }
+      SPTIROp fp;
+      int ar, br;
+      SPTType a_t, b_t;
+      if (!decode_compare(rc, ci, &fp, &ar, &br, &a_t, &b_t)) {
+        rc->aborted = 1;
+        return 1;
+      }
+      if (!sptt_isnum(a_t) || !sptt_isnum(b_t)) {
+        rc->aborted = 1;
+        return 1;
+      }
+      rc->pc = ci + 2; /* record the then-arm's compute of A */
+      while (rc->pc < then_ret) {
+        if (!rec_inst(rc))
+          return 1;
+      }
+      if (rc->pc != then_ret) {
+        rc->aborted = 1;
+        return 1;
+      }
       int areg = GETARG_A(*then_ret);
-      int aval = ir->reg_map[fb + areg]; SPTType avt = ir->reg_type[fb + areg];
-      if (aval < 0 || !sptt_isnum(avt)) { rc->aborted = 1; return 1; }
-      for (int kk = 0; kk < cmax; kk++) { ir->reg_map[fb+kk]=save_map[kk]; ir->reg_type[fb+kk]=save_type[kk]; }
-      s_fop[nseg]=fp; s_aref[nseg]=ar; s_bref[nseg]=br; s_at[nseg]=a_t; s_bt[nseg]=b_t;
-      s_A[nseg]=aval; s_At[nseg]=avt; nseg++;
+      int aval = ir->reg_map[fb + areg];
+      SPTType avt = ir->reg_type[fb + areg];
+      if (aval < 0 || !sptt_isnum(avt)) {
+        rc->aborted = 1;
+        return 1;
+      }
+      for (int kk = 0; kk < cmax; kk++) {
+        ir->reg_map[fb + kk] = save_map[kk];
+        ir->reg_type[fb + kk] = save_type[kk];
+      }
+      s_fop[nseg] = fp;
+      s_aref[nseg] = ar;
+      s_bref[nseg] = br;
+      s_at[nseg] = a_t;
+      s_bt[nseg] = b_t;
+      s_A[nseg] = aval;
+      s_At[nseg] = avt;
+      nseg++;
       cur = t;
-    } else if (ri) {                               /* the final return */
-      if (GET_OPCODE(*ri) != OP_RETURN1) { rc->aborted = 1; return 1; }
-      for (int kk = 0; kk < cmax; kk++) { save_map[kk]=ir->reg_map[fb+kk]; save_type[kk]=ir->reg_type[fb+kk]; }
+    } else if (ri) { /* the final return */
+      if (GET_OPCODE(*ri) != OP_RETURN1) {
+        rc->aborted = 1;
+        return 1;
+      }
+      for (int kk = 0; kk < cmax; kk++) {
+        save_map[kk] = ir->reg_map[fb + kk];
+        save_type[kk] = ir->reg_type[fb + kk];
+      }
       rc->pc = cur;
-      while (rc->pc < ri) { if (!rec_inst(rc)) return 1; }
-      if (rc->pc != ri) { rc->aborted = 1; return 1; }
+      while (rc->pc < ri) {
+        if (!rec_inst(rc))
+          return 1;
+      }
+      if (rc->pc != ri) {
+        rc->aborted = 1;
+        return 1;
+      }
       int freg = GETARG_A(*ri);
-      final_ref = ir->reg_map[fb + freg]; final_t = ir->reg_type[fb + freg];
-      if (final_ref < 0 || !sptt_isnum(final_t)) { rc->aborted = 1; return 1; }
-      for (int kk = 0; kk < cmax; kk++) { ir->reg_map[fb+kk]=save_map[kk]; ir->reg_type[fb+kk]=save_type[kk]; }
+      final_ref = ir->reg_map[fb + freg];
+      final_t = ir->reg_type[fb + freg];
+      if (final_ref < 0 || !sptt_isnum(final_t)) {
+        rc->aborted = 1;
+        return 1;
+      }
+      for (int kk = 0; kk < cmax; kk++) {
+        ir->reg_map[fb + kk] = save_map[kk];
+        ir->reg_type[fb + kk] = save_type[kk];
+      }
       break;
-    } else { rc->aborted = 1; return 1; }
+    } else {
+      rc->aborted = 1;
+      return 1;
+    }
   }
-  if (nseg < 2 || final_ref < 0) { rc->aborted = 1; return 1; }
+  if (nseg < 2 || final_ref < 0) {
+    rc->aborted = 1;
+    return 1;
+  }
 
   /* fold selects inside-out: res = Afinal; res = select(c_i, A_i, res) for i = n..0 */
-  int res = final_ref; SPTType res_t = final_t;
+  int res = final_ref;
+  SPTType res_t = final_t;
   for (int i = nseg - 1; i >= 0; i--) {
-    int nr; SPTType nt;
-    if (!emit_select(rc, s_fop[i], s_aref[i], s_bref[i], s_at[i], s_bt[i],
-                     s_A[i], s_At[i], res, res_t, &nr, &nt)) return 1;   /* mixed types -> abort */
-    res = nr; res_t = nt;
+    int nr;
+    SPTType nt;
+    if (!emit_select(rc, s_fop[i], s_aref[i], s_bref[i], s_at[i], s_bt[i], s_A[i], s_At[i], res,
+                     res_t, &nr, &nt))
+      return 1; /* mixed types -> abort */
+    res = nr;
+    res_t = nt;
   }
 
   /* bind to caller, unwind (identical to the single cond-return tail) */
@@ -1447,7 +1837,8 @@ static int rec_try_chained_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop0, int ar
     SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
     ir->reg_map[f->call_result_slot] = res;
     ir->reg_type[f->call_result_slot] = res_t;
-    if (f->call_result_slot > ir->maxslot) ir->maxslot = f->call_result_slot;
+    if (f->call_result_slot > ir->maxslot)
+      ir->maxslot = f->call_result_slot;
   }
   rec_inline_pop(rc);
   return 1;
@@ -1465,24 +1856,30 @@ static int rec_try_chained_condreturn_ifconv(SPTRecCtx *rc, SPTIROp fop0, int ar
    idempotent for a pure-read body up to the write) never fires after the write
    commits -- no double write, no new codegen, no entry-layout guard. Returns 1 if
    it took this path (caller returns 1 unless rc->aborted), 0 if not applicable. */
-static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
-                                    SPTType at, SPTType bt) {
-  if (rc->frame_base == 0) return 0;              /* only inside an inlined method */
-  if (!sptt_isnum(at) || !sptt_isnum(bt)) return 0;
+static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref, SPTType at,
+                                    SPTType bt) {
+  if (rc->frame_base == 0)
+    return 0; /* only inside an inlined method */
+  if (!sptt_isnum(at) || !sptt_isnum(bt))
+    return 0;
   SPTIRBuilder *ir = rc->ir;
   int fb = rc->frame_base;
   const Instruction *cmp_pc = rc->pc;
   const Instruction *jmp = cmp_pc + 1;
-  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
-  const Instruction *T1 = jmp + 1 + GETARG_sJ(*jmp);    /* JMP target = merge */
+  if (GET_OPCODE(*jmp) != OP_JMP)
+    return 0;
+  const Instruction *T1 = jmp + 1 + GETARG_sJ(*jmp); /* JMP target = merge */
   const Instruction *cend = rc->p->code + rc->p->sizecode;
-  if (T1 <= cmp_pc + 2 || T1 > cend) return 0;
-  const Instruction *sf_pc = T1 - 1;                    /* last then-arm op = the write */
-  if (GET_OPCODE(*sf_pc) != OP_SETFIELD) return 0;
+  if (T1 <= cmp_pc + 2 || T1 > cend)
+    return 0;
+  const Instruction *sf_pc = T1 - 1; /* last then-arm op = the write */
+  if (GET_OPCODE(*sf_pc) != OP_SETFIELD)
+    return 0;
 
   int sf_a = GETARG_A(*sf_pc), sf_b = GETARG_B(*sf_pc);
   const TValue *kc = &rc->k[sf_b];
-  if (ttypetag(kc) != LUA_VSHRSTR) return 0;
+  if (ttypetag(kc) != LUA_VSHRSTR)
+    return 0;
   TString *key = tsvalue(kc);
 
   /* old = this.f's current value: one of the compare operands must be a GETFIELD
@@ -1500,27 +1897,38 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
                 matched by key. */
   int old_ref = -1;
   if (aref >= 0 && ir->insts[aref].op == SPTIR_GETFIELD &&
-      (TString *)(intptr_t)ir->insts[aref].aux == key)      old_ref = aref;
+      (TString *)(intptr_t)ir->insts[aref].aux == key)
+    old_ref = aref;
   else if (bref >= 0 && ir->insts[bref].op == SPTIR_GETFIELD &&
-      (TString *)(intptr_t)ir->insts[bref].aux == key)      old_ref = bref;
+           (TString *)(intptr_t)ir->insts[bref].aux == key)
+    old_ref = bref;
 
   /* record the then-arm's compute of A (ops before the SETFIELD; usually none for
      `this.f = x`, a constant load for `this.f = 0`, or a field read + arithmetic
      for `this.f = this.f + x`). These run unconditionally after if-conversion, but
      the static gate restricted them to non-trapping ops (condreturn_method_op_ok). */
-  int thenarm_ir0 = rc->ir->ninst;                /* watermark: ops the then-arm emits */
+  int thenarm_ir0 = rc->ir->ninst; /* watermark: ops the then-arm emits */
   rc->pc = cmp_pc + 2;
-  while (rc->pc < sf_pc) { if (!rec_inst(rc)) return 1; }
-  if (rc->pc != sf_pc) { rc->aborted = 1; return 1; }
+  while (rc->pc < sf_pc) {
+    if (!rec_inst(rc))
+      return 1;
+  }
+  if (rc->pc != sf_pc) {
+    rc->aborted = 1;
+    return 1;
+  }
 
-  int a_ref = rec_load_rkc(rc, *sf_pc);           /* A = the written value RK(C) */
-  if (rc->aborted) return 1;
+  int a_ref = rec_load_rkc(rc, *sf_pc); /* A = the written value RK(C) */
+  if (rc->aborted)
+    return 1;
   SPTType a_t = sptir_type(ir, a_ref);
 
-  if (old_ref < 0) {                              /* conditional RMW: old from then-arm read */
+  if (old_ref < 0) { /* conditional RMW: old from then-arm read */
     for (int k = thenarm_ir0; k < rc->ir->ninst; k++)
-      if (ir->insts[k].op == SPTIR_GETFIELD &&
-          (TString *)(intptr_t)ir->insts[k].aux == key) { old_ref = k; break; }
+      if (ir->insts[k].op == SPTIR_GETFIELD && (TString *)(intptr_t)ir->insts[k].aux == key) {
+        old_ref = k;
+        break;
+      }
   }
   if (old_ref < 0) {
     /* §10.55: old is read nowhere -- the condition is on a different value AND the
@@ -1532,20 +1940,34 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
        write has committed, so it reads the unchanged value). Replicates the
        OP_GETFIELD core (base resolve, key-exists walk, type predict, guarded emit). */
     int gbase = rec_load_reg(rc, sf_a);
-    if (rc->aborted) return 1;
-    if (ir->reg_type[fb + sf_a] != SPTT_TAB) { rc->aborted = 1; return 1; }
+    if (rc->aborted)
+      return 1;
+    if (ir->reg_type[fb + sf_a] != SPTT_TAB) {
+      rc->aborted = 1;
+      return 1;
+    }
     TValue gmap;
-    if (!rec_eval_container(rc, gbase, &gmap) || !ttistable(&gmap)) { rc->aborted = 1; return 1; }
+    if (!rec_eval_container(rc, gbase, &gmap) || !ttistable(&gmap)) {
+      rc->aborted = 1;
+      return 1;
+    }
     Table *gt = hvalue(&gmap);
     Node *gn = &gt->node[(unsigned int)key->hash & ((1u << gt->lsizenode) - 1u)];
     for (;;) {
-      if (keytt(gn) == ctb(LUA_VSHRSTR) && (void *)keyval(gn).gc == (void *)key) break;
+      if (keytt(gn) == ctb(LUA_VSHRSTR) && (void *)keyval(gn).gc == (void *)key)
+        break;
       int nx = (int)gn->u.next;
-      if (nx == 0) { rc->aborted = 1; return 1; }   /* field absent -> abort (as the SETFIELD would) */
+      if (nx == 0) {
+        rc->aborted = 1;
+        return 1;
+      } /* field absent -> abort (as the SETFIELD would) */
       gn += nx;
     }
     SPTType get = rec_value_type(&gn->i_val);
-    if (get != SPTT_INT && get != SPTT_FLT) { rc->aborted = 1; return 1; }  /* numeric old for the select */
+    if (get != SPTT_INT && get != SPTT_FLT) {
+      rc->aborted = 1;
+      return 1;
+    } /* numeric old for the select */
     int gref = sptir_emit(ir, SPTIR_GETFIELD, get, gbase, SPTIR_NULL, (int64_t)(intptr_t)key);
     int gsnap = rec_snap(rc);
     ir->insts[gref].snap_idx = gsnap;
@@ -1556,7 +1978,8 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
 
   /* newval = select(fop, A, old): take A when the then-condition holds, else keep
      old (the unchanged field). Identical bit-exact select to the cond-return path. */
-  int res; SPTType res_t;
+  int res;
+  SPTType res_t;
   if (a_t == SPTT_INT && old_t == SPTT_INT && at == SPTT_INT && bt == SPTT_INT) {
     int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
     int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, a_ref, old_ref, 0);
@@ -1568,11 +1991,21 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
     int mask;
     if (is_flt_cmp) {
       int ca = aref, cb = bref;
-      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
-      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
-      int ma = ca, mb = cb; SPTIROp mop = fop;
-      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
-      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      if (at == SPTT_INT)
+        ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT)
+        cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb;
+      SPTIROp mop = fop;
+      if (fop == SPTIR_GT) {
+        mop = SPTIR_LT;
+        ma = cb;
+        mb = ca;
+      } else if (fop == SPTIR_GE) {
+        mop = SPTIR_LE;
+        ma = cb;
+        mb = ca;
+      }
       mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
     } else {
       mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
@@ -1580,24 +2013,39 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
     res = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT, a_ref, old_ref, (int64_t)mask);
     res_t = SPTT_FLT;
   } else {
-    rc->aborted = 1; return 1;                    /* mixed types: fall back */
+    rc->aborted = 1;
+    return 1; /* mixed types: fall back */
   }
 
   /* emit ONE unconditional `this.f = newval` -- replicates the OP_SETFIELD handler
      core (base resolution, key-exists chain walk, snapshot, guarded emit) but with
      the selected value `res` in place of RK(C). */
   int base_ref = rec_load_reg(rc, sf_a);
-  if (rc->aborted) return 1;
-  if (ir->reg_type[fb + sf_a] != SPTT_TAB) { rc->aborted = 1; return 1; }
-  if (res_t != SPTT_INT && res_t != SPTT_FLT) { rc->aborted = 1; return 1; }  /* no GC barrier */
+  if (rc->aborted)
+    return 1;
+  if (ir->reg_type[fb + sf_a] != SPTT_TAB) {
+    rc->aborted = 1;
+    return 1;
+  }
+  if (res_t != SPTT_INT && res_t != SPTT_FLT) {
+    rc->aborted = 1;
+    return 1;
+  } /* no GC barrier */
   TValue mapval;
-  if (!rec_eval_container(rc, base_ref, &mapval) || !ttistable(&mapval)) { rc->aborted = 1; return 1; }
+  if (!rec_eval_container(rc, base_ref, &mapval) || !ttistable(&mapval)) {
+    rc->aborted = 1;
+    return 1;
+  }
   Table *t = hvalue(&mapval);
   Node *nd = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
   for (;;) {
-    if (keytt(nd) == ctb(LUA_VSHRSTR) && (void *)keyval(nd).gc == (void *)key) break;
+    if (keytt(nd) == ctb(LUA_VSHRSTR) && (void *)keyval(nd).gc == (void *)key)
+      break;
     int nx = (int)nd->u.next;
-    if (nx == 0) { rc->aborted = 1; return 1; }   /* key absent -> abort (would insert) */
+    if (nx == 0) {
+      rc->aborted = 1;
+      return 1;
+    } /* key absent -> abort (would insert) */
     nd += nx;
   }
   int snap = rec_snap(rc);
@@ -1605,7 +2053,7 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
   ir->insts[sref].snap_idx = snap;
   ir->insts[sref].flags |= SPTIRF_GUARD;
 
-  rc->pc = T1;                                    /* continue at merge (RETURN0 -> void return) */
+  rc->pc = T1; /* continue at merge (RETURN0 -> void return) */
   return 1;
 }
 
@@ -1618,58 +2066,95 @@ static int rec_try_condwrite_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int br
    the SETFIELD is the only write and is emitted last. */
 static int rec_try_condwrite_ifelse_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
                                            SPTType at, SPTType bt) {
-  if (rc->frame_base == 0) return 0;              /* only inside an inlined method */
-  if (!sptt_isnum(at) || !sptt_isnum(bt)) return 0;
+  if (rc->frame_base == 0)
+    return 0; /* only inside an inlined method */
+  if (!sptt_isnum(at) || !sptt_isnum(bt))
+    return 0;
   SPTIRBuilder *ir = rc->ir;
   int fb = rc->frame_base;
   const Instruction *cmp_pc = rc->pc;
   const Instruction *jmp = cmp_pc + 1;
-  if (GET_OPCODE(*jmp) != OP_JMP) return 0;
-  const Instruction *else_start = jmp + 1 + GETARG_sJ(*jmp);    /* else-arm start */
+  if (GET_OPCODE(*jmp) != OP_JMP)
+    return 0;
+  const Instruction *else_start = jmp + 1 + GETARG_sJ(*jmp); /* else-arm start */
   const Instruction *cend = rc->p->code + rc->p->sizecode;
-  if (else_start <= cmp_pc + 2 || else_start >= cend) return 0;
-  const Instruction *then_jmp = else_start - 1;                 /* then-arm skip-else JMP */
-  if (GET_OPCODE(*then_jmp) != OP_JMP) return 0;
-  const Instruction *then_sf = then_jmp - 1;                    /* then-arm SETFIELD */
-  if (then_sf < cmp_pc + 2 || GET_OPCODE(*then_sf) != OP_SETFIELD) return 0;
-  const Instruction *merge = then_jmp + 1 + GETARG_sJ(*then_jmp);  /* skip-else target = merge */
-  if (merge <= else_start || merge > cend) return 0;
-  const Instruction *else_sf = merge - 1;                      /* else-arm SETFIELD */
-  if (else_sf < else_start || GET_OPCODE(*else_sf) != OP_SETFIELD) return 0;
+  if (else_start <= cmp_pc + 2 || else_start >= cend)
+    return 0;
+  const Instruction *then_jmp = else_start - 1; /* then-arm skip-else JMP */
+  if (GET_OPCODE(*then_jmp) != OP_JMP)
+    return 0;
+  const Instruction *then_sf = then_jmp - 1; /* then-arm SETFIELD */
+  if (then_sf < cmp_pc + 2 || GET_OPCODE(*then_sf) != OP_SETFIELD)
+    return 0;
+  const Instruction *merge = then_jmp + 1 + GETARG_sJ(*then_jmp); /* skip-else target = merge */
+  if (merge <= else_start || merge > cend)
+    return 0;
+  const Instruction *else_sf = merge - 1; /* else-arm SETFIELD */
+  if (else_sf < else_start || GET_OPCODE(*else_sf) != OP_SETFIELD)
+    return 0;
 
   int sf_a = GETARG_A(*then_sf);
   const TValue *kc = &rc->k[GETARG_B(*then_sf)];
-  if (ttypetag(kc) != LUA_VSHRSTR) return 0;
+  if (ttypetag(kc) != LUA_VSHRSTR)
+    return 0;
   TString *key = tsvalue(kc);
-  const TValue *kc2 = &rc->k[GETARG_B(*else_sf)];               /* both write the same field */
-  if (ttypetag(kc2) != LUA_VSHRSTR || tsvalue(kc2) != key) return 0;
-  if (GETARG_A(*else_sf) != sf_a) return 0;                    /* ... on the same receiver */
+  const TValue *kc2 = &rc->k[GETARG_B(*else_sf)]; /* both write the same field */
+  if (ttypetag(kc2) != LUA_VSHRSTR || tsvalue(kc2) != key)
+    return 0;
+  if (GETARG_A(*else_sf) != sf_a)
+    return 0; /* ... on the same receiver */
 
   int cmax = rc->p->maxstacksize;
-  if (cmax > 64) return 0;
-  int save_map[64]; SPTType save_type[64];
-  for (int k = 0; k < cmax; k++) { save_map[k] = ir->reg_map[fb+k]; save_type[k] = ir->reg_type[fb+k]; }
+  if (cmax > 64)
+    return 0;
+  int save_map[64];
+  SPTType save_type[64];
+  for (int k = 0; k < cmax; k++) {
+    save_map[k] = ir->reg_map[fb + k];
+    save_type[k] = ir->reg_type[fb + k];
+  }
 
   /* ---- record then-arm's compute of A (forked frame), A = the written value RK(C) */
   rc->pc = cmp_pc + 2;
-  while (rc->pc < then_sf) { if (!rec_inst(rc)) return 1; }
-  if (rc->pc != then_sf) { rc->aborted = 1; return 1; }
+  while (rc->pc < then_sf) {
+    if (!rec_inst(rc))
+      return 1;
+  }
+  if (rc->pc != then_sf) {
+    rc->aborted = 1;
+    return 1;
+  }
   int a_ref = rec_load_rkc(rc, *then_sf);
-  if (rc->aborted) return 1;
+  if (rc->aborted)
+    return 1;
   SPTType a_t = sptir_type(ir, a_ref);
-  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+  for (int k = 0; k < cmax; k++) {
+    ir->reg_map[fb + k] = save_map[k];
+    ir->reg_type[fb + k] = save_type[k];
+  }
 
   /* ---- record else-arm's compute of B (forked frame), B = the written value RK(C) */
   rc->pc = else_start;
-  while (rc->pc < else_sf) { if (!rec_inst(rc)) return 1; }
-  if (rc->pc != else_sf) { rc->aborted = 1; return 1; }
+  while (rc->pc < else_sf) {
+    if (!rec_inst(rc))
+      return 1;
+  }
+  if (rc->pc != else_sf) {
+    rc->aborted = 1;
+    return 1;
+  }
   int b_ref = rec_load_rkc(rc, *else_sf);
-  if (rc->aborted) return 1;
+  if (rc->aborted)
+    return 1;
   SPTType b_t = sptir_type(ir, b_ref);
-  for (int k = 0; k < cmax; k++) { ir->reg_map[fb+k] = save_map[k]; ir->reg_type[fb+k] = save_type[k]; }
+  for (int k = 0; k < cmax; k++) {
+    ir->reg_map[fb + k] = save_map[k];
+    ir->reg_type[fb + k] = save_type[k];
+  }
 
   /* newval = select(fop, A, B): A when the then-condition holds, else B. */
-  int res; SPTType res_t;
+  int res;
+  SPTType res_t;
   if (a_t == SPTT_INT && b_t == SPTT_INT && at == SPTT_INT && bt == SPTT_INT) {
     int cref = sptir_emit(ir, SPTIR_CMPSET, SPTT_INT, aref, bref, (int64_t)fop);
     int diff = sptir_emit(ir, SPTIR_SUB, SPTT_INT, a_ref, b_ref, 0);
@@ -1681,11 +2166,21 @@ static int rec_try_condwrite_ifelse_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref,
     int mask;
     if (is_flt_cmp) {
       int ca = aref, cb = bref;
-      if (at == SPTT_INT) ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
-      if (bt == SPTT_INT) cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
-      int ma = ca, mb = cb; SPTIROp mop = fop;
-      if (fop == SPTIR_GT)      { mop = SPTIR_LT; ma = cb; mb = ca; }
-      else if (fop == SPTIR_GE) { mop = SPTIR_LE; ma = cb; mb = ca; }
+      if (at == SPTT_INT)
+        ca = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, -1, 0);
+      if (bt == SPTT_INT)
+        cb = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, -1, 0);
+      int ma = ca, mb = cb;
+      SPTIROp mop = fop;
+      if (fop == SPTIR_GT) {
+        mop = SPTIR_LT;
+        ma = cb;
+        mb = ca;
+      } else if (fop == SPTIR_GE) {
+        mop = SPTIR_LE;
+        ma = cb;
+        mb = ca;
+      }
       mask = sptir_emit(ir, SPTIR_FCMPMASK, SPTT_FLT, ma, mb, (int64_t)mop);
     } else {
       mask = sptir_emit(ir, SPTIR_ICMPMASK, SPTT_FLT, aref, bref, (int64_t)fop);
@@ -1693,22 +2188,37 @@ static int rec_try_condwrite_ifelse_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref,
     res = sptir_emit(ir, SPTIR_FSELECT, SPTT_FLT, a_ref, b_ref, (int64_t)mask);
     res_t = SPTT_FLT;
   } else {
-    rc->aborted = 1; return 1;                    /* mixed types: fall back */
+    rc->aborted = 1;
+    return 1; /* mixed types: fall back */
   }
 
   /* emit ONE unconditional `this.f = newval` (replicates the OP_SETFIELD core) */
   int base_ref = rec_load_reg(rc, sf_a);
-  if (rc->aborted) return 1;
-  if (ir->reg_type[fb + sf_a] != SPTT_TAB) { rc->aborted = 1; return 1; }
-  if (res_t != SPTT_INT && res_t != SPTT_FLT) { rc->aborted = 1; return 1; }
+  if (rc->aborted)
+    return 1;
+  if (ir->reg_type[fb + sf_a] != SPTT_TAB) {
+    rc->aborted = 1;
+    return 1;
+  }
+  if (res_t != SPTT_INT && res_t != SPTT_FLT) {
+    rc->aborted = 1;
+    return 1;
+  }
   TValue mapval;
-  if (!rec_eval_container(rc, base_ref, &mapval) || !ttistable(&mapval)) { rc->aborted = 1; return 1; }
+  if (!rec_eval_container(rc, base_ref, &mapval) || !ttistable(&mapval)) {
+    rc->aborted = 1;
+    return 1;
+  }
   Table *t = hvalue(&mapval);
   Node *nd = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
   for (;;) {
-    if (keytt(nd) == ctb(LUA_VSHRSTR) && (void *)keyval(nd).gc == (void *)key) break;
+    if (keytt(nd) == ctb(LUA_VSHRSTR) && (void *)keyval(nd).gc == (void *)key)
+      break;
     int nx = (int)nd->u.next;
-    if (nx == 0) { rc->aborted = 1; return 1; }
+    if (nx == 0) {
+      rc->aborted = 1;
+      return 1;
+    }
     nd += nx;
   }
   int snap = rec_snap(rc);
@@ -1716,7 +2226,7 @@ static int rec_try_condwrite_ifelse_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref,
   ir->insts[sref].snap_idx = snap;
   ir->insts[sref].flags |= SPTIRF_GUARD;
 
-  rc->pc = merge;                                 /* continue at merge (RETURN0 -> void return) */
+  rc->pc = merge; /* continue at merge (RETURN0 -> void return) */
   return 1;
 }
 
@@ -1728,18 +2238,26 @@ static int rec_try_condwrite_ifelse_ifconv(SPTRecCtx *rc, SPTIROp fop, int aref,
    we guard the negation and continue at the JMP target. If the values can't be
    known (an operand computed mid-trace), we keep the static fall-through, which
    is always correct (just possibly cold). Returns 1 to continue, 0 to abort. */
-static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
-                           SPTType at, SPTType bt, int a_reg, int b_reg) {
-  if (!sptt_isnum(at) || !sptt_isnum(bt)) { rc->aborted = 1; return 0; }
+static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref, SPTType at, SPTType bt,
+                           int a_reg, int b_reg) {
+  if (!sptt_isnum(at) || !sptt_isnum(bt)) {
+    rc->aborted = 1;
+    return 0;
+  }
   /* Prefer branchless if-conversion for simple integer if-else / if-only: it
      keeps both arms in the trace with no side exit, which is a large win for
      ~50/50 branches that would otherwise exit every other iteration. Falls back
      to the guarded branch (below) when the shape isn't convertible. */
-  if (rec_try_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
-  if (rec_try_chained_condreturn_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
-  if (rec_try_condreturn_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
-  if (rec_try_condwrite_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
-  if (rec_try_condwrite_ifelse_ifconv(rc, fop, aref, bref, at, bt)) return rc->aborted ? 0 : 1;
+  if (rec_try_ifconv(rc, fop, aref, bref, at, bt))
+    return rc->aborted ? 0 : 1;
+  if (rec_try_chained_condreturn_ifconv(rc, fop, aref, bref, at, bt))
+    return rc->aborted ? 0 : 1;
+  if (rec_try_condreturn_ifconv(rc, fop, aref, bref, at, bt))
+    return rc->aborted ? 0 : 1;
+  if (rec_try_condwrite_ifconv(rc, fop, aref, bref, at, bt))
+    return rc->aborted ? 0 : 1;
+  if (rec_try_condwrite_ifelse_ifconv(rc, fop, aref, bref, at, bt))
+    return rc->aborted ? 0 : 1;
   /* A comparison inside an inlined callee that couldn't be if-converted needs
      a guarded branch, i.e. a mid-callee control-flow split with a snapshot.
      For method inlines (method_self_pc != NULL), the resume is at the caller's
@@ -1767,7 +2285,9 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
     }
     /* Free-function inline: proceed with guarded branch (resume-at-call). */
   }
-  if (rc->js->debug) fprintf(stderr, "[JIT] guarded branch: fb=%d depth=%d fop=%d\n", rc->frame_base, rc->inline_depth, (int)fop);
+  if (rc->js->debug)
+    fprintf(stderr, "[JIT] guarded branch: fb=%d depth=%d fop=%d\n", rc->frame_base,
+            rc->inline_depth, (int)fop);
   const Instruction *jmp = rc->pc + 1; /* the JMP following the comparison */
   double xv, yv;
   int fall_through = 1; /* default: static fall-through (correct, maybe cold) */
@@ -1801,11 +2321,13 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
   }
   if (fall_through) {
     rec_compare(rc, fop, aref, bref, at, bt);
-    if (rc->aborted) return 0;
-    rc->pc = jmp + 1;                   /* skip comparison + JMP */
+    if (rc->aborted)
+      return 0;
+    rc->pc = jmp + 1; /* skip comparison + JMP */
   } else {
     rec_compare(rc, rec_negate_cmp(fop), aref, bref, at, bt);
-    if (rc->aborted) return 0;
+    if (rc->aborted)
+      return 0;
     rc->pc = jmp + 1 + GETARG_sJ(*jmp); /* follow the JMP */
   }
   return 1;
@@ -1815,10 +2337,12 @@ static int rec_cond_branch(SPTRecCtx *rc, SPTIROp fop, int aref, int bref,
    the operand's stack slot. NULL if not a string. */
 static TString *rec_str_at(SPTRecCtx *rc, int ref, int reg) {
   SPTIRInst *in = sptir_get(rc->ir, ref);
-  if (in && in->op == SPTIR_KSTR) return (TString *)(uintptr_t)in->aux;
+  if (in && in->op == SPTIR_KSTR)
+    return (TString *)(uintptr_t)in->aux;
   if (reg >= 0) {
     TValue *v = s2v((rc->ci->func.p + 1) + reg);
-    if (ttisstring(v)) return tsvalue(v);
+    if (ttisstring(v))
+      return tsvalue(v);
   }
   return NULL;
 }
@@ -1827,8 +2351,7 @@ static TString *rec_str_at(SPTRecCtx *rc, int ref, int reg) {
    guard is a pointer comparison, valid because the constant operand is a short
    interned string (the OP_EQK handler checks this). The taken branch is
    predicted by comparing the record-time string pointers. */
-static int rec_str_cond_branch(SPTRecCtx *rc, int k, int aref, int bref,
-                               int a_reg, int b_reg) {
+static int rec_str_cond_branch(SPTRecCtx *rc, int k, int aref, int bref, int a_reg, int b_reg) {
   SPTIROp fop = k ? SPTIR_NE : SPTIR_EQ; /* fall-through condition */
   TString *sa = rec_str_at(rc, aref, a_reg);
   TString *sb = rec_str_at(rc, bref, b_reg);
@@ -1840,14 +2363,18 @@ static int rec_str_cond_branch(SPTRecCtx *rc, int k, int aref, int bref,
   const Instruction *jmp = rc->pc + 1;
   SPTIROp gop = fall_through ? fop : rec_negate_cmp(fop);
   rec_compare(rc, gop, aref, bref, SPTT_STR, SPTT_STR);
-  if (rc->aborted) return 0;
-  if (fall_through) rc->pc = jmp + 1;
-  else rc->pc = jmp + 1 + GETARG_sJ(*jmp);
+  if (rc->aborted)
+    return 0;
+  if (fall_through)
+    rc->pc = jmp + 1;
+  else
+    rc->pc = jmp + 1 + GETARG_sJ(*jmp);
   return 1;
 }
 
 /* Record an arithmetic operation. */
-static int rec_arith(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_type, SPTType b_type) {
+static int rec_arith(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_type,
+                     SPTType b_type) {
   SPTIRBuilder *ir = rc->ir;
 
   /* DIV ('/') and POW ('^') always produce a float in SPT/Lua, even for two
@@ -1880,19 +2407,19 @@ static int rec_arith(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_
       a_ref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, a_ref, SPTIR_NULL, 0);
       a_type = SPTT_FLT;
     } else if (a_type != SPTT_FLT) {
-      rc->aborted = 1; return SPTIR_NULL;
+      rc->aborted = 1;
+      return SPTIR_NULL;
     }
     if (b_type == SPTT_INT) {
       b_ref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, b_ref, SPTIR_NULL, 0);
       b_type = SPTT_FLT;
     } else if (b_type != SPTT_FLT) {
-      rc->aborted = 1; return SPTIR_NULL;
+      rc->aborted = 1;
+      return SPTIR_NULL;
     }
-    return sptir_emit(ir, SPTIR_FMATH2, SPTT_FLT, a_ref, b_ref,
-                      (int64_t)(intptr_t)spt_jit_luamodf);
+    return sptir_emit(ir, SPTIR_FMATH2, SPTT_FLT, a_ref, b_ref, (int64_t)(intptr_t)spt_jit_luamodf);
   }
-  if ((op == SPTIR_IDIV) &&
-      !(a_type == SPTT_INT && b_type == SPTT_INT)) {
+  if ((op == SPTIR_IDIV) && !(a_type == SPTT_INT && b_type == SPTT_INT)) {
     rc->aborted = 1;
     return SPTIR_NULL;
   }
@@ -1923,8 +2450,8 @@ static int rec_arith(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_
 }
 
 /* Record a comparison. */
-static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
-                       SPTType a_type, SPTType b_type) {
+static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref, SPTType a_type,
+                       SPTType b_type) {
   SPTIRBuilder *ir = rc->ir;
 
   /* If both int or both float, direct comparison. */
@@ -1949,8 +2476,7 @@ static int rec_compare(SPTRecCtx *rc, SPTIROp op, int a_ref, int b_ref,
      short interned constant operand, so pointer equality is exact: equal short
      strings share one interned object, and a long string can never equal a
      short constant. Only EQ/NE (ordering would need content comparison). */
-  if (a_type == SPTT_STR && b_type == SPTT_STR &&
-      (op == SPTIR_EQ || op == SPTIR_NE)) {
+  if (a_type == SPTT_STR && b_type == SPTT_STR && (op == SPTIR_EQ || op == SPTIR_NE)) {
     int ref = sptir_emit(ir, op, SPTT_TRUE, a_ref, b_ref, 0);
     ir->insts[ref].flags |= SPTIRF_GUARD;
     int snap = rec_snap(rc);
@@ -2002,42 +2528,73 @@ static int rec_shift_const(SPTRecCtx *rc, int val_ref, int64_t sh) {
    after the return. On success returns 1 and writes the register holding the
    returned value to *ret_reg. */
 static int proto_is_inlinable(Proto *p, int *ret_reg) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;          /* has nested protos => may close over */
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0; /* has nested protos => may close over */
   int n = p->sizecode;
-  if (n < 1 || n > 48) return 0;        /* keep inlined bodies small */
+  if (n < 1 || n > 48)
+    return 0; /* keep inlined bodies small */
   int saw_return = 0;
   for (int i = 0; i < n; i++) {
     Instruction ins = p->code[i];
     OpCode o = GET_OPCODE(ins);
     switch (o) {
-      /* value-producing, side-effect-free, straight-line ops */
-      case OP_MOVE:
-      case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
-      case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-      case OP_MOD: case OP_IDIV: case OP_POW:
-      case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
-      case OP_MODK: case OP_IDIVK: case OP_POWK:
-      case OP_ADDI:
-      case OP_BAND: case OP_BOR: case OP_BXOR:
-      case OP_BANDK: case OP_BORK: case OP_BXORK:
-      case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
-      case OP_BNOT: case OP_UNM: case OP_NOT:
-      case OP_MMBIN: case OP_MMBINI: case OP_MMBINK: /* metamethod markers; skipped */
-      case OP_EXTRAARG:
-      /* A trailing RETURN0/RETURN after the RETURN1 is dead compiler boilerplate
-         and is never recorded (RETURN1 redirects recording back to the caller),
-         so accepting it here is safe; it does not set a return register. */
-      case OP_RETURN0: case OP_RETURN:
-        break;
-      case OP_RETURN1:
-        if (saw_return) return 0;       /* only a single return point */
-        *ret_reg = GETARG_A(ins);
-        saw_return = 1;
-        break;
-      default:
-        return 0;                       /* anything else: not inlinable */
+    /* value-producing, side-effect-free, straight-line ops */
+    case OP_MOVE:
+    case OP_LOADI:
+    case OP_LOADF:
+    case OP_LOADK:
+    case OP_LOADKX:
+    case OP_LOADFALSE:
+    case OP_LOADTRUE:
+    case OP_LOADNIL:
+    case OP_ADD:
+    case OP_SUB:
+    case OP_MUL:
+    case OP_DIV:
+    case OP_MOD:
+    case OP_IDIV:
+    case OP_POW:
+    case OP_ADDK:
+    case OP_SUBK:
+    case OP_MULK:
+    case OP_DIVK:
+    case OP_MODK:
+    case OP_IDIVK:
+    case OP_POWK:
+    case OP_ADDI:
+    case OP_BAND:
+    case OP_BOR:
+    case OP_BXOR:
+    case OP_BANDK:
+    case OP_BORK:
+    case OP_BXORK:
+    case OP_SHL:
+    case OP_SHR:
+    case OP_SHLI:
+    case OP_SHRI:
+    case OP_BNOT:
+    case OP_UNM:
+    case OP_NOT:
+    case OP_MMBIN:
+    case OP_MMBINI:
+    case OP_MMBINK: /* metamethod markers; skipped */
+    case OP_EXTRAARG:
+    /* A trailing RETURN0/RETURN after the RETURN1 is dead compiler boilerplate
+       and is never recorded (RETURN1 redirects recording back to the caller),
+       so accepting it here is safe; it does not set a return register. */
+    case OP_RETURN0:
+    case OP_RETURN:
+      break;
+    case OP_RETURN1:
+      if (saw_return)
+        return 0; /* only a single return point */
+      *ret_reg = GETARG_A(ins);
+      saw_return = 1;
+      break;
+    default:
+      return 0; /* anything else: not inlinable */
     }
   }
   return saw_return;
@@ -2054,63 +2611,104 @@ static int proto_is_inlinable(Proto *p, int *ret_reg) {
    the FIRST RETURN1 (all return slots should be the same local; the recorder
    validates this at record time). */
 static int proto_is_branch_inlinable(Proto *p, int *ret_reg) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 1 || n > 64) return 0;
+  if (n < 1 || n > 64)
+    return 0;
   int saw_return = 0;
   for (int i = 0; i < n; i++) {
     Instruction ins = p->code[i];
     OpCode o = GET_OPCODE(ins);
     switch (o) {
-      /* value-producing, side-effect-free, straight-line ops (same as
-         proto_is_inlinable) */
-      case OP_MOVE:
-      case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
-      case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-      case OP_MOD: case OP_IDIV: case OP_POW:
-      case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
-      case OP_MODK: case OP_IDIVK: case OP_POWK:
-      case OP_ADDI:
-      case OP_BAND: case OP_BOR: case OP_BXOR:
-      case OP_BANDK: case OP_BORK: case OP_BXORK:
-      case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
-      case OP_BNOT: case OP_UNM: case OP_NOT:
-      case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
-      case OP_EXTRAARG:
-      /* read-only field / element access (for methods reading this.field,
-         and free functions reading table fields with branches) */
-      case OP_GETFIELD: case OP_GETI: case OP_GETTABLE:
-      case OP_LEN:
-      case OP_RETURN0: case OP_RETURN:
-        break;
-      case OP_RETURN1:
-        if (!saw_return) *ret_reg = GETARG_A(ins);
-        saw_return++;
-        break;
-      /* conditional branches */
-      case OP_EQ: case OP_LT: case OP_LE:
-      case OP_EQK: case OP_EQI:
-      case OP_LTI: case OP_LEI: case OP_GTI: case OP_GEI:
-        break;
-      case OP_JMP: {
-        int sj = GETARG_sJ(ins);
-        if (sj < 0) return 0;           /* backward jump = loop: not inlinable */
-        int target = i + 1 + sj;
-        if (target >= n) return 0;      /* jump out of function: not inlinable */
-        break;
-      }
-      /* numeric for-loops: allowed because try_unroll_inner_loop will unroll
-         the body inline at recording time (constant or speculative trip count).
-         If the body is not straight-line or the trip count exceeds the unroll
-         cap, the unroller bails and the FORLOOP back-edge aborts the trace
-         safely (falls back to interpreter). */
-      case OP_FORPREP:
-      case OP_FORLOOP:
-        break;
-      default:
-        return 0;                       /* anything else: not inlinable */
+    /* value-producing, side-effect-free, straight-line ops (same as
+       proto_is_inlinable) */
+    case OP_MOVE:
+    case OP_LOADI:
+    case OP_LOADF:
+    case OP_LOADK:
+    case OP_LOADKX:
+    case OP_LOADFALSE:
+    case OP_LOADTRUE:
+    case OP_LOADNIL:
+    case OP_ADD:
+    case OP_SUB:
+    case OP_MUL:
+    case OP_DIV:
+    case OP_MOD:
+    case OP_IDIV:
+    case OP_POW:
+    case OP_ADDK:
+    case OP_SUBK:
+    case OP_MULK:
+    case OP_DIVK:
+    case OP_MODK:
+    case OP_IDIVK:
+    case OP_POWK:
+    case OP_ADDI:
+    case OP_BAND:
+    case OP_BOR:
+    case OP_BXOR:
+    case OP_BANDK:
+    case OP_BORK:
+    case OP_BXORK:
+    case OP_SHL:
+    case OP_SHR:
+    case OP_SHLI:
+    case OP_SHRI:
+    case OP_BNOT:
+    case OP_UNM:
+    case OP_NOT:
+    case OP_MMBIN:
+    case OP_MMBINI:
+    case OP_MMBINK:
+    case OP_EXTRAARG:
+    /* read-only field / element access (for methods reading this.field,
+       and free functions reading table fields with branches) */
+    case OP_GETFIELD:
+    case OP_GETI:
+    case OP_GETTABLE:
+    case OP_LEN:
+    case OP_RETURN0:
+    case OP_RETURN:
+      break;
+    case OP_RETURN1:
+      if (!saw_return)
+        *ret_reg = GETARG_A(ins);
+      saw_return++;
+      break;
+    /* conditional branches */
+    case OP_EQ:
+    case OP_LT:
+    case OP_LE:
+    case OP_EQK:
+    case OP_EQI:
+    case OP_LTI:
+    case OP_LEI:
+    case OP_GTI:
+    case OP_GEI:
+      break;
+    case OP_JMP: {
+      int sj = GETARG_sJ(ins);
+      if (sj < 0)
+        return 0; /* backward jump = loop: not inlinable */
+      int target = i + 1 + sj;
+      if (target >= n)
+        return 0; /* jump out of function: not inlinable */
+      break;
+    }
+    /* numeric for-loops: allowed because try_unroll_inner_loop will unroll
+       the body inline at recording time (constant or speculative trip count).
+       If the body is not straight-line or the trip count exceeds the unroll
+       cap, the unroller bails and the FORLOOP back-edge aborts the trace
+       safely (falls back to interpreter). */
+    case OP_FORPREP:
+    case OP_FORLOOP:
+      break;
+    default:
+      return 0; /* anything else: not inlinable */
     }
   }
   return saw_return >= 1;
@@ -2125,49 +2723,82 @@ static int proto_is_branch_inlinable(Proto *p, int *ret_reg) {
    SELF+CALL+method in the interpreter idempotently. Still a single RETURN1, no
    branches/loops/calls, kept small. */
 static int proto_is_method_inlinable(Proto *p, int *ret_reg) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 1 || n > 48) return 0;
+  if (n < 1 || n > 48)
+    return 0;
   int saw_return = 0;
   for (int i = 0; i < n; i++) {
     Instruction ins = p->code[i];
     OpCode o = GET_OPCODE(ins);
     switch (o) {
-      case OP_MOVE:
-      case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
-      case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-      case OP_MOD: case OP_IDIV: case OP_POW:
-      case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
-      case OP_MODK: case OP_IDIVK: case OP_POWK:
-      case OP_ADDI:
-      case OP_BAND: case OP_BOR: case OP_BXOR:
-      case OP_BANDK: case OP_BORK: case OP_BXORK:
-      case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
-      case OP_BNOT: case OP_UNM: case OP_NOT:
-      case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
-      case OP_EXTRAARG:
-      /* read-only field / element access on this (and locals) */
-      case OP_GETFIELD: case OP_GETI: case OP_GETTABLE:
-      case OP_LEN:
-      case OP_RETURN0: case OP_RETURN:
-        break;
-      case OP_RETURN1:
-        if (saw_return) return 0;
-        *ret_reg = GETARG_A(ins);
-        saw_return = 1;
-        break;
-      default:
+    case OP_MOVE:
+    case OP_LOADI:
+    case OP_LOADF:
+    case OP_LOADK:
+    case OP_LOADKX:
+    case OP_LOADFALSE:
+    case OP_LOADTRUE:
+    case OP_LOADNIL:
+    case OP_ADD:
+    case OP_SUB:
+    case OP_MUL:
+    case OP_DIV:
+    case OP_MOD:
+    case OP_IDIV:
+    case OP_POW:
+    case OP_ADDK:
+    case OP_SUBK:
+    case OP_MULK:
+    case OP_DIVK:
+    case OP_MODK:
+    case OP_IDIVK:
+    case OP_POWK:
+    case OP_ADDI:
+    case OP_BAND:
+    case OP_BOR:
+    case OP_BXOR:
+    case OP_BANDK:
+    case OP_BORK:
+    case OP_BXORK:
+    case OP_SHL:
+    case OP_SHR:
+    case OP_SHLI:
+    case OP_SHRI:
+    case OP_BNOT:
+    case OP_UNM:
+    case OP_NOT:
+    case OP_MMBIN:
+    case OP_MMBINI:
+    case OP_MMBINK:
+    case OP_EXTRAARG:
+    /* read-only field / element access on this (and locals) */
+    case OP_GETFIELD:
+    case OP_GETI:
+    case OP_GETTABLE:
+    case OP_LEN:
+    case OP_RETURN0:
+    case OP_RETURN:
+      break;
+    case OP_RETURN1:
+      if (saw_return)
         return 0;
+      *ret_reg = GETARG_A(ins);
+      saw_return = 1;
+      break;
+    default:
+      return 0;
     }
   }
   return saw_return;
 }
 
 static int op_is_comparison(OpCode o) {
-  return o == OP_EQ || o == OP_LT || o == OP_LE || o == OP_EQK ||
-         o == OP_EQI || o == OP_LTI || o == OP_LEI || o == OP_GTI || o == OP_GEI;
+  return o == OP_EQ || o == OP_LT || o == OP_LE || o == OP_EQK || o == OP_EQI || o == OP_LTI ||
+         o == OP_LEI || o == OP_GTI || o == OP_GEI;
 }
 
 /* Decide whether `p` is an inlinable conditional-return leaf of the exact shape
@@ -2183,39 +2814,60 @@ static int op_is_comparison(OpCode o) {
    callee is inlined and its conditional return if-converted into a branchless
    integer or float select (see rec_try_condreturn_ifconv). */
 static int proto_is_condreturn_inlinable(Proto *p) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 4 || n > 48) return 0;
+  if (n < 4 || n > 48)
+    return 0;
   int ci = -1;
   for (int i = 0; i < n; i++)
-    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
-  if (ci < 0) return 0;
-  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
-  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);    /* JMP target = else-arm start */
-  if (t1 <= ci + 2 || t1 >= n) return 0;
-  if (GET_OPCODE(p->code[t1-1]) != OP_RETURN1) return 0;
-  for (int i = 0; i < ci; i++) {                 /* prefix */
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) {
+      ci = i;
+      break;
+    }
+  if (ci < 0)
+    return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci + 1]) != OP_JMP)
+    return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci + 1]); /* JMP target = else-arm start */
+  if (t1 <= ci + 2 || t1 >= n)
+    return 0;
+  if (GET_OPCODE(p->code[t1 - 1]) != OP_RETURN1)
+    return 0;
+  for (int i = 0; i < ci; i++) { /* prefix */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe_any(o)) return 0;
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
+    if (!opcode_is_ifconv_safe_any(o))
+      return 0;
   }
-  for (int i = ci + 2; i < t1 - 1; i++) {        /* then-arm compute */
+  for (int i = ci + 2; i < t1 - 1; i++) { /* then-arm compute */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe_any(o)) return 0;
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
+    if (!opcode_is_ifconv_safe_any(o))
+      return 0;
   }
   int e = -1;
-  for (int i = t1; i < n; i++) {                 /* else-arm: first RETURN1 */
+  for (int i = t1; i < n; i++) { /* else-arm: first RETURN1 */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_RETURN1) { e = i; break; }
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe_any(o)) return 0;
+    if (o == OP_RETURN1) {
+      e = i;
+      break;
+    }
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
+    if (!opcode_is_ifconv_safe_any(o))
+      return 0;
   }
-  if (e < 0) return 0;
-  for (int i = e + 1; i < n; i++) {              /* only dead boilerplate after */
+  if (e < 0)
+    return 0;
+  for (int i = e + 1; i < n; i++) { /* only dead boilerplate after */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o != OP_RETURN0 && o != OP_RETURN) return 0;
+    if (o != OP_RETURN0 && o != OP_RETURN)
+      return 0;
   }
   return 1;
 }
@@ -2230,8 +2882,10 @@ static int proto_is_condreturn_inlinable(Proto *p) {
    never fire in steady state. Writes stay excluded (a committed side effect
    breaks resume-at-SELF). */
 static int condreturn_method_op_ok(OpCode o) {
-  if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) return 1;
-  if (opcode_is_ifconv_safe_any(o)) return 1;   /* int- OR float-safe (float const loads, float DIV) */
+  if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+    return 1;
+  if (opcode_is_ifconv_safe_any(o))
+    return 1; /* int- OR float-safe (float const loads, float DIV) */
   return o == OP_GETFIELD || o == OP_LEN;
 }
 
@@ -2244,38 +2898,57 @@ static int condreturn_method_op_ok(OpCode o) {
    types are validated at record time (integer select must be bit-exact); a float
    field/return cleanly aborts there. */
 static int proto_is_condreturn_method_inlinable(Proto *p) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 4 || n > 48) return 0;
+  if (n < 4 || n > 48)
+    return 0;
   int ci = -1;
   for (int i = 0; i < n; i++)
-    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
-  if (ci < 0) return 0;
-  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
-  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);    /* JMP target = else-arm start */
-  if (t1 <= ci + 2 || t1 >= n) return 0;
-  if (GET_OPCODE(p->code[t1-1]) != OP_RETURN1) return 0;
-  for (int i = 0; i < ci; i++)                    /* prefix */
-    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
-  for (int i = ci + 2; i < t1 - 1; i++)           /* then-arm compute */
-    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) {
+      ci = i;
+      break;
+    }
+  if (ci < 0)
+    return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci + 1]) != OP_JMP)
+    return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci + 1]); /* JMP target = else-arm start */
+  if (t1 <= ci + 2 || t1 >= n)
+    return 0;
+  if (GET_OPCODE(p->code[t1 - 1]) != OP_RETURN1)
+    return 0;
+  for (int i = 0; i < ci; i++) /* prefix */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
+  for (int i = ci + 2; i < t1 - 1; i++) /* then-arm compute */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
   int e = -1;
-  for (int i = t1; i < n; i++) {                  /* else-arm: first RETURN1 */
+  for (int i = t1; i < n; i++) { /* else-arm: first RETURN1 */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_RETURN1) { e = i; break; }
-    if (!condreturn_method_op_ok(o)) return 0;
+    if (o == OP_RETURN1) {
+      e = i;
+      break;
+    }
+    if (!condreturn_method_op_ok(o))
+      return 0;
   }
-  if (e < 0) return 0;
-  for (int i = e + 1; i < n; i++) {               /* only dead boilerplate after */
+  if (e < 0)
+    return 0;
+  for (int i = e + 1; i < n; i++) { /* only dead boilerplate after */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o != OP_RETURN0 && o != OP_RETURN) return 0;
+    if (o != OP_RETURN0 && o != OP_RETURN)
+      return 0;
   }
   return 1;
 }
 
 static int chain_op_ok(OpCode o, int allow_fields) {
-  if (allow_fields) return condreturn_method_op_ok(o);
+  if (allow_fields)
+    return condreturn_method_op_ok(o);
   return o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK || opcode_is_ifconv_safe_any(o);
 }
 
@@ -2290,38 +2963,55 @@ static int chain_op_ok(OpCode o, int allow_fields) {
    (no branch, no side exit). The walk MIRRORS the recorder so a gate pass implies a
    recordable shape (and any mismatch just aborts cleanly). */
 static int proto_is_chained_condreturn(Proto *p, int allow_fields) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 6 || n > 64) return 0;
+  if (n < 6 || n > 64)
+    return 0;
   int pc = 0, nseg = 0;
   for (;;) {
     int ci = -1, ri = -1;
-    for (int i = pc; i < n; i++) {                 /* compute prefix, then CMP or RETURN */
+    for (int i = pc; i < n; i++) { /* compute prefix, then CMP or RETURN */
       OpCode o = GET_OPCODE(p->code[i]);
-      if (op_is_comparison(o)) { ci = i; break; }
-      if (o == OP_RETURN1 || o == OP_RETURN0 || o == OP_RETURN) { ri = i; break; }
-      if (!chain_op_ok(o, allow_fields)) return 0;
+      if (op_is_comparison(o)) {
+        ci = i;
+        break;
+      }
+      if (o == OP_RETURN1 || o == OP_RETURN0 || o == OP_RETURN) {
+        ri = i;
+        break;
+      }
+      if (!chain_op_ok(o, allow_fields))
+        return 0;
     }
     if (ci >= 0) {
-      if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
-      int t = ci + 2 + GETARG_sJ(p->code[ci+1]);   /* JMP target = next segment */
-      if (t <= ci + 2 || t > n) return 0;
-      if (GET_OPCODE(p->code[t-1]) != OP_RETURN1) return 0;
-      for (int i = ci + 2; i < t - 1; i++)         /* then-arm compute A */
-        if (!chain_op_ok(GET_OPCODE(p->code[i]), allow_fields)) return 0;
+      if (ci + 1 >= n || GET_OPCODE(p->code[ci + 1]) != OP_JMP)
+        return 0;
+      int t = ci + 2 + GETARG_sJ(p->code[ci + 1]); /* JMP target = next segment */
+      if (t <= ci + 2 || t > n)
+        return 0;
+      if (GET_OPCODE(p->code[t - 1]) != OP_RETURN1)
+        return 0;
+      for (int i = ci + 2; i < t - 1; i++) /* then-arm compute A */
+        if (!chain_op_ok(GET_OPCODE(p->code[i]), allow_fields))
+          return 0;
       nseg++;
       pc = t;
     } else if (ri >= 0) {
-      if (GET_OPCODE(p->code[ri]) != OP_RETURN1) return 0;   /* final must be a value return */
-      for (int i = ri + 1; i < n; i++) {           /* only dead boilerplate after */
+      if (GET_OPCODE(p->code[ri]) != OP_RETURN1)
+        return 0;                        /* final must be a value return */
+      for (int i = ri + 1; i < n; i++) { /* only dead boilerplate after */
         OpCode o = GET_OPCODE(p->code[i]);
-        if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG) return 0;
+        if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG)
+          return 0;
       }
       break;
-    } else return 0;
+    } else
+      return 0;
   }
-  return nseg >= 2;                                 /* >=2 cond-returns = a chain */
+  return nseg >= 2; /* >=2 cond-returns = a chain */
 }
 
 /* Ops permitted BEFORE the write in a single-trailing-write method body: the
@@ -2331,25 +3021,53 @@ static int proto_is_chained_condreturn(Proto *p, int allow_fields) {
    so a failure side-exits before the write commits -- safe with resume-at-SELF. */
 static int method_read_op_ok(OpCode o) {
   switch (o) {
-    case OP_MOVE:
-    case OP_LOADI: case OP_LOADF: case OP_LOADK: case OP_LOADKX:
-    case OP_LOADFALSE: case OP_LOADTRUE: case OP_LOADNIL:
-    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-    case OP_MOD: case OP_IDIV: case OP_POW:
-    case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
-    case OP_MODK: case OP_IDIVK: case OP_POWK:
-    case OP_ADDI:
-    case OP_BAND: case OP_BOR: case OP_BXOR:
-    case OP_BANDK: case OP_BORK: case OP_BXORK:
-    case OP_SHL: case OP_SHR: case OP_SHLI: case OP_SHRI:
-    case OP_BNOT: case OP_UNM: case OP_NOT:
-    case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
-    case OP_EXTRAARG:
-    case OP_GETFIELD: case OP_GETI: case OP_GETTABLE:
-    case OP_LEN:
-      return 1;
-    default:
-      return 0;
+  case OP_MOVE:
+  case OP_LOADI:
+  case OP_LOADF:
+  case OP_LOADK:
+  case OP_LOADKX:
+  case OP_LOADFALSE:
+  case OP_LOADTRUE:
+  case OP_LOADNIL:
+  case OP_ADD:
+  case OP_SUB:
+  case OP_MUL:
+  case OP_DIV:
+  case OP_MOD:
+  case OP_IDIV:
+  case OP_POW:
+  case OP_ADDK:
+  case OP_SUBK:
+  case OP_MULK:
+  case OP_DIVK:
+  case OP_MODK:
+  case OP_IDIVK:
+  case OP_POWK:
+  case OP_ADDI:
+  case OP_BAND:
+  case OP_BOR:
+  case OP_BXOR:
+  case OP_BANDK:
+  case OP_BORK:
+  case OP_BXORK:
+  case OP_SHL:
+  case OP_SHR:
+  case OP_SHLI:
+  case OP_SHRI:
+  case OP_BNOT:
+  case OP_UNM:
+  case OP_NOT:
+  case OP_MMBIN:
+  case OP_MMBINI:
+  case OP_MMBINK:
+  case OP_EXTRAARG:
+  case OP_GETFIELD:
+  case OP_GETI:
+  case OP_GETTABLE:
+  case OP_LEN:
+    return 1;
+  default:
+    return 0;
   }
 }
 
@@ -2373,20 +3091,26 @@ static int method_read_op_ok(OpCode o) {
    loop-invariant (SLOAD) and its class/method/field layout is pinned by the
    once-per-entry method guard, so the SETFIELD key guard holds in steady state. */
 static int proto_is_write_method_inlinable(Proto *p) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 1 || n > 48) return 0;
-  int wi = -1;                          /* index of the single SETFIELD */
+  if (n < 1 || n > 48)
+    return 0;
+  int wi = -1; /* index of the single SETFIELD */
   for (int i = 0; i < n; i++) {
     if (GET_OPCODE(p->code[i]) == OP_SETFIELD) {
-      if (wi >= 0) return 0;            /* more than one write -> not this subset */
+      if (wi >= 0)
+        return 0; /* more than one write -> not this subset */
       wi = i;
     }
   }
-  if (wi < 0) return 0;                 /* no write -> not a write method */
-  for (int i = 0; i < wi; i++)          /* reads/compute before the write */
-    if (!method_read_op_ok(GET_OPCODE(p->code[i]))) return 0;
+  if (wi < 0)
+    return 0;                  /* no write -> not a write method */
+  for (int i = 0; i < wi; i++) /* reads/compute before the write */
+    if (!method_read_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
   /* After the write, two safe tails are allowed:
        (a) void return: only RETURN0/RETURN/EXTRAARG; OR
        (b) return the JUST-WRITTEN field: GETFIELD of the SAME key (store-to-load
@@ -2394,15 +3118,16 @@ static int proto_is_write_method_inlinable(Proto *p) {
            -and-return-new-value pattern `int inc(){ this.v=this.v+1; return this.v; }`.
      Any OTHER op after the write (a different-field read, an array index, more
      arithmetic) would emit a guard after the write and is rejected. */
-  const TValue *wkc = &p->k[GETARG_B(p->code[wi])];          /* the written field's key */
+  const TValue *wkc = &p->k[GETARG_B(p->code[wi])]; /* the written field's key */
   TString *wkey = (ttypetag(wkc) == LUA_VSHRSTR) ? tsvalue(wkc) : NULL;
   for (int i = wi + 1; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_EXTRAARG ||
-        o == OP_RETURN1 || o == OP_MOVE) continue;
-    if (o == OP_GETFIELD) {            /* must re-read the written field (forwardable) */
+    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_EXTRAARG || o == OP_RETURN1 || o == OP_MOVE)
+      continue;
+    if (o == OP_GETFIELD) { /* must re-read the written field (forwardable) */
       const TValue *gkc = &p->k[GETARG_C(p->code[i])];
-      if (!wkey || ttypetag(gkc) != LUA_VSHRSTR || tsvalue(gkc) != wkey) return 0;
+      if (!wkey || ttypetag(gkc) != LUA_VSHRSTR || tsvalue(gkc) != wkey)
+        return 0;
       continue;
     }
     return 0;
@@ -2424,17 +3149,23 @@ static int proto_is_write_method_inlinable(Proto *p) {
    since §10.34 fix 5, GETI/GETTABLE/LEN before the first SETFIELD are also
    allowed (their guards fire pre-write -> resume-at-SELF is safe). */
 static int proto_is_multiwrite_method_inlinable(Proto *p) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 2 || n > 64) return 0;
+  if (n < 2 || n > 64)
+    return 0;
   int n_writes = 0, has_value_return = 0;
   for (int i = 0; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_SETFIELD) n_writes++;
-    if (o == OP_RETURN1) has_value_return = 1; /* §10.65: value return now supported */
+    if (o == OP_SETFIELD)
+      n_writes++;
+    if (o == OP_RETURN1)
+      has_value_return = 1; /* §10.65: value return now supported */
   }
-  if (n_writes < 2) return 0;                 /* single write -> use §10.49 path */
+  if (n_writes < 2)
+    return 0; /* single write -> use §10.49 path */
   /* Straight-line body: only reads + SETFIELD + return. Since §10.65 a VALUE
      return (OP_RETURN1) is allowed: the returned value is computed guard-free in
      multi-write mode -- a returned this.<field> is a guard-free GETFIELD whose
@@ -2453,10 +3184,16 @@ static int proto_is_multiwrite_method_inlinable(Proto *p) {
   int seen_write = 0;
   for (int i = 0; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_SETFIELD) { seen_write = 1; continue; }
-    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_RETURN1 || o == OP_EXTRAARG) continue;
-    if (has_value_return && seen_write && (o == OP_GETI || o == OP_GETTABLE || o == OP_LEN)) return 0;
-    if (method_read_op_ok(o)) continue;
+    if (o == OP_SETFIELD) {
+      seen_write = 1;
+      continue;
+    }
+    if (o == OP_RETURN0 || o == OP_RETURN || o == OP_RETURN1 || o == OP_EXTRAARG)
+      continue;
+    if (has_value_return && seen_write && (o == OP_GETI || o == OP_GETTABLE || o == OP_LEN))
+      return 0;
+    if (method_read_op_ok(o))
+      continue;
     return 0;
   }
   return 1;
@@ -2481,32 +3218,51 @@ static int proto_is_multiwrite_method_inlinable(Proto *p) {
    comparison reads the written field (so `old` is a compare operand); if not, it
    aborts cleanly. */
 static int proto_is_condwrite_method_inlinable(Proto *p) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 4 || n > 48) return 0;
-  int wi = -1;                          /* the single SETFIELD */
+  if (n < 4 || n > 48)
+    return 0;
+  int wi = -1; /* the single SETFIELD */
   for (int i = 0; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_SETFIELD) { if (wi >= 0) return 0; wi = i; }
-    if (o == OP_RETURN1) return 0;      /* value return -> not a void conditional-write */
+    if (o == OP_SETFIELD) {
+      if (wi >= 0)
+        return 0;
+      wi = i;
+    }
+    if (o == OP_RETURN1)
+      return 0; /* value return -> not a void conditional-write */
   }
-  if (wi < 0) return 0;
-  int ci = -1;                          /* the comparison */
+  if (wi < 0)
+    return 0;
+  int ci = -1; /* the comparison */
   for (int i = 0; i < n; i++)
-    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
-  if (ci < 0) return 0;
-  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
-  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);   /* JMP target = merge */
-  if (t1 <= ci + 2 || t1 > n) return 0;
-  if (wi != t1 - 1) return 0;           /* single write is the LAST then-arm op (if-only) */
-  for (int i = 0; i < ci; i++)          /* prefix: reads + compute compare operands */
-    if (!method_read_op_ok(GET_OPCODE(p->code[i]))) return 0;
-  for (int i = ci + 2; i < wi; i++)     /* then-arm compute A: non-trapping (eval'd unconditionally) */
-    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
-  for (int i = t1; i < n; i++) {        /* after merge: void-return boilerplate only */
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) {
+      ci = i;
+      break;
+    }
+  if (ci < 0)
+    return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci + 1]) != OP_JMP)
+    return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci + 1]); /* JMP target = merge */
+  if (t1 <= ci + 2 || t1 > n)
+    return 0;
+  if (wi != t1 - 1)
+    return 0;                  /* single write is the LAST then-arm op (if-only) */
+  for (int i = 0; i < ci; i++) /* prefix: reads + compute compare operands */
+    if (!method_read_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
+  for (int i = ci + 2; i < wi; i++) /* then-arm compute A: non-trapping (eval'd unconditionally) */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
+  for (int i = t1; i < n; i++) { /* after merge: void-return boilerplate only */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG) return 0;
+    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG)
+      return 0;
   }
   return 1;
 }
@@ -2520,45 +3276,73 @@ static int proto_is_condwrite_method_inlinable(Proto *p) {
    SETFIELD). No `old` is needed (both A and B are explicit). Composes the §10.30
    select with §10.49's single-trailing-write safety (one SETFIELD, emitted last). */
 static int proto_is_condwrite_ifelse_method_inlinable(Proto *p) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 5 || n > 48) return 0;
-  int sf1 = -1, sf2 = -1;               /* exactly two SETFIELDs, no value return */
+  if (n < 5 || n > 48)
+    return 0;
+  int sf1 = -1, sf2 = -1; /* exactly two SETFIELDs, no value return */
   for (int i = 0; i < n; i++) {
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_SETFIELD) { if (sf1 < 0) sf1 = i; else if (sf2 < 0) sf2 = i; else return 0; }
-    if (o == OP_RETURN1) return 0;
+    if (o == OP_SETFIELD) {
+      if (sf1 < 0)
+        sf1 = i;
+      else if (sf2 < 0)
+        sf2 = i;
+      else
+        return 0;
+    }
+    if (o == OP_RETURN1)
+      return 0;
   }
-  if (sf2 < 0) return 0;
-  int ci = -1;                          /* the comparison */
+  if (sf2 < 0)
+    return 0;
+  int ci = -1; /* the comparison */
   for (int i = 0; i < n; i++)
-    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
-  if (ci < 0) return 0;
-  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
-  int else_start = ci + 2 + GETARG_sJ(p->code[ci+1]);   /* JMP target = else-arm start */
-  if (else_start <= ci + 2 || else_start >= n) return 0;
-  int then_jmp = else_start - 1;                         /* then-arm's skip-else JMP */
-  if (then_jmp < ci + 2 || GET_OPCODE(p->code[then_jmp]) != OP_JMP) return 0;
-  int then_sf = then_jmp - 1;                            /* then-arm SETFIELD (= sf1) */
-  if (then_sf < ci + 2 || then_sf != sf1) return 0;
-  int merge = then_jmp + 1 + GETARG_sJ(p->code[then_jmp]);  /* skip-else target = merge */
-  if (merge <= else_start || merge > n) return 0;
-  int else_sf = merge - 1;                              /* else-arm SETFIELD (= sf2) */
-  if (else_sf < else_start || else_sf != sf2) return 0;
-  const TValue *k1 = &p->k[GETARG_B(p->code[then_sf])];  /* both write the SAME field */
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) {
+      ci = i;
+      break;
+    }
+  if (ci < 0)
+    return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci + 1]) != OP_JMP)
+    return 0;
+  int else_start = ci + 2 + GETARG_sJ(p->code[ci + 1]); /* JMP target = else-arm start */
+  if (else_start <= ci + 2 || else_start >= n)
+    return 0;
+  int then_jmp = else_start - 1; /* then-arm's skip-else JMP */
+  if (then_jmp < ci + 2 || GET_OPCODE(p->code[then_jmp]) != OP_JMP)
+    return 0;
+  int then_sf = then_jmp - 1; /* then-arm SETFIELD (= sf1) */
+  if (then_sf < ci + 2 || then_sf != sf1)
+    return 0;
+  int merge = then_jmp + 1 + GETARG_sJ(p->code[then_jmp]); /* skip-else target = merge */
+  if (merge <= else_start || merge > n)
+    return 0;
+  int else_sf = merge - 1; /* else-arm SETFIELD (= sf2) */
+  if (else_sf < else_start || else_sf != sf2)
+    return 0;
+  const TValue *k1 = &p->k[GETARG_B(p->code[then_sf])]; /* both write the SAME field */
   const TValue *k2 = &p->k[GETARG_B(p->code[else_sf])];
-  if (ttypetag(k1) != LUA_VSHRSTR || ttypetag(k2) != LUA_VSHRSTR) return 0;
-  if (tsvalue(k1) != tsvalue(k2)) return 0;
-  for (int i = 0; i < ci; i++)          /* prefix: reads + compute compare operands */
-    if (!method_read_op_ok(GET_OPCODE(p->code[i]))) return 0;
-  for (int i = ci + 2; i < then_sf; i++)  /* then-arm compute A: non-trapping */
-    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
-  for (int i = else_start; i < else_sf; i++)  /* else-arm compute B: non-trapping */
-    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i]))) return 0;
-  for (int i = merge; i < n; i++) {     /* after merge: void-return boilerplate only */
+  if (ttypetag(k1) != LUA_VSHRSTR || ttypetag(k2) != LUA_VSHRSTR)
+    return 0;
+  if (tsvalue(k1) != tsvalue(k2))
+    return 0;
+  for (int i = 0; i < ci; i++) /* prefix: reads + compute compare operands */
+    if (!method_read_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
+  for (int i = ci + 2; i < then_sf; i++) /* then-arm compute A: non-trapping */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
+  for (int i = else_start; i < else_sf; i++) /* else-arm compute B: non-trapping */
+    if (!condreturn_method_op_ok(GET_OPCODE(p->code[i])))
+      return 0;
+  for (int i = merge; i < n; i++) { /* after merge: void-return boilerplate only */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG) return 0;
+    if (o != OP_RETURN0 && o != OP_RETURN && o != OP_EXTRAARG)
+      return 0;
   }
   return 1;
 }
@@ -2575,42 +3359,61 @@ static int proto_is_condwrite_ifelse_method_inlinable(Proto *p) {
    in callee frames) to slot = select(c, A, old), and the trailing RETURN1 binds
    that to the caller's result -- branchless, no side exit. */
 static int proto_is_condassign_inlinable(Proto *p) {
-  if (isvararg(p)) return 0;
-  if (p->sizep != 0) return 0;
+  if (isvararg(p))
+    return 0;
+  if (p->sizep != 0)
+    return 0;
   int n = p->sizecode;
-  if (n < 4 || n > 48) return 0;
+  if (n < 4 || n > 48)
+    return 0;
   int ci = -1;
   for (int i = 0; i < n; i++)
-    if (op_is_comparison(GET_OPCODE(p->code[i]))) { ci = i; break; }
-  if (ci < 0) return 0;
-  if (ci + 1 >= n || GET_OPCODE(p->code[ci+1]) != OP_JMP) return 0;
-  int t1 = ci + 2 + GETARG_sJ(p->code[ci+1]);    /* JMP target = merge (if-only) */
-  if (t1 <= ci + 2 || t1 >= n) return 0;         /* forward, leaving room for the return */
-  for (int i = 0; i < ci; i++) {                 /* prefix */
+    if (op_is_comparison(GET_OPCODE(p->code[i]))) {
+      ci = i;
+      break;
+    }
+  if (ci < 0)
+    return 0;
+  if (ci + 1 >= n || GET_OPCODE(p->code[ci + 1]) != OP_JMP)
+    return 0;
+  int t1 = ci + 2 + GETARG_sJ(p->code[ci + 1]); /* JMP target = merge (if-only) */
+  if (t1 <= ci + 2 || t1 >= n)
+    return 0;                    /* forward, leaving room for the return */
+  for (int i = 0; i < ci; i++) { /* prefix */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe_any(o)) return 0;
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
+    if (!opcode_is_ifconv_safe_any(o))
+      return 0;
   }
-  for (int i = ci + 2; i < t1; i++) {            /* then-arm: assignments only, no return */
+  for (int i = ci + 2; i < t1; i++) { /* then-arm: assignments only, no return */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe_any(o)) return 0;
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
+    if (!opcode_is_ifconv_safe_any(o))
+      return 0;
   }
   int ret_idx = -1;
-  for (int i = t1; i < n; i++) {                 /* post-merge: compute then RETURN1 */
+  for (int i = t1; i < n; i++) { /* post-merge: compute then RETURN1 */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o == OP_RETURN1) { ret_idx = i; break; }
-    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK) continue;
-    if (!opcode_is_ifconv_safe_any(o)) return 0;
+    if (o == OP_RETURN1) {
+      ret_idx = i;
+      break;
+    }
+    if (o == OP_MMBIN || o == OP_MMBINI || o == OP_MMBINK)
+      continue;
+    if (!opcode_is_ifconv_safe_any(o))
+      return 0;
   }
-  if (ret_idx < 0) return 0;
-  for (int i = ret_idx + 1; i < n; i++) {        /* only dead boilerplate after */
+  if (ret_idx < 0)
+    return 0;
+  for (int i = ret_idx + 1; i < n; i++) { /* only dead boilerplate after */
     OpCode o = GET_OPCODE(p->code[i]);
-    if (o != OP_RETURN0 && o != OP_RETURN) return 0;
+    if (o != OP_RETURN0 && o != OP_RETURN)
+      return 0;
   }
   return 1;
 }
-
 
 /* ===================================================================
    Inner-loop unrolling (Phase 3a / nested-loop optimization)
@@ -2634,29 +3437,44 @@ static int proto_is_condassign_inlinable(Proto *p) {
    also safe. */
 static int unroll_unsafe_op(OpCode op) {
   switch (op) {
-    /* branches + conditional skips */
-    case OP_JMP:
-    case OP_EQ: case OP_LT: case OP_LE:
-    case OP_EQK: case OP_EQI: case OP_LTI: case OP_LEI:
-    case OP_GTI: case OP_GEI:
-    case OP_TEST: case OP_TESTSET:
-    /* generic-for loops (iterator protocol) -- not handled by the recorder */
-    case OP_TFORPREP: case OP_TFORCALL: case OP_TFORLOOP:
-    /* calls / returns / frame effects */
-    case OP_CALL: case OP_TAILCALL:
-    case OP_RETURN: case OP_RETURN0: case OP_RETURN1:
-    case OP_CLOSURE: case OP_CLOSE: case OP_TBC:
-    case OP_VARARG: case OP_VARARGPREP:
-      return 1;
-    /* NOTE: OP_FORPREP / OP_FORLOOP (a *nested numeric for*) are allowed in the
-       body: the replay reaches the inner FORPREP via rec_inst and recursively
-       unrolls it, so an all-constant nested loop (e.g. a fixed-size matrix
-       multiply) collapses fully into one linear trace. If an inner loop turns
-       out NOT to be unrollable (e.g. variable bounds), the recursive attempt
-       falls back and the inner FORLOOP back-edge aborts the whole trace -- the
-       same safe fall-back as before, just discovered one level deeper. */
-    default:
-      return 0;
+  /* branches + conditional skips */
+  case OP_JMP:
+  case OP_EQ:
+  case OP_LT:
+  case OP_LE:
+  case OP_EQK:
+  case OP_EQI:
+  case OP_LTI:
+  case OP_LEI:
+  case OP_GTI:
+  case OP_GEI:
+  case OP_TEST:
+  case OP_TESTSET:
+  /* generic-for loops (iterator protocol) -- not handled by the recorder */
+  case OP_TFORPREP:
+  case OP_TFORCALL:
+  case OP_TFORLOOP:
+  /* calls / returns / frame effects */
+  case OP_CALL:
+  case OP_TAILCALL:
+  case OP_RETURN:
+  case OP_RETURN0:
+  case OP_RETURN1:
+  case OP_CLOSURE:
+  case OP_CLOSE:
+  case OP_TBC:
+  case OP_VARARG:
+  case OP_VARARGPREP:
+    return 1;
+  /* NOTE: OP_FORPREP / OP_FORLOOP (a *nested numeric for*) are allowed in the
+     body: the replay reaches the inner FORPREP via rec_inst and recursively
+     unrolls it, so an all-constant nested loop (e.g. a fixed-size matrix
+     multiply) collapses fully into one linear trace. If an inner loop turns
+     out NOT to be unrollable (e.g. variable bounds), the recursive attempt
+     falls back and the inner FORLOOP back-edge aborts the whole trace -- the
+     same safe fall-back as before, just discovered one level deeper. */
+  default:
+    return 0;
   }
 }
 
@@ -2666,12 +3484,17 @@ static int unroll_unsafe_op(OpCode op) {
    reassigning it (table/upvalue stores). Everything else here writes R[A]. */
 static int unroll_writes_dest_A(OpCode op) {
   switch (op) {
-    case OP_MMBIN: case OP_MMBINI: case OP_MMBINK:
-    case OP_SETI: case OP_SETTABLE: case OP_SETFIELD:
-    case OP_SETTABUP: case OP_SETUPVAL:
-      return 0;
-    default:
-      return 1;
+  case OP_MMBIN:
+  case OP_MMBINI:
+  case OP_MMBINK:
+  case OP_SETI:
+  case OP_SETTABLE:
+  case OP_SETFIELD:
+  case OP_SETTABUP:
+  case OP_SETUPVAL:
+    return 0;
+  default:
+    return 1;
   }
 }
 
@@ -2687,33 +3510,39 @@ static int unroll_writes_dest_A(OpCode op) {
    here, so we never speculate it into a negative optimization. */
 static int eval_invariant_int(SPTRecCtx *rc, int ref, lua_Integer *out) {
   SPTIRBuilder *ir = rc->ir;
-  if (ref < 0 || ref >= ir->ninst) return 0;
+  if (ref < 0 || ref >= ir->ninst)
+    return 0;
   SPTIRInst *in = &ir->insts[ref];
   switch (in->op) {
-    case SPTIR_KINT:
-      *out = (lua_Integer)in->aux;
-      return 1;
-    case SPTIR_SLOAD: {
-      int slot = (int)in->aux;
-      if (slot < 0 || slot >= 256) return 0;
-      /* Invariant only if the slot has not been reassigned since this load. */
-      if (ir->reg_map[slot] != ref) return 0;
-      TValue *v = s2v((rc->ci->func.p + 1) + slot);
-      if (!ttisinteger(v)) return 0;
-      *out = ivalue(v);
-      return 1;
-    }
-    case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL: {
-      lua_Integer x, y;
-      if (!eval_invariant_int(rc, in->op1, &x)) return 0;
-      if (!eval_invariant_int(rc, in->op2, &y)) return 0;
-      *out = (in->op == SPTIR_ADD) ? x + y
-           : (in->op == SPTIR_SUB) ? x - y
-                                   : x * y;
-      return 1;
-    }
-    default:
+  case SPTIR_KINT:
+    *out = (lua_Integer)in->aux;
+    return 1;
+  case SPTIR_SLOAD: {
+    int slot = (int)in->aux;
+    if (slot < 0 || slot >= 256)
       return 0;
+    /* Invariant only if the slot has not been reassigned since this load. */
+    if (ir->reg_map[slot] != ref)
+      return 0;
+    TValue *v = s2v((rc->ci->func.p + 1) + slot);
+    if (!ttisinteger(v))
+      return 0;
+    *out = ivalue(v);
+    return 1;
+  }
+  case SPTIR_ADD:
+  case SPTIR_SUB:
+  case SPTIR_MUL: {
+    lua_Integer x, y;
+    if (!eval_invariant_int(rc, in->op1, &x))
+      return 0;
+    if (!eval_invariant_int(rc, in->op2, &y))
+      return 0;
+    *out = (in->op == SPTIR_ADD) ? x + y : (in->op == SPTIR_SUB) ? x - y : x * y;
+    return 1;
+  }
+  default:
+    return 0;
   }
 }
 
@@ -2725,9 +3554,15 @@ static int eval_invariant_int(SPTRecCtx *rc, int ref, lua_Integer *out) {
 static void emit_pin_guard(SPTIRBuilder *ir, int ref, lua_Integer val, int snap) {
   int kv = sptir_kint(ir, val);
   int g1 = sptir_emit(ir, SPTIR_GUARD_LE, SPTT_NIL, ref, SPTIR_NULL, kv);
-  if (g1 != SPTIR_NULL) { ir->insts[g1].flags |= SPTIRF_GUARD; ir->insts[g1].snap_idx = snap; }
+  if (g1 != SPTIR_NULL) {
+    ir->insts[g1].flags |= SPTIRF_GUARD;
+    ir->insts[g1].snap_idx = snap;
+  }
   int g2 = sptir_emit(ir, SPTIR_GUARD_LE, SPTT_NIL, kv, SPTIR_NULL, ref);
-  if (g2 != SPTIR_NULL) { ir->insts[g2].flags |= SPTIRF_GUARD; ir->insts[g2].snap_idx = snap; }
+  if (g2 != SPTIR_NULL) {
+    ir->insts[g2].flags |= SPTIRF_GUARD;
+    ir->insts[g2].snap_idx = snap;
+  }
 }
 
 /* Try to unroll the inner numeric for-loop whose FORPREP is `i` (at rc->pc)
@@ -2739,7 +3574,8 @@ static void emit_pin_guard(SPTIRBuilder *ir, int ref, lua_Integer val, int snap)
 static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
   SPTIRBuilder *ir = rc->ir;
   SPTJitState *js = rc->js;
-  if (js->unroll_max <= 0) return 0;
+  if (js->unroll_max <= 0)
+    return 0;
 
   int a = GETARG_A(i);
   int bx = GETARG_Bx(i);
@@ -2751,46 +3587,63 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
      a run-time guard, so the speculative trip count is safe (a mismatch
      side-exits). Anything else (a PHI/loop-variable bound, a non-integer, a
      value we cannot evaluate) makes the trip count unknowable -- bail. */
-  int init_ref  = ir->reg_map[base + a];
+  int init_ref = ir->reg_map[base + a];
   int limit_ref = ir->reg_map[base + a + 1];
-  int step_ref  = ir->reg_map[base + a + 2];
-  if (init_ref < 0 || limit_ref < 0 || step_ref < 0) return 0;
-  if (init_ref >= ir->ninst || limit_ref >= ir->ninst || step_ref >= ir->ninst) return 0;
-  int init_k  = (ir->insts[init_ref].op  == SPTIR_KINT);
+  int step_ref = ir->reg_map[base + a + 2];
+  if (init_ref < 0 || limit_ref < 0 || step_ref < 0)
+    return 0;
+  if (init_ref >= ir->ninst || limit_ref >= ir->ninst || step_ref >= ir->ninst)
+    return 0;
+  int init_k = (ir->insts[init_ref].op == SPTIR_KINT);
   int limit_k = (ir->insts[limit_ref].op == SPTIR_KINT);
-  int step_k  = (ir->insts[step_ref].op  == SPTIR_KINT);
+  int step_k = (ir->insts[step_ref].op == SPTIR_KINT);
   lua_Integer init, limit, step;
-  if (init_k)  init  = (lua_Integer)ir->insts[init_ref].aux;
-  else if (!eval_invariant_int(rc, init_ref, &init))   return 0;
-  if (limit_k) limit = (lua_Integer)ir->insts[limit_ref].aux;
-  else if (!eval_invariant_int(rc, limit_ref, &limit)) return 0;
-  if (step_k)  step  = (lua_Integer)ir->insts[step_ref].aux;
-  else if (!eval_invariant_int(rc, step_ref, &step))   return 0;
-  if (step == 0) return 0;
+  if (init_k)
+    init = (lua_Integer)ir->insts[init_ref].aux;
+  else if (!eval_invariant_int(rc, init_ref, &init))
+    return 0;
+  if (limit_k)
+    limit = (lua_Integer)ir->insts[limit_ref].aux;
+  else if (!eval_invariant_int(rc, limit_ref, &limit))
+    return 0;
+  if (step_k)
+    step = (lua_Integer)ir->insts[step_ref].aux;
+  else if (!eval_invariant_int(rc, step_ref, &step))
+    return 0;
+  if (step == 0)
+    return 0;
 
   /* Trip count, computed exactly as the VM's forprep() does for an integer
      loop. The body runs (count + 1) times with idx = init + k*step, and
      R[A] (the FORLOOP counter) holds (count - k) during body iteration k. */
   lua_Unsigned count;
   if (step > 0) {
-    if (init > limit) return 0;
+    if (init > limit)
+      return 0;
     count = (lua_Unsigned)limit - (lua_Unsigned)init;
-    if (step != 1) count /= (lua_Unsigned)step;
+    if (step != 1)
+      count /= (lua_Unsigned)step;
   } else {
-    if (init < limit) return 0;
+    if (init < limit)
+      return 0;
     count = (lua_Unsigned)init - (lua_Unsigned)limit;
     count /= (lua_Unsigned)(-(step + 1)) + 1u;
   }
-  if (count + 1 > (lua_Unsigned)js->unroll_max) return 0;
+  if (count + 1 > (lua_Unsigned)js->unroll_max)
+    return 0;
   int trips = (int)(count + 1);
 
   /* Inner body is [body_pc, forloop_pc); FORLOOP closes it. */
-  const Instruction *body_pc    = rc->pc + 1;
+  const Instruction *body_pc = rc->pc + 1;
   const Instruction *forloop_pc = rc->pc + bx + 1;
-  if (forloop_pc <= body_pc) return 0;
-  if (GET_OPCODE(*forloop_pc) != OP_FORLOOP) return 0;
-  if (GETARG_A(*forloop_pc) != a) return 0;
-  if ((forloop_pc + 1) - GETARG_Bx(*forloop_pc) != body_pc) return 0;
+  if (forloop_pc <= body_pc)
+    return 0;
+  if (GET_OPCODE(*forloop_pc) != OP_FORLOOP)
+    return 0;
+  if (GETARG_A(*forloop_pc) != a)
+    return 0;
+  if ((forloop_pc + 1) - GETARG_Bx(*forloop_pc) != body_pc)
+    return 0;
 
   /* Body must be straight-line and must not REASSIGN the loop control slots
      (A=counter, A+1=step, A+2=idx) -- those are pinned to constants per copy, so
@@ -2808,10 +3661,12 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
      preserving the load-after-store dependency. */
   for (const Instruction *p = body_pc; p < forloop_pc; p++) {
     OpCode op = GET_OPCODE(*p);
-    if (unroll_unsafe_op(op)) return 0;
+    if (unroll_unsafe_op(op))
+      return 0;
     if (unroll_writes_dest_A(op)) {
       int da = GETARG_A(*p);
-      if (da == a || da == a + 1 || da == a + 2) return 0;
+      if (da == a || da == a + 1 || da == a + 2)
+        return 0;
     }
   }
 
@@ -2823,9 +3678,12 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
      byte-identical to the previous (constant-only) unroller. */
   if (!init_k || !limit_k || !step_k) {
     int snap = rec_snap(rc);
-    if (!init_k)  emit_pin_guard(ir, init_ref,  init,  snap);
-    if (!limit_k) emit_pin_guard(ir, limit_ref, limit, snap);
-    if (!step_k)  emit_pin_guard(ir, step_ref,  step,  snap);
+    if (!init_k)
+      emit_pin_guard(ir, init_ref, init, snap);
+    if (!limit_k)
+      emit_pin_guard(ir, limit_ref, limit, snap);
+    if (!step_k)
+      emit_pin_guard(ir, step_ref, step, snap);
   }
 
   /* Commit: replay the body `trips` times. From here we emit IR; if rec_inst
@@ -2834,18 +3692,20 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
     lua_Integer idx = init + (lua_Integer)k * step;
     /* Pin the control slots so any guard's snapshot in this copy flushes the
        exact interpreter state for inner iteration k (counter = count - k). */
-    ir->reg_map[base + a]     = sptir_kint(ir, (lua_Integer)(count - (lua_Unsigned)k));
-    ir->reg_type[base + a]    = SPTT_INT;
+    ir->reg_map[base + a] = sptir_kint(ir, (lua_Integer)(count - (lua_Unsigned)k));
+    ir->reg_type[base + a] = SPTT_INT;
     ir->reg_map[base + a + 1] = sptir_kint(ir, step);
     ir->reg_type[base + a + 1] = SPTT_INT;
     ir->reg_map[base + a + 2] = sptir_kint(ir, idx);
     ir->reg_type[base + a + 2] = SPTT_INT;
-    if (base + a + 2 > ir->maxslot) ir->maxslot = base + a + 2;
+    if (base + a + 2 > ir->maxslot)
+      ir->maxslot = base + a + 2;
 
     rc->pc = body_pc;
     while (rc->pc < forloop_pc) {
       if (!rec_inst(rc)) {
-        if (!rc->aborted) rc->aborted = 1;  /* unexpected early close -> discard */
+        if (!rc->aborted)
+          rc->aborted = 1; /* unexpected early close -> discard */
         return 1;
       }
     }
@@ -2854,17 +3714,16 @@ static int try_unroll_inner_loop(SPTRecCtx *rc, Instruction i) {
   /* Post-loop register state (what the interpreter would hold after the inner
      FORLOOP falls through): counter = 0, step unchanged, idx = init + count*step
      (the last body iteration's value; FORLOOP does not bump idx on exit). */
-  ir->reg_map[base + a]     = sptir_kint(ir, 0);
-  ir->reg_type[base + a]    = SPTT_INT;
+  ir->reg_map[base + a] = sptir_kint(ir, 0);
+  ir->reg_type[base + a] = SPTT_INT;
   ir->reg_map[base + a + 1] = sptir_kint(ir, step);
   ir->reg_type[base + a + 1] = SPTT_INT;
   ir->reg_map[base + a + 2] = sptir_kint(ir, init + (lua_Integer)count * step);
   ir->reg_type[base + a + 2] = SPTT_INT;
 
-  rc->pc = forloop_pc + 1;                 /* continue the outer body */
+  rc->pc = forloop_pc + 1; /* continue the outer body */
   return 1;
 }
-
 
 static int rec_inst(SPTRecCtx *rc) {
   SPTIRBuilder *ir = rc->ir;
@@ -2872,9 +3731,8 @@ static int rec_inst(SPTRecCtx *rc) {
   OpCode op = GET_OPCODE(i);
 
   if (rc->js->debug >= 3) {
-    fprintf(stderr, "  [rec] pc=%d %-12s A=%d B=%d C=%d k=%d sBx=%d\n",
-            (int)(rc->pc - rc->p->code), opnames[op], GETARG_A(i), GETARG_B(i),
-            GETARG_C(i), GETARG_k(i), GETARG_sBx(i));
+    fprintf(stderr, "  [rec] pc=%d %-12s A=%d B=%d C=%d k=%d sBx=%d\n", (int)(rc->pc - rc->p->code),
+            opnames[op], GETARG_A(i), GETARG_B(i), GETARG_C(i), GETARG_k(i), GETARG_sBx(i));
   }
 
   if (rc->inst_count++ > SPT_JIT_MAX_TRACE) {
@@ -2883,1632 +3741,2058 @@ static int rec_inst(SPTRecCtx *rc) {
   }
 
   switch (op) {
-    /* ---- Constants and moves ---- */
-    case OP_MOVE: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int bref = rec_load_reg(rc, b);
-      ir->reg_map[rc->frame_base + a] = bref;
-      ir->reg_type[rc->frame_base + a] = ir->reg_type[rc->frame_base + b];
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LOADI: {
-      int a = GETARG_A(i);
-      int ref = sptir_kint(ir, GETARG_sBx(i));
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LOADF: {
-      int a = GETARG_A(i);
-      int ref = sptir_kflt(ir, (double)GETARG_sBx(i));
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_FLT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LOADK: {
-      int a = GETARG_A(i);
-      int ref = rec_load_k(rc, GETARG_Bx(i));
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LOADKX: {
-      int a = GETARG_A(i);
-      rc->pc++; /* skip EXTRAARG */
-      int ref = rec_load_k(rc, GETARG_Ax(*rc->pc));
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LOADFALSE: {
-      int a = GETARG_A(i);
-      ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
-      ir->reg_type[rc->frame_base + a] = SPTT_FALSE;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LOADTRUE: {
-      int a = GETARG_A(i);
-      ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_TRUE, SPTT_TRUE, SPTIR_NULL, SPTIR_NULL, 0);
-      ir->reg_type[rc->frame_base + a] = SPTT_TRUE;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LFALSESKIP: {
-      int a = GETARG_A(i);
-      ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
-      ir->reg_type[rc->frame_base + a] = SPTT_FALSE;
-      rc->pc++; /* skip next */
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LOADNIL: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      do {
-        ir->reg_map[rc->frame_base + a] = sptir_emit(ir, SPTIR_NIL, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
-        ir->reg_type[rc->frame_base + a] = SPTT_NIL;
-        if (a > ir->maxslot) ir->maxslot = a;
-        a++;
-      } while (b--);
-      break;
-    }
+  /* ---- Constants and moves ---- */
+  case OP_MOVE: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int bref = rec_load_reg(rc, b);
+    ir->reg_map[rc->frame_base + a] = bref;
+    ir->reg_type[rc->frame_base + a] = ir->reg_type[rc->frame_base + b];
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LOADI: {
+    int a = GETARG_A(i);
+    int ref = sptir_kint(ir, GETARG_sBx(i));
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LOADF: {
+    int a = GETARG_A(i);
+    int ref = sptir_kflt(ir, (double)GETARG_sBx(i));
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_FLT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LOADK: {
+    int a = GETARG_A(i);
+    int ref = rec_load_k(rc, GETARG_Bx(i));
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LOADKX: {
+    int a = GETARG_A(i);
+    rc->pc++; /* skip EXTRAARG */
+    int ref = rec_load_k(rc, GETARG_Ax(*rc->pc));
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LOADFALSE: {
+    int a = GETARG_A(i);
+    ir->reg_map[rc->frame_base + a] =
+        sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
+    ir->reg_type[rc->frame_base + a] = SPTT_FALSE;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LOADTRUE: {
+    int a = GETARG_A(i);
+    ir->reg_map[rc->frame_base + a] =
+        sptir_emit(ir, SPTIR_TRUE, SPTT_TRUE, SPTIR_NULL, SPTIR_NULL, 0);
+    ir->reg_type[rc->frame_base + a] = SPTT_TRUE;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LFALSESKIP: {
+    int a = GETARG_A(i);
+    ir->reg_map[rc->frame_base + a] =
+        sptir_emit(ir, SPTIR_FALSE, SPTT_FALSE, SPTIR_NULL, SPTIR_NULL, 0);
+    ir->reg_type[rc->frame_base + a] = SPTT_FALSE;
+    rc->pc++; /* skip next */
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LOADNIL: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    do {
+      ir->reg_map[rc->frame_base + a] =
+          sptir_emit(ir, SPTIR_NIL, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
+      ir->reg_type[rc->frame_base + a] = SPTT_NIL;
+      if (a > ir->maxslot)
+        ir->maxslot = a;
+      a++;
+    } while (b--);
+    break;
+  }
 
-    /* ---- Upvalues ---- */
-    case OP_GETUPVAL: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int ref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_ANY;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_SETUPVAL: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int aref = rec_load_reg(rc, a);
-      sptir_emit(ir, SPTIR_USTORE, SPTT_NIL, b, aref, 0);
-      break;
-    }
+  /* ---- Upvalues ---- */
+  case OP_GETUPVAL: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int ref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_ANY;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_SETUPVAL: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int aref = rec_load_reg(rc, a);
+    sptir_emit(ir, SPTIR_USTORE, SPTT_NIL, b, aref, 0);
+    break;
+  }
 
-    /* ---- Table/Array access ---- */
-    case OP_GETTABUP: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      /* UpValue[B][K[C]] for a constant short-string key (e.g. a global read:
-         _ENV["g"], or a library table like _ENV["math"]). ULOAD yields the
-         upvalue table; the codegen then does the same inline hash-slot search as
-         GETFIELD (gen_hash_find) on it. We read the live upvalue table here to
-         (a) confirm the key is present and (b) predict the value type; the
-         codegen re-walks at run time so a moved/absent key still resolves or
-         side-exits. Only the top frame's upvalues are read (an inlined callee
-         would have different upvalues). */
-      if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
-      TValue *kc = &rc->k[GETARG_C(i)];
-      if (!ttisshrstring(kc)) { rc->aborted = 1; return 0; }
-      TString *key = tsvalue(kc);
-      LClosure *cl = clLvalue(s2v(rc->ci->func.p));
-      if (b >= cl->nupvalues) { rc->aborted = 1; return 0; }
-      TValue *envtv = cl->upvals[b]->v.p;
-      if (!ttistable(envtv)) { rc->aborted = 1; return 0; }
-      Table *envt = hvalue(envtv);
-      Node *n = &envt->node[(unsigned int)key->hash & ((1u << envt->lsizenode) - 1u)];
-      for (;;) {
-        if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
-        int nx = (int)n->u.next;
-        if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort */
-        n += nx;
-      }
-      SPTType et = rec_value_type(&n->i_val);
-      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR &&
-          et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
-      int upref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
-      int ref = sptir_emit(ir, SPTIR_GETTABUP, et, upref, SPTIR_NULL,
-                           (int64_t)(intptr_t)key);
-      int snap = rec_snap(rc);
-      ir->insts[ref].snap_idx = snap;
-      ir->insts[ref].flags |= SPTIRF_GUARD;
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = et;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
+  /* ---- Table/Array access ---- */
+  case OP_GETTABUP: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    /* UpValue[B][K[C]] for a constant short-string key (e.g. a global read:
+       _ENV["g"], or a library table like _ENV["math"]). ULOAD yields the
+       upvalue table; the codegen then does the same inline hash-slot search as
+       GETFIELD (gen_hash_find) on it. We read the live upvalue table here to
+       (a) confirm the key is present and (b) predict the value type; the
+       codegen re-walks at run time so a moved/absent key still resolves or
+       side-exits. Only the top frame's upvalues are read (an inlined callee
+       would have different upvalues). */
+    if (rc->frame_base != 0) {
+      rc->aborted = 1;
+      return 0;
     }
-    case OP_GETI: {
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      int bref = rec_load_reg(rc, b);
-      SPTType bt = ir->reg_type[rc->frame_base + b];
-      if (bt != SPTT_ARR) { rc->aborted = 1; return 0; }
-      /* Element type from the live array. Numeric elements and (short or long)
-         strings are loadable: the GETI codegen tag-guards then loads the 8-byte
-         value (the TString* for a string), and exits restore any type. */
-      SPTType et = rec_array_elem_type(rc, b, c);
-      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
-      /* Bounds guard: 0 <= c < loglen (c is a constant here). */
-      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, c), (int64_t)lenref, rec_guard_pc(rc));
-      /* Type-guarded load. */
-      int ref = sptir_emit(ir, SPTIR_GETI, et, bref, sptir_kint(ir, c), 0);
-      int snap = rec_snap(rc);
-      ir->insts[ref].snap_idx = snap;
-      ir->insts[ref].flags |= SPTIRF_GUARD;
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = et;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
+    TValue *kc = &rc->k[GETARG_C(i)];
+    if (!ttisshrstring(kc)) {
+      rc->aborted = 1;
+      return 0;
     }
-    case OP_GETFIELD: {
-      /* R[A] = R[B][K[C]:shortstring]  -- map read by a constant short-string
-         key. The key is interned, so the codegen's inline hash-slot fast path
-         can pointer-compare it (see SPTIR_GETFIELD codegen). We record it only
-         when, in the live map, the key sits at its MAIN POSITION (so the
-         fast-path key guard will match) and its value has a traceable type;
-         otherwise the compiled trace would always side-exit, so abort instead
-         (correctness either way -- the guard, not this prediction, is load-bearing). */
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      int bref = rec_load_reg(rc, b);
-      if (ir->reg_type[rc->frame_base + b] != SPTT_TAB) { rc->aborted = 1; return 0; }
-      const TValue *kc = &rc->k[c];
-      if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
-      TString *key = tsvalue(kc);
-      /* Multi-write method mode: guard-free field read. The entry field-layout
-         guard already verified the key exists + value type matches, so we emit
-         GETFIELD without SPTIRF_GUARD (no snapshot, no exit stub). This lifts
-         the §10.49 single-trailing-write restriction: a read after a write no
-         longer risks double-write on resume-at-SELF because there is no
-         in-body guard to resume from. */
-      if (rc->frame_base != 0 && rc->inline_depth > 0 &&
-          rc->inline_frames[rc->inline_depth - 1].multiwrite_mode) {
-        TValue mapval;
-        if (!rec_eval_container(rc, bref, &mapval))
-          mapval = *s2v((rc->ci->func.p + 1) + b);
-        if (!ttistable(&mapval)) { rc->aborted = 1; return 0; }
-        Table *t = hvalue(&mapval);
-        Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
-        for (;;) {
-          if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
-          int nx = (int)n->u.next;
-          if (nx == 0) { rc->aborted = 1; return 0; }
-          n += nx;
-        }
-        SPTType et = rec_value_type(&n->i_val);
-        if (et != SPTT_INT && et != SPTT_FLT) { rc->aborted = 1; return 0; }
-        int ref = sptir_emit(ir, SPTIR_GETFIELD, et, bref, SPTIR_NULL, (int64_t)(intptr_t)key);
-        /* NO snap, NO SPTIRF_GUARD -- entry field-layout guard covers it */
-        ir->reg_map[rc->frame_base + a] = ref;
-        ir->reg_type[rc->frame_base + a] = et;
-        if (a > ir->maxslot) ir->maxslot = a;
-        /* register field for entry layout guard (dedup by key, update type) */
-        for (int fi = 0; fi < rc->n_field_layouts; fi++) {
-          if (rc->field_layouts[fi].key == (void *)key) {
-            rc->field_layouts[fi].value_type = (uint8_t)et;
-            goto getfield_mw_done;
-          }
-        }
-        if (rc->n_field_layouts >= SPT_JIT_MAX_FIELD_LAYOUTS) { rc->aborted = 1; return 0; }
-        rc->field_layouts[rc->n_field_layouts].key = (void *)key;
-        rc->field_layouts[rc->n_field_layouts].value_type = (uint8_t)et;
-        rc->n_field_layouts++;
-        getfield_mw_done:
+    TString *key = tsvalue(kc);
+    LClosure *cl = clLvalue(s2v(rc->ci->func.p));
+    if (b >= cl->nupvalues) {
+      rc->aborted = 1;
+      return 0;
+    }
+    TValue *envtv = cl->upvals[b]->v.p;
+    if (!ttistable(envtv)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    Table *envt = hvalue(envtv);
+    Node *n = &envt->node[(unsigned int)key->hash & ((1u << envt->lsizenode) - 1u)];
+    for (;;) {
+      if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key)
         break;
-      }
-      /* Store-to-load forwarding, inlined method bodies only (frame_base != 0):
-         a read of the field just written by the preceding SETFIELD (same base IR
-         ref + key) resolves to the written value with NO emit and NO guard. This
-         keeps `int inc(){ this.v = this.v + 1; return this.v; }` (write then
-         return the written field) a guard-free single-trailing-write -- the
-         SETFIELD stays the last guard-emitting op (§10.49 safety). A read after a
-         write that does NOT forward would emit a GETFIELD guard AFTER the write;
-         on failure resume-at-SELF re-runs the whole method, double-writing -- so
-         abort instead. (No existing inlinable shape reads a field after a write,
-         so this only ever fires for the write-and-return shape or aborts.) */
-      if (rc->frame_base != 0 && rc->fwd_base >= 0) {
-        if (bref == rc->fwd_base && rc->fwd_key == (void *)key) {
-          ir->reg_map[rc->frame_base + a] = rc->fwd_val;
-          ir->reg_type[rc->frame_base + a] = sptir_type(ir, rc->fwd_val);
-          if (a > ir->maxslot) ir->maxslot = a;
-          break;
-        }
-        rc->aborted = 1; return 0;
-      }
-      /* Resolve the base Map through the IR when possible: for a chained
-         m["k1"]["k2"] the intermediate map is produced earlier in THIS trace, so
-         its live stack slot is stale (holds the previous iteration's value --
-         the same §10.42 hazard). rec_eval_container follows SLOAD/GETI/GETFIELD
-         to the record-time map; fall back to the live slot for a base it can't
-         follow (e.g. a loop-invariant global via GETTABUP), preserving the prior
-         behavior. Record-time only; the codegen re-walks with guards. */
+      int nx = (int)n->u.next;
+      if (nx == 0) {
+        rc->aborted = 1;
+        return 0;
+      } /* key absent -> abort */
+      n += nx;
+    }
+    SPTType et = rec_value_type(&n->i_val);
+    if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int upref = sptir_emit(ir, SPTIR_ULOAD, SPTT_ANY, SPTIR_NULL, SPTIR_NULL, b);
+    int ref = sptir_emit(ir, SPTIR_GETTABUP, et, upref, SPTIR_NULL, (int64_t)(intptr_t)key);
+    int snap = rec_snap(rc);
+    ir->insts[ref].snap_idx = snap;
+    ir->insts[ref].flags |= SPTIRF_GUARD;
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = et;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_GETI: {
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    int bref = rec_load_reg(rc, b);
+    SPTType bt = ir->reg_type[rc->frame_base + b];
+    if (bt != SPTT_ARR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Element type from the live array. Numeric elements and (short or long)
+       strings are loadable: the GETI codegen tag-guards then loads the 8-byte
+       value (the TString* for a string), and exits restore any type. */
+    SPTType et = rec_array_elem_type(rc, b, c);
+    if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Bounds guard: 0 <= c < loglen (c is a constant here). */
+    int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
+    sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, c), (int64_t)lenref, rec_guard_pc(rc));
+    /* Type-guarded load. */
+    int ref = sptir_emit(ir, SPTIR_GETI, et, bref, sptir_kint(ir, c), 0);
+    int snap = rec_snap(rc);
+    ir->insts[ref].snap_idx = snap;
+    ir->insts[ref].flags |= SPTIRF_GUARD;
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = et;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_GETFIELD: {
+    /* R[A] = R[B][K[C]:shortstring]  -- map read by a constant short-string
+       key. The key is interned, so the codegen's inline hash-slot fast path
+       can pointer-compare it (see SPTIR_GETFIELD codegen). We record it only
+       when, in the live map, the key sits at its MAIN POSITION (so the
+       fast-path key guard will match) and its value has a traceable type;
+       otherwise the compiled trace would always side-exit, so abort instead
+       (correctness either way -- the guard, not this prediction, is load-bearing). */
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    int bref = rec_load_reg(rc, b);
+    if (ir->reg_type[rc->frame_base + b] != SPTT_TAB) {
+      rc->aborted = 1;
+      return 0;
+    }
+    const TValue *kc = &rc->k[c];
+    if (ttypetag(kc) != LUA_VSHRSTR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    TString *key = tsvalue(kc);
+    /* Multi-write method mode: guard-free field read. The entry field-layout
+       guard already verified the key exists + value type matches, so we emit
+       GETFIELD without SPTIRF_GUARD (no snapshot, no exit stub). This lifts
+       the §10.49 single-trailing-write restriction: a read after a write no
+       longer risks double-write on resume-at-SELF because there is no
+       in-body guard to resume from. */
+    if (rc->frame_base != 0 && rc->inline_depth > 0 &&
+        rc->inline_frames[rc->inline_depth - 1].multiwrite_mode) {
       TValue mapval;
       if (!rec_eval_container(rc, bref, &mapval))
         mapval = *s2v((rc->ci->func.p + 1) + b);
-      if (!ttistable(&mapval)) { rc->aborted = 1; return 0; }
+      if (!ttistable(&mapval)) {
+        rc->aborted = 1;
+        return 0;
+      }
       Table *t = hvalue(&mapval);
-      /* Walk the key's main position + collision chain, exactly as the codegen
-         (gen_hash_find) will, to (a) confirm the key is PRESENT -- if it is
-         absent we abort, since the compiled chain-walk would side-exit every
-         time -- and (b) predict the value's type for the guard. The codegen
-         re-walks at run time, so a key that moves between record and run still
-         resolves correctly (or side-exits); this is only a prediction. */
       Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
       for (;;) {
-        if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
+        if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key)
+          break;
         int nx = (int)n->u.next;
-        if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort */
+        if (nx == 0) {
+          rc->aborted = 1;
+          return 0;
+        }
         n += nx;
       }
       SPTType et = rec_value_type(&n->i_val);
-      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR &&
-          et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
+      if (et != SPTT_INT && et != SPTT_FLT) {
+        rc->aborted = 1;
+        return 0;
+      }
       int ref = sptir_emit(ir, SPTIR_GETFIELD, et, bref, SPTIR_NULL, (int64_t)(intptr_t)key);
-      int snap = rec_snap(rc);
-      ir->insts[ref].snap_idx = snap;
-      ir->insts[ref].flags |= SPTIRF_GUARD;
+      /* NO snap, NO SPTIRF_GUARD -- entry field-layout guard covers it */
       ir->reg_map[rc->frame_base + a] = ref;
       ir->reg_type[rc->frame_base + a] = et;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_GETTABLE: {
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      int bref = rec_load_reg(rc, b);
-      int cref = rec_load_reg(rc, c);
-      SPTType bt = ir->reg_type[rc->frame_base + b];
-      SPTType ct = ir->reg_type[rc->frame_base + c];
-      if (bt != SPTT_ARR || ct != SPTT_INT) { rc->aborted = 1; return 0; }
-      /* Predict the element type from the index's stack value. One-pass
-         recording reads it at the back-edge, so a reused index register may
-         show a stale, non-integer, or out-of-range value; the IR already knows
-         the index is an integer (ct == SPTT_INT) and the load is bounds- and
-         type-guarded, so fall back to element 0 when the predictor is unusable
-         (correctness is enforced by those guards, not by this prediction). */
-      StkId base = rc->ci->func.p + 1;
-      TValue *idxtv = s2v(base + c);
-      lua_Integer pidx = ttisinteger(idxtv) ? ivalue(idxtv) : 0;
-      SPTType et = rec_array_elem_type(rc, b, pidx);
-      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) { rc->aborted = 1; return 0; }
-      /* Bounds guard: 0 <= idx < loglen. */
-      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)cref, rec_guard_pc(rc));
-      sptir_guard(ir, SPTIR_GUARD_LT, cref, (int64_t)lenref, rec_guard_pc(rc));
-      /* Type-guarded load. */
-      int ref = sptir_emit(ir, SPTIR_GETI, et, bref, cref, 0);
-      int snap = rec_snap(rc);
-      ir->insts[ref].snap_idx = snap;
-      ir->insts[ref].flags |= SPTIRF_GUARD;
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = et;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_SETI: {
-      rc->fwd_base = -1;   /* array write may alias: drop store-to-load forwarding */
-      /* R[A][B] = RK(C), B is a constant index. */
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int aref = rec_load_reg(rc, a);
-      if (ir->reg_type[rc->frame_base + a] != SPTT_ARR) { rc->aborted = 1; return 0; }
-      int cref = rec_load_rkc(rc, i);
-      SPTType vt = sptir_type(ir, cref);
-      if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }
-      /* Bounds guard: 0 <= b < loglen (in-bounds write only; growth -> exit). */
-      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, b), (int64_t)lenref, rec_guard_pc(rc));
-      sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, sptir_kint(ir, b), (int64_t)cref);
-      break;
-    }
-    case OP_SETTABLE: {
-      rc->fwd_base = -1;   /* generic write may alias: drop store-to-load forwarding */
-      /* R[A][R[B]] = RK(C), variable index. */
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = rec_load_reg(rc, b);
-      if (ir->reg_type[rc->frame_base + a] != SPTT_ARR || ir->reg_type[rc->frame_base + b] != SPTT_INT) {
-        rc->aborted = 1; return 0;
-      }
-      int cref = rec_load_rkc(rc, i);
-      SPTType vt = sptir_type(ir, cref);
-      if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }
-      /* Bounds guard: 0 <= idx < loglen. */
-      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
-      sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)bref, rec_guard_pc(rc));
-      sptir_guard(ir, SPTIR_GUARD_LT, bref, (int64_t)lenref, rec_guard_pc(rc));
-      sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, bref, (int64_t)cref);
-      break;
-    }
-    case OP_SETFIELD: {
-      /* R[A][K[B]:shortstring] := RK(C)  -- map write by a constant short
-         string key. Symmetric to OP_GETFIELD's inline hash-slot fast path: we
-         compile it only when the key ALREADY EXISTS at its MAIN POSITION in the
-         live map (so the codegen overwrites the right node; an absent key would
-         need an insert/rehash, and a chained key isn't at the computed slot --
-         both side-exit to the interpreter). We also store only INTEGER/FLOAT
-         values: those are non-collectable, so no GC write barrier is needed
-         (exactly the restriction SETI uses). A collectable value (string/table)
-         would require luaC_barrier and is left to the interpreter. */
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int aref = rec_load_reg(rc, a);
-      if (ir->reg_type[rc->frame_base + a] != SPTT_TAB) { rc->aborted = 1; return 0; }
-      const TValue *kc = &rc->k[b];
-      if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
-      TString *key = tsvalue(kc);
-      int cref = rec_load_rkc(rc, i);
-      SPTType vt = sptir_type(ir, cref);
-      if (vt != SPTT_INT && vt != SPTT_FLT) { rc->aborted = 1; return 0; }  /* no barrier */
-      /* Resolve the base map by following the IR (SLOAD/GETI/GETFIELD), NOT the
-         raw stack slot `a`: inside an inlined method `a` is the callee-relative
-         slot (0 = this), whose absolute stack location is frame_base+a. The
-         receiver SLOAD resolves to the live instance table. (Mirrors GETFIELD's
-         §10.44 base resolution.) */
-      TValue mapval;
-      if (!rec_eval_container(rc, aref, &mapval) || !ttistable(&mapval)) { rc->aborted = 1; return 0; }
-      Table *t = hvalue(&mapval);
-      /* Confirm the key EXISTS somewhere in its chain (we update, never insert;
-         an absent key side-exits via the codegen chain-walk). Same walk as
-         gen_hash_find / luaH_Hgetshortstr. */
-      Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
-      for (;;) {
-        if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key) break;
-        int nx = (int)n->u.next;
-        if (nx == 0) { rc->aborted = 1; return 0; }   /* key absent -> abort (would insert) */
-        n += nx;
-      }
-      if (rc->frame_base != 0 && rc->inline_depth > 0 &&
-          rc->inline_frames[rc->inline_depth - 1].multiwrite_mode) {
-        /* Multi-write mode: guard-free field write. Entry field-layout guard
-           verified the key exists, so no in-body guard needed. No snapshot,
-           no exit stub -> no in-callee exit -> write-safe regardless of how
-           many SETFIELDs precede this one. */
-        int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
-        /* NO snap, NO SPTIRF_GUARD */
-        /* register field for entry layout guard (dedup by key, update type) */
-        for (int fi = 0; fi < rc->n_field_layouts; fi++) {
-          if (rc->field_layouts[fi].key == (void *)key) {
-            rc->field_layouts[fi].value_type = (uint8_t)vt;
-            goto setfield_mw_done;
-          }
+      if (a > ir->maxslot)
+        ir->maxslot = a;
+      /* register field for entry layout guard (dedup by key, update type) */
+      for (int fi = 0; fi < rc->n_field_layouts; fi++) {
+        if (rc->field_layouts[fi].key == (void *)key) {
+          rc->field_layouts[fi].value_type = (uint8_t)et;
+          goto getfield_mw_done;
         }
-        if (rc->n_field_layouts >= SPT_JIT_MAX_FIELD_LAYOUTS) { rc->aborted = 1; return 0; }
-        rc->field_layouts[rc->n_field_layouts].key = (void *)key;
-        rc->field_layouts[rc->n_field_layouts].value_type = (uint8_t)vt;
-        rc->n_field_layouts++;
-        setfield_mw_done:
+      }
+      if (rc->n_field_layouts >= SPT_JIT_MAX_FIELD_LAYOUTS) {
+        rc->aborted = 1;
+        return 0;
+      }
+      rc->field_layouts[rc->n_field_layouts].key = (void *)key;
+      rc->field_layouts[rc->n_field_layouts].value_type = (uint8_t)et;
+      rc->n_field_layouts++;
+    getfield_mw_done:
+      break;
+    }
+    /* Store-to-load forwarding, inlined method bodies only (frame_base != 0):
+       a read of the field just written by the preceding SETFIELD (same base IR
+       ref + key) resolves to the written value with NO emit and NO guard. This
+       keeps `int inc(){ this.v = this.v + 1; return this.v; }` (write then
+       return the written field) a guard-free single-trailing-write -- the
+       SETFIELD stays the last guard-emitting op (§10.49 safety). A read after a
+       write that does NOT forward would emit a GETFIELD guard AFTER the write;
+       on failure resume-at-SELF re-runs the whole method, double-writing -- so
+       abort instead. (No existing inlinable shape reads a field after a write,
+       so this only ever fires for the write-and-return shape or aborts.) */
+    if (rc->frame_base != 0 && rc->fwd_base >= 0) {
+      if (bref == rc->fwd_base && rc->fwd_key == (void *)key) {
+        ir->reg_map[rc->frame_base + a] = rc->fwd_val;
+        ir->reg_type[rc->frame_base + a] = sptir_type(ir, rc->fwd_val);
+        if (a > ir->maxslot)
+          ir->maxslot = a;
         break;
       }
-      int snap = rec_snap(rc);
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Resolve the base Map through the IR when possible: for a chained
+       m["k1"]["k2"] the intermediate map is produced earlier in THIS trace, so
+       its live stack slot is stale (holds the previous iteration's value --
+       the same §10.42 hazard). rec_eval_container follows SLOAD/GETI/GETFIELD
+       to the record-time map; fall back to the live slot for a base it can't
+       follow (e.g. a loop-invariant global via GETTABUP), preserving the prior
+       behavior. Record-time only; the codegen re-walks with guards. */
+    TValue mapval;
+    if (!rec_eval_container(rc, bref, &mapval))
+      mapval = *s2v((rc->ci->func.p + 1) + b);
+    if (!ttistable(&mapval)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    Table *t = hvalue(&mapval);
+    /* Walk the key's main position + collision chain, exactly as the codegen
+       (gen_hash_find) will, to (a) confirm the key is PRESENT -- if it is
+       absent we abort, since the compiled chain-walk would side-exit every
+       time -- and (b) predict the value's type for the guard. The codegen
+       re-walks at run time, so a key that moves between record and run still
+       resolves correctly (or side-exits); this is only a prediction. */
+    Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+    for (;;) {
+      if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key)
+        break;
+      int nx = (int)n->u.next;
+      if (nx == 0) {
+        rc->aborted = 1;
+        return 0;
+      } /* key absent -> abort */
+      n += nx;
+    }
+    SPTType et = rec_value_type(&n->i_val);
+    if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int ref = sptir_emit(ir, SPTIR_GETFIELD, et, bref, SPTIR_NULL, (int64_t)(intptr_t)key);
+    int snap = rec_snap(rc);
+    ir->insts[ref].snap_idx = snap;
+    ir->insts[ref].flags |= SPTIRF_GUARD;
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = et;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_GETTABLE: {
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    int bref = rec_load_reg(rc, b);
+    int cref = rec_load_reg(rc, c);
+    SPTType bt = ir->reg_type[rc->frame_base + b];
+    SPTType ct = ir->reg_type[rc->frame_base + c];
+    if (bt != SPTT_ARR || ct != SPTT_INT) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Predict the element type from the index's stack value. One-pass
+       recording reads it at the back-edge, so a reused index register may
+       show a stale, non-integer, or out-of-range value; the IR already knows
+       the index is an integer (ct == SPTT_INT) and the load is bounds- and
+       type-guarded, so fall back to element 0 when the predictor is unusable
+       (correctness is enforced by those guards, not by this prediction). */
+    StkId base = rc->ci->func.p + 1;
+    TValue *idxtv = s2v(base + c);
+    lua_Integer pidx = ttisinteger(idxtv) ? ivalue(idxtv) : 0;
+    SPTType et = rec_array_elem_type(rc, b, pidx);
+    if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Bounds guard: 0 <= idx < loglen. */
+    int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
+    sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)cref, rec_guard_pc(rc));
+    sptir_guard(ir, SPTIR_GUARD_LT, cref, (int64_t)lenref, rec_guard_pc(rc));
+    /* Type-guarded load. */
+    int ref = sptir_emit(ir, SPTIR_GETI, et, bref, cref, 0);
+    int snap = rec_snap(rc);
+    ir->insts[ref].snap_idx = snap;
+    ir->insts[ref].flags |= SPTIRF_GUARD;
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = et;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_SETI: {
+    rc->fwd_base = -1; /* array write may alias: drop store-to-load forwarding */
+    /* R[A][B] = RK(C), B is a constant index. */
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int aref = rec_load_reg(rc, a);
+    if (ir->reg_type[rc->frame_base + a] != SPTT_ARR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int cref = rec_load_rkc(rc, i);
+    SPTType vt = sptir_type(ir, cref);
+    if (vt != SPTT_INT && vt != SPTT_FLT) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Bounds guard: 0 <= b < loglen (in-bounds write only; growth -> exit). */
+    int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
+    sptir_guard(ir, SPTIR_GUARD_LT, sptir_kint(ir, b), (int64_t)lenref, rec_guard_pc(rc));
+    sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, sptir_kint(ir, b), (int64_t)cref);
+    break;
+  }
+  case OP_SETTABLE: {
+    rc->fwd_base = -1; /* generic write may alias: drop store-to-load forwarding */
+    /* R[A][R[B]] = RK(C), variable index. */
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = rec_load_reg(rc, b);
+    if (ir->reg_type[rc->frame_base + a] != SPTT_ARR ||
+        ir->reg_type[rc->frame_base + b] != SPTT_INT) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int cref = rec_load_rkc(rc, i);
+    SPTType vt = sptir_type(ir, cref);
+    if (vt != SPTT_INT && vt != SPTT_FLT) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Bounds guard: 0 <= idx < loglen. */
+    int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, aref, SPTIR_NULL, 0);
+    sptir_guard(ir, SPTIR_GUARD_LE, sptir_kint(ir, 0), (int64_t)bref, rec_guard_pc(rc));
+    sptir_guard(ir, SPTIR_GUARD_LT, bref, (int64_t)lenref, rec_guard_pc(rc));
+    sptir_emit(ir, SPTIR_SETI, SPTT_NIL, aref, bref, (int64_t)cref);
+    break;
+  }
+  case OP_SETFIELD: {
+    /* R[A][K[B]:shortstring] := RK(C)  -- map write by a constant short
+       string key. Symmetric to OP_GETFIELD's inline hash-slot fast path: we
+       compile it only when the key ALREADY EXISTS at its MAIN POSITION in the
+       live map (so the codegen overwrites the right node; an absent key would
+       need an insert/rehash, and a chained key isn't at the computed slot --
+       both side-exit to the interpreter). We also store only INTEGER/FLOAT
+       values: those are non-collectable, so no GC write barrier is needed
+       (exactly the restriction SETI uses). A collectable value (string/table)
+       would require luaC_barrier and is left to the interpreter. */
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int aref = rec_load_reg(rc, a);
+    if (ir->reg_type[rc->frame_base + a] != SPTT_TAB) {
+      rc->aborted = 1;
+      return 0;
+    }
+    const TValue *kc = &rc->k[b];
+    if (ttypetag(kc) != LUA_VSHRSTR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    TString *key = tsvalue(kc);
+    int cref = rec_load_rkc(rc, i);
+    SPTType vt = sptir_type(ir, cref);
+    if (vt != SPTT_INT && vt != SPTT_FLT) {
+      rc->aborted = 1;
+      return 0;
+    } /* no barrier */
+    /* Resolve the base map by following the IR (SLOAD/GETI/GETFIELD), NOT the
+       raw stack slot `a`: inside an inlined method `a` is the callee-relative
+       slot (0 = this), whose absolute stack location is frame_base+a. The
+       receiver SLOAD resolves to the live instance table. (Mirrors GETFIELD's
+       §10.44 base resolution.) */
+    TValue mapval;
+    if (!rec_eval_container(rc, aref, &mapval) || !ttistable(&mapval)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    Table *t = hvalue(&mapval);
+    /* Confirm the key EXISTS somewhere in its chain (we update, never insert;
+       an absent key side-exits via the codegen chain-walk). Same walk as
+       gen_hash_find / luaH_Hgetshortstr. */
+    Node *n = &t->node[(unsigned int)key->hash & ((1u << t->lsizenode) - 1u)];
+    for (;;) {
+      if (keytt(n) == ctb(LUA_VSHRSTR) && (void *)keyval(n).gc == (void *)key)
+        break;
+      int nx = (int)n->u.next;
+      if (nx == 0) {
+        rc->aborted = 1;
+        return 0;
+      } /* key absent -> abort (would insert) */
+      n += nx;
+    }
+    if (rc->frame_base != 0 && rc->inline_depth > 0 &&
+        rc->inline_frames[rc->inline_depth - 1].multiwrite_mode) {
+      /* Multi-write mode: guard-free field write. Entry field-layout guard
+         verified the key exists, so no in-body guard needed. No snapshot,
+         no exit stub -> no in-callee exit -> write-safe regardless of how
+         many SETFIELDs precede this one. */
       int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
+      /* NO snap, NO SPTIRF_GUARD */
+      /* register field for entry layout guard (dedup by key, update type) */
+      for (int fi = 0; fi < rc->n_field_layouts; fi++) {
+        if (rc->field_layouts[fi].key == (void *)key) {
+          rc->field_layouts[fi].value_type = (uint8_t)vt;
+          goto setfield_mw_done;
+        }
+      }
+      if (rc->n_field_layouts >= SPT_JIT_MAX_FIELD_LAYOUTS) {
+        rc->aborted = 1;
+        return 0;
+      }
+      rc->field_layouts[rc->n_field_layouts].key = (void *)key;
+      rc->field_layouts[rc->n_field_layouts].value_type = (uint8_t)vt;
+      rc->n_field_layouts++;
+    setfield_mw_done:
+      break;
+    }
+    int snap = rec_snap(rc);
+    int ref = sptir_emit(ir, SPTIR_SETFIELD, SPTT_NIL, aref, cref, (int64_t)(intptr_t)key);
+    ir->insts[ref].snap_idx = snap;
+    ir->insts[ref].flags |= SPTIRF_GUARD;
+    /* arm store-to-load forwarding: a later GETFIELD of this exact base+key in
+       the same inlined method body forwards to the written value, guard-free. */
+    rc->fwd_base = aref;
+    rc->fwd_key = (void *)key;
+    rc->fwd_val = cref;
+    break;
+  }
+
+  /* ---- Arithmetic ---- */
+  case OP_ADD:
+  case OP_SUB:
+  case OP_MUL:
+  case OP_DIV:
+  case OP_MOD:
+  case OP_IDIV:
+  case OP_POW: {
+    /* OP_POW emits SPTIR_POW, which has NO codegen (it would need a libm pow
+       C call). No current SPT syntax generates OP_POW (`^` lexes to bitwise
+       XOR / OP_BXOR), so this is defensive: abort cleanly rather than emit an
+       un-codegen-able op that would compile to garbage if OP_POW ever appears.
+       (Enable via the C-call milestone -- see JIT_DEV_NOTES §10.40.) */
+    if (op == OP_POW) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    int bref = rec_load_reg(rc, b);
+    int cref = rec_load_reg(rc, c);
+    SPTType bt = ir->reg_type[rc->frame_base + b], ct = ir->reg_type[rc->frame_base + c];
+    SPTIROp irop;
+    switch (op) {
+    case OP_ADD:
+      irop = SPTIR_ADD;
+      break;
+    case OP_SUB:
+      irop = SPTIR_SUB;
+      break;
+    case OP_MUL:
+      irop = SPTIR_MUL;
+      break;
+    case OP_DIV:
+      irop = SPTIR_DIV;
+      break;
+    case OP_MOD:
+      irop = SPTIR_MOD;
+      break;
+    case OP_IDIV:
+      irop = SPTIR_IDIV;
+      break;
+    case OP_POW:
+      irop = SPTIR_POW;
+      break;
+    default:
+      irop = SPTIR_ADD;
+    }
+    int ref = rec_arith(rc, irop, bref, cref, bt, ct);
+    if (rc->aborted)
+      return 0;
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc); /* skip MMBIN if present */
+    break;
+  }
+  case OP_ADDK:
+  case OP_SUBK:
+  case OP_MULK:
+  case OP_DIVK:
+  case OP_MODK:
+  case OP_IDIVK:
+  case OP_POWK: {
+    /* See OP_POW above: SPTIR_POW has no codegen; abort defensively. */
+    if (op == OP_POWK) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    int bref = rec_load_reg(rc, b);
+    int cref = rec_load_k(rc, c);
+    SPTType bt = ir->reg_type[rc->frame_base + b], ct = sptir_type(ir, cref);
+    SPTIROp irop;
+    switch (op) {
+    case OP_ADDK:
+      irop = SPTIR_ADD;
+      break;
+    case OP_SUBK:
+      irop = SPTIR_SUB;
+      break;
+    case OP_MULK:
+      irop = SPTIR_MUL;
+      break;
+    case OP_DIVK:
+      irop = SPTIR_DIV;
+      break;
+    case OP_MODK:
+      irop = SPTIR_MOD;
+      break;
+    case OP_IDIVK:
+      irop = SPTIR_IDIV;
+      break;
+    case OP_POWK:
+      irop = SPTIR_POW;
+      break;
+    default:
+      irop = SPTIR_ADD;
+    }
+    int ref = rec_arith(rc, irop, bref, cref, bt, ct);
+    if (rc->aborted)
+      return 0;
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc);
+    break;
+  }
+  case OP_ADDI: {
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
+    int bref = rec_load_reg(rc, b);
+    int cref = sptir_kint(ir, c);
+    SPTType bt = ir->reg_type[rc->frame_base + b];
+    int ref = rec_arith(rc, SPTIR_ADD, bref, cref, bt, SPTT_INT);
+    if (rc->aborted)
+      return 0;
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc);
+    break;
+  }
+
+  /* ---- Bitwise ---- */
+  case OP_BAND:
+  case OP_BOR:
+  case OP_BXOR:
+  case OP_SHL:
+  case OP_SHR: {
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    int bref = rec_load_reg(rc, b);
+    int cref = rec_load_reg(rc, c);
+    /* Bitwise ops require integer operands. A float operand is converted to an
+       integer by the VM (erroring if it has a fractional part) -- we don't
+       replicate that, and emitting the op on a float reinterprets its raw IEEE
+       bits, so abort and let the interpreter handle non-int operands. */
+    if (ir->reg_type[rc->frame_base + b] != SPTT_INT ||
+        ir->reg_type[rc->frame_base + c] != SPTT_INT) {
+      rc->aborted = 1;
+      return 0;
+    }
+    SPTIROp irop;
+    switch (op) {
+    case OP_BAND:
+      irop = SPTIR_BAND;
+      break;
+    case OP_BOR:
+      irop = SPTIR_BOR;
+      break;
+    case OP_BXOR:
+      irop = SPTIR_BXOR;
+      break;
+    case OP_SHL:
+      irop = SPTIR_SHL;
+      break;
+    case OP_SHR:
+      irop = SPTIR_SHR;
+      break;
+    default:
+      irop = SPTIR_BAND;
+    }
+    /* x86 variable shift masks the count to 6 bits, diverging from
+       luaV_shiftl for counts outside [0,63] (Lua yields 0). Guard the count
+       in range so the common case is correct; unusual counts side-exit. */
+    if (op == OP_SHL || op == OP_SHR)
+      sptir_guard(ir, SPTIR_GUARD_ULT, cref, 64, rec_guard_pc(rc));
+    int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc);
+    break;
+  }
+  case OP_BANDK:
+  case OP_BORK:
+  case OP_BXORK: {
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    int bref = rec_load_reg(rc, b);
+    int cref = rec_load_k(rc, c);
+    if (ir->reg_type[rc->frame_base + b] != SPTT_INT || sptir_type(ir, cref) != SPTT_INT) {
+      rc->aborted = 1;
+      return 0; /* see OP_BAND: non-int needs the interpreter */
+    }
+    SPTIROp irop;
+    switch (op) {
+    case OP_BANDK:
+      irop = SPTIR_BAND;
+      break;
+    case OP_BORK:
+      irop = SPTIR_BOR;
+      break;
+    case OP_BXORK:
+      irop = SPTIR_BXOR;
+      break;
+    default:
+      irop = SPTIR_BAND;
+    }
+    int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc);
+    break;
+  }
+  case OP_SHLI: {
+    /* R[A] = luaV_shiftl(sC, R[B]) = constant sC shifted left by R[B].
+       The shift AMOUNT is the dynamic register R[B]; the value is the
+       immediate sC. We specialize the common case (0 <= R[B] < 64) and
+       guard it so out-of-range counts side-exit to the interpreter. */
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
+    int bref = rec_load_reg(rc, b);
+    if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
+      rc->aborted = 1;
+      return 0; /* non-int shift amount -> interpreter */
+    }
+    /* Guard amount in [0, 63] (unsigned < 64). */
+    sptir_guard(ir, SPTIR_GUARD_ULT, bref, 64, rec_guard_pc(rc));
+    int cref = sptir_kint(ir, c);
+    int ref = sptir_emit(ir, SPTIR_SHL, SPTT_INT, cref, bref, 0);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc);
+    break;
+  }
+  case OP_SHRI: {
+    /* R[A] = luaV_shiftl(R[B], -sC): R[B] shifted by the compile-time
+       amount (-sC). Direction depends on the sign of -sC. */
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
+    int bref = rec_load_reg(rc, b);
+    if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
+      rc->aborted = 1;
+      return 0; /* non-int shifted value -> interpreter */
+    }
+    int ref = rec_shift_const(rc, bref, -(int64_t)c);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc);
+    break;
+  }
+
+  /* ---- Unary ---- */
+  case OP_UNM: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int bref = rec_load_reg(rc, b);
+    SPTType bt = ir->reg_type[rc->frame_base + b];
+    /* Negation is numeric-only; SPTIR_NEG negates an int or float register.
+       A string/array/etc. operand would be negated as an integer (garbage),
+       and the VM errors on it anyway, so abort for non-numeric operands. */
+    if (bt != SPTT_INT && bt != SPTT_FLT) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int ref = sptir_emit(ir, SPTIR_NEG, bt, bref, SPTIR_NULL, 0);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = bt;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc); /* UNM has no MMBIN; no-op */
+    break;
+  }
+  case OP_BNOT: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int bref = rec_load_reg(rc, b);
+    /* '~' is integer-only; a float operand is converted to an integer by the
+       VM (erroring on a fractional part). Emitting an integer complement on a
+       float reinterprets its raw bits, so abort and let the interpreter run a
+       non-int operand (same as the other bitwise ops). */
+    if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int ref = sptir_emit(ir, SPTIR_BNOT, SPTT_INT, bref, SPTIR_NULL, 0);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc); /* BNOT has no MMBIN; no-op */
+    break;
+  }
+  case OP_NOT: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int bref = rec_load_reg(rc, b);
+    int ref = sptir_emit(ir, SPTIR_NOT, SPTT_TRUE, bref, SPTIR_NULL, 0);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_TRUE;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    break;
+  }
+  case OP_LEN: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    int bref = rec_load_reg(rc, b);
+    /* String '#': SHORT-string byte length via SLEN. The op reads TString.
+       shrlen as an unsigned byte and guards short (long strings side-exit).
+       A LONG string would fail that guard EVERY iteration, and a trace whose
+       guard always fails is discarded and re-recorded -- an unbounded compile
+       thrash that the runtime never escapes. To avoid that we only emit SLEN
+       when we can OBSERVE the live string is short at record time, and only at
+       root (an inlined method body has no live callee frame to read R[b]). A
+       long (or non-observable) string aborts recording instead, so the abort
+       counter blacklists this PC and the interpreter takes over -- bounded and
+       correct. The runtime short-guard then only ever fires on the rare
+       short->long mutation, which re-records, re-observes long, and blacklists. */
+    if (ir->reg_type[rc->frame_base + b] == SPTT_STR) {
+      if (rc->frame_base != 0) {
+        rc->aborted = 1;
+        return 0;
+      }
+      TValue *sv = s2v((rc->ci->func.p + 1) + b);
+      if (!ttisstring(sv) || !strisshr(tsvalue(sv))) {
+        rc->aborted = 1;
+        return 0;
+      }
+      int ref = sptir_emit(ir, SPTIR_SLEN, SPTT_INT, bref, SPTIR_NULL, 0);
+      int snap = rec_snap(rc);
       ir->insts[ref].snap_idx = snap;
       ir->insts[ref].flags |= SPTIRF_GUARD;
-      /* arm store-to-load forwarding: a later GETFIELD of this exact base+key in
-         the same inlined method body forwards to the written value, guard-free. */
-      rc->fwd_base = aref; rc->fwd_key = (void *)key; rc->fwd_val = cref;
+      ir->reg_map[rc->frame_base + a] = ref;
+      ir->reg_type[rc->frame_base + a] = SPTT_INT;
+      if (a > ir->maxslot)
+        ir->maxslot = a;
+      rec_skip_mmbin(rc); /* LEN has no MMBIN; no-op */
+      break;
+    }
+    /* SPTIR_LEN reads an array's length field (Table->loglen). For a string,
+       a map, or anything else, '#' has different semantics (e.g. byte length,
+       stored in a different field that varies between short and long strings),
+       so reading the array field yields garbage. Only arrays are handled here;
+       everything else aborts to the interpreter, which is correct. */
+    if (ir->reg_type[rc->frame_base + b] != SPTT_ARR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int ref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
+    ir->reg_map[rc->frame_base + a] = ref;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    rec_skip_mmbin(rc); /* LEN has no MMBIN; no-op */
+    break;
+  }
+
+  /* ---- Comparisons ---- */
+  case OP_EQ: {
+    int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = rec_load_reg(rc, b);
+    SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
+    /* Two string *variables*: either could be a long (non-interned) string,
+       so pointer comparison is unsafe. Abort. */
+    if (at == SPTT_STR || bt == SPTT_STR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt, a, b);
+  }
+  case OP_LT: {
+    int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = rec_load_reg(rc, b);
+    SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
+    return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt, a, b);
+  }
+  case OP_LE: {
+    int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = rec_load_reg(rc, b);
+    SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
+    return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt, a, b);
+  }
+  case OP_EQI: {
+    int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = sptir_kint(ir, b);
+    return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
+                           ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
+  }
+  case OP_LTI: {
+    int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = sptir_kint(ir, b);
+    return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref,
+                           ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
+  }
+  case OP_LEI: {
+    int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = sptir_kint(ir, b);
+    return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref,
+                           ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
+  }
+  case OP_GTI: {
+    int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = sptir_kint(ir, b);
+    return rec_cond_branch(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref,
+                           ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
+  }
+  case OP_GEI: {
+    int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = sptir_kint(ir, b);
+    return rec_cond_branch(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref,
+                           ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
+  }
+  case OP_EQK: {
+    int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a);
+    int bref = rec_load_k(rc, b);
+    SPTType at = ir->reg_type[rc->frame_base + a], bt = sptir_type(ir, bref);
+    if (at == SPTT_STR && bt == SPTT_STR) {
+      /* `s == "literal"`: only safe when the constant is a short interned
+         string -- then pointer equality is exact. */
+      if (!ttisshrstring(&rc->k[b])) {
+        rc->aborted = 1;
+        return 0;
+      }
+      return rec_str_cond_branch(rc, k, aref, bref, a, b);
+    }
+    return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt, a, -1);
+  }
+
+  /* ---- Tests ---- */
+  case OP_TEST: {
+    int a = GETARG_A(i), k = GETARG_k(i);
+    int aref = rec_load_reg(rc, a); /* emits GUARD_T pinning R[A]'s exact tag */
+    int cond;
+    /* The tag guard fixes truthiness (true/false/nil are distinct tags); read
+       it from the IR ref (a reused slot's stack value would be stale). */
+    if (!rec_ref_truthy(rc, aref, &cond)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    const Instruction *jmp = rc->pc + 1;
+    if (cond != k)
+      rc->pc = jmp + 1; /* fall-through */
+    else
+      rc->pc = jmp + 1 + GETARG_sJ(*jmp); /* take the JMP */
+    return 1;
+  }
+  case OP_TESTSET: {
+    int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
+    int bref = rec_load_reg(rc, b); /* GUARD_T pins R[B]'s tag/truthiness */
+    int cond;
+    if (!rec_ref_truthy(rc, bref, &cond)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int isfalse = !cond;
+    const Instruction *jmp = rc->pc + 1;
+    if (isfalse == k) {
+      /* Fall-through: R[A] is NOT assigned. */
+      rc->pc = jmp + 1;
+    } else {
+      /* Branch: R[A] := R[B], then take the JMP. */
+      ir->reg_map[rc->frame_base + a] = bref;
+      ir->reg_type[rc->frame_base + a] = ir->reg_type[rc->frame_base + b];
+      if (a > ir->maxslot)
+        ir->maxslot = a;
+      rc->pc = jmp + 1 + GETARG_sJ(*jmp);
+    }
+    return 1;
+  }
+
+  /* ---- Jumps ---- */
+  case OP_JMP: {
+    int sj = GETARG_sJ(i);
+    if (sj < 0) {
+      /* Backward jump. Only our own loop header (start_pc) closes the trace.
+         A backward jump to any OTHER target is an INNER loop's back-edge --
+         e.g. a `while` nested inside the `for` we are tracing. We cannot
+         represent a nested loop in a single linear trace; closing here would
+         fold the inner loop's pre-header (its init) into the body and produce
+         a non-terminating trace (constant exit guard). So abort instead and
+         let the interpreter run this loop; the inner loop still gets its own
+         correct trace from its own header. */
+      const Instruction *target = rc->pc + 1 + sj;
+      if (target == rc->start_pc) {
+        sptir_loop(ir);
+        return 0;
+      }
+      /* Back-edge to a target before our start. In a root trace this is an
+         inner loop we can't represent (abort). In a SIDE trace started
+         mid-loop, the parent's loop header is necessarily before our start, so
+         this is the expected close point: emit an unconditional exit to the
+         interpreter at the back-edge PC and end successfully. The interpreter
+         runs the back-edge JMP and re-enters the parent (or the link
+         trampoline hands off). */
+      if (rc->is_side_trace) {
+        sptir_exit(ir, rc->pc);
+        return 0;
+      }
+      rc->aborted = 1;
+      rc->abort_pc = rc->pc;
+      return 0;
+    }
+    /* Forward jump: follow it. The straight-line trace must track the actual
+       control flow taken at record time. A forward JMP is unconditional (any
+       condition was already turned into a guard by the preceding test), so we
+       jump to its target rather than falling through -- otherwise we'd record
+       BOTH arms of an if/else. Target = pc + 1 + sJ; returning 1 skips the
+       default pc++ at the end of rec_inst. */
+    rc->pc += sj + 1;
+    return 1;
+  }
+
+  /* ---- Numeric for loop ---- */
+  case OP_FORPREP: {
+    /* SPT for loop: after FORPREP, R[A]=count, R[A+1]=step, R[A+2]=init.
+       FORPREP jumps to FORLOOP, so we skip it in the trace. But if this is an
+       inner loop inside the (outer) trace we are recording, try to unroll it
+       inline first so the whole nest becomes one linear trace (Phase 3a). */
+    if (try_unroll_inner_loop(rc, i))
+      return rc->aborted ? 0 : 1;
+    int bx = GETARG_Bx(i);
+    rc->pc += bx + 1;
+    return 1;
+  }
+  case OP_FORLOOP: {
+    /* SPT FORLOOP layout (different from standard Lua!):
+       R[A] = count (unsigned, decremented each iteration)
+       R[A+1] = step
+       R[A+2] = idx (incremented by step each iteration)
+       if count > 0: count--; idx += step; jump back to loop body */
+    int a = GETARG_A(i);
+
+    /* Nested-loop guard: this back-edge only closes the trace if it jumps
+       to OUR loop header. The VM computes the target as pc - Bx with pc
+       already advanced past the FORLOOP, i.e. (rc->pc + 1) - Bx here. A
+       FORLOOP that targets a different header belongs to an inner loop we
+       recorded through; a single linear trace can't represent that, so we
+       abort and let the interpreter drive the outer loop. The inner loop
+       keeps its own (already compiled) trace, so the hot path is preserved. */
+    const Instruction *target = rc->pc + 1 - GETARG_Bx(i);
+    if (target != rc->start_pc) {
+      /* Side trace reaching the (outer) loop's FORLOOP back-edge: it targets
+         the loop header, which is before our mid-loop start, so we cannot loop
+         on it. Close with an unconditional exit at the FORLOOP PC *before*
+         emitting the count/idx update -- the interpreter then executes FORLOOP
+         (decrement, idx += step, back-jump) and its hot-check re-enters the
+         parent. Slots we never touched (idx, count) keep their flushed stack
+         values via the snapshot's -1 entries; that is exactly correct. */
+      if (rc->is_side_trace) {
+        sptir_exit(ir, rc->pc);
+        return 0;
+      }
+      rc->aborted = 1;
+      return 0;
+    }
+
+    int count_ref = rec_load_reg(rc, a);    /* R[A] = count */
+    int step_ref = rec_load_reg(rc, a + 1); /* R[A+1] = step */
+    int idx_ref = rec_load_reg(rc, a + 2);  /* R[A+2] = idx */
+
+    /* Guard: count > 0 (continue loop). Use GUARD_LT with 0 < count. */
+    int zero_ref = sptir_kint(ir, 0);
+    int guard_ref = sptir_guard(ir, SPTIR_GUARD_LT, zero_ref, (int64_t)count_ref, rec_guard_pc(rc));
+    if (guard_ref >= 0)
+      rc->loop_end_snap = ir->insts[guard_ref].snap_idx;
+
+    /* new_count = count - 1 */
+    int one_ref = sptir_kint(ir, 1);
+    int new_count = sptir_emit(ir, SPTIR_SUB, SPTT_INT, count_ref, one_ref, 0);
+    ir->reg_map[rc->frame_base + a] = new_count;
+    ir->reg_type[rc->frame_base + a] = SPTT_INT;
+
+    /* new_idx = idx + step */
+    int new_idx = sptir_emit(ir, SPTIR_ADD, SPTT_INT, idx_ref, step_ref, 0);
+    ir->reg_map[rc->frame_base + a + 2] = new_idx;
+    ir->reg_type[rc->frame_base + a + 2] = SPTT_INT;
+
+    if (a > ir->maxslot)
+      ir->maxslot = a;
+    if (rc->frame_base + a + 2 > ir->maxslot)
+      ir->maxslot = rc->frame_base + a + 2;
+
+    /* This is the loop back-edge. */
+    sptir_loop(ir);
+    return 0;
+  }
+
+  /* ---- Returns ---- */
+  case OP_RETURN0: {
+    if (rc->frame_base != 0) {
+      /* Void return from an inlined single-trailing-write method: restore the
+         caller's recording context with NO result to bind, and keep recording
+         the caller after the CALL. The method's only side effect -- its single
+         trailing field write -- is already emitted and resume-at-SELF
+         protected: the write is the last committing op, so any guard failure
+         side-exits before it commits and the interpreter re-runs the call
+         exactly once (no double write). See proto_is_write_method_inlinable. */
+      rec_inline_pop(rc);
+      return 1;
+    }
+    sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
+    return 0;
+  }
+  case OP_RETURN1: {
+    int a = GETARG_A(i);
+    if (rc->frame_base != 0) {
+      /* Returning from an inlined callee: bind the caller's result register to
+         the returned value's IR ref, restore the caller's recording context,
+         and keep recording the caller after the CALL. */
+      int aref = rec_load_reg(rc, a);
+      if (rc->aborted)
+        return 0;
+      SPTType rt = ir->reg_type[rc->frame_base + a];
+      SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
+      ir->reg_map[f->call_result_slot] = aref;
+      ir->reg_type[f->call_result_slot] = rt;
+      if (f->call_result_slot > ir->maxslot)
+        ir->maxslot = f->call_result_slot;
+      rec_inline_pop(rc);
+      return 1;
+    }
+    int aref = rec_load_reg(rc, a);
+    sptir_emit(ir, SPTIR_RETURN, ir->reg_type[rc->frame_base + a], aref, SPTIR_NULL, 0);
+    return 0;
+  }
+  case OP_RETURN: {
+    int a = GETARG_A(i), b = GETARG_B(i);
+    if (rc->frame_base != 0) {
+      /* Inlined method void return (b==1): restore the caller like OP_RETURN0,
+         no result to bind. A value-returning OP_RETURN from an inlined method
+         is not supported here (write methods are void). */
+      if (b != 1) {
+        rc->aborted = 1;
+        return 0;
+      }
+      rec_inline_pop(rc);
+      return 1;
+    }
+    if (b == 1) {
+      sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
+    } else {
+      int aref = rec_load_reg(rc, a);
+      sptir_emit(ir, SPTIR_RETURN, ir->reg_type[rc->frame_base + a], aref, SPTIR_NULL, 0);
+    }
+    return 0;
+  }
+
+  /* ---- Call inlining (pure straight-line leaf functions) ---- */
+  case OP_CALL: {
+    rc->fwd_base =
+        -1; /* a call may mutate: drop store-to-load forwarding (re-armed on method inline) */
+    rc->call_arg_self_pc = NULL; /* close the SELF->CALL arg-load window */
+    /* CALL A B C : R[A](R[A+1..A+B-1]) -> R[A..A+C-2].
+       SPT uses a slot-0 receiver, so R[A+1] is the (nil) receiver and
+       R[A+2..] are the actual arguments. */
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+
+    /* A multiret arg slot (set by a nested min/max whose result this CALL may
+       consume) is valid for exactly this one CALL. Capture and clear it now so
+       it never leaks to a later CALL. */
+    int incoming_mm_top = rc->minmax_multiret_top;
+    rc->minmax_multiret_top = -1;
+
+    /* Pending unary-math call armed by a preceding SELF (e.g. math.sqrt)?
+       The SPT convention puts the receiver at R[A+1] and the single real
+       argument at R[A+2]; math_* read luaL_checknumber(L, 2). Lower it to a
+       direct libm call (SPTIR_FMATH). Requires exactly one real arg
+       (B == 3: function + receiver + arg) and one result (C == 2). */
+    if (rc->pending_cfn_slot == rc->frame_base + a) {
+      void *libm = rc->pending_cfn_libm;
+      rc->pending_cfn_slot = -1;
+      rc->pending_cfn_libm = NULL;
+      if (b != 3 || c != 2) {
+        rc->aborted = 1;
+        return 0;
+      }
+      int arg = ir->reg_map[rc->frame_base + a + 2];
+      if (arg < 0) {
+        rc->aborted = 1;
+        return 0;
+      }
+      SPTType at = ir->reg_type[rc->frame_base + a + 2];
+      if (at == SPTT_INT) {
+        arg = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg, SPTIR_NULL, 0);
+      } else if (at != SPTT_FLT) {
+        rc->aborted = 1;
+        return 0; /* non-numeric arg */
+      }
+      int fref = sptir_emit(ir, SPTIR_FMATH, SPTT_FLT, arg, SPTIR_NULL, (int64_t)(intptr_t)libm);
+      ir->reg_map[rc->frame_base + a] = fref;
+      ir->reg_type[rc->frame_base + a] = SPTT_FLT;
+      if (a > ir->maxslot)
+        ir->maxslot = a;
       break;
     }
 
-    /* ---- Arithmetic ---- */
-    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
-    case OP_MOD: case OP_IDIV: case OP_POW: {
-      /* OP_POW emits SPTIR_POW, which has NO codegen (it would need a libm pow
-         C call). No current SPT syntax generates OP_POW (`^` lexes to bitwise
-         XOR / OP_BXOR), so this is defensive: abort cleanly rather than emit an
-         un-codegen-able op that would compile to garbage if OP_POW ever appears.
-         (Enable via the C-call milestone -- see JIT_DEV_NOTES §10.40.) */
-      if (op == OP_POW) { rc->aborted = 1; return 0; }
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      int bref = rec_load_reg(rc, b);
-      int cref = rec_load_reg(rc, c);
-      SPTType bt = ir->reg_type[rc->frame_base + b], ct = ir->reg_type[rc->frame_base + c];
-      SPTIROp irop;
-      switch (op) {
-        case OP_ADD:  irop = SPTIR_ADD;  break;
-        case OP_SUB:  irop = SPTIR_SUB;  break;
-        case OP_MUL:  irop = SPTIR_MUL;  break;
-        case OP_DIV:  irop = SPTIR_DIV;  break;
-        case OP_MOD:  irop = SPTIR_MOD;  break;
-        case OP_IDIV: irop = SPTIR_IDIV; break;
-        case OP_POW:  irop = SPTIR_POW;  break;
-        default: irop = SPTIR_ADD;
+    /* Pending binary-math call armed by a preceding SELF (e.g. math.pow,
+       math.atan)? The SPT convention puts the receiver at R[A+1] and the
+       real arguments at R[A+2] (and R[A+3] for two-arg forms). Lower to
+       SPTIR_FMATH2. Two forms:
+         - B == 4 (two real args, e.g. math.pow(x,y), math.atan(y,x)):
+           arg1 = R[A+2], arg2 = R[A+3].
+         - B == 3 (one real arg, e.g. math.atan(y) → atan2(y,1)):
+           arg1 = R[A+2], arg2 = kflt(1.0). Only atan2 has a single-arg form;
+           math.pow with B==3 would be a user error (caught by the interpreter).
+       C == 2 (one result) is always required. */
+    if (rc->pending_cfn2_slot == rc->frame_base + a) {
+      void *libm2 = rc->pending_cfn2_libm;
+      rc->pending_cfn2_slot = -1;
+      rc->pending_cfn2_libm = NULL;
+      if (c != 2) {
+        rc->aborted = 1;
+        return 0;
       }
-      int ref = rec_arith(rc, irop, bref, cref, bt, ct);
-      if (rc->aborted) return 0;
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc); /* skip MMBIN if present */
-      break;
-    }
-    case OP_ADDK: case OP_SUBK: case OP_MULK: case OP_DIVK:
-    case OP_MODK: case OP_IDIVK: case OP_POWK: {
-      /* See OP_POW above: SPTIR_POW has no codegen; abort defensively. */
-      if (op == OP_POWK) { rc->aborted = 1; return 0; }
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      int bref = rec_load_reg(rc, b);
-      int cref = rec_load_k(rc, c);
-      SPTType bt = ir->reg_type[rc->frame_base + b], ct = sptir_type(ir, cref);
-      SPTIROp irop;
-      switch (op) {
-        case OP_ADDK:  irop = SPTIR_ADD;  break;
-        case OP_SUBK:  irop = SPTIR_SUB;  break;
-        case OP_MULK:  irop = SPTIR_MUL;  break;
-        case OP_DIVK:  irop = SPTIR_DIV;  break;
-        case OP_MODK:  irop = SPTIR_MOD;  break;
-        case OP_IDIVK: irop = SPTIR_IDIV; break;
-        case OP_POWK:  irop = SPTIR_POW;  break;
-        default: irop = SPTIR_ADD;
+      int arg1 = ir->reg_map[rc->frame_base + a + 2];
+      if (arg1 < 0) {
+        rc->aborted = 1;
+        return 0;
       }
-      int ref = rec_arith(rc, irop, bref, cref, bt, ct);
-      if (rc->aborted) return 0;
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc);
-      break;
-    }
-    case OP_ADDI: {
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
-      int bref = rec_load_reg(rc, b);
-      int cref = sptir_kint(ir, c);
-      SPTType bt = ir->reg_type[rc->frame_base + b];
-      int ref = rec_arith(rc, SPTIR_ADD, bref, cref, bt, SPTT_INT);
-      if (rc->aborted) return 0;
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = sptir_type(ir, ref);
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc);
+      SPTType at1 = ir->reg_type[rc->frame_base + a + 2];
+      if (at1 == SPTT_INT) {
+        arg1 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg1, SPTIR_NULL, 0);
+      } else if (at1 != SPTT_FLT) {
+        rc->aborted = 1;
+        return 0; /* non-numeric arg1 */
+      }
+      int arg2;
+      if (b == 4) {
+        arg2 = ir->reg_map[rc->frame_base + a + 3];
+        if (arg2 < 0) {
+          rc->aborted = 1;
+          return 0;
+        }
+        SPTType at2 = ir->reg_type[rc->frame_base + a + 3];
+        if (at2 == SPTT_INT) {
+          arg2 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg2, SPTIR_NULL, 0);
+        } else if (at2 != SPTT_FLT) {
+          rc->aborted = 1;
+          return 0; /* non-numeric arg2 */
+        }
+      } else if (b == 3) {
+        /* Single-arg form: math.atan(y) → atan2(y, 1.0) */
+        arg2 = sptir_kflt(ir, 1.0);
+      } else {
+        rc->aborted = 1;
+        return 0;
+      }
+      int fref = sptir_emit(ir, SPTIR_FMATH2, SPTT_FLT, arg1, arg2, (int64_t)(intptr_t)libm2);
+      ir->reg_map[rc->frame_base + a] = fref;
+      ir->reg_type[rc->frame_base + a] = SPTT_FLT;
+      if (a > ir->maxslot)
+        ir->maxslot = a;
       break;
     }
 
-    /* ---- Bitwise ---- */
-    case OP_BAND: case OP_BOR: case OP_BXOR: case OP_SHL: case OP_SHR: {
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      int bref = rec_load_reg(rc, b);
-      int cref = rec_load_reg(rc, c);
-      /* Bitwise ops require integer operands. A float operand is converted to an
-         integer by the VM (erroring if it has a fractional part) -- we don't
-         replicate that, and emitting the op on a float reinterprets its raw IEEE
-         bits, so abort and let the interpreter handle non-int operands. */
-      if (ir->reg_type[rc->frame_base + b] != SPTT_INT ||
-          ir->reg_type[rc->frame_base + c] != SPTT_INT) {
-        rc->aborted = 1; return 0;
+    /* Pending string.len / string.byte armed by a preceding SELF? Lower to
+       SLEN / SBYTE. SPT puts the receiver (string module) at R[A+1], s at
+       R[A+2], and (for byte) i at R[A+3] -- str_* read arg2 = s, arg3 = i.
+       Only at root (frame_base == 0), where R[A+2] can be read live. SLEN /
+       SBYTE guard short at runtime, but a LONG string fails that guard every
+       iteration and thrashes, so we additionally require the live string to be
+       observably SHORT here (the abort blacklists the PC -> bounded), exactly
+       as the '#s' path does. SBYTE's bounds guard needs no such check: an
+       out-of-range string.byte returns no value, so the side-exit lands the
+       interpreter on the same error (it never loops gracefully). */
+    if (rc->pending_str_slot == rc->frame_base + a) {
+      int sop = rc->pending_str_op;
+      const Instruction *str_self_pc = rc->pending_str_self_pc;
+      rc->pending_str_slot = -1;
+      rc->pending_str_op = 0;
+      if (rc->frame_base != 0 || c != 2) {
+        rc->aborted = 1;
+        return 0;
       }
-      SPTIROp irop;
-      switch (op) {
-        case OP_BAND: irop = SPTIR_BAND; break;
-        case OP_BOR:  irop = SPTIR_BOR;  break;
-        case OP_BXOR: irop = SPTIR_BXOR; break;
-        case OP_SHL:  irop = SPTIR_SHL;  break;
-        case OP_SHR:  irop = SPTIR_SHR;  break;
-        default: irop = SPTIR_BAND;
+      int sref = ir->reg_map[rc->frame_base + a + 2];
+      if (sref < 0 || ir->reg_type[rc->frame_base + a + 2] != SPTT_STR) {
+        rc->aborted = 1;
+        return 0;
       }
-      /* x86 variable shift masks the count to 6 bits, diverging from
-         luaV_shiftl for counts outside [0,63] (Lua yields 0). Guard the count
-         in range so the common case is correct; unusual counts side-exit. */
-      if (op == OP_SHL || op == OP_SHR)
-        sptir_guard(ir, SPTIR_GUARD_ULT, cref, 64, rec_guard_pc(rc));
-      int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc);
-      break;
-    }
-    case OP_BANDK: case OP_BORK: case OP_BXORK: {
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      int bref = rec_load_reg(rc, b);
-      int cref = rec_load_k(rc, c);
-      if (ir->reg_type[rc->frame_base + b] != SPTT_INT ||
-          sptir_type(ir, cref) != SPTT_INT) {
-        rc->aborted = 1; return 0;  /* see OP_BAND: non-int needs the interpreter */
+      TValue *sv = s2v((rc->ci->func.p + 1) + (a + 2));
+      if (!ttisstring(sv) || !strisshr(tsvalue(sv))) {
+        rc->aborted = 1;
+        return 0;
       }
-      SPTIROp irop;
-      switch (op) {
-        case OP_BANDK: irop = SPTIR_BAND; break;
-        case OP_BORK:  irop = SPTIR_BOR;  break;
-        case OP_BXORK: irop = SPTIR_BXOR; break;
-        default: irop = SPTIR_BAND;
-      }
-      int ref = sptir_emit(ir, irop, SPTT_INT, bref, cref, 0);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc);
-      break;
-    }
-    case OP_SHLI: {
-      /* R[A] = luaV_shiftl(sC, R[B]) = constant sC shifted left by R[B].
-         The shift AMOUNT is the dynamic register R[B]; the value is the
-         immediate sC. We specialize the common case (0 <= R[B] < 64) and
-         guard it so out-of-range counts side-exit to the interpreter. */
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
-      int bref = rec_load_reg(rc, b);
-      if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
-        rc->aborted = 1; return 0;  /* non-int shift amount -> interpreter */
-      }
-      /* Guard amount in [0, 63] (unsigned < 64). */
-      sptir_guard(ir, SPTIR_GUARD_ULT, bref, 64, rec_guard_pc(rc));
-      int cref = sptir_kint(ir, c);
-      int ref = sptir_emit(ir, SPTIR_SHL, SPTT_INT, cref, bref, 0);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc);
-      break;
-    }
-    case OP_SHRI: {
-      /* R[A] = luaV_shiftl(R[B], -sC): R[B] shifted by the compile-time
-         amount (-sC). Direction depends on the sign of -sC. */
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_sC(i);
-      int bref = rec_load_reg(rc, b);
-      if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
-        rc->aborted = 1; return 0;  /* non-int shifted value -> interpreter */
-      }
-      int ref = rec_shift_const(rc, bref, -(int64_t)c);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc);
-      break;
-    }
-
-    /* ---- Unary ---- */
-    case OP_UNM: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int bref = rec_load_reg(rc, b);
-      SPTType bt = ir->reg_type[rc->frame_base + b];
-      /* Negation is numeric-only; SPTIR_NEG negates an int or float register.
-         A string/array/etc. operand would be negated as an integer (garbage),
-         and the VM errors on it anyway, so abort for non-numeric operands. */
-      if (bt != SPTT_INT && bt != SPTT_FLT) {
-        rc->aborted = 1; return 0;
-      }
-      int ref = sptir_emit(ir, SPTIR_NEG, bt, bref, SPTIR_NULL, 0);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = bt;
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc); /* UNM has no MMBIN; no-op */
-      break;
-    }
-    case OP_BNOT: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int bref = rec_load_reg(rc, b);
-      /* '~' is integer-only; a float operand is converted to an integer by the
-         VM (erroring on a fractional part). Emitting an integer complement on a
-         float reinterprets its raw bits, so abort and let the interpreter run a
-         non-int operand (same as the other bitwise ops). */
-      if (ir->reg_type[rc->frame_base + b] != SPTT_INT) {
-        rc->aborted = 1; return 0;
-      }
-      int ref = sptir_emit(ir, SPTIR_BNOT, SPTT_INT, bref, SPTIR_NULL, 0);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc); /* BNOT has no MMBIN; no-op */
-      break;
-    }
-    case OP_NOT: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int bref = rec_load_reg(rc, b);
-      int ref = sptir_emit(ir, SPTIR_NOT, SPTT_TRUE, bref, SPTIR_NULL, 0);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_TRUE;
-      if (a > ir->maxslot) ir->maxslot = a;
-      break;
-    }
-    case OP_LEN: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      int bref = rec_load_reg(rc, b);
-      /* String '#': SHORT-string byte length via SLEN. The op reads TString.
-         shrlen as an unsigned byte and guards short (long strings side-exit).
-         A LONG string would fail that guard EVERY iteration, and a trace whose
-         guard always fails is discarded and re-recorded -- an unbounded compile
-         thrash that the runtime never escapes. To avoid that we only emit SLEN
-         when we can OBSERVE the live string is short at record time, and only at
-         root (an inlined method body has no live callee frame to read R[b]). A
-         long (or non-observable) string aborts recording instead, so the abort
-         counter blacklists this PC and the interpreter takes over -- bounded and
-         correct. The runtime short-guard then only ever fires on the rare
-         short->long mutation, which re-records, re-observes long, and blacklists. */
-      if (ir->reg_type[rc->frame_base + b] == SPTT_STR) {
-        if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
-        TValue *sv = s2v((rc->ci->func.p + 1) + b);
-        if (!ttisstring(sv) || !strisshr(tsvalue(sv))) { rc->aborted = 1; return 0; }
-        int ref = sptir_emit(ir, SPTIR_SLEN, SPTT_INT, bref, SPTIR_NULL, 0);
-        int snap = rec_snap(rc);
+      if (sop == 1) { /* string.len(s) -> SLEN */
+        if (b != 3) {
+          rc->aborted = 1;
+          return 0;
+        }
+        int ref = sptir_emit(ir, SPTIR_SLEN, SPTT_INT, sref, SPTIR_NULL, 0);
+        /* Resume the short-string guard at the SELF (not this CALL): the
+           interpreter re-executes SELF+CALL and runs string.len for a long
+           string. Idempotent: a length read has no side effects. */
+        int snap = sptir_snapshot(ir, str_self_pc);
         ir->insts[ref].snap_idx = snap;
         ir->insts[ref].flags |= SPTIRF_GUARD;
         ir->reg_map[rc->frame_base + a] = ref;
         ir->reg_type[rc->frame_base + a] = SPTT_INT;
-        if (a > ir->maxslot) ir->maxslot = a;
-        rec_skip_mmbin(rc); /* LEN has no MMBIN; no-op */
+        if (a > ir->maxslot)
+          ir->maxslot = a;
+        break;
+      } else { /* string.byte(s, i) -> SBYTE */
+        if (b != 4) {
+          rc->aborted = 1;
+          return 0;
+        }
+        int iref = ir->reg_map[rc->frame_base + a + 3];
+        if (iref < 0 || ir->reg_type[rc->frame_base + a + 3] != SPTT_INT) {
+          rc->aborted = 1;
+          return 0;
+        }
+        int ref = sptir_emit(ir, SPTIR_SBYTE, SPTT_INT, sref, iref, 0);
+        /* Resume the short-string / bounds guard at the SELF (not this CALL):
+           the interpreter re-executes SELF+CALL and runs the real string.byte
+           for a long string, or errors identically for an out-of-range index.
+           Idempotent: a byte read has no side effects. */
+        int snap = sptir_snapshot(ir, str_self_pc);
+        ir->insts[ref].snap_idx = snap;
+        ir->insts[ref].flags |= SPTIRF_GUARD;
+        ir->reg_map[rc->frame_base + a] = ref;
+        ir->reg_type[rc->frame_base + a] = SPTT_INT;
+        if (a > ir->maxslot)
+          ir->maxslot = a;
         break;
       }
-      /* SPTIR_LEN reads an array's length field (Table->loglen). For a string,
-         a map, or anything else, '#' has different semantics (e.g. byte length,
-         stored in a different field that varies between short and long strings),
-         so reading the array field yields garbage. Only arrays are handled here;
-         everything else aborts to the interpreter, which is correct. */
-      if (ir->reg_type[rc->frame_base + b] != SPTT_ARR) {
-        rc->aborted = 1; return 0;
+    }
+
+    /* Pending math.min / math.max armed by a preceding SELF? Lower to a
+       branchless select (reusing emit_select). SPT puts the receiver (math
+       module) at R[A+1] and the two values at R[A+2], R[A+3]. Requires exactly
+       two args (b == 4) and one result (c == 2). Lua's math.max(a,b) =
+       (b > a) ? b : a = (a < b) ? b : a; math.min(a,b) = (b < a) ? b : a =
+       (a > b) ? b : a -- so out = (a FOP b) ? b : a with FOP = LT for max,
+       GT for min. emit_select's compare-false -> else (= a) matches Lua's
+       "keep the current arg unless strictly beaten" exactly (ties and NaN both
+       fall to a). Matches the LIFO top of the pending stack so a nested clamp
+       pops the inner min before the outer max. Mixed int/float args are
+       promoted to float first (Lua promotes); result type follows emit_select. */
+    if (rc->pending_minmax_top > 0 &&
+        rc->pending_minmax_slot[rc->pending_minmax_top - 1] == rc->frame_base + a) {
+      rc->pending_minmax_top--;
+      int mmop = rc->pending_minmax_op[rc->pending_minmax_top];
+      /* Two values at R[A+2], R[A+3]. Normally b == 4 (fn + receiver + 2). When
+         the trailing arg is itself a (just-lowered) nested min/max, Lua emits
+         this CALL with b == 0 (args to top); that inner result is the single
+         value at minmax_multiret_top, which must be exactly R[A+3] (i.e. exactly
+         2 args). c == 2 for one result, or c == 0 when THIS result in turn feeds
+         an enclosing call (still a single value). */
+      if (b != 4 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 3)) {
+        rc->aborted = 1;
+        return 0;
       }
-      int ref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, bref, SPTIR_NULL, 0);
-      ir->reg_map[rc->frame_base + a] = ref;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-      if (a > ir->maxslot) ir->maxslot = a;
-      rec_skip_mmbin(rc); /* LEN has no MMBIN; no-op */
+      if (c != 2 && c != 0) {
+        rc->aborted = 1;
+        return 0;
+      }
+      int aref = ir->reg_map[rc->frame_base + a + 2];
+      int bref = ir->reg_map[rc->frame_base + a + 3];
+      if (aref < 0 || bref < 0) {
+        rc->aborted = 1;
+        return 0;
+      }
+      SPTType at = ir->reg_type[rc->frame_base + a + 2];
+      SPTType bt = ir->reg_type[rc->frame_base + a + 3];
+      if (!sptt_isnum(at) || !sptt_isnum(bt)) {
+        rc->aborted = 1;
+        return 0;
+      }
+      /* Promote a mixed pair to float so emit_select's both-float path applies
+         and the result is float, as Lua does for a mixed min/max. */
+      if (at == SPTT_INT && bt == SPTT_FLT) {
+        aref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, SPTIR_NULL, 0);
+        at = SPTT_FLT;
+      } else if (at == SPTT_FLT && bt == SPTT_INT) {
+        bref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, SPTIR_NULL, 0);
+        bt = SPTT_FLT;
+      }
+      SPTIROp fop = (mmop == 2) ? SPTIR_LT : SPTIR_GT; /* 2 = max -> LT, 1 = min -> GT */
+      int out_ref;
+      SPTType out_t;
+      /* out = (a FOP b) ? then(=b) : else(=a) */
+      if (!emit_select(rc, fop, aref, bref, at, bt, bref, bt, aref, at, &out_ref, &out_t)) {
+        rc->aborted = 1;
+        return 0;
+      }
+      ir->reg_map[rc->frame_base + a] = out_ref;
+      ir->reg_type[rc->frame_base + a] = out_t;
+      if (a > ir->maxslot)
+        ir->maxslot = a;
+      /* If this result is itself a trailing arg (c == 0), record its slot so the
+         enclosing CALL can confirm its arg count. */
+      if (c == 0)
+        rc->minmax_multiret_top = rc->frame_base + a;
       break;
     }
 
-    /* ---- Comparisons ---- */
-    case OP_EQ: {
-      int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = rec_load_reg(rc, b);
-      SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
-      /* Two string *variables*: either could be a long (non-interned) string,
-         so pointer comparison is unsafe. Abort. */
-      if (at == SPTT_STR || bt == SPTT_STR) { rc->aborted = 1; return 0; }
-      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref, at, bt, a, b);
-    }
-    case OP_LT: {
-      int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = rec_load_reg(rc, b);
-      SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
-      return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref, at, bt, a, b);
-    }
-    case OP_LE: {
-      int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = rec_load_reg(rc, b);
-      SPTType at = ir->reg_type[rc->frame_base + a], bt = ir->reg_type[rc->frame_base + b];
-      return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref, at, bt, a, b);
-    }
-    case OP_EQI: {
-      int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = sptir_kint(ir, b);
-      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
-                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
-    }
-    case OP_LTI: {
-      int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = sptir_kint(ir, b);
-      return rec_cond_branch(rc, k ? SPTIR_GE : SPTIR_LT, aref, bref,
-                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
-    }
-    case OP_LEI: {
-      int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = sptir_kint(ir, b);
-      return rec_cond_branch(rc, k ? SPTIR_GT : SPTIR_LE, aref, bref,
-                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
-    }
-    case OP_GTI: {
-      int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = sptir_kint(ir, b);
-      return rec_cond_branch(rc, k ? SPTIR_LE : SPTIR_GT, aref, bref,
-                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
-    }
-    case OP_GEI: {
-      int a = GETARG_A(i), b = GETARG_sB(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = sptir_kint(ir, b);
-      return rec_cond_branch(rc, k ? SPTIR_LT : SPTIR_GE, aref, bref,
-                             ir->reg_type[rc->frame_base + a], SPTT_INT, a, -1);
-    }
-    case OP_EQK: {
-      int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a);
-      int bref = rec_load_k(rc, b);
-      SPTType at = ir->reg_type[rc->frame_base + a], bt = sptir_type(ir, bref);
-      if (at == SPTT_STR && bt == SPTT_STR) {
-        /* `s == "literal"`: only safe when the constant is a short interned
-           string -- then pointer equality is exact. */
-        if (!ttisshrstring(&rc->k[b])) { rc->aborted = 1; return 0; }
-        return rec_str_cond_branch(rc, k, aref, bref, a, b);
-      }
-      return rec_cond_branch(rc, k ? SPTIR_NE : SPTIR_EQ, aref, bref,
-                             at, bt, a, -1);
-    }
-
-    /* ---- Tests ---- */
-    case OP_TEST: {
-      int a = GETARG_A(i), k = GETARG_k(i);
-      int aref = rec_load_reg(rc, a); /* emits GUARD_T pinning R[A]'s exact tag */
-      int cond;
-      /* The tag guard fixes truthiness (true/false/nil are distinct tags); read
-         it from the IR ref (a reused slot's stack value would be stale). */
-      if (!rec_ref_truthy(rc, aref, &cond)) { rc->aborted = 1; return 0; }
-      const Instruction *jmp = rc->pc + 1;
-      if (cond != k)
-        rc->pc = jmp + 1;                            /* fall-through */
-      else
-        rc->pc = jmp + 1 + GETARG_sJ(*jmp);          /* take the JMP */
-      return 1;
-    }
-    case OP_TESTSET: {
-      int a = GETARG_A(i), b = GETARG_B(i), k = GETARG_k(i);
-      int bref = rec_load_reg(rc, b); /* GUARD_T pins R[B]'s tag/truthiness */
-      int cond;
-      if (!rec_ref_truthy(rc, bref, &cond)) { rc->aborted = 1; return 0; }
-      int isfalse = !cond;
-      const Instruction *jmp = rc->pc + 1;
-      if (isfalse == k) {
-        /* Fall-through: R[A] is NOT assigned. */
-        rc->pc = jmp + 1;
-      } else {
-        /* Branch: R[A] := R[B], then take the JMP. */
-        ir->reg_map[rc->frame_base + a] = bref;
-        ir->reg_type[rc->frame_base + a] = ir->reg_type[rc->frame_base + b];
-        if (a > ir->maxslot) ir->maxslot = a;
-        rc->pc = jmp + 1 + GETARG_sJ(*jmp);
-      }
-      return 1;
-    }
-
-    /* ---- Jumps ---- */
-    case OP_JMP: {
-      int sj = GETARG_sJ(i);
-      if (sj < 0) {
-        /* Backward jump. Only our own loop header (start_pc) closes the trace.
-           A backward jump to any OTHER target is an INNER loop's back-edge --
-           e.g. a `while` nested inside the `for` we are tracing. We cannot
-           represent a nested loop in a single linear trace; closing here would
-           fold the inner loop's pre-header (its init) into the body and produce
-           a non-terminating trace (constant exit guard). So abort instead and
-           let the interpreter run this loop; the inner loop still gets its own
-           correct trace from its own header. */
-        const Instruction *target = rc->pc + 1 + sj;
-        if (target == rc->start_pc) {
-          sptir_loop(ir);
-          return 0;
-        }
-        /* Back-edge to a target before our start. In a root trace this is an
-           inner loop we can't represent (abort). In a SIDE trace started
-           mid-loop, the parent's loop header is necessarily before our start, so
-           this is the expected close point: emit an unconditional exit to the
-           interpreter at the back-edge PC and end successfully. The interpreter
-           runs the back-edge JMP and re-enters the parent (or the link
-           trampoline hands off). */
-        if (rc->is_side_trace) {
-          sptir_exit(ir, rc->pc);
-          return 0;
-        }
-        rc->aborted = 1;
-        rc->abort_pc = rc->pc;
-        return 0;
-      }
-      /* Forward jump: follow it. The straight-line trace must track the actual
-         control flow taken at record time. A forward JMP is unconditional (any
-         condition was already turned into a guard by the preceding test), so we
-         jump to its target rather than falling through -- otherwise we'd record
-         BOTH arms of an if/else. Target = pc + 1 + sJ; returning 1 skips the
-         default pc++ at the end of rec_inst. */
-      rc->pc += sj + 1;
-      return 1;
-    }
-
-    /* ---- Numeric for loop ---- */
-    case OP_FORPREP: {
-      /* SPT for loop: after FORPREP, R[A]=count, R[A+1]=step, R[A+2]=init.
-         FORPREP jumps to FORLOOP, so we skip it in the trace. But if this is an
-         inner loop inside the (outer) trace we are recording, try to unroll it
-         inline first so the whole nest becomes one linear trace (Phase 3a). */
-      if (try_unroll_inner_loop(rc, i))
-        return rc->aborted ? 0 : 1;
-      int bx = GETARG_Bx(i);
-      rc->pc += bx + 1;
-      return 1;
-    }
-    case OP_FORLOOP: {
-      /* SPT FORLOOP layout (different from standard Lua!):
-         R[A] = count (unsigned, decremented each iteration)
-         R[A+1] = step
-         R[A+2] = idx (incremented by step each iteration)
-         if count > 0: count--; idx += step; jump back to loop body */
-      int a = GETARG_A(i);
-
-      /* Nested-loop guard: this back-edge only closes the trace if it jumps
-         to OUR loop header. The VM computes the target as pc - Bx with pc
-         already advanced past the FORLOOP, i.e. (rc->pc + 1) - Bx here. A
-         FORLOOP that targets a different header belongs to an inner loop we
-         recorded through; a single linear trace can't represent that, so we
-         abort and let the interpreter drive the outer loop. The inner loop
-         keeps its own (already compiled) trace, so the hot path is preserved. */
-      const Instruction *target = rc->pc + 1 - GETARG_Bx(i);
-      if (target != rc->start_pc) {
-        /* Side trace reaching the (outer) loop's FORLOOP back-edge: it targets
-           the loop header, which is before our mid-loop start, so we cannot loop
-           on it. Close with an unconditional exit at the FORLOOP PC *before*
-           emitting the count/idx update -- the interpreter then executes FORLOOP
-           (decrement, idx += step, back-jump) and its hot-check re-enters the
-           parent. Slots we never touched (idx, count) keep their flushed stack
-           values via the snapshot's -1 entries; that is exactly correct. */
-        if (rc->is_side_trace) {
-          sptir_exit(ir, rc->pc);
-          return 0;
-        }
+    /* Pending math.abs armed by a preceding SELF? Lower abs(x) with no real
+       call. SPT puts the receiver (math module) at R[A+1] and the single value
+       at R[A+2]. Normally b == 3 (fn + receiver + 1 arg); when that arg is a
+       just-lowered nested min/max, Lua emits this CALL with b == 0 (args to
+       top) and the lone value is at minmax_multiret_top, which must be exactly
+       R[A+2]. c == 2 for one result, or c == 0 when this result in turn feeds
+       an enclosing call. INT: branchless select (x<0)?(0-x):x via emit_select
+       -- bit-exact incl. INT64_MIN (SPTIR_SUB wraps as Lua's 0u-n). FLOAT:
+       SPTIR_FMATH(fabs) -- not a select, so -0.0 -> +0.0 and NaN are correct. */
+    if (rc->pending_abs_slot == rc->frame_base + a) {
+      void *absfn = rc->pending_abs_fabs;
+      rc->pending_abs_slot = -1;
+      rc->pending_abs_fabs = NULL;
+      if (b != 3 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 2)) {
         rc->aborted = 1;
         return 0;
       }
-
-      int count_ref = rec_load_reg(rc, a);       /* R[A] = count */
-      int step_ref = rec_load_reg(rc, a + 1);    /* R[A+1] = step */
-      int idx_ref = rec_load_reg(rc, a + 2);     /* R[A+2] = idx */
-
-      /* Guard: count > 0 (continue loop). Use GUARD_LT with 0 < count. */
-      int zero_ref = sptir_kint(ir, 0);
-      int guard_ref = sptir_guard(ir, SPTIR_GUARD_LT, zero_ref,
-                                  (int64_t)count_ref, rec_guard_pc(rc));
-      if (guard_ref >= 0)
-        rc->loop_end_snap = ir->insts[guard_ref].snap_idx;
-
-      /* new_count = count - 1 */
-      int one_ref = sptir_kint(ir, 1);
-      int new_count = sptir_emit(ir, SPTIR_SUB, SPTT_INT, count_ref, one_ref, 0);
-      ir->reg_map[rc->frame_base + a] = new_count;
-      ir->reg_type[rc->frame_base + a] = SPTT_INT;
-
-      /* new_idx = idx + step */
-      int new_idx = sptir_emit(ir, SPTIR_ADD, SPTT_INT, idx_ref, step_ref, 0);
-      ir->reg_map[rc->frame_base + a + 2] = new_idx;
-      ir->reg_type[rc->frame_base + a + 2] = SPTT_INT;
-
-      if (a > ir->maxslot) ir->maxslot = a;
-      if (rc->frame_base + a + 2 > ir->maxslot) ir->maxslot = rc->frame_base + a + 2;
-
-      /* This is the loop back-edge. */
-      sptir_loop(ir);
-      return 0;
-    }
-
-    /* ---- Returns ---- */
-    case OP_RETURN0: {
-      if (rc->frame_base != 0) {
-        /* Void return from an inlined single-trailing-write method: restore the
-           caller's recording context with NO result to bind, and keep recording
-           the caller after the CALL. The method's only side effect -- its single
-           trailing field write -- is already emitted and resume-at-SELF
-           protected: the write is the last committing op, so any guard failure
-           side-exits before it commits and the interpreter re-runs the call
-           exactly once (no double write). See proto_is_write_method_inlinable. */
-        rec_inline_pop(rc);
-        return 1;
+      if (c != 2 && c != 0) {
+        rc->aborted = 1;
+        return 0;
       }
-      sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
-      return 0;
-    }
-    case OP_RETURN1: {
-      int a = GETARG_A(i);
-      if (rc->frame_base != 0) {
-        /* Returning from an inlined callee: bind the caller's result register to
-           the returned value's IR ref, restore the caller's recording context,
-           and keep recording the caller after the CALL. */
-        int aref = rec_load_reg(rc, a);
-        if (rc->aborted) return 0;
-        SPTType rt = ir->reg_type[rc->frame_base + a];
-        SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth - 1];
-        ir->reg_map[f->call_result_slot] = aref;
-        ir->reg_type[f->call_result_slot] = rt;
-        if (f->call_result_slot > ir->maxslot) ir->maxslot = f->call_result_slot;
-        rec_inline_pop(rc);
-        return 1;
+      int xref = ir->reg_map[rc->frame_base + a + 2];
+      if (xref < 0) {
+        rc->aborted = 1;
+        return 0;
       }
-      int aref = rec_load_reg(rc, a);
-      sptir_emit(ir, SPTIR_RETURN, ir->reg_type[rc->frame_base + a], aref, SPTIR_NULL, 0);
-      return 0;
-    }
-    case OP_RETURN: {
-      int a = GETARG_A(i), b = GETARG_B(i);
-      if (rc->frame_base != 0) {
-        /* Inlined method void return (b==1): restore the caller like OP_RETURN0,
-           no result to bind. A value-returning OP_RETURN from an inlined method
-           is not supported here (write methods are void). */
-        if (b != 1) { rc->aborted = 1; return 0; }
-        rec_inline_pop(rc);
-        return 1;
-      }
-      if (b == 1) {
-        sptir_emit(ir, SPTIR_RETURN, SPTT_NIL, SPTIR_NULL, SPTIR_NULL, 0);
+      SPTType xt = ir->reg_type[rc->frame_base + a + 2];
+      int out_ref;
+      SPTType out_t;
+      if (xt == SPTT_INT) {
+        int zero = sptir_kint(ir, 0);
+        int neg = sptir_emit(ir, SPTIR_SUB, SPTT_INT, zero, xref, 0); /* 0 - x */
+        /* out = (x < 0) ? (0 - x) : x */
+        if (!emit_select(rc, SPTIR_LT, xref, zero, SPTT_INT, SPTT_INT, neg, SPTT_INT, xref,
+                         SPTT_INT, &out_ref, &out_t)) {
+          rc->aborted = 1;
+          return 0;
+        }
+      } else if (xt == SPTT_FLT) {
+        out_ref = sptir_emit(ir, SPTIR_FMATH, SPTT_FLT, xref, SPTIR_NULL, (int64_t)(intptr_t)absfn);
+        out_t = SPTT_FLT;
       } else {
-        int aref = rec_load_reg(rc, a);
-        sptir_emit(ir, SPTIR_RETURN, ir->reg_type[rc->frame_base + a], aref, SPTIR_NULL, 0);
+        rc->aborted = 1;
+        return 0; /* non-numeric arg */
       }
-      return 0;
+      ir->reg_map[rc->frame_base + a] = out_ref;
+      ir->reg_type[rc->frame_base + a] = out_t;
+      if (a > ir->maxslot)
+        ir->maxslot = a;
+      /* If this result is itself a trailing arg (c == 0), record its slot so the
+         enclosing CALL can confirm its arg count (abs feeding min/max/abs). */
+      if (c == 0)
+        rc->minmax_multiret_top = rc->frame_base + a;
+      break;
     }
 
-    /* ---- Call inlining (pure straight-line leaf functions) ---- */
-    case OP_CALL: {
-      rc->fwd_base = -1;   /* a call may mutate: drop store-to-load forwarding (re-armed on method inline) */
-      rc->call_arg_self_pc = NULL;  /* close the SELF->CALL arg-load window */
-      /* CALL A B C : R[A](R[A+1..A+B-1]) -> R[A..A+C-2].
-         SPT uses a slot-0 receiver, so R[A+1] is the (nil) receiver and
-         R[A+2..] are the actual arguments. */
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-
-      /* A multiret arg slot (set by a nested min/max whose result this CALL may
-         consume) is valid for exactly this one CALL. Capture and clear it now so
-         it never leaks to a later CALL. */
-      int incoming_mm_top = rc->minmax_multiret_top;
-      rc->minmax_multiret_top = -1;
-
-      /* Pending unary-math call armed by a preceding SELF (e.g. math.sqrt)?
-         The SPT convention puts the receiver at R[A+1] and the single real
-         argument at R[A+2]; math_* read luaL_checknumber(L, 2). Lower it to a
-         direct libm call (SPTIR_FMATH). Requires exactly one real arg
-         (B == 3: function + receiver + arg) and one result (C == 2). */
-      if (rc->pending_cfn_slot == rc->frame_base + a) {
-        void *libm = rc->pending_cfn_libm;
-        rc->pending_cfn_slot = -1; rc->pending_cfn_libm = NULL;
-        if (b != 3 || c != 2) { rc->aborted = 1; return 0; }
-        int arg = ir->reg_map[rc->frame_base + a + 2];
-        if (arg < 0) { rc->aborted = 1; return 0; }
-        SPTType at = ir->reg_type[rc->frame_base + a + 2];
-        if (at == SPTT_INT) {
-          arg = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg, SPTIR_NULL, 0);
-        } else if (at != SPTT_FLT) {
-          rc->aborted = 1; return 0;       /* non-numeric arg */
-        }
-        int fref = sptir_emit(ir, SPTIR_FMATH, SPTT_FLT, arg, SPTIR_NULL,
-                              (int64_t)(intptr_t)libm);
-        ir->reg_map[rc->frame_base + a] = fref;
-        ir->reg_type[rc->frame_base + a] = SPTT_FLT;
-        if (a > ir->maxslot) ir->maxslot = a;
-        break;
+    /* Pending math.floor / math.ceil armed by a preceding SELF? Lower with no
+       real call. Arg at R[A+2]. b == 3 (fn + receiver + 1), or b == 0 when the
+       arg is a just-lowered nested min/max/abs (multiret; the lone value at
+       minmax_multiret_top must be R[A+2]). c == 2 for one result, or c == 0
+       when this result feeds an enclosing call. INT arg: floor/ceil is identity
+       (an integer is its own floor/ceil) -> pass the ref through. FLOAT arg:
+       SPTIR_TOINT (roundsd + range guard); out-of-range/NaN side-exits and the
+       interpreter returns the float, exactly as Lua's pushnumint does. */
+    if (rc->pending_floorceil_slot == rc->frame_base + a) {
+      int mode = rc->pending_floorceil_mode;
+      const Instruction *fc_self_pc = rc->pending_floorceil_self_pc;
+      rc->pending_floorceil_slot = -1;
+      rc->pending_floorceil_mode = 0;
+      if (b != 3 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 2)) {
+        rc->aborted = 1;
+        return 0;
       }
-
-      /* Pending binary-math call armed by a preceding SELF (e.g. math.pow,
-         math.atan)? The SPT convention puts the receiver at R[A+1] and the
-         real arguments at R[A+2] (and R[A+3] for two-arg forms). Lower to
-         SPTIR_FMATH2. Two forms:
-           - B == 4 (two real args, e.g. math.pow(x,y), math.atan(y,x)):
-             arg1 = R[A+2], arg2 = R[A+3].
-           - B == 3 (one real arg, e.g. math.atan(y) → atan2(y,1)):
-             arg1 = R[A+2], arg2 = kflt(1.0). Only atan2 has a single-arg form;
-             math.pow with B==3 would be a user error (caught by the interpreter).
-         C == 2 (one result) is always required. */
-      if (rc->pending_cfn2_slot == rc->frame_base + a) {
-        void *libm2 = rc->pending_cfn2_libm;
-        rc->pending_cfn2_slot = -1; rc->pending_cfn2_libm = NULL;
-        if (c != 2) { rc->aborted = 1; return 0; }
-        int arg1 = ir->reg_map[rc->frame_base + a + 2];
-        if (arg1 < 0) { rc->aborted = 1; return 0; }
-        SPTType at1 = ir->reg_type[rc->frame_base + a + 2];
-        if (at1 == SPTT_INT) {
-          arg1 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg1, SPTIR_NULL, 0);
-        } else if (at1 != SPTT_FLT) {
-          rc->aborted = 1; return 0;       /* non-numeric arg1 */
-        }
-        int arg2;
-        if (b == 4) {
-          arg2 = ir->reg_map[rc->frame_base + a + 3];
-          if (arg2 < 0) { rc->aborted = 1; return 0; }
-          SPTType at2 = ir->reg_type[rc->frame_base + a + 3];
-          if (at2 == SPTT_INT) {
-            arg2 = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, arg2, SPTIR_NULL, 0);
-          } else if (at2 != SPTT_FLT) {
-            rc->aborted = 1; return 0;     /* non-numeric arg2 */
-          }
-        } else if (b == 3) {
-          /* Single-arg form: math.atan(y) → atan2(y, 1.0) */
-          arg2 = sptir_kflt(ir, 1.0);
-        } else {
-          rc->aborted = 1; return 0;
-        }
-        int fref = sptir_emit(ir, SPTIR_FMATH2, SPTT_FLT, arg1, arg2,
-                              (int64_t)(intptr_t)libm2);
-        ir->reg_map[rc->frame_base + a] = fref;
-        ir->reg_type[rc->frame_base + a] = SPTT_FLT;
-        if (a > ir->maxslot) ir->maxslot = a;
-        break;
+      if (c != 2 && c != 0) {
+        rc->aborted = 1;
+        return 0;
       }
-
-      /* Pending string.len / string.byte armed by a preceding SELF? Lower to
-         SLEN / SBYTE. SPT puts the receiver (string module) at R[A+1], s at
-         R[A+2], and (for byte) i at R[A+3] -- str_* read arg2 = s, arg3 = i.
-         Only at root (frame_base == 0), where R[A+2] can be read live. SLEN /
-         SBYTE guard short at runtime, but a LONG string fails that guard every
-         iteration and thrashes, so we additionally require the live string to be
-         observably SHORT here (the abort blacklists the PC -> bounded), exactly
-         as the '#s' path does. SBYTE's bounds guard needs no such check: an
-         out-of-range string.byte returns no value, so the side-exit lands the
-         interpreter on the same error (it never loops gracefully). */
-      if (rc->pending_str_slot == rc->frame_base + a) {
-        int sop = rc->pending_str_op;
-        const Instruction *str_self_pc = rc->pending_str_self_pc;
-        rc->pending_str_slot = -1; rc->pending_str_op = 0;
-        if (rc->frame_base != 0 || c != 2) { rc->aborted = 1; return 0; }
-        int sref = ir->reg_map[rc->frame_base + a + 2];
-        if (sref < 0 || ir->reg_type[rc->frame_base + a + 2] != SPTT_STR) { rc->aborted = 1; return 0; }
-        TValue *sv = s2v((rc->ci->func.p + 1) + (a + 2));
-        if (!ttisstring(sv) || !strisshr(tsvalue(sv))) { rc->aborted = 1; return 0; }
-        if (sop == 1) {                          /* string.len(s) -> SLEN */
-          if (b != 3) { rc->aborted = 1; return 0; }
-          int ref = sptir_emit(ir, SPTIR_SLEN, SPTT_INT, sref, SPTIR_NULL, 0);
-          /* Resume the short-string guard at the SELF (not this CALL): the
-             interpreter re-executes SELF+CALL and runs string.len for a long
-             string. Idempotent: a length read has no side effects. */
-          int snap = sptir_snapshot(ir, str_self_pc);
-          ir->insts[ref].snap_idx = snap; ir->insts[ref].flags |= SPTIRF_GUARD;
-          ir->reg_map[rc->frame_base + a] = ref;
-          ir->reg_type[rc->frame_base + a] = SPTT_INT;
-          if (a > ir->maxslot) ir->maxslot = a;
-          break;
-        } else {                                 /* string.byte(s, i) -> SBYTE */
-          if (b != 4) { rc->aborted = 1; return 0; }
-          int iref = ir->reg_map[rc->frame_base + a + 3];
-          if (iref < 0 || ir->reg_type[rc->frame_base + a + 3] != SPTT_INT) { rc->aborted = 1; return 0; }
-          int ref = sptir_emit(ir, SPTIR_SBYTE, SPTT_INT, sref, iref, 0);
-          /* Resume the short-string / bounds guard at the SELF (not this CALL):
-             the interpreter re-executes SELF+CALL and runs the real string.byte
-             for a long string, or errors identically for an out-of-range index.
-             Idempotent: a byte read has no side effects. */
-          int snap = sptir_snapshot(ir, str_self_pc);
-          ir->insts[ref].snap_idx = snap; ir->insts[ref].flags |= SPTIRF_GUARD;
-          ir->reg_map[rc->frame_base + a] = ref;
-          ir->reg_type[rc->frame_base + a] = SPTT_INT;
-          if (a > ir->maxslot) ir->maxslot = a;
-          break;
-        }
+      int xref = ir->reg_map[rc->frame_base + a + 2];
+      if (xref < 0) {
+        rc->aborted = 1;
+        return 0;
       }
-
-      /* Pending math.min / math.max armed by a preceding SELF? Lower to a
-         branchless select (reusing emit_select). SPT puts the receiver (math
-         module) at R[A+1] and the two values at R[A+2], R[A+3]. Requires exactly
-         two args (b == 4) and one result (c == 2). Lua's math.max(a,b) =
-         (b > a) ? b : a = (a < b) ? b : a; math.min(a,b) = (b < a) ? b : a =
-         (a > b) ? b : a -- so out = (a FOP b) ? b : a with FOP = LT for max,
-         GT for min. emit_select's compare-false -> else (= a) matches Lua's
-         "keep the current arg unless strictly beaten" exactly (ties and NaN both
-         fall to a). Matches the LIFO top of the pending stack so a nested clamp
-         pops the inner min before the outer max. Mixed int/float args are
-         promoted to float first (Lua promotes); result type follows emit_select. */
-      if (rc->pending_minmax_top > 0 &&
-          rc->pending_minmax_slot[rc->pending_minmax_top - 1] == rc->frame_base + a) {
-        rc->pending_minmax_top--;
-        int mmop = rc->pending_minmax_op[rc->pending_minmax_top];
-        /* Two values at R[A+2], R[A+3]. Normally b == 4 (fn + receiver + 2). When
-           the trailing arg is itself a (just-lowered) nested min/max, Lua emits
-           this CALL with b == 0 (args to top); that inner result is the single
-           value at minmax_multiret_top, which must be exactly R[A+3] (i.e. exactly
-           2 args). c == 2 for one result, or c == 0 when THIS result in turn feeds
-           an enclosing call (still a single value). */
-        if (b != 4 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 3)) { rc->aborted = 1; return 0; }
-        if (c != 2 && c != 0) { rc->aborted = 1; return 0; }
-        int aref = ir->reg_map[rc->frame_base + a + 2];
-        int bref = ir->reg_map[rc->frame_base + a + 3];
-        if (aref < 0 || bref < 0) { rc->aborted = 1; return 0; }
-        SPTType at = ir->reg_type[rc->frame_base + a + 2];
-        SPTType bt = ir->reg_type[rc->frame_base + a + 3];
-        if (!sptt_isnum(at) || !sptt_isnum(bt)) { rc->aborted = 1; return 0; }
-        /* Promote a mixed pair to float so emit_select's both-float path applies
-           and the result is float, as Lua does for a mixed min/max. */
-        if (at == SPTT_INT && bt == SPTT_FLT) {
-          aref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, aref, SPTIR_NULL, 0); at = SPTT_FLT;
-        } else if (at == SPTT_FLT && bt == SPTT_INT) {
-          bref = sptir_emit(ir, SPTIR_TOFLT, SPTT_FLT, bref, SPTIR_NULL, 0); bt = SPTT_FLT;
-        }
-        SPTIROp fop = (mmop == 2) ? SPTIR_LT : SPTIR_GT;   /* 2 = max -> LT, 1 = min -> GT */
-        int out_ref; SPTType out_t;
-        /* out = (a FOP b) ? then(=b) : else(=a) */
-        if (!emit_select(rc, fop, aref, bref, at, bt, bref, bt, aref, at, &out_ref, &out_t)) {
-          rc->aborted = 1; return 0;
-        }
-        ir->reg_map[rc->frame_base + a] = out_ref;
-        ir->reg_type[rc->frame_base + a] = out_t;
-        if (a > ir->maxslot) ir->maxslot = a;
-        /* If this result is itself a trailing arg (c == 0), record its slot so the
-           enclosing CALL can confirm its arg count. */
-        if (c == 0) rc->minmax_multiret_top = rc->frame_base + a;
-        break;
-      }
-
-      /* Pending math.abs armed by a preceding SELF? Lower abs(x) with no real
-         call. SPT puts the receiver (math module) at R[A+1] and the single value
-         at R[A+2]. Normally b == 3 (fn + receiver + 1 arg); when that arg is a
-         just-lowered nested min/max, Lua emits this CALL with b == 0 (args to
-         top) and the lone value is at minmax_multiret_top, which must be exactly
-         R[A+2]. c == 2 for one result, or c == 0 when this result in turn feeds
-         an enclosing call. INT: branchless select (x<0)?(0-x):x via emit_select
-         -- bit-exact incl. INT64_MIN (SPTIR_SUB wraps as Lua's 0u-n). FLOAT:
-         SPTIR_FMATH(fabs) -- not a select, so -0.0 -> +0.0 and NaN are correct. */
-      if (rc->pending_abs_slot == rc->frame_base + a) {
-        void *absfn = rc->pending_abs_fabs;
-        rc->pending_abs_slot = -1; rc->pending_abs_fabs = NULL;
-        if (b != 3 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 2)) { rc->aborted = 1; return 0; }
-        if (c != 2 && c != 0) { rc->aborted = 1; return 0; }
-        int xref = ir->reg_map[rc->frame_base + a + 2];
-        if (xref < 0) { rc->aborted = 1; return 0; }
-        SPTType xt = ir->reg_type[rc->frame_base + a + 2];
-        int out_ref; SPTType out_t;
-        if (xt == SPTT_INT) {
-          int zero = sptir_kint(ir, 0);
-          int neg = sptir_emit(ir, SPTIR_SUB, SPTT_INT, zero, xref, 0);   /* 0 - x */
-          /* out = (x < 0) ? (0 - x) : x */
-          if (!emit_select(rc, SPTIR_LT, xref, zero, SPTT_INT, SPTT_INT,
-                           neg, SPTT_INT, xref, SPTT_INT, &out_ref, &out_t)) {
-            rc->aborted = 1; return 0;
-          }
-        } else if (xt == SPTT_FLT) {
-          out_ref = sptir_emit(ir, SPTIR_FMATH, SPTT_FLT, xref, SPTIR_NULL,
-                               (int64_t)(intptr_t)absfn);
-          out_t = SPTT_FLT;
-        } else {
-          rc->aborted = 1; return 0;            /* non-numeric arg */
-        }
-        ir->reg_map[rc->frame_base + a] = out_ref;
-        ir->reg_type[rc->frame_base + a] = out_t;
-        if (a > ir->maxslot) ir->maxslot = a;
-        /* If this result is itself a trailing arg (c == 0), record its slot so the
-           enclosing CALL can confirm its arg count (abs feeding min/max/abs). */
-        if (c == 0) rc->minmax_multiret_top = rc->frame_base + a;
-        break;
-      }
-
-      /* Pending math.floor / math.ceil armed by a preceding SELF? Lower with no
-         real call. Arg at R[A+2]. b == 3 (fn + receiver + 1), or b == 0 when the
-         arg is a just-lowered nested min/max/abs (multiret; the lone value at
-         minmax_multiret_top must be R[A+2]). c == 2 for one result, or c == 0
-         when this result feeds an enclosing call. INT arg: floor/ceil is identity
-         (an integer is its own floor/ceil) -> pass the ref through. FLOAT arg:
-         SPTIR_TOINT (roundsd + range guard); out-of-range/NaN side-exits and the
-         interpreter returns the float, exactly as Lua's pushnumint does. */
-      if (rc->pending_floorceil_slot == rc->frame_base + a) {
-        int mode = rc->pending_floorceil_mode;
-        const Instruction *fc_self_pc = rc->pending_floorceil_self_pc;
-        rc->pending_floorceil_slot = -1; rc->pending_floorceil_mode = 0;
-        if (b != 3 && !(b == 0 && incoming_mm_top == rc->frame_base + a + 2)) { rc->aborted = 1; return 0; }
-        if (c != 2 && c != 0) { rc->aborted = 1; return 0; }
-        int xref = ir->reg_map[rc->frame_base + a + 2];
-        if (xref < 0) { rc->aborted = 1; return 0; }
-        SPTType xt = ir->reg_type[rc->frame_base + a + 2];
-        int out_ref; SPTType out_t;
-        if (xt == SPTT_INT) {
-          out_ref = xref; out_t = SPTT_INT;          /* integer is its own floor/ceil */
-        } else if (xt == SPTT_FLT) {
-          /* Record-time range observation at root (cf. SLEN/SBYTE's short-string
-             check): if the live argument already lies outside lua_Integer range,
-             the guard would side-exit on every iteration, so abort and let the
-             interpreter run the loop rather than compile an always-exiting trace
-             (the abort blacklists the PC -> bounded). Only at frame_base==0, where
-             the arg's live slot is addressable; an in-range value still compiles,
-             and a later out-of-range value side-exits correctly via resume-at-SELF. */
-          if (rc->frame_base == 0) {
-            TValue *av = s2v((rc->ci->func.p + 1) + (a + 2));
-            if (ttisfloat(av)) {
-              double xv = fltvalue(av);
-              if (!(xv >= -9223372036854775808.0 && xv < 9223372036854775808.0)) {
-                rc->aborted = 1; return 0;
-              }
+      SPTType xt = ir->reg_type[rc->frame_base + a + 2];
+      int out_ref;
+      SPTType out_t;
+      if (xt == SPTT_INT) {
+        out_ref = xref;
+        out_t = SPTT_INT; /* integer is its own floor/ceil */
+      } else if (xt == SPTT_FLT) {
+        /* Record-time range observation at root (cf. SLEN/SBYTE's short-string
+           check): if the live argument already lies outside lua_Integer range,
+           the guard would side-exit on every iteration, so abort and let the
+           interpreter run the loop rather than compile an always-exiting trace
+           (the abort blacklists the PC -> bounded). Only at frame_base==0, where
+           the arg's live slot is addressable; an in-range value still compiles,
+           and a later out-of-range value side-exits correctly via resume-at-SELF. */
+        if (rc->frame_base == 0) {
+          TValue *av = s2v((rc->ci->func.p + 1) + (a + 2));
+          if (ttisfloat(av)) {
+            double xv = fltvalue(av);
+            if (!(xv >= -9223372036854775808.0 && xv < 9223372036854775808.0)) {
+              rc->aborted = 1;
+              return 0;
             }
           }
-          out_ref = sptir_emit(ir, SPTIR_TOINT, SPTT_INT, xref, SPTIR_NULL, (int64_t)mode);
-          /* Resume the range guard at the SELF (not this CALL): the interpreter
-             re-executes SELF+CALL and returns the float for out-of-range inputs,
-             matching Lua's pushnumint. Idempotent: floor/ceil has no side effects. */
-          int snap = sptir_snapshot(ir, fc_self_pc);
-          ir->insts[out_ref].snap_idx = snap;
-          ir->insts[out_ref].flags |= SPTIRF_GUARD;
-          out_t = SPTT_INT;
-        } else {
-          rc->aborted = 1; return 0;                 /* non-numeric arg */
         }
-        ir->reg_map[rc->frame_base + a] = out_ref;
-        ir->reg_type[rc->frame_base + a] = out_t;
-        if (a > ir->maxslot) ir->maxslot = a;
-        if (c == 0) rc->minmax_multiret_top = rc->frame_base + a;
-        break;
+        out_ref = sptir_emit(ir, SPTIR_TOINT, SPTT_INT, xref, SPTIR_NULL, (int64_t)mode);
+        /* Resume the range guard at the SELF (not this CALL): the interpreter
+           re-executes SELF+CALL and returns the float for out-of-range inputs,
+           matching Lua's pushnumint. Idempotent: floor/ceil has no side effects. */
+        int snap = sptir_snapshot(ir, fc_self_pc);
+        ir->insts[out_ref].snap_idx = snap;
+        ir->insts[out_ref].flags |= SPTIRF_GUARD;
+        out_t = SPTT_INT;
+      } else {
+        rc->aborted = 1;
+        return 0; /* non-numeric arg */
       }
+      ir->reg_map[rc->frame_base + a] = out_ref;
+      ir->reg_type[rc->frame_base + a] = out_t;
+      if (a > ir->maxslot)
+        ir->maxslot = a;
+      if (c == 0)
+        rc->minmax_multiret_top = rc->frame_base + a;
+      break;
+    }
 
-      /* Pending user method armed by a preceding SELF (`obj.method`)? Inline the
-         resolved method proto, with the receiver already staged in R[A+1] as
-         callee slot 0 (this). Reuses the leaf-inline machinery below: same body
-         purity gate, frame-base switch, and depth-1 restriction. The method
-         identity is pinned by the once-per-entry C guard (method_recv_slot). */
-      if (rc->pending_method_slot == rc->frame_base + a) {
-        Proto *callee_p = rc->pending_method_proto;
-        LClosure *callee_cl = (LClosure *)rc->pending_method_cl;
-        rc->pending_method_slot = -1;
-        rc->pending_method_proto = NULL;
-        rc->pending_method_cl = NULL;
-        /* c == 2: one result (pure-read / cond-return method). c == 1: zero
-           results (void single-trailing-write method, e.g. a setter/accumulator
-           called as a statement). Both are valid; the RETURN handler binds a
-           result only for the value-returning case.
-           §10.68b: frame_base != 0 is now allowed -- nested inline frames can
-           inline methods. The inlined-frame exit safety net (post-optimization
-           guard exit-PC range check) refuses to compile any trace whose in-callee
-           guard survives, so only zero-in-body-guard methods actually compile;
-           the rest fall back to the interpreter (correct, just not accelerated). */
-        if ((c != 1 && c != 2) || b < 1) { rc->aborted = 1; return 0; }
-        if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
-        int ret_reg = -1;
-        if (!proto_is_method_inlinable(callee_p, &ret_reg) &&
-            !proto_is_condreturn_method_inlinable(callee_p) &&
-            !proto_is_chained_condreturn(callee_p, 1) &&
-            !proto_is_write_method_inlinable(callee_p) &&
-            !proto_is_condwrite_method_inlinable(callee_p) &&
-            !proto_is_condwrite_ifelse_method_inlinable(callee_p) &&
-            !proto_is_multiwrite_method_inlinable(callee_p) &&
-            !proto_is_branch_inlinable(callee_p, &ret_reg)) { rc->aborted = 1; return 0; }
-        int new_fb = rc->frame_base + a + 1;
-        if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
-        if (rc->inline_depth >= SPT_JIT_MAX_INLINE_DEPTH) { rc->aborted = 1; return 0; }
-        /* Push caller frame onto the inline stack. The method_self_pc /
-           method_resume_snap fields belong to the callee frame (used by
-           rec_snap/rec_guard_pc while recording the callee body). */
-        SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth];
-        f->method_self_pc = rc->pending_method_self_pc;
-        f->method_resume_snap =
-            (rc->pending_method_self_pc != NULL) ? sptir_snapshot(ir, rc->pending_method_self_pc) : -1;
-        f->p = rc->p;
-        f->k = rc->k;
-        f->cl = rc->cl;
-        f->pc = rc->pc + 1;
-        f->frame_base = rc->frame_base;
-        f->call_result_slot = rc->frame_base + a;
-        f->multiwrite_mode = proto_is_multiwrite_method_inlinable(callee_p);
-        f->callee_proto = callee_p;        /* §10.68c: for resume-at-call */
-        f->nresults = c - 1;               /* C operand encodes nresults+1 */
-        rc->inline_depth++;
-        rc->pending_method_self_pc = NULL;  /* consumed */
-        rc->p = callee_p;
-        rc->k = callee_p->k;
-        rc->cl = callee_cl;
-        rc->frame_base = new_fb;
-        rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
-        rc->pc = callee_p->code;
-        return 1;                                 /* keep recording in the method */
+    /* Pending user method armed by a preceding SELF (`obj.method`)? Inline the
+       resolved method proto, with the receiver already staged in R[A+1] as
+       callee slot 0 (this). Reuses the leaf-inline machinery below: same body
+       purity gate, frame-base switch, and depth-1 restriction. The method
+       identity is pinned by the once-per-entry C guard (method_recv_slot). */
+    if (rc->pending_method_slot == rc->frame_base + a) {
+      Proto *callee_p = rc->pending_method_proto;
+      LClosure *callee_cl = (LClosure *)rc->pending_method_cl;
+      rc->pending_method_slot = -1;
+      rc->pending_method_proto = NULL;
+      rc->pending_method_cl = NULL;
+      /* c == 2: one result (pure-read / cond-return method). c == 1: zero
+         results (void single-trailing-write method, e.g. a setter/accumulator
+         called as a statement). Both are valid; the RETURN handler binds a
+         result only for the value-returning case.
+         §10.68b: frame_base != 0 is now allowed -- nested inline frames can
+         inline methods. The inlined-frame exit safety net (post-optimization
+         guard exit-PC range check) refuses to compile any trace whose in-callee
+         guard survives, so only zero-in-body-guard methods actually compile;
+         the rest fall back to the interpreter (correct, just not accelerated). */
+      if ((c != 1 && c != 2) || b < 1) {
+        rc->aborted = 1;
+        return 0;
       }
-
-      /* The function value must be a plain SLOAD from a stable stack slot, i.e.
-         a loop-invariant function. That tells us which proto to inline and lets
-         us guard the function once at trace entry instead of every iteration. */
-      int fref = ir->reg_map[rc->frame_base + a];
-      if (fref < 0) { rc->aborted = 1; return 0; }
-      SPTIRInst *fi = sptir_get(ir, fref);
-      if (!fi || fi->op != SPTIR_SLOAD) { rc->aborted = 1; return 0; }
-      int fslot = (int)fi->aux;
-      TValue *fv = s2v(rc->ci->func.p + 1 + fslot);
-      if (!ttisLclosure(fv)) { rc->aborted = 1; return 0; }
-      LClosure *callee_cl = clLvalue(fv);
-      Proto *callee_p = callee_cl->p;
-
-      /* Argument count must match: B-1 passed values = receiver + numparams. */
-      if ((b - 1) != callee_p->numparams) { rc->aborted = 1; return 0; }
-
-      /* Callee must be a pure straight-line leaf, a conditional-return leaf
-         `if(c){return A}return B`, a conditional-assignment-then-return leaf
-         `if(c){slot=A}return slot` (the latter two get their branch if-converted),
-         or a branch-inlinable leaf with forward conditional branches and multiple
-         RETURN1 points (§10.68c: guarded branches with resume-at-call). */
+      if ((b - 1) != callee_p->numparams) {
+        rc->aborted = 1;
+        return 0;
+      }
       int ret_reg = -1;
-      int straight = proto_is_inlinable(callee_p, &ret_reg);
-      if (!straight && !proto_is_condreturn_inlinable(callee_p) &&
-          !proto_is_chained_condreturn(callee_p, 0) &&
-          !proto_is_condassign_inlinable(callee_p) &&
-          !proto_is_branch_inlinable(callee_p, &ret_reg)) { rc->aborted = 1; return 0; }
-
-      /* New frame base = A+1 (the slot after the function). Keep the callee's
-         whole frame inside the fixed-size backing reg_map array. */
-      int new_fb = rc->frame_base + a + 1;
-      if (new_fb + callee_p->maxstacksize >= 256) { rc->aborted = 1; return 0; }
-
-      /* One entry check per trace: every inlined call must share (slot, proto). */
-      if (rc->inline_fn_slot < 0) {
-        rc->inline_fn_slot = fslot;
-        rc->inline_fn_proto = callee_p;
-      } else if (rc->inline_fn_slot != fslot || rc->inline_fn_proto != callee_p) {
-        rc->aborted = 1; return 0;
+      if (!proto_is_method_inlinable(callee_p, &ret_reg) &&
+          !proto_is_condreturn_method_inlinable(callee_p) &&
+          !proto_is_chained_condreturn(callee_p, 1) && !proto_is_write_method_inlinable(callee_p) &&
+          !proto_is_condwrite_method_inlinable(callee_p) &&
+          !proto_is_condwrite_ifelse_method_inlinable(callee_p) &&
+          !proto_is_multiwrite_method_inlinable(callee_p) &&
+          !proto_is_branch_inlinable(callee_p, &ret_reg)) {
+        rc->aborted = 1;
+        return 0;
       }
-
-      /* Save caller state and switch the recorder into the callee. The callee's
-         argument slots already coincide with the caller's argument registers in
-         reg_map (callee slot k == caller slot A+1+k), so nothing is copied. */
-      if (rc->inline_depth >= SPT_JIT_MAX_INLINE_DEPTH) { rc->aborted = 1; return 0; }
-      SPTInlineFrame *ff = &rc->inline_frames[rc->inline_depth];
-      ff->p = rc->p;
-      ff->k = rc->k;
-      ff->cl = rc->cl;
-      ff->pc = rc->pc + 1;                  /* caller resumes after the CALL */
-      ff->frame_base = rc->frame_base;
-      ff->call_result_slot = rc->frame_base + a; /* caller R[A] takes the result */
-      ff->method_self_pc = NULL;            /* free-function inline: no SELF resume */
-      ff->method_resume_snap = -1;
-      ff->multiwrite_mode = 0;              /* multi-write only applies to method inlining */
-      ff->callee_proto = callee_p;          /* §10.68c: for resume-at-call */
-      ff->nresults = c - 1;                 /* C operand encodes nresults+1 */
+      int new_fb = rc->frame_base + a + 1;
+      if (new_fb + callee_p->maxstacksize >= 256) {
+        rc->aborted = 1;
+        return 0;
+      }
+      if (rc->inline_depth >= SPT_JIT_MAX_INLINE_DEPTH) {
+        rc->aborted = 1;
+        return 0;
+      }
+      /* Push caller frame onto the inline stack. The method_self_pc /
+         method_resume_snap fields belong to the callee frame (used by
+         rec_snap/rec_guard_pc while recording the callee body). */
+      SPTInlineFrame *f = &rc->inline_frames[rc->inline_depth];
+      f->method_self_pc = rc->pending_method_self_pc;
+      f->method_resume_snap = (rc->pending_method_self_pc != NULL)
+                                  ? sptir_snapshot(ir, rc->pending_method_self_pc)
+                                  : -1;
+      f->p = rc->p;
+      f->k = rc->k;
+      f->cl = rc->cl;
+      f->pc = rc->pc + 1;
+      f->frame_base = rc->frame_base;
+      f->call_result_slot = rc->frame_base + a;
+      f->multiwrite_mode = proto_is_multiwrite_method_inlinable(callee_p);
+      f->callee_proto = callee_p; /* §10.68c: for resume-at-call */
+      f->nresults = c - 1;        /* C operand encodes nresults+1 */
       rc->inline_depth++;
-
+      rc->pending_method_self_pc = NULL; /* consumed */
       rc->p = callee_p;
       rc->k = callee_p->k;
       rc->cl = callee_cl;
       rc->frame_base = new_fb;
-      rc->fwd_base = -1;            /* fresh store-to-load forwarding per inlined method */
+      rc->fwd_base = -1; /* fresh store-to-load forwarding per inlined method */
       rc->pc = callee_p->code;
-      return 1;                                  /* keep recording in the callee */
+      return 1; /* keep recording in the method */
     }
 
+    /* The function value must be a plain SLOAD from a stable stack slot, i.e.
+       a loop-invariant function. That tells us which proto to inline and lets
+       us guard the function once at trace entry instead of every iteration. */
+    int fref = ir->reg_map[rc->frame_base + a];
+    if (fref < 0) {
+      rc->aborted = 1;
+      return 0;
+    }
+    SPTIRInst *fi = sptir_get(ir, fref);
+    if (!fi || fi->op != SPTIR_SLOAD) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int fslot = (int)fi->aux;
+    TValue *fv = s2v(rc->ci->func.p + 1 + fslot);
+    if (!ttisLclosure(fv)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    LClosure *callee_cl = clLvalue(fv);
+    Proto *callee_p = callee_cl->p;
 
-    case OP_TFORPREP: {
-      /* Generic-for preheader. The outer loop's own TFORPREP is before
-         start_pc and never recorded; reaching one here means an *inner*
-         for-each nested in the trace we're recording. We don't unroll
-         for-each, so abort and let the interpreter drive the inner loop. */
+    /* Argument count must match: B-1 passed values = receiver + numparams. */
+    if ((b - 1) != callee_p->numparams) {
       rc->aborted = 1;
       return 0;
     }
 
-    case OP_TFORCALL: {
-      /* Generic-for iterator step, specialized for `for k[,v] : pairs(L)` or
-         `for k[,v] : iter(2, L)` over a List. Both luaB_next (pairs) and
-         iter_list_next (iter) over an array-mode table yield keys
-         0,1,...,loglen-1 with value = L[key] (see ltable.c luaH_next), so the
-         whole loop is a native index loop -- no C call, no GC.
-
-         SPT layout after TFORCALL (see lvm.c): iterator at ra+0, state at ra+1
-         (both loop-invariant), the call results land at ra+3 (key, which also
-         serves as the next iteration's control) and ra+4 (value). We model the
-         step as: newkey = key + 1; GUARD newkey < #state (loop-continue);
-         value = state[newkey]. The guard/value snapshots capture the PRE-update
-         state at this PC, so when the guard fails (key was the last element) the
-         exit re-runs the real TFORCALL -> next returns nil -> TFORLOOP ends the
-         loop. The iterator identity (== luaB_next or iter_list_next) is pinned
-         with a once-per-entry C guard (forin_iter_slot). Top frame only. */
-      int a = GETARG_A(i), c = GETARG_C(i);
-      if (rc->frame_base != 0) { rc->aborted = 1; return 0; }
-      /* next yields exactly (key,value); support 1 or 2 loop vars. >2 would bind
-         nils we don't model. */
-      if (c < 1 || c > 2) { rc->aborted = 1; return 0; }
-
-      StkId base = rc->ci->func.p + 1;
-      /* Iterator must be luaB_next (pairs) or iter_list_next (iter): both yield
-         the same contiguous 0-based key sequence over a list, so the native
-         index-loop lowering applies to either. Pinned in C at entry. */
-      TValue *fv = s2v(base + a);
-      lua_CFunction fn = ttislcf(fv) ? fvalue(fv) : NULL;
-      if (fn != spt_jit_pairs_next() && fn != spt_jit_iter_list_next()) {
-        rc->aborted = 1; return 0;
-      }
-      /* State must be a List (array-mode table). */
-      TValue *sv = s2v(base + a + 1);
-      if (!ttisarray(sv)) { rc->aborted = 1; return 0; }
-      /* SLOAD the state (loop-invariant) -> emits GUARD_T(ARR), hoisted and
-         checked at entry via the live-in list. The iterator is NOT loaded into
-         the IR (no use); its identity is the C entry guard below. */
-      int sref = rec_load_reg(rc, a + 1);
-      if (ir->reg_type[rc->frame_base + a + 1] != SPTT_ARR) { rc->aborted = 1; return 0; }
-      /* Record the iterator entry guard. All for-each loops in one trace must
-         share the same iterator slot. */
-      if (rc->forin_iter_slot < 0) {
-        rc->forin_iter_slot = a;
-        rc->forin_iter_fn = fvalue(fv);
-      } else if (rc->forin_iter_slot != a) {
-        rc->aborted = 1; return 0;
-      }
-
-      /* Control variable (current key) at ra+3 -- must be an integer. */
-      int keyref = rec_load_reg(rc, a + 3);
-      if (ir->reg_type[rc->frame_base + a + 3] != SPTT_INT) { rc->aborted = 1; return 0; }
-
-      /* newkey = key + 1 */
-      int newkey = sptir_emit(ir, SPTIR_ADD, SPTT_INT, keyref, sptir_kint(ir, 1), 0);
-      /* len = #state */
-      int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, sref, SPTIR_NULL, 0);
-      /* Loop-continue guard: newkey < len. Snapshot = pre-update state at this
-         PC; on failure the interpreter re-runs the real TFORCALL (next -> nil). */
-      sptir_guard(ir, SPTIR_GUARD_LT, newkey, (int64_t)lenref, rec_guard_pc(rc));
-
-      if (c >= 2) {
-        /* value = state[newkey]. newkey >= 1 > 0 and < len (continue guard) so it
-           is in bounds; SPTIR_GETI only type-guards and relies on the preceding
-           bounds guard, exactly like OP_GETI/OP_GETTABLE. Predict the element
-           type from L[newkey] (rec_array_elem_type clamps out-of-range); the
-           runtime type guard, not this prediction, is load-bearing. */
-        TValue *ktv = s2v(base + a + 3);
-        lua_Integer kpred = ttisinteger(ktv) ? ivalue(ktv) + 1 : 0;
-        SPTType et = rec_array_elem_type(rc, a + 1, kpred);
-        if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) {
-          rc->aborted = 1; return 0;
-        }
-        int vref = sptir_emit(ir, SPTIR_GETI, et, sref, newkey, 0);
-        int snap = rec_snap(rc);
-        ir->insts[vref].snap_idx = snap;
-        ir->insts[vref].flags |= SPTIRF_GUARD;
-        ir->reg_map[rc->frame_base + a + 4] = vref;
-        ir->reg_type[rc->frame_base + a + 4] = et;
-        if (a + 4 > ir->maxslot) ir->maxslot = a + 4;
-      }
-
-      /* Commit the new key AFTER the snapshots above (so they carry the OLD
-         key). This is the loop-carried induction variable. */
-      ir->reg_map[rc->frame_base + a + 3] = newkey;
-      ir->reg_type[rc->frame_base + a + 3] = SPTT_INT;
-      if (a + 3 > ir->maxslot) ir->maxslot = a + 3;
-      break;
-    }
-
-    case OP_TFORLOOP: {
-      /* Back-edge of the generic-for. Mirrors OP_FORLOOP: only closes the trace
-         when it targets our loop header; an inner loop we recorded through has a
-         different target -> a side trace exits to the interpreter, a root trace
-         aborts. The continue test was already emitted as the GUARD_LT in the
-         preceding TFORCALL. */
-      const Instruction *target = rc->pc + 1 - GETARG_Bx(i);
-      if (target != rc->start_pc) {
-        if (rc->is_side_trace) { sptir_exit(ir, rc->pc); return 0; }
-        rc->aborted = 1;
-        return 0;
-      }
-      sptir_loop(ir);
+    /* Callee must be a pure straight-line leaf, a conditional-return leaf
+       `if(c){return A}return B`, a conditional-assignment-then-return leaf
+       `if(c){slot=A}return slot` (the latter two get their branch if-converted),
+       or a branch-inlinable leaf with forward conditional branches and multiple
+       RETURN1 points (§10.68c: guarded branches with resume-at-call). */
+    int ret_reg = -1;
+    int straight = proto_is_inlinable(callee_p, &ret_reg);
+    if (!straight && !proto_is_condreturn_inlinable(callee_p) &&
+        !proto_is_chained_condreturn(callee_p, 0) && !proto_is_condassign_inlinable(callee_p) &&
+        !proto_is_branch_inlinable(callee_p, &ret_reg)) {
+      rc->aborted = 1;
       return 0;
     }
 
-    case OP_SETLIST:
-    case OP_CLOSURE:
-    case OP_VARARG:
-    case OP_SELF: {
-      /* R[A+1] = R[B]; R[A] = R[B][K[C]].  Specialized ONLY for the unary-libm
-         math-method idiom (e.g. math.sqrt): R[B] is a library/global table read
-         (a GETTABUP) and R[B][key] resolves to a known math C function. We don't
-         materialize the function/receiver -- we arm a pending FMATH that the
-         next CALL on R[A] consumes, and pin the method with a GUARD_CFUNC so
-         reassigning it (or the library table) side-exits. Anything else aborts.
-
-         The library table must be re-derived from the STABLE upvalue source, NOT
-         the live R[B] register: in this idiom R[B] is overwritten by the call
-         result within the loop body, so the live stack at record time holds a
-         stale value. We recover _ENV (the upvalue) and the library key from the
-         GETTABUP/ULOAD IR and look up _ENV[libkey][methodkey] directly. The run-
-         time GUARD_CFUNC re-walks on the (dynamic) GETTABUP result, so the live
-         lookup here is only a prediction. Top frame only. */
-      int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
-      /* §10.68b: OP_SELF is now allowed in nested inline frames (frame_base != 0).
-         SETLIST/CLOSURE/VARARG still abort in nested frames. */
-      if (rc->frame_base != 0 && op != OP_SELF) { rc->aborted = 1; return 0; }
-      const TValue *kc = &rc->k[c];
-      if (ttypetag(kc) != LUA_VSHRSTR) { rc->aborted = 1; return 0; }
-      TString *key = tsvalue(kc);
-      int bref = rec_load_reg(rc, b);
-      if (ir->reg_type[rc->frame_base + b] != SPTT_TAB) { rc->aborted = 1; return 0; }
-      SPTIRInst *gi = sptir_get(ir, bref);
-      if (!gi || gi->op != SPTIR_GETTABUP) {
-        /* Not a library/global table read -> try the user-method idiom:
-           `obj.method()` on a class instance held in a stable (loop-invariant)
-           slot. SPT classes are `setmetatable(inst, Class)` with
-           `Class.__index = Class`, so the method lives directly on the
-           receiver's metatable. Resolve it, stage the receiver into R[A+1]
-           (callee slot 0 = `this`), and arm the next CALL to inline the method
-           proto. The metatable + method identity is pinned by a once-per-entry C
-           guard (method_recv_slot), so a different class / reassigned method
-           declines. Requiring an SLOAD receiver also guarantees loop-invariance
-           (a receiver reassigned in the body would not be a bare SLOAD).
-
-           §10.68b: This path is now reachable in nested inline frames. The
-           receiver's SLOAD aux always points to the ROOT frame's slot (each
-           inline layer passes `this` = slot 0, whose IR ref is the caller's
-           SLOAD), so the entry-time method-identity guard checks the correct
-           stack slot regardless of inline depth. The live-stack read below uses
-           frame_base to find the receiver in the current inline frame. */
-        if (gi && gi->op == SPTIR_SLOAD) {
-          int recv_slot = (int)gi->aux;
-          TValue *recv = s2v((rc->ci->func.p + 1) + rc->frame_base + b);
-          if (!ttistable(recv)) { rc->aborted = 1; return 0; }
-          Table *mt = hvalue(recv)->metatable;
-          if (!mt) { rc->aborted = 1; return 0; }
-          const TValue *mv = rec_table_getstr(mt, key);
-          if (!mv || !ttisLclosure(mv)) { rc->aborted = 1; return 0; }
-          LClosure *mcl = clLvalue(mv);
-          rc->pending_method_self_pc = rc->pc;  /* resume point for in-method guards */
-          ir->reg_map[rc->frame_base + a + 1] = bref;        /* R[A+1] = receiver */
-          ir->reg_type[rc->frame_base + a + 1] = SPTT_TAB;
-          if (rc->frame_base + a + 1 > ir->maxslot) ir->maxslot = rc->frame_base + a + 1;
-          rc->pending_method_slot = rc->frame_base + a;       /* next CALL inlines it */
-          rc->pending_method_proto = mcl->p;
-          rc->pending_method_cl = mcl;
-          /* Register this method's identity for the once-per-entry guard.
-             Several distinct methods may be inlined into one trace
-             (`a.foo(); a.bar()`); each is re-validated independently at entry,
-             and a repeat call to the same method reuses its existing entry. */
-          int mfound = 0;
-          for (int mi = 0; mi < rc->n_methods; mi++) {
-            if (rc->methods[mi].recv_slot == recv_slot &&
-                rc->methods[mi].class_mt == mt &&
-                rc->methods[mi].proto == mcl->p) { mfound = 1; break; }
-          }
-          if (!mfound) {
-            if (rc->n_methods >= SPT_JIT_MAX_METHODS) { rc->aborted = 1; return 0; }
-            rc->methods[rc->n_methods].recv_slot = recv_slot;
-            rc->methods[rc->n_methods].class_mt = mt;
-            rc->methods[rc->n_methods].key = key;
-            rc->methods[rc->n_methods].proto = mcl->p;
-            rc->n_methods++;
-          }
-          break;
-        }
-        rc->aborted = 1; return 0;
-      }
-      SPTIRInst *uli = sptir_get(ir, gi->op1);
-      if (!uli || uli->op != SPTIR_ULOAD) { rc->aborted = 1; return 0; }
-      int uvidx = (int)uli->aux;
-      TString *libkey = (TString *)(intptr_t)gi->aux;       /* e.g. "math" */
-      LClosure *cl = clLvalue(s2v(rc->ci->func.p));
-      if (uvidx >= cl->nupvalues) { rc->aborted = 1; return 0; }
-      TValue *envtv = cl->upvals[uvidx]->v.p;
-      if (!ttistable(envtv)) { rc->aborted = 1; return 0; }
-      const TValue *libtv = rec_table_getstr(hvalue(envtv), libkey);
-      if (!libtv || !ttistable(libtv)) { rc->aborted = 1; return 0; }
-      const TValue *fv = rec_table_getstr(hvalue(libtv), key);
-      if (!fv) { rc->aborted = 1; return 0; }
-      /* math.* are registered by luaL_newlib (nup=0) as LIGHT C functions
-         (LUA_VLCF), so the value is the lua_CFunction directly. */
-      if (!ttislcf(fv)) { rc->aborted = 1; return 0; }
-      spt_unary_libm_fn libm = spt_jit_unary_math(fvalue(fv));
-      spt_binary_libm_fn libm2 = libm ? NULL : spt_jit_binary_math(fvalue(fv));
-      int strop = (libm || libm2) ? 0 : spt_jit_str_op(fvalue(fv));
-      int mmop = (libm || libm2 || strop) ? 0 : spt_jit_math_minmax(fvalue(fv));
-      spt_unary_libm_fn absfn = (libm || libm2 || strop || mmop) ? NULL : spt_jit_math_abs(fvalue(fv));
-      int fcop = (libm || libm2 || strop || mmop || absfn) ? 0 : spt_jit_math_floorceil(fvalue(fv));
-      if (!libm && !libm2 && !strop && !mmop && !absfn && !fcop) { rc->aborted = 1; return 0; }
-      int kref = sptir_kptr(ir, (void *)key);
-      int gref = sptir_emit(ir, SPTIR_GUARD_CFUNC, SPTT_NIL, bref, kref,
-                            (int64_t)(intptr_t)fvalue(fv));
-      int snap = rec_snap(rc);
-      ir->insts[gref].snap_idx = snap;
-      ir->insts[gref].flags |= SPTIRF_GUARD;
-      /* Open the arg-load window: until the CALL, guards resume at this SELF. */
-      rc->call_arg_self_pc = rc->pc;
-      if (libm) {
-        rc->pending_cfn_libm = (void *)libm;
-        rc->pending_cfn_slot = rc->frame_base + a;
-      } else if (libm2) {
-        rc->pending_cfn2_libm = (void *)libm2;
-        rc->pending_cfn2_slot = rc->frame_base + a;
-      } else if (strop) {                     /* string.len (1) / string.byte (2) */
-        rc->pending_str_op = strop;
-        rc->pending_str_slot = rc->frame_base + a;
-        rc->pending_str_self_pc = rc->pc;  /* resume point for the SLEN/SBYTE guard */
-      } else if (mmop) {                      /* math.min (1) / math.max (2) */
-        if (rc->pending_minmax_top >= 8) { rc->aborted = 1; return 0; }
-        rc->pending_minmax_slot[rc->pending_minmax_top] = rc->frame_base + a;
-        rc->pending_minmax_op[rc->pending_minmax_top] = mmop;
-        rc->pending_minmax_top++;
-      } else if (absfn) {                     /* math.abs */
-        rc->pending_abs_slot = rc->frame_base + a;
-        rc->pending_abs_fabs = (void *)absfn;
-      } else {                                /* math.floor (1) / math.ceil (2) */
-        rc->pending_floorceil_slot = rc->frame_base + a;
-        rc->pending_floorceil_mode = fcop;
-        rc->pending_floorceil_self_pc = rc->pc;  /* resume point for range guard */
-      }
-      break;
+    /* New frame base = A+1 (the slot after the function). Keep the callee's
+       whole frame inside the fixed-size backing reg_map array. */
+    int new_fb = rc->frame_base + a + 1;
+    if (new_fb + callee_p->maxstacksize >= 256) {
+      rc->aborted = 1;
+      return 0;
     }
-    case OP_GETVARG:
-    case OP_VARARGPREP:
-    case OP_CONCAT:
-    case OP_CLOSE:
-    case OP_TBC:
-    case OP_NEWTABLE:
-    case OP_NEWLIST:
-    case OP_ERRNNIL:
-    case OP_SETTABUP:
-    case OP_EXTRAARG:
-    case OP_MMBIN:
-    case OP_MMBINI:
-    case OP_MMBINK:
-      /* These instructions are either skipped (MMBIN) or abort the trace. */
-      if (op == OP_MMBIN || op == OP_MMBINI || op == OP_MMBINK) {
-        /* Already skipped by the arithmetic handler. If we reach here,
-           it means the arithmetic wasn't handled. Skip it. */
+
+    /* One entry check per trace: every inlined call must share (slot, proto). */
+    if (rc->inline_fn_slot < 0) {
+      rc->inline_fn_slot = fslot;
+      rc->inline_fn_proto = callee_p;
+    } else if (rc->inline_fn_slot != fslot || rc->inline_fn_proto != callee_p) {
+      rc->aborted = 1;
+      return 0;
+    }
+
+    /* Save caller state and switch the recorder into the callee. The callee's
+       argument slots already coincide with the caller's argument registers in
+       reg_map (callee slot k == caller slot A+1+k), so nothing is copied. */
+    if (rc->inline_depth >= SPT_JIT_MAX_INLINE_DEPTH) {
+      rc->aborted = 1;
+      return 0;
+    }
+    SPTInlineFrame *ff = &rc->inline_frames[rc->inline_depth];
+    ff->p = rc->p;
+    ff->k = rc->k;
+    ff->cl = rc->cl;
+    ff->pc = rc->pc + 1; /* caller resumes after the CALL */
+    ff->frame_base = rc->frame_base;
+    ff->call_result_slot = rc->frame_base + a; /* caller R[A] takes the result */
+    ff->method_self_pc = NULL;                 /* free-function inline: no SELF resume */
+    ff->method_resume_snap = -1;
+    ff->multiwrite_mode = 0;     /* multi-write only applies to method inlining */
+    ff->callee_proto = callee_p; /* §10.68c: for resume-at-call */
+    ff->nresults = c - 1;        /* C operand encodes nresults+1 */
+    rc->inline_depth++;
+
+    rc->p = callee_p;
+    rc->k = callee_p->k;
+    rc->cl = callee_cl;
+    rc->frame_base = new_fb;
+    rc->fwd_base = -1; /* fresh store-to-load forwarding per inlined method */
+    rc->pc = callee_p->code;
+    return 1; /* keep recording in the callee */
+  }
+
+  case OP_TFORPREP: {
+    /* Generic-for preheader. The outer loop's own TFORPREP is before
+       start_pc and never recorded; reaching one here means an *inner*
+       for-each nested in the trace we're recording. We don't unroll
+       for-each, so abort and let the interpreter drive the inner loop. */
+    rc->aborted = 1;
+    return 0;
+  }
+
+  case OP_TFORCALL: {
+    /* Generic-for iterator step, specialized for `for k[,v] : pairs(L)` or
+       `for k[,v] : iter(2, L)` over a List. Both luaB_next (pairs) and
+       iter_list_next (iter) over an array-mode table yield keys
+       0,1,...,loglen-1 with value = L[key] (see ltable.c luaH_next), so the
+       whole loop is a native index loop -- no C call, no GC.
+
+       SPT layout after TFORCALL (see lvm.c): iterator at ra+0, state at ra+1
+       (both loop-invariant), the call results land at ra+3 (key, which also
+       serves as the next iteration's control) and ra+4 (value). We model the
+       step as: newkey = key + 1; GUARD newkey < #state (loop-continue);
+       value = state[newkey]. The guard/value snapshots capture the PRE-update
+       state at this PC, so when the guard fails (key was the last element) the
+       exit re-runs the real TFORCALL -> next returns nil -> TFORLOOP ends the
+       loop. The iterator identity (== luaB_next or iter_list_next) is pinned
+       with a once-per-entry C guard (forin_iter_slot). Top frame only. */
+    int a = GETARG_A(i), c = GETARG_C(i);
+    if (rc->frame_base != 0) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* next yields exactly (key,value); support 1 or 2 loop vars. >2 would bind
+       nils we don't model. */
+    if (c < 1 || c > 2) {
+      rc->aborted = 1;
+      return 0;
+    }
+
+    StkId base = rc->ci->func.p + 1;
+    /* Iterator must be luaB_next (pairs) or iter_list_next (iter): both yield
+       the same contiguous 0-based key sequence over a list, so the native
+       index-loop lowering applies to either. Pinned in C at entry. */
+    TValue *fv = s2v(base + a);
+    lua_CFunction fn = ttislcf(fv) ? fvalue(fv) : NULL;
+    if (fn != spt_jit_pairs_next() && fn != spt_jit_iter_list_next()) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* State must be a List (array-mode table). */
+    TValue *sv = s2v(base + a + 1);
+    if (!ttisarray(sv)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* SLOAD the state (loop-invariant) -> emits GUARD_T(ARR), hoisted and
+       checked at entry via the live-in list. The iterator is NOT loaded into
+       the IR (no use); its identity is the C entry guard below. */
+    int sref = rec_load_reg(rc, a + 1);
+    if (ir->reg_type[rc->frame_base + a + 1] != SPTT_ARR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* Record the iterator entry guard. All for-each loops in one trace must
+       share the same iterator slot. */
+    if (rc->forin_iter_slot < 0) {
+      rc->forin_iter_slot = a;
+      rc->forin_iter_fn = fvalue(fv);
+    } else if (rc->forin_iter_slot != a) {
+      rc->aborted = 1;
+      return 0;
+    }
+
+    /* Control variable (current key) at ra+3 -- must be an integer. */
+    int keyref = rec_load_reg(rc, a + 3);
+    if (ir->reg_type[rc->frame_base + a + 3] != SPTT_INT) {
+      rc->aborted = 1;
+      return 0;
+    }
+
+    /* newkey = key + 1 */
+    int newkey = sptir_emit(ir, SPTIR_ADD, SPTT_INT, keyref, sptir_kint(ir, 1), 0);
+    /* len = #state */
+    int lenref = sptir_emit(ir, SPTIR_LEN, SPTT_INT, sref, SPTIR_NULL, 0);
+    /* Loop-continue guard: newkey < len. Snapshot = pre-update state at this
+       PC; on failure the interpreter re-runs the real TFORCALL (next -> nil). */
+    sptir_guard(ir, SPTIR_GUARD_LT, newkey, (int64_t)lenref, rec_guard_pc(rc));
+
+    if (c >= 2) {
+      /* value = state[newkey]. newkey >= 1 > 0 and < len (continue guard) so it
+         is in bounds; SPTIR_GETI only type-guards and relies on the preceding
+         bounds guard, exactly like OP_GETI/OP_GETTABLE. Predict the element
+         type from L[newkey] (rec_array_elem_type clamps out-of-range); the
+         runtime type guard, not this prediction, is load-bearing. */
+      TValue *ktv = s2v(base + a + 3);
+      lua_Integer kpred = ttisinteger(ktv) ? ivalue(ktv) + 1 : 0;
+      SPTType et = rec_array_elem_type(rc, a + 1, kpred);
+      if (et != SPTT_INT && et != SPTT_FLT && et != SPTT_STR && et != SPTT_ARR && et != SPTT_TAB) {
+        rc->aborted = 1;
+        return 0;
+      }
+      int vref = sptir_emit(ir, SPTIR_GETI, et, sref, newkey, 0);
+      int snap = rec_snap(rc);
+      ir->insts[vref].snap_idx = snap;
+      ir->insts[vref].flags |= SPTIRF_GUARD;
+      ir->reg_map[rc->frame_base + a + 4] = vref;
+      ir->reg_type[rc->frame_base + a + 4] = et;
+      if (a + 4 > ir->maxslot)
+        ir->maxslot = a + 4;
+    }
+
+    /* Commit the new key AFTER the snapshots above (so they carry the OLD
+       key). This is the loop-carried induction variable. */
+    ir->reg_map[rc->frame_base + a + 3] = newkey;
+    ir->reg_type[rc->frame_base + a + 3] = SPTT_INT;
+    if (a + 3 > ir->maxslot)
+      ir->maxslot = a + 3;
+    break;
+  }
+
+  case OP_TFORLOOP: {
+    /* Back-edge of the generic-for. Mirrors OP_FORLOOP: only closes the trace
+       when it targets our loop header; an inner loop we recorded through has a
+       different target -> a side trace exits to the interpreter, a root trace
+       aborts. The continue test was already emitted as the GUARD_LT in the
+       preceding TFORCALL. */
+    const Instruction *target = rc->pc + 1 - GETARG_Bx(i);
+    if (target != rc->start_pc) {
+      if (rc->is_side_trace) {
+        sptir_exit(ir, rc->pc);
+        return 0;
+      }
+      rc->aborted = 1;
+      return 0;
+    }
+    sptir_loop(ir);
+    return 0;
+  }
+
+  case OP_SETLIST:
+  case OP_CLOSURE:
+  case OP_VARARG:
+  case OP_SELF: {
+    /* R[A+1] = R[B]; R[A] = R[B][K[C]].  Specialized ONLY for the unary-libm
+       math-method idiom (e.g. math.sqrt): R[B] is a library/global table read
+       (a GETTABUP) and R[B][key] resolves to a known math C function. We don't
+       materialize the function/receiver -- we arm a pending FMATH that the
+       next CALL on R[A] consumes, and pin the method with a GUARD_CFUNC so
+       reassigning it (or the library table) side-exits. Anything else aborts.
+
+       The library table must be re-derived from the STABLE upvalue source, NOT
+       the live R[B] register: in this idiom R[B] is overwritten by the call
+       result within the loop body, so the live stack at record time holds a
+       stale value. We recover _ENV (the upvalue) and the library key from the
+       GETTABUP/ULOAD IR and look up _ENV[libkey][methodkey] directly. The run-
+       time GUARD_CFUNC re-walks on the (dynamic) GETTABUP result, so the live
+       lookup here is only a prediction. Top frame only. */
+    int a = GETARG_A(i), b = GETARG_B(i), c = GETARG_C(i);
+    /* §10.68b: OP_SELF is now allowed in nested inline frames (frame_base != 0).
+       SETLIST/CLOSURE/VARARG still abort in nested frames. */
+    if (rc->frame_base != 0 && op != OP_SELF) {
+      rc->aborted = 1;
+      return 0;
+    }
+    const TValue *kc = &rc->k[c];
+    if (ttypetag(kc) != LUA_VSHRSTR) {
+      rc->aborted = 1;
+      return 0;
+    }
+    TString *key = tsvalue(kc);
+    int bref = rec_load_reg(rc, b);
+    if (ir->reg_type[rc->frame_base + b] != SPTT_TAB) {
+      rc->aborted = 1;
+      return 0;
+    }
+    SPTIRInst *gi = sptir_get(ir, bref);
+    if (!gi || gi->op != SPTIR_GETTABUP) {
+      /* Not a library/global table read -> try the user-method idiom:
+         `obj.method()` on a class instance held in a stable (loop-invariant)
+         slot. SPT classes are `setmetatable(inst, Class)` with
+         `Class.__index = Class`, so the method lives directly on the
+         receiver's metatable. Resolve it, stage the receiver into R[A+1]
+         (callee slot 0 = `this`), and arm the next CALL to inline the method
+         proto. The metatable + method identity is pinned by a once-per-entry C
+         guard (method_recv_slot), so a different class / reassigned method
+         declines. Requiring an SLOAD receiver also guarantees loop-invariance
+         (a receiver reassigned in the body would not be a bare SLOAD).
+
+         §10.68b: This path is now reachable in nested inline frames. The
+         receiver's SLOAD aux always points to the ROOT frame's slot (each
+         inline layer passes `this` = slot 0, whose IR ref is the caller's
+         SLOAD), so the entry-time method-identity guard checks the correct
+         stack slot regardless of inline depth. The live-stack read below uses
+         frame_base to find the receiver in the current inline frame. */
+      if (gi && gi->op == SPTIR_SLOAD) {
+        int recv_slot = (int)gi->aux;
+        TValue *recv = s2v((rc->ci->func.p + 1) + rc->frame_base + b);
+        if (!ttistable(recv)) {
+          rc->aborted = 1;
+          return 0;
+        }
+        Table *mt = hvalue(recv)->metatable;
+        if (!mt) {
+          rc->aborted = 1;
+          return 0;
+        }
+        const TValue *mv = rec_table_getstr(mt, key);
+        if (!mv || !ttisLclosure(mv)) {
+          rc->aborted = 1;
+          return 0;
+        }
+        LClosure *mcl = clLvalue(mv);
+        rc->pending_method_self_pc = rc->pc;        /* resume point for in-method guards */
+        ir->reg_map[rc->frame_base + a + 1] = bref; /* R[A+1] = receiver */
+        ir->reg_type[rc->frame_base + a + 1] = SPTT_TAB;
+        if (rc->frame_base + a + 1 > ir->maxslot)
+          ir->maxslot = rc->frame_base + a + 1;
+        rc->pending_method_slot = rc->frame_base + a; /* next CALL inlines it */
+        rc->pending_method_proto = mcl->p;
+        rc->pending_method_cl = mcl;
+        /* Register this method's identity for the once-per-entry guard.
+           Several distinct methods may be inlined into one trace
+           (`a.foo(); a.bar()`); each is re-validated independently at entry,
+           and a repeat call to the same method reuses its existing entry. */
+        int mfound = 0;
+        for (int mi = 0; mi < rc->n_methods; mi++) {
+          if (rc->methods[mi].recv_slot == recv_slot && rc->methods[mi].class_mt == mt &&
+              rc->methods[mi].proto == mcl->p) {
+            mfound = 1;
+            break;
+          }
+        }
+        if (!mfound) {
+          if (rc->n_methods >= SPT_JIT_MAX_METHODS) {
+            rc->aborted = 1;
+            return 0;
+          }
+          rc->methods[rc->n_methods].recv_slot = recv_slot;
+          rc->methods[rc->n_methods].class_mt = mt;
+          rc->methods[rc->n_methods].key = key;
+          rc->methods[rc->n_methods].proto = mcl->p;
+          rc->n_methods++;
+        }
         break;
       }
       rc->aborted = 1;
       return 0;
-
-    default:
+    }
+    SPTIRInst *uli = sptir_get(ir, gi->op1);
+    if (!uli || uli->op != SPTIR_ULOAD) {
       rc->aborted = 1;
       return 0;
+    }
+    int uvidx = (int)uli->aux;
+    TString *libkey = (TString *)(intptr_t)gi->aux; /* e.g. "math" */
+    LClosure *cl = clLvalue(s2v(rc->ci->func.p));
+    if (uvidx >= cl->nupvalues) {
+      rc->aborted = 1;
+      return 0;
+    }
+    TValue *envtv = cl->upvals[uvidx]->v.p;
+    if (!ttistable(envtv)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    const TValue *libtv = rec_table_getstr(hvalue(envtv), libkey);
+    if (!libtv || !ttistable(libtv)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    const TValue *fv = rec_table_getstr(hvalue(libtv), key);
+    if (!fv) {
+      rc->aborted = 1;
+      return 0;
+    }
+    /* math.* are registered by luaL_newlib (nup=0) as LIGHT C functions
+       (LUA_VLCF), so the value is the lua_CFunction directly. */
+    if (!ttislcf(fv)) {
+      rc->aborted = 1;
+      return 0;
+    }
+    spt_unary_libm_fn libm = spt_jit_unary_math(fvalue(fv));
+    spt_binary_libm_fn libm2 = libm ? NULL : spt_jit_binary_math(fvalue(fv));
+    int strop = (libm || libm2) ? 0 : spt_jit_str_op(fvalue(fv));
+    int mmop = (libm || libm2 || strop) ? 0 : spt_jit_math_minmax(fvalue(fv));
+    spt_unary_libm_fn absfn =
+        (libm || libm2 || strop || mmop) ? NULL : spt_jit_math_abs(fvalue(fv));
+    int fcop = (libm || libm2 || strop || mmop || absfn) ? 0 : spt_jit_math_floorceil(fvalue(fv));
+    if (!libm && !libm2 && !strop && !mmop && !absfn && !fcop) {
+      rc->aborted = 1;
+      return 0;
+    }
+    int kref = sptir_kptr(ir, (void *)key);
+    int gref =
+        sptir_emit(ir, SPTIR_GUARD_CFUNC, SPTT_NIL, bref, kref, (int64_t)(intptr_t)fvalue(fv));
+    int snap = rec_snap(rc);
+    ir->insts[gref].snap_idx = snap;
+    ir->insts[gref].flags |= SPTIRF_GUARD;
+    /* Open the arg-load window: until the CALL, guards resume at this SELF. */
+    rc->call_arg_self_pc = rc->pc;
+    if (libm) {
+      rc->pending_cfn_libm = (void *)libm;
+      rc->pending_cfn_slot = rc->frame_base + a;
+    } else if (libm2) {
+      rc->pending_cfn2_libm = (void *)libm2;
+      rc->pending_cfn2_slot = rc->frame_base + a;
+    } else if (strop) { /* string.len (1) / string.byte (2) */
+      rc->pending_str_op = strop;
+      rc->pending_str_slot = rc->frame_base + a;
+      rc->pending_str_self_pc = rc->pc; /* resume point for the SLEN/SBYTE guard */
+    } else if (mmop) {                  /* math.min (1) / math.max (2) */
+      if (rc->pending_minmax_top >= 8) {
+        rc->aborted = 1;
+        return 0;
+      }
+      rc->pending_minmax_slot[rc->pending_minmax_top] = rc->frame_base + a;
+      rc->pending_minmax_op[rc->pending_minmax_top] = mmop;
+      rc->pending_minmax_top++;
+    } else if (absfn) { /* math.abs */
+      rc->pending_abs_slot = rc->frame_base + a;
+      rc->pending_abs_fabs = (void *)absfn;
+    } else { /* math.floor (1) / math.ceil (2) */
+      rc->pending_floorceil_slot = rc->frame_base + a;
+      rc->pending_floorceil_mode = fcop;
+      rc->pending_floorceil_self_pc = rc->pc; /* resume point for range guard */
+    }
+    break;
+  }
+  case OP_GETVARG:
+  case OP_VARARGPREP:
+  case OP_CONCAT:
+  case OP_CLOSE:
+  case OP_TBC:
+  case OP_NEWTABLE:
+  case OP_NEWLIST:
+  case OP_ERRNNIL:
+  case OP_SETTABUP:
+  case OP_EXTRAARG:
+  case OP_MMBIN:
+  case OP_MMBINI:
+  case OP_MMBINK:
+    /* These instructions are either skipped (MMBIN) or abort the trace. */
+    if (op == OP_MMBIN || op == OP_MMBINI || op == OP_MMBINK) {
+      /* Already skipped by the arithmetic handler. If we reach here,
+         it means the arithmetic wasn't handled. Skip it. */
+      break;
+    }
+    rc->aborted = 1;
+    return 0;
+
+  default:
+    rc->aborted = 1;
+    return 0;
   }
 
   rc->pc++;
@@ -4517,12 +5801,13 @@ static int rec_inst(SPTRecCtx *rc) {
 
 /* Record a trace starting from start_pc. */
 static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
-                               const Instruction *start_pc, int is_side) {
+                              const Instruction *start_pc, int is_side) {
   LClosure *cl = clLvalue(s2v(ci->func.p));
   Proto *p = cl->p;
 
   SPTTrace *t = (SPTTrace *)calloc(1, sizeof(SPTTrace));
-  if (!t) return NULL;
+  if (!t)
+    return NULL;
   sptir_init(&t->ir);
 
   SPTRecCtx rc;
@@ -4538,8 +5823,8 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   rc.ir = &t->ir;
   rc.frame_base = 0;
   rc.is_side_trace = is_side;
-  rc.fwd_base = -1;            /* store-to-load forwarding: none pending */
-  rc.inline_depth = 0;         /* no inlined frames yet */
+  rc.fwd_base = -1;    /* store-to-load forwarding: none pending */
+  rc.inline_depth = 0; /* no inlined frames yet */
   rc.n_field_layouts = 0;
   rc.inline_fn_slot = -1;
   rc.inline_fn_proto = NULL;
@@ -4584,8 +5869,8 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
       fprintf(stderr,
               "[JIT] aborted trace: proto=%p start_pc_offset=%d at op=%d "
               "(pc_offset=%d) after %d insts\n",
-              (void *)p, (int)(start_pc - p->code), (int)bad,
-              (int)(rc.pc - p->code), rc.inst_count);
+              (void *)p, (int)(start_pc - p->code), (int)bad, (int)(rc.pc - p->code),
+              rc.inst_count);
     }
     sptir_free(&t->ir);
     free(t);
@@ -4610,7 +5895,8 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   t->forin_iter_slot = rc.forin_iter_slot;
   t->forin_iter_fn = rc.forin_iter_fn;
   t->n_methods = rc.n_methods;
-  for (int mi = 0; mi < rc.n_methods; mi++) t->methods[mi] = rc.methods[mi];
+  for (int mi = 0; mi < rc.n_methods; mi++)
+    t->methods[mi] = rc.methods[mi];
 
   /* Carry the multi-write field-layout entry guards (if any). */
   t->n_field_layouts = rc.n_field_layouts;
@@ -4622,12 +5908,14 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
      exits from the side-exit tally. */
   t->loop_end_snap = rc.loop_end_snap;
 
-  if (js->debug >= 2) sptir_dump(&t->ir, "pre-opt");
+  if (js->debug >= 2)
+    sptir_dump(&t->ir, "pre-opt");
 
   /* Optimize the IR. */
   sptir_optimize(&t->ir);
 
-  if (js->debug >= 2) sptir_dump(&t->ir, "post-opt");
+  if (js->debug >= 2)
+    sptir_dump(&t->ir, "post-opt");
 
   /* Inlined-frame exit safety net. An exit stub sets ci->u.l.savedpc = exit_pc
      and returns to the interpreter, which resumes in the CALLER's CallInfo (the
@@ -4646,9 +5934,11 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
     const Instruction *lo = p->code, *hi = p->code + p->sizecode;
     for (int k = 0; k < t->ir.ninst; k++) {
       SPTIRInst *gi = &t->ir.insts[k];
-      if (!(gi->flags & SPTIRF_GUARD) || (gi->flags & SPTIRF_DEAD)) continue;
+      if (!(gi->flags & SPTIRF_GUARD) || (gi->flags & SPTIRF_DEAD))
+        continue;
       int si = gi->snap_idx;
-      if (si < 0 || si >= t->ir.nsnaps) continue;
+      if (si < 0 || si >= t->ir.nsnaps)
+        continue;
       const Instruction *epc = t->ir.exit_pcs[si];
       if (epc && (epc < lo || epc >= hi)) {
         /* In-callee exit. Allow only if resume-at-call info is present and the
@@ -4658,13 +5948,13 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
           const Instruction *clo = ri->callee_proto->code;
           const Instruction *chi = clo + ri->callee_proto->sizecode;
           if (epc >= clo && epc < chi) {
-            continue;  /* valid in-callee exit with resume-at-call */
+            continue; /* valid in-callee exit with resume-at-call */
           }
         }
         if (js->debug)
           fprintf(stderr, "[JIT] trace has an un-hoisted in-callee guard (exit "
-                  "pc outside main proto, no resume info); refusing to compile, "
-                  "fall back to interpreter\n");
+                          "pc outside main proto, no resume info); refusing to compile, "
+                          "fall back to interpreter\n");
         sptir_free(&t->ir);
         free(t);
         return NULL;
@@ -4680,17 +5970,28 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
   t->n_livein = 0;
   for (int k = 0; k < t->ir.ninst; k++) {
     SPTIRInst *gi = &t->ir.insts[k];
-    if (gi->op != SPTIR_GUARD_T) continue;
+    if (gi->op != SPTIR_GUARD_T)
+      continue;
     int sref = gi->op1;
-    if (sref < 0 || sref >= t->ir.ninst) continue;
-    if (t->ir.insts[sref].op != SPTIR_SLOAD) continue;
+    if (sref < 0 || sref >= t->ir.ninst)
+      continue;
+    if (t->ir.insts[sref].op != SPTIR_SLOAD)
+      continue;
     int slot = (int)t->ir.insts[sref].aux;
-    if (slot < 0 || slot > 255) continue;
+    if (slot < 0 || slot > 255)
+      continue;
     int dup = 0;
     for (int j = 0; j < t->n_livein; j++)
-      if (t->livein_slot[j] == (uint8_t)slot) { dup = 1; break; }
-    if (dup) continue;
-    if (t->n_livein >= SPT_JIT_MAX_LIVEIN) { t->n_livein = -1; break; }
+      if (t->livein_slot[j] == (uint8_t)slot) {
+        dup = 1;
+        break;
+      }
+    if (dup)
+      continue;
+    if (t->n_livein >= SPT_JIT_MAX_LIVEIN) {
+      t->n_livein = -1;
+      break;
+    }
     t->livein_slot[t->n_livein] = (uint8_t)slot;
     t->livein_type[t->n_livein] = (uint8_t)(SPTType)gi->aux;
     t->n_livein++;
@@ -4704,8 +6005,10 @@ static SPTTrace *record_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
      the interpreter -- exactly the pre-Phase-2 behavior, so no regression. */
   if (rc.is_side_trace && (int)t->ir.ninst < js->side_min_ir) {
     if (js->debug)
-      fprintf(stderr, "[JIT] side trace too small (ir=%d < %d), discarded; "
-              "arm stays in interpreter\n", t->ir.ninst, js->side_min_ir);
+      fprintf(stderr,
+              "[JIT] side trace too small (ir=%d < %d), discarded; "
+              "arm stays in interpreter\n",
+              t->ir.ninst, js->side_min_ir);
     sptir_free(&t->ir);
     free(t);
     return NULL;
@@ -4783,11 +6086,14 @@ static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
   for (int mi = 0; mi < t->n_methods; mi++) {
     SPTMethodId *m = &t->methods[mi];
     TValue *recv = s2v(ci->func.p + 1 + m->recv_slot);
-    if (!ttistable(recv)) return 0;
+    if (!ttistable(recv))
+      return 0;
     Table *mt = hvalue(recv)->metatable;
-    if (mt != (Table *)m->class_mt) return 0;
+    if (mt != (Table *)m->class_mt)
+      return 0;
     const TValue *mv = rec_table_getstr(mt, (TString *)m->key);
-    if (!mv || !ttisLclosure(mv) || clLvalue(mv)->p != m->proto) return 0;
+    if (!mv || !ttisLclosure(mv) || clLvalue(mv)->p != m->proto)
+      return 0;
   }
   /* Multi-write field-layout guards: each this.<field> accessed in the inlined
      body is verified at entry (key present in the receiver table + value type
@@ -4795,16 +6101,19 @@ static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
      SETFIELD. The receiver is methods[0] (multi-write traces are single-
      method). */
   if (t->n_field_layouts > 0) {
-    if (t->n_methods < 1) return 0;
+    if (t->n_methods < 1)
+      return 0;
     SPTMethodId *m = &t->methods[0];
     TValue *recv = s2v(ci->func.p + 1 + m->recv_slot);
-    if (!ttistable(recv)) return 0;
+    if (!ttistable(recv))
+      return 0;
     Table *tbl = hvalue(recv);
     for (int fi = 0; fi < t->n_field_layouts; fi++) {
       const TValue *v = rec_table_getstr(tbl, (TString *)t->field_layouts[fi].key);
-      if (!v) return 0;                             /* key absent -> decline */
+      if (!v)
+        return 0; /* key absent -> decline */
       if (rec_value_type(v) != (SPTType)t->field_layouts[fi].value_type)
-        return 0;                                   /* type changed -> decline */
+        return 0; /* type changed -> decline */
     }
   }
   if (t->n_livein >= 0) {
@@ -4817,10 +6126,13 @@ static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
     SPTIRBuilder *tir = &t->ir;
     for (int k = 0; k < tir->ninst; k++) {
       SPTIRInst *gi = &tir->insts[k];
-      if (gi->op != SPTIR_GUARD_T) continue;
+      if (gi->op != SPTIR_GUARD_T)
+        continue;
       int sref = gi->op1;
-      if (sref < 0 || sref >= tir->ninst) continue;
-      if (tir->insts[sref].op != SPTIR_SLOAD) continue;
+      if (sref < 0 || sref >= tir->ninst)
+        continue;
+      if (tir->insts[sref].op != SPTIR_SLOAD)
+        continue;
       int slot = (int)tir->insts[sref].aux;
       if (rec_value_type(s2v(ci->func.p + 1 + slot)) != (SPTType)gi->aux)
         return 0;
@@ -4840,15 +6152,18 @@ static int trace_entry_guards_ok(SPTTrace *t, CallInfo *ci) {
    Called only on a trampoline miss (no trace at exit_pc yet). Once a side trace
    exists the trampoline enters it instead, so this stops firing for that PC.
    Abort accounting mirrors the root path: repeated failures blacklist the PC. */
-static void maybe_record_side_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
-                                     SPTTrace *parent, const Instruction *exit_pc) {
-  if (!parent || !exit_pc) return;
+static void maybe_record_side_trace(SPTJitState *js, lua_State *L, CallInfo *ci, SPTTrace *parent,
+                                    const Instruction *exit_pc) {
+  if (!parent || !exit_pc)
+    return;
 
   LClosure *cl = clLvalue(s2v(ci->func.p));
-  if (!cl || !cl->p) return;
+  if (!cl || !cl->p)
+    return;
   Proto *p = cl->p;
   int pc_offset = (int)(exit_pc - p->code);
-  if (pc_offset < 0 || pc_offset >= p->sizecode) return;
+  if (pc_offset < 0 || pc_offset >= p->sizecode)
+    return;
 
   /* Don't root a side trace on a loop back-edge. A trace started at a FORLOOP /
      TFORLOOP / backward JMP would hit that back-edge as its first instruction --
@@ -4857,8 +6172,10 @@ static void maybe_record_side_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
      the trampoline's progress check rejects anyway. The interpreter runs the
      back-edge (one bytecode) and re-enters the parent, which is already optimal. */
   OpCode bop = GET_OPCODE(*exit_pc);
-  if (bop == OP_FORLOOP || bop == OP_TFORLOOP) return;
-  if (bop == OP_JMP && GETARG_sJ(*exit_pc) < 0) return;
+  if (bop == OP_FORLOOP || bop == OP_TFORLOOP)
+    return;
+  if (bop == OP_JMP && GETARG_sJ(*exit_pc) < 0)
+    return;
 
   /* Cheap rejections FIRST -- this runs on every trampoline miss, including the
      steady state of a PC we have already blacklisted (e.g. a too-small side trace
@@ -4866,19 +6183,25 @@ static void maybe_record_side_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
      snapshot scan keeps that steady-state path O(1), so a gated arm costs the same
      as the pre-Phase-2 fallback (no per-miss snapshot loop). */
   SPTHotEntry *e = hot_lookup(js, p, pc_offset);
-  if (!e) return;
-  if (e->trace && e->trace->code) return;        /* already have a side trace */
-  if (e->aborts >= SPT_JIT_MAX_ABORTS) return;   /* gave up on this PC */
+  if (!e)
+    return;
+  if (e->trace && e->trace->code)
+    return; /* already have a side trace */
+  if (e->aborts >= SPT_JIT_MAX_ABORTS)
+    return; /* gave up on this PC */
 
   /* Is this exit hot? Find a parent snapshot whose exit PC matches and whose
      taken-count (bumped by the exit stub) has crossed the side-trace threshold.
      Multiple snapshots may share a PC; any one being hot makes the PC hot. */
   int hot = 0;
   for (int s = 0; s < parent->ir.nsnaps && s < SPT_JIT_MAX_SNAPSHOTS; s++) {
-    if (parent->exit_pcs[s] == exit_pc &&
-        parent->exit_count[s] >= js->side_hot_threshold) { hot = 1; break; }
+    if (parent->exit_pcs[s] == exit_pc && parent->exit_count[s] >= js->side_hot_threshold) {
+      hot = 1;
+      break;
+    }
   }
-  if (!hot) return;
+  if (!hot)
+    return;
 
   SPTTrace *st = record_trace(js, L, ci, exit_pc, /*is_side=*/1);
   if (st) {
@@ -4886,8 +6209,10 @@ static void maybe_record_side_trace(SPTJitState *js, lua_State *L, CallInfo *ci,
     e->pc_offset = pc_offset;
     e->trace = st;
     if (js->debug)
-      fprintf(stderr, "[JIT] recorded side trace: proto=%p pc_offset=%d "
-              "(parent exit hot)\n", (void *)p, pc_offset);
+      fprintf(stderr,
+              "[JIT] recorded side trace: proto=%p pc_offset=%d "
+              "(parent exit hot)\n",
+              (void *)p, pc_offset);
   } else if (e->aborts < 0xFFFF) {
     e->aborts++;
   }
@@ -4918,7 +6243,7 @@ void sptjit_exit_resume(lua_State *L, CallInfo *ci, SPTTrace *t, int snap_idx) {
     nci = ci->next;
     nci->u.l.trap = 0;
   } else {
-    nci = luaE_extendCI(L);  /* links after L->ci (= ci), sets nci->previous */
+    nci = luaE_extendCI(L); /* links after L->ci (= ci), sets nci->previous */
   }
   /* Callee's func = root_base + callee_frame_base (see §10.68c derivation).
      root_base = ci->func.p + 1, so callee func = ci->func.p + callee_frame_base. */
@@ -4933,7 +6258,7 @@ void sptjit_exit_resume(lua_State *L, CallInfo *ci, SPTTrace *t, int snap_idx) {
   nci->top.p = callee_func + 1 + ri->callee_proto->maxstacksize;
   nci->u.l.savedpc = exit_pc;
   nci->u.l.nextraargs = 0;
-  nci->callstatus = cast_uint(ri->nresults + 1);  /* nresults encoded as +1 */
+  nci->callstatus = cast_uint(ri->nresults + 1); /* nresults encoded as +1 */
   /* Link into CI chain (if reused, already linked; if new, extendCI linked). */
   nci->previous = ci;
   ci->next = nci;
@@ -4945,16 +6270,20 @@ void sptjit_exit_resume(lua_State *L, CallInfo *ci, SPTTrace *t, int snap_idx) {
 int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
   global_State *g = G(L);
   SPTJitState *js = (SPTJitState *)g->jit_state; /* will be added */
-  if (!js || js->mode == SPT_JIT_MODE_OFF) return 0;
+  if (!js || js->mode == SPT_JIT_MODE_OFF)
+    return 0;
 
   LClosure *cl = clLvalue(s2v(ci->func.p));
-  if (!cl || !cl->p) return 0;
+  if (!cl || !cl->p)
+    return 0;
   Proto *p = cl->p;
   int pc_offset = (int)(pc - p->code);
 
   SPTHotEntry *e = hot_lookup(js, p, pc_offset);
-  if (!e || !e->trace || !e->trace->code) return 0;
-  if (!trace_entry_guards_ok(e->trace, ci)) return 0;
+  if (!e || !e->trace || !e->trace->code)
+    return 0;
+  if (!trace_entry_guards_ok(e->trace, ci))
+    return 0;
 
   /* Enter the trace, then follow stitched links (Phase 2). When a trace exits it
      has written every live stack slot back and set ci->u.l.savedpc to the resume
@@ -4986,12 +6315,15 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
        pushed a callee CI and set L->ci != ci. Stop linking — the interpreter
        must resume in the callee, not at a caller PC. sptjit_hot_check will
        pick up L->ci and update the local ci/pc/base/cl/k. */
-    if (L->ci != ci) break;
+    if (L->ci != ci)
+      break;
 
     const Instruction *next_pc = ci->u.l.savedpc;
-    if (next_pc == entered_pc) break;       /* no forward progress */
+    if (next_pc == entered_pc)
+      break; /* no forward progress */
     int npc_off = (int)(next_pc - p->code);
-    if (npc_off < 0 || npc_off >= p->sizecode) break;
+    if (npc_off < 0 || npc_off >= p->sizecode)
+      break;
     SPTHotEntry *ne = hot_lookup(js, p, npc_off);
     if (!ne || !ne->trace || !ne->trace->code) {
       /* No trace at this exit PC. If the exit is hot, record a side trace here;
@@ -5000,7 +6332,8 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
       maybe_record_side_trace(js, L, ci, t, next_pc);
       break;
     }
-    if (!trace_entry_guards_ok(ne->trace, ci)) break;
+    if (!trace_entry_guards_ok(ne->trace, ci))
+      break;
 
     entered_pc = next_pc;
     t = ne->trace;
@@ -5011,15 +6344,18 @@ int sptjit_trace_enter(lua_State *L, CallInfo *ci, const Instruction *pc) {
 int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
   global_State *g = G(L);
   SPTJitState *js = (SPTJitState *)g->jit_state;
-  if (!js || js->mode == SPT_JIT_MODE_OFF) return 0;
+  if (!js || js->mode == SPT_JIT_MODE_OFF)
+    return 0;
 
   LClosure *cl = clLvalue(s2v(ci->func.p));
-  if (!cl || !cl->p) return 0;
+  if (!cl || !cl->p)
+    return 0;
   Proto *p = cl->p;
   int pc_offset = (int)(pc - p->code);
 
   SPTHotEntry *e = hot_lookup(js, p, pc_offset);
-  if (!e) return 0;
+  if (!e)
+    return 0;
 
   /* If trace already exists, enter it. */
   if (e->trace && e->trace->code) {
@@ -5031,11 +6367,11 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
        discard the trace and bump runtime_fails; after MAX_RUNTIME_FAILS
        discards the entry is fully blacklisted (aborts = MAX_ABORTS). */
     SPTTrace *t = e->trace;
-    if (t->entry_count > 0 &&
-        (t->entry_count & (SPT_JIT_BLACKLIST_CHECK_INTERVAL - 1)) == 0) {
+    if (t->entry_count > 0 && (t->entry_count & (SPT_JIT_BLACKLIST_CHECK_INTERVAL - 1)) == 0) {
       uint64_t side_exits = 0;
       int nsnaps = t->ir.nsnaps;
-      if (nsnaps > SPT_JIT_MAX_SNAPSHOTS) nsnaps = SPT_JIT_MAX_SNAPSHOTS;
+      if (nsnaps > SPT_JIT_MAX_SNAPSHOTS)
+        nsnaps = SPT_JIT_MAX_SNAPSHOTS;
       for (int i = 0; i < nsnaps; i++) {
         if (i != t->loop_end_snap)
           side_exits += t->exit_count[i];
@@ -5045,18 +6381,18 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
           fprintf(stderr,
                   "[JIT] runtime blacklist: proto=%p pc_offset=%d "
                   "side_exits=%llu entry_count=%u runtime_fails=%d\n",
-                  (void *)p, pc_offset,
-                  (unsigned long long)side_exits, t->entry_count,
+                  (void *)p, pc_offset, (unsigned long long)side_exits, t->entry_count,
                   e->runtime_fails + 1);
         }
         sptir_free(&t->ir);
         free(t);
         e->trace = NULL;
-        if (e->runtime_fails < 0xFFFF) e->runtime_fails++;
+        if (e->runtime_fails < 0xFFFF)
+          e->runtime_fails++;
         if (e->runtime_fails >= SPT_JIT_MAX_RUNTIME_FAILS) {
-          e->aborts = SPT_JIT_MAX_ABORTS;  /* full blacklist */
+          e->aborts = SPT_JIT_MAX_ABORTS; /* full blacklist */
         } else {
-          e->counter = e->aborts + e->runtime_fails;  /* phase-shift retry */
+          e->counter = e->aborts + e->runtime_fails; /* phase-shift retry */
         }
         return 0;
       }
@@ -5068,7 +6404,8 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
      containing a call, generic-for, or other un-traceable op). Stop trying --
      repeatedly recording and discarding makes the JIT slower than the plain
      interpreter. */
-  if (e->aborts >= SPT_JIT_MAX_ABORTS) return 0;
+  if (e->aborts >= SPT_JIT_MAX_ABORTS)
+    return 0;
 
   /* Branch-direction profiling phase. Once a loop is hot we don't record
      immediately; we first sample which way each conditional branch goes for a
@@ -5079,14 +6416,19 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
      iteration tripped the threshold (a coin-flip). See §10.23. */
   if (sptjit_profiling_active) {
     int is_profiled = (g_prof.proto == p && g_prof.pc_start == pc_offset);
-    if (g_prof.budget > 0) g_prof.budget--;
+    if (g_prof.budget > 0)
+      g_prof.budget--;
     if (is_profiled && ++g_prof.iters >= SPT_PROF_ITERS) {
       /* Enough samples: stop profiling and record using the majority tally. */
       sptjit_profiling_active = 0;
       e->counter = 0;
       SPTTrace *t = record_trace(js, L, ci, pc, /*is_side=*/0);
-      if (t) { e->trace = t; return sptjit_trace_enter(L, ci, pc); }
-      if (e->aborts < 0xFFFF) e->aborts++;
+      if (t) {
+        e->trace = t;
+        return sptjit_trace_enter(L, ci, pc);
+      }
+      if (e->aborts < 0xFFFF)
+        e->aborts++;
       e->counter = e->aborts;
       return 0;
     }
@@ -5096,7 +6438,7 @@ int sptjit_trace_hot(lua_State *L, CallInfo *ci, const Instruction *pc) {
          fall through and handle the current loop normally. */
       sptjit_profiling_active = 0;
     } else {
-      return 0;  /* keep sampling (this loop or let the profiled one finish) */
+      return 0; /* keep sampling (this loop or let the profiled one finish) */
     }
   }
 

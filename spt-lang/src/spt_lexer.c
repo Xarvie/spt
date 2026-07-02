@@ -61,9 +61,7 @@ static void doc_append(Lexer *L, const char *p, size_t n) {
   L->docbuf[L->doclen] = '\0';
 }
 
-static int lex_col(const Lexer *L, size_t at) {
-  return (int)(at - L->line_start) + 1;
-}
+static int lex_col(const Lexer *L, size_t at) { return (int)(at - L->line_start) + 1; }
 
 static void lex_push(Lexer *L, SptTokenKind kind, size_t start, size_t end, int line, int col) {
   if (L->count >= L->cap) {
@@ -152,16 +150,15 @@ typedef struct {
 
 /* IDENT_START 的非 ASCII 区间（ASCII a-zA-Z_ 走快速路径） */
 static const Range IDENT_START_RANGES[] = {
-    {0x00C0, 0x00D6}, {0x00D8, 0x00F6},   {0x00F8, 0x02FF},   {0x0370, 0x037D},
-    {0x037F, 0x1FFF}, {0x200C, 0x200D},   {0x2070, 0x218F},   {0x2C00, 0x2FEF},
-    {0x3001, 0xD7FF}, {0xF900, 0xFDCF},   {0xFDF0, 0xFFFD},   {0x10000, 0x1FAFF},
-    {0x1FC00, 0xEFFFF},
+    {0x00C0, 0x00D6}, {0x00D8, 0x00F6},   {0x00F8, 0x02FF},   {0x0370, 0x037D}, {0x037F, 0x1FFF},
+    {0x200C, 0x200D}, {0x2070, 0x218F},   {0x2C00, 0x2FEF},   {0x3001, 0xD7FF}, {0xF900, 0xFDCF},
+    {0xFDF0, 0xFFFD}, {0x10000, 0x1FAFF}, {0x1FC00, 0xEFFFF},
 };
 
 /* IDENT_PART 在 START 之外额外允许的区间（0-9 走快速路径） */
 static const Range IDENT_PART_EXTRA[] = {
-    {0x0300, 0x036F},   {0x203F, 0x2040},   {0xFE00, 0xFE0F},   {0xE0100, 0xE01EF},
-    {0x1F3FB, 0x1F3FF}, {0x20E3, 0x20E3},
+    {0x0300, 0x036F},   {0x203F, 0x2040},   {0xFE00, 0xFE0F},
+    {0xE0100, 0xE01EF}, {0x1F3FB, 0x1F3FF}, {0x20E3, 0x20E3},
 };
 
 static int in_ranges(uint32_t cp, const Range *r, size_t n) {
@@ -195,24 +192,17 @@ typedef struct {
 } Keyword;
 
 static const Keyword KEYWORDS[] = {
-    {"int", TOK_INT},         {"float", TOK_FLOAT},
-    {"number", TOK_NUMBER},   {"str", TOK_STR},
-    {"bool", TOK_BOOL},       {"any", TOK_ANY},
-    {"void", TOK_VOID},       {"null", TOK_NULL},
-    {"list", TOK_LIST},       {"map", TOK_MAP},
-    {"fn", TOK_FUNCTION}, {"coro", TOK_COROUTINE},
-    {"vars", TOK_VARS},       {"if", TOK_IF},
-    {"else", TOK_ELSE},       {"while", TOK_WHILE},
-    {"for", TOK_FOR},         {"break", TOK_BREAK},
-    {"continue", TOK_CONTINUE}, {"return", TOK_RETURN},
-    {"defer", TOK_DEFER},     {"true", TOK_TRUE},
-    {"false", TOK_FALSE},     {"const", TOK_CONST},
-    {"auto", TOK_AUTO},       {"global", TOK_GLOBAL},
-    {"static", TOK_STATIC},   {"import", TOK_IMPORT},
-    {"as", TOK_AS},           {"from", TOK_FROM},
-    {"export", TOK_EXPORT},
-    {"declare", TOK_DECLARE},
-    {"class", TOK_CLASS},
+    {"int", TOK_INT},           {"float", TOK_FLOAT},     {"number", TOK_NUMBER},
+    {"str", TOK_STR},           {"bool", TOK_BOOL},       {"any", TOK_ANY},
+    {"void", TOK_VOID},         {"null", TOK_NULL},       {"list", TOK_LIST},
+    {"map", TOK_MAP},           {"fn", TOK_FUNCTION},     {"coro", TOK_COROUTINE},
+    {"vars", TOK_VARS},         {"if", TOK_IF},           {"else", TOK_ELSE},
+    {"while", TOK_WHILE},       {"for", TOK_FOR},         {"break", TOK_BREAK},
+    {"continue", TOK_CONTINUE}, {"return", TOK_RETURN},   {"defer", TOK_DEFER},
+    {"true", TOK_TRUE},         {"false", TOK_FALSE},     {"const", TOK_CONST},
+    {"auto", TOK_AUTO},         {"global", TOK_GLOBAL},   {"static", TOK_STATIC},
+    {"import", TOK_IMPORT},     {"as", TOK_AS},           {"from", TOK_FROM},
+    {"export", TOK_EXPORT},     {"declare", TOK_DECLARE}, {"class", TOK_CLASS},
 };
 
 static SptTokenKind keyword_lookup(const char *s, int len) {
@@ -227,9 +217,8 @@ static SptTokenKind keyword_lookup(const char *s, int len) {
  * 字符判定辅助
  * ========================================================================= */
 static int is_digit(int c) { return c >= '0' && c <= '9'; }
-static int is_hex(int c) {
-  return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
+
+static int is_hex(int c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 
 static char peek_at(Lexer *L, size_t off) {
   size_t p = L->pos + off;
@@ -294,8 +283,8 @@ static void skip_trivia(Lexer *L) {
       } else if (is_doc) {
         size_t s = inner_start, e = inner_end;
         /* 去掉内文的首尾空白（含换行） */
-        while (s < e && (L->src[s] == ' ' || L->src[s] == '\t' || L->src[s] == '\r' ||
-                         L->src[s] == '\n'))
+        while (s < e &&
+               (L->src[s] == ' ' || L->src[s] == '\t' || L->src[s] == '\r' || L->src[s] == '\n'))
           s++;
         while (e > s && (L->src[e - 1] == ' ' || L->src[e - 1] == '\t' || L->src[e - 1] == '\r' ||
                          L->src[e - 1] == '\n'))
@@ -506,65 +495,158 @@ int spt_lex(const char *source, size_t len, SptArena *arena, SptDiag *diag, SptT
       size_t adv = 1;
       switch (c) {
       case '+':
-        if (c1 == '=') { k = TOK_ADD_ASSIGN; adv = 2; } else { k = TOK_ADD; }
+        if (c1 == '=') {
+          k = TOK_ADD_ASSIGN;
+          adv = 2;
+        } else {
+          k = TOK_ADD;
+        }
         break;
       case '-':
-        if (c1 == '=') { k = TOK_SUB_ASSIGN; adv = 2; }
-        else if (c1 == '>') { k = TOK_ARROW; adv = 2; }
-        else { k = TOK_SUB; }
+        if (c1 == '=') {
+          k = TOK_SUB_ASSIGN;
+          adv = 2;
+        } else if (c1 == '>') {
+          k = TOK_ARROW;
+          adv = 2;
+        } else {
+          k = TOK_SUB;
+        }
         break;
       case '*':
-        if (c1 == '=') { k = TOK_MUL_ASSIGN; adv = 2; } else { k = TOK_MUL; }
+        if (c1 == '=') {
+          k = TOK_MUL_ASSIGN;
+          adv = 2;
+        } else {
+          k = TOK_MUL;
+        }
         break;
       case '/':
-        if (c1 == '=') { k = TOK_DIV_ASSIGN; adv = 2; } else { k = TOK_DIV; }
+        if (c1 == '=') {
+          k = TOK_DIV_ASSIGN;
+          adv = 2;
+        } else {
+          k = TOK_DIV;
+        }
         break;
       case '%':
-        if (c1 == '=') { k = TOK_MOD_ASSIGN; adv = 2; } else { k = TOK_MOD; }
+        if (c1 == '=') {
+          k = TOK_MOD_ASSIGN;
+          adv = 2;
+        } else {
+          k = TOK_MOD;
+        }
         break;
       case '~':
-        if (c1 == '/' && c2 == '=') { k = TOK_IDIV_ASSIGN; adv = 3; }
-        else if (c1 == '/') { k = TOK_IDIV; adv = 2; }
-        else { k = TOK_BIT_NOT; }
+        if (c1 == '/' && c2 == '=') {
+          k = TOK_IDIV_ASSIGN;
+          adv = 3;
+        } else if (c1 == '/') {
+          k = TOK_IDIV;
+          adv = 2;
+        } else {
+          k = TOK_BIT_NOT;
+        }
         break;
       case '=':
-        if (c1 == '=') { k = TOK_EQ; adv = 2; } else { k = TOK_ASSIGN; }
+        if (c1 == '=') {
+          k = TOK_EQ;
+          adv = 2;
+        } else {
+          k = TOK_ASSIGN;
+        }
         break;
       case '!':
-        if (c1 == '=') { k = TOK_NEQ; adv = 2; } else { k = TOK_NOT; }
+        if (c1 == '=') {
+          k = TOK_NEQ;
+          adv = 2;
+        } else {
+          k = TOK_NOT;
+        }
         break;
       case '<':
-        if (c1 == '=') { k = TOK_LTE; adv = 2; }
-        else if (c1 == '<') { k = TOK_LSHIFT; adv = 2; }
-        else { k = TOK_LT; }
+        if (c1 == '=') {
+          k = TOK_LTE;
+          adv = 2;
+        } else if (c1 == '<') {
+          k = TOK_LSHIFT;
+          adv = 2;
+        } else {
+          k = TOK_LT;
+        }
         break;
       case '>':
         /* 注意：不产生 '>>'，右移由解析器用两个 '>' 合成 */
-        if (c1 == '=') { k = TOK_GTE; adv = 2; } else { k = TOK_GT; }
+        if (c1 == '=') {
+          k = TOK_GTE;
+          adv = 2;
+        } else {
+          k = TOK_GT;
+        }
         break;
       case '&':
-        if (c1 == '&') { k = TOK_AND; adv = 2; } else { k = TOK_BIT_AND; }
+        if (c1 == '&') {
+          k = TOK_AND;
+          adv = 2;
+        } else {
+          k = TOK_BIT_AND;
+        }
         break;
       case '|':
-        if (c1 == '|') { k = TOK_OR; adv = 2; } else { k = TOK_BIT_OR; }
+        if (c1 == '|') {
+          k = TOK_OR;
+          adv = 2;
+        } else {
+          k = TOK_BIT_OR;
+        }
         break;
-      case '^': k = TOK_BIT_XOR; break;
-      case '#': k = TOK_LEN; break;
+      case '^':
+        k = TOK_BIT_XOR;
+        break;
+      case '#':
+        k = TOK_LEN;
+        break;
       case '.':
-        if (c1 == '.' && c2 == '.') { k = TOK_ELLIPSIS; adv = 3; }
-        else if (c1 == '.' && c2 == '=') { k = TOK_CONCAT_ASSIGN; adv = 3; }
-        else if (c1 == '.') { k = TOK_CONCAT; adv = 2; }
-        else { k = TOK_DOT; }
+        if (c1 == '.' && c2 == '.') {
+          k = TOK_ELLIPSIS;
+          adv = 3;
+        } else if (c1 == '.' && c2 == '=') {
+          k = TOK_CONCAT_ASSIGN;
+          adv = 3;
+        } else if (c1 == '.') {
+          k = TOK_CONCAT;
+          adv = 2;
+        } else {
+          k = TOK_DOT;
+        }
         break;
-      case '(': k = TOK_LPAREN; break;
-      case ')': k = TOK_RPAREN; break;
-      case '[': k = TOK_LBRACKET; break;
-      case ']': k = TOK_RBRACKET; break;
-      case '{': k = TOK_LBRACE; break;
-      case '}': k = TOK_RBRACE; break;
-      case ',': k = TOK_COMMA; break;
-      case ':': k = TOK_COLON; break;
-      case ';': k = TOK_SEMICOLON; break;
+      case '(':
+        k = TOK_LPAREN;
+        break;
+      case ')':
+        k = TOK_RPAREN;
+        break;
+      case '[':
+        k = TOK_LBRACKET;
+        break;
+      case ']':
+        k = TOK_RBRACKET;
+        break;
+      case '{':
+        k = TOK_LBRACE;
+        break;
+      case '}':
+        k = TOK_RBRACE;
+        break;
+      case ',':
+        k = TOK_COMMA;
+        break;
+      case ':':
+        k = TOK_COLON;
+        break;
+      case ';':
+        k = TOK_SEMICOLON;
+        break;
       default: {
         char buf[2] = {(char)c, 0};
         lex_error(&L, line, col, "非法字符 '%s'", buf);

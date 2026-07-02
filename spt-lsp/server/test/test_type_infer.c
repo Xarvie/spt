@@ -13,12 +13,19 @@
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
+
 static int next_id = 200;
 
 static void open_doc(LspServer *s, const char *uri, const char *text) {
@@ -34,7 +41,8 @@ static void open_doc(LspServer *s, const char *uri, const char *text) {
   cJSON_AddStringToObject(m, "method", "textDocument/didOpen");
   cJSON_AddItemToObject(m, "params", p);
   cJSON *r = lsp_dispatch(s, m);
-  if (r) cJSON_Delete(r);
+  if (r)
+    cJSON_Delete(r);
   cJSON_Delete(m);
 }
 
@@ -62,45 +70,44 @@ static cJSON *posp(const char *uri, int line, int ch) {
 }
 
 static int array_has_label(cJSON *arr, const char *label) {
-  if (!arr) return 0;
+  if (!arr)
+    return 0;
   int n = cJSON_GetArraySize(arr);
   for (int i = 0; i < n; i++) {
     cJSON *it = cJSON_GetArrayItem(arr, i);
     cJSON *l = cJSON_GetObjectItemCaseSensitive(it, "label");
-    if (l && l->valuestring && strcmp(l->valuestring, label) == 0) return 1;
+    if (l && l->valuestring && strcmp(l->valuestring, label) == 0)
+      return 1;
   }
   return 0;
 }
 
-static int array_count(cJSON *arr) {
-  return arr ? cJSON_GetArraySize(arr) : 0;
-}
+static int array_count(cJSON *arr) { return arr ? cJSON_GetArraySize(arr) : 0; }
 
 /* 两个类，都有 x 成员，用于验证精准化 */
-static const char *DOC =
-    "class Point {\n"          /* 0 */
-    "  int x;\n"               /* 1 */
-    "  int y;\n"               /* 2 */
-    "  int getX() {\n"         /* 3 */
-    "    return x;\n"          /* 4 */
-    "  }\n"                    /* 5 */
-    "}\n"                      /* 6 */
-    "\n"                       /* 7 */
-    "class Line {\n"           /* 8 */
-    "  int x;\n"               /* 9 */
-    "  int length;\n"          /* 10 */
-    "}\n"                      /* 11 */
-    "\n"                       /* 12 */
-    "int test_explicit() {\n"  /* 13 */
-    "  Point p;\n"             /* 14 */
-    "  p.x = 1;\n"             /* 15 */
-    "  return 0;\n"            /* 16 */
-    "}\n"                      /* 17 */
-    "\n"                       /* 18 */
-    "int test_param(Point p) {\n" /* 19 */
-    "  p.x = 3;\n"             /* 20 */
-    "  return 0;\n"            /* 21 */
-    "}\n";                     /* 22 */
+static const char *DOC = "class Point {\n"             /* 0 */
+                         "  int x;\n"                  /* 1 */
+                         "  int y;\n"                  /* 2 */
+                         "  int getX() {\n"            /* 3 */
+                         "    return x;\n"             /* 4 */
+                         "  }\n"                       /* 5 */
+                         "}\n"                         /* 6 */
+                         "\n"                          /* 7 */
+                         "class Line {\n"              /* 8 */
+                         "  int x;\n"                  /* 9 */
+                         "  int length;\n"             /* 10 */
+                         "}\n"                         /* 11 */
+                         "\n"                          /* 12 */
+                         "int test_explicit() {\n"     /* 13 */
+                         "  Point p;\n"                /* 14 */
+                         "  p.x = 1;\n"                /* 15 */
+                         "  return 0;\n"               /* 16 */
+                         "}\n"                         /* 17 */
+                         "\n"                          /* 18 */
+                         "int test_param(Point p) {\n" /* 19 */
+                         "  p.x = 3;\n"                /* 20 */
+                         "  return 0;\n"               /* 21 */
+                         "}\n";                        /* 22 */
 
 int main(void) {
   printf("=== TestTypeInfer: Phase 2 类型推断（成员跳转精准化 + 补全过滤）===\n");
@@ -114,7 +121,8 @@ int main(void) {
   cJSON_AddNumberToObject(im, "id", 1);
   cJSON_AddStringToObject(im, "method", "initialize");
   cJSON *ir = lsp_dispatch(&s, im);
-  if (ir) cJSON_Delete(ir);
+  if (ir)
+    cJSON_Delete(ir);
   cJSON_Delete(im);
 
   const char *uri = "file:///test_type.spt";
@@ -131,7 +139,8 @@ int main(void) {
       cJSON *line = start ? cJSON_GetObjectItemCaseSensitive(start, "line") : NULL;
       int def_line = line ? line->valueint : -1;
       CHECK(def_line == 1, "p.x (explicit) should jump to Point.x (line 1), got line");
-      if (def_line != 1) printf("  (got line %d)\n", def_line);
+      if (def_line != 1)
+        printf("  (got line %d)\n", def_line);
     }
   }
 
@@ -146,7 +155,8 @@ int main(void) {
       cJSON *line = start ? cJSON_GetObjectItemCaseSensitive(start, "line") : NULL;
       int def_line = line ? line->valueint : -1;
       CHECK(def_line == 1, "p.x (param) should jump to Point.x (line 1)");
-      if (def_line != 1) printf("  (got line %d)\n", def_line);
+      if (def_line != 1)
+        printf("  (got line %d)\n", def_line);
     }
   }
 

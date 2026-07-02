@@ -122,11 +122,12 @@ static int tinsert(lua_State *L) {
   case 4: {
     lua_Integer i;
     pos = luaL_checkinteger(L, 3); /* 2nd argument is the position */
-    if (pos < 0) pos += e; /* 负索引从尾计：-1 = 最后一个之前插入 */
+    if (pos < 0)
+      pos += e; /* 负索引从尾计：-1 = 最后一个之前插入 */
     luaL_argcheck(L, (lua_Unsigned)pos <= (lua_Unsigned)e, 3, "position out of bounds");
     /* grow by appending a dummy nil at the end to trigger amortized growth */
     lua_pushnil(L);
-    lua_seti(L, 2, e); /* extend loglen to e+1 via append path */
+    lua_seti(L, 2, e);          /* extend loglen to e+1 via append path */
     for (i = e; i > pos; i--) { /* move up elements */
       lua_geti(L, 2, i - 1);
       lua_seti(L, 2, i); /* t[i] = t[i - 1] */
@@ -152,7 +153,8 @@ static int tinsert(lua_State *L) {
 static int tremove(lua_State *L) {
   lua_Integer size = list_getn(L, 2);
   lua_Integer pos = luaL_optinteger(L, 3, (size > 0) ? size - 1 : 0);
-  if (pos < 0) pos += size; /* 负索引从尾计：-1 = 最后一个 */
+  if (pos < 0)
+    pos += size;    /* 负索引从尾计：-1 = 最后一个 */
   if (size == 0) {  /* empty list? */
     lua_pushnil(L); /* return nil, do nothing */
     return 1;
@@ -181,14 +183,17 @@ static int tmove(lua_State *L) {
   lua_Integer e = luaL_checkinteger(L, 4);
   lua_Integer t = luaL_checkinteger(L, 5);
   int tt = !lua_isnoneornil(L, 6) ? 6 : 2; /* destination table */
-  luaL_checktype(L, 2, LUA_TARRAY);  /* source must be list */
-  luaL_checktype(L, tt, LUA_TARRAY); /* destination must be list */
+  luaL_checktype(L, 2, LUA_TARRAY);        /* source must be list */
+  luaL_checktype(L, tt, LUA_TARRAY);       /* destination must be list */
   /* 负索引从尾计：相对各自 loglen 转换 */
   lua_Integer src_len = luaL_len(L, 2);
   lua_Integer dst_len = luaL_len(L, tt);
-  if (f < 0) f += src_len;
-  if (e < 0) e += src_len;
-  if (t < 0) t += dst_len;
+  if (f < 0)
+    f += src_len;
+  if (e < 0)
+    e += src_len;
+  if (t < 0)
+    t += dst_len;
   if (e > f) { /* otherwise, empty range; nothing to move */
     lua_Integer n, i;
     luaL_argcheck(L, f >= 0 || e < LUA_MAXINTEGER + f, 3, "too many elements to move");
@@ -225,10 +230,12 @@ static int tconcat(lua_State *L) {
   lua_Integer loglen = list_getn(L, 2); /* loglen */
   size_t lsep;
   const char *sep = luaL_optlstring(L, 3, "", &lsep);
-  lua_Integer i = luaL_optinteger(L, 4, 0);      /* default start: 0 */
+  lua_Integer i = luaL_optinteger(L, 4, 0);         /* default start: 0 */
   lua_Integer last = luaL_optinteger(L, 5, loglen); /* default end: loglen (exclusive) */
-  if (i < 0) i += loglen;     /* 负索引从尾计 */
-  if (last < 0) last += loglen;
+  if (i < 0)
+    i += loglen; /* 负索引从尾计 */
+  if (last < 0)
+    last += loglen;
   luaL_buffinit(L, &b);
   for (; i < last - 1; i++) { /* all but last, each followed by sep */
     addfield(L, &b, i);
@@ -272,10 +279,12 @@ static int tunpack(lua_State *L) {
   lua_Unsigned n;
   luaL_checktype(L, 2, LUA_TARRAY); /* list only */
   lua_Integer loglen = luaL_len(L, 2);
-  lua_Integer i = luaL_optinteger(L, 3, 0);                /* default start: 0 */
+  lua_Integer i = luaL_optinteger(L, 3, 0);                  /* default start: 0 */
   lua_Integer e = luaL_opt(L, luaL_checkinteger, 4, loglen); /* exclusive end */
-  if (i < 0) i += loglen; /* 负索引从尾计 */
-  if (e < 0) e += loglen;
+  if (i < 0)
+    i += loglen; /* 负索引从尾计 */
+  if (e < 0)
+    e += loglen;
   if (i >= e)
     return 0;                      /* empty range */
   n = l_castS2U(e) - l_castS2U(i); /* number of elements */
@@ -553,7 +562,7 @@ static int map_keys(lua_State *L) {
   lua_Integer n = 0;
   lua_pushnil(L); /* first key */
   while (lua_next(L, 2)) {
-    lua_pushvalue(L, -2);    /* copy key to top */
+    lua_pushvalue(L, -2);     /* copy key to top */
     lua_seti(L, list_idx, n); /* list[n] = key */
     n++;
     lua_pop(L, 1); /* pop value, keep key for next iteration */
@@ -569,7 +578,7 @@ static int map_values(lua_State *L) {
   lua_Integer n = 0;
   lua_pushnil(L);
   while (lua_next(L, 2)) {
-    lua_pushvalue(L, -1);    /* copy value to top */
+    lua_pushvalue(L, -1);     /* copy value to top */
     lua_seti(L, list_idx, n); /* list[n] = value */
     n++;
     lua_pop(L, 1); /* pop value, keep key */
@@ -619,17 +628,14 @@ static int map_delete(lua_State *L) {
 
 /* }====================================================== */
 
-static const luaL_Reg list_funcs[] = {{"concat", tconcat},   {"create", list_create},
-                                      {"insert", tinsert},   {"pack", tpack},
-                                      {"unpack", tunpack},   {"remove", tremove},
-                                      {"move", tmove},       {"sort", sort},
-                                      {"push", lpush},       {"pop", lpop},
-                                      {NULL, NULL}};
+static const luaL_Reg list_funcs[] = {
+    {"concat", tconcat}, {"create", list_create}, {"insert", tinsert}, {"pack", tpack},
+    {"unpack", tunpack}, {"remove", tremove},     {"move", tmove},     {"sort", sort},
+    {"push", lpush},     {"pop", lpop},           {NULL, NULL}};
 
-static const luaL_Reg map_funcs[] = {{"create", map_create}, {"keys", map_keys},
-                                     {"values", map_values}, {"has", map_has},
-                                     {"get", map_get},       {"set", map_set},
-                                     {"delete", map_delete}, {NULL, NULL}};
+static const luaL_Reg map_funcs[] = {
+    {"create", map_create}, {"keys", map_keys}, {"values", map_values}, {"has", map_has},
+    {"get", map_get},       {"set", map_set},   {"delete", map_delete}, {NULL, NULL}};
 
 LUAMOD_API int luaopen_list(lua_State *L) {
   luaL_newlib(L, list_funcs);

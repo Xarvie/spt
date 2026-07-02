@@ -10,12 +10,12 @@
 #define _DEFAULT_SOURCE 1
 #define _XOPEN_SOURCE 700
 
-#include "server.h"
-#include "workspace.h"
-#include "semantic.h"
-#include "spt_lsp_bridge.h"
-#include "lsp_features.h"
 #include "documents.h"
+#include "lsp_features.h"
+#include "semantic.h"
+#include "server.h"
+#include "spt_lsp_bridge.h"
+#include "workspace.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,12 +30,18 @@
 #endif
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
-    if (!(cond)) { printf("  FAIL: %s\n", msg); failed++; }                                       \
+    if (!(cond)) {                                                                                 \
+      printf("  FAIL: %s\n", msg);                                                                 \
+      failed++;                                                                                    \
+    }                                                                                              \
   } while (0)
 
-static void sink_emit(void *ctx, cJSON *m) { (void)ctx; cJSON_Delete(m); }
+static void sink_emit(void *ctx, cJSON *m) {
+  (void)ctx;
+  cJSON_Delete(m);
+}
 
 static cJSON *make_req(int id, const char *method, cJSON *params) {
   cJSON *m = cJSON_CreateObject();
@@ -54,20 +60,26 @@ static void write_file(const char *dir, const char *name, const char *content) {
   snprintf(path, sizeof path, "%s/%s", dir, name);
 #endif
   FILE *f = fopen(path, "wb");
-  if (f) { fputs(content, f); fclose(f); }
+  if (f) {
+    fputs(content, f);
+    fclose(f);
+  }
 }
 
 static char *make_temp_dir(char *out, size_t cap) {
 #ifdef _WIN32
   char base[MAX_PATH];
-  if (!GetTempPathA(MAX_PATH, base)) return NULL;
+  if (!GetTempPathA(MAX_PATH, base))
+    return NULL;
   snprintf(out, cap, "%ssptp5_%lu", base, (unsigned long)GetCurrentProcessId());
-  if (!CreateDirectoryA(out, NULL)) return NULL;
+  if (!CreateDirectoryA(out, NULL))
+    return NULL;
   return out;
 #else
   (void)cap;
   snprintf(out, cap, "/tmp/sptp5_%d", (int)getpid());
-  if (mkdir(out, 0777) != 0) return NULL;
+  if (mkdir(out, 0777) != 0)
+    return NULL;
   return out;
 #endif
 }
@@ -81,11 +93,14 @@ static void remove_dir_recursive(const char *path) {
   if (h != INVALID_HANDLE_VALUE) {
     do {
       const char *nm = fd.cFileName;
-      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0) continue;
+      if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0)
+        continue;
       char full[MAX_PATH];
       snprintf(full, sizeof full, "%s\\%s", path, nm);
-      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) remove_dir_recursive(full);
-      else DeleteFileA(full);
+      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        remove_dir_recursive(full);
+      else
+        DeleteFileA(full);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
   }
@@ -93,23 +108,41 @@ static void remove_dir_recursive(const char *path) {
 #else
   char cmd[4200];
   snprintf(cmd, sizeof cmd, "rm -rf %s", path);
-  if (system(cmd) != 0) { /* best-effort */ }
+  if (system(cmd) != 0) { /* best-effort */
+  }
 #endif
 }
 
 /* ---- 5b/5c 回调收集器 ---- */
-typedef struct { char uris[16][4096]; int count; } OccCollector;
+typedef struct {
+  char uris[16][4096];
+  int count;
+} OccCollector;
+
 static void occ_cb(void *ctx, const char *uri, size_t off, int len) {
-  (void)off; (void)len;
+  (void)off;
+  (void)len;
   OccCollector *c = (OccCollector *)ctx;
-  if (c->count < 16) { strncpy(c->uris[c->count], uri, 4095); c->uris[c->count][4095] = '\0'; c->count++; }
+  if (c->count < 16) {
+    strncpy(c->uris[c->count], uri, 4095);
+    c->uris[c->count][4095] = '\0';
+    c->count++;
+  }
 }
+
 static void imp_cb(void *ctx, const char *importer_uri) {
   OccCollector *c = (OccCollector *)ctx;
-  if (c->count < 16) { strncpy(c->uris[c->count], importer_uri, 4095); c->uris[c->count][4095] = '\0'; c->count++; }
+  if (c->count < 16) {
+    strncpy(c->uris[c->count], importer_uri, 4095);
+    c->uris[c->count][4095] = '\0';
+    c->count++;
+  }
 }
+
 static int occ_has_uri(OccCollector *c, const char *uri) {
-  for (int i = 0; i < c->count; i++) if (strcmp(c->uris[i], uri) == 0) return 1;
+  for (int i = 0; i < c->count; i++)
+    if (strcmp(c->uris[i], uri) == 0)
+      return 1;
   return 0;
 }
 
@@ -120,7 +153,10 @@ int main(void) {
   char tmpl[4096];
   char *dir = make_temp_dir(tmpl, sizeof tmpl);
   CHECK(dir != NULL, "make_temp_dir ok");
-  if (!dir) { printf("=== abort ===\n"); return 1; }
+  if (!dir) {
+    printf("=== abort ===\n");
+    return 1;
+  }
 
   /* 项目结构：
      mod.spt    — 定义 foo / class Bar
@@ -128,21 +164,21 @@ int main(void) {
      user2.spt  — import * as M from "./mod"; 调用 M.foo
   */
   write_file(dir, "mod.spt",
-    "int foo(int n) { return n + 1; }\n"
-    "class Bar {\n"
-    "  int x;\n"
-    "  int get() { return x; }\n"
-    "}\n");
+             "int foo(int n) { return n + 1; }\n"
+             "class Bar {\n"
+             "  int x;\n"
+             "  int get() { return x; }\n"
+             "}\n");
   write_file(dir, "user.spt",
-    "import { foo } from \"./mod\";\n"
-    "int main() {\n"
-    "  return foo(42);\n"
-    "}\n");
+             "import { foo } from \"./mod\";\n"
+             "int main() {\n"
+             "  return foo(42);\n"
+             "}\n");
   write_file(dir, "user2.spt",
-    "import * as M from \"./mod\";\n"
-    "int run() {\n"
-    "  return M.foo(1);\n"
-    "}\n");
+             "import * as M from \"./mod\";\n"
+             "int run() {\n"
+             "  return M.foo(1);\n"
+             "}\n");
 
   LspServer srv;
   lsp_server_init(&srv);
@@ -156,7 +192,8 @@ int main(void) {
     cJSON_AddStringToObject(params, "rootUri", rootUri);
     cJSON *resp = lsp_dispatch(&srv, make_req(1, "initialize", params));
     CHECK(resp != NULL, "initialize response");
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   /* 触发 workspace 索引构建（workspace/symbol 空查询 = 全量） */
@@ -165,7 +202,8 @@ int main(void) {
     cJSON_AddStringToObject(params, "query", "");
     cJSON *resp = lsp_dispatch(&srv, make_req(2, "workspace/symbol", params));
     CHECK(resp != NULL, "workspace/symbol triggers index build");
-    if (resp) cJSON_Delete(resp);
+    if (resp)
+      cJSON_Delete(resp);
   }
 
   Workspace *ws = &srv.ws;
@@ -253,9 +291,9 @@ int main(void) {
 
     /* 重写 user.spt：完全移除 foo，换成 independent() */
     write_file(dir, "user.spt",
-      "int independent() {\n"
-      "  return 0;\n"
-      "}\n");
+               "int independent() {\n"
+               "  return 0;\n"
+               "}\n");
 
     /* 增量失效：只重建 user.spt */
     workspace_mark_doc_dirty(ws, user_uri);
@@ -311,12 +349,12 @@ int main(void) {
 
     /* 重写 mod.spt：添加 newfunc */
     write_file(dir, "mod.spt",
-      "int foo(int n) { return n + 1; }\n"
-      "int newfunc() { return 0; }\n"
-      "class Bar {\n"
-      "  int x;\n"
-      "  int get() { return x; }\n"
-      "}\n");
+               "int foo(int n) { return n + 1; }\n"
+               "int newfunc() { return 0; }\n"
+               "class Bar {\n"
+               "  int x;\n"
+               "  int get() { return x; }\n"
+               "}\n");
 
     workspace_mark_doc_dirty(ws, mod_uri);
 
@@ -336,9 +374,8 @@ int main(void) {
   printf("--- 5a: hash symbol index (sem_find_function) ---\n");
   {
     /* 解析一个简单文件，验证 sem_find_function 能找到定义 */
-    const char *text =
-      "int alpha(int x) { return x; }\n"
-      "int beta() { return alpha(1); }\n";
+    const char *text = "int alpha(int x) { return x; }\n"
+                       "int beta() { return alpha(1); }\n";
     Document d;
     doc_store_init(&srv.docs);
     Document *od = doc_store_open(&srv.docs, "file:///test_hash.spt", text, strlen(text), 1);

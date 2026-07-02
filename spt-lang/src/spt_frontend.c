@@ -170,8 +170,7 @@ LUALIB_API void spt_frontend_destroy(struct AstNode *node) {
   } else {
     /* 未登记：理论上不会发生。可能是重复 destroy 或外部构造的节点。
     ** 静默忽略会掩盖 use-after-free / double-free 类 bug，这里告警。 */
-    fprintf(stderr,
-            "[Ast Warning] spt_frontend_destroy: node %p not registered (double free?)\n",
+    fprintf(stderr, "[Ast Warning] spt_frontend_destroy: node %p not registered (double free?)\n",
             (void *)node);
   }
 }

@@ -167,23 +167,29 @@ struct AstNode {
     struct {
       int64_t value;
     } lit_int;
+
     struct {
       double value;
     } lit_float;
+
     struct {
       const char *data; /* 已反转义；可含嵌入 NUL */
       int len;
     } lit_str;
+
     struct {
       bool value;
     } lit_bool;
+
     /* NODE_LITERAL_NULL: 无负载 */
     struct {
       AstList elements;
     } lit_list;
+
     struct {
       AstList entries; /* 每个元素为 NODE_MAP_ENTRY */
     } lit_map;
+
     struct {
       AstNode *key;
       AstNode *value;
@@ -193,33 +199,40 @@ struct AstNode {
     struct {
       const char *name;
     } ident;
+
     struct {
       OperatorKind op;
       AstNode *operand;
     } unary;
+
     struct {
       OperatorKind op;
       AstNode *left;
       AstNode *right;
     } binary;
+
     struct {
       AstNode *func;
       AstList args;
     } call;
+
     struct { /* MEMBER_ACCESS 与 MEMBER_LOOKUP 共用此布局 */
       AstNode *object;
       const char *member;
     } member;
+
     struct {
       AstNode *array;
       AstNode *index;
     } index;
+
     struct {
       AstList params; /* NODE_PARAMETER_DECL 列表 */
       AstNode *return_type;
       AstNode *body; /* NODE_BLOCK */
       bool is_variadic;
     } lambda;
+
     /* NODE_THIS_EXPRESSION / NODE_VAR_ARGS: 无负载 */
 
     /* ---- 语句 ---- */
@@ -228,32 +241,39 @@ struct AstNode {
       SourceLocation end_loc;
       bool use_end;
     } block;
+
     struct {
       AstNode *expr;
     } expr_stmt;
+
     struct {
       AstList lvalues;
       AstList rvalues;
     } assign;
+
     struct {
       OperatorKind op;
       AstNode *lvalue;
       AstNode *rvalue;
     } update;
+
     struct {
       AstNode *condition;
       AstNode *body;
     } if_clause;
+
     struct {
       AstNode *condition;
       AstNode *then_block;
       AstList else_if_clauses; /* NODE_IF_CLAUSE 列表 */
       AstNode *else_block;     /* 可空 */
     } if_stmt;
+
     struct {
       AstNode *condition;
       AstNode *body;
     } while_stmt;
+
     struct {
       const char *var_name;
       AstNode *type_annotation; /* 可空 */
@@ -262,27 +282,33 @@ struct AstNode {
       AstNode *step; /* 可空 */
       AstNode *body;
     } for_num;
+
     struct {
       AstList loop_variables; /* NODE_PARAMETER_DECL 列表（类型可空） */
       AstList iterable_exprs;
       AstNode *body;
     } for_each;
+
     /* NODE_BREAK_STATEMENT / NODE_CONTINUE_STATEMENT: 无负载 */
     struct {
       AstList values;
     } return_stmt;
+
     struct {
       const char *alias;
       const char *module_path;
     } import_ns;
+
     struct {
       AstList specifiers; /* NODE_IMPORT_SPECIFIER 列表 */
       const char *module_path;
     } import_named;
+
     struct {
       const char *imported_name;
       const char *alias; /* 可空（无 as 时为 NULL） */
     } import_spec;
+
     struct {
       AstNode *body; /* NODE_BLOCK */
     } defer_stmt;
@@ -297,9 +323,10 @@ struct AstNode {
       bool is_static;
       bool is_exported;
       bool is_module_root;
-      bool is_ambient;  /* declare 声明：编译期擦除，不产生绑定 */
-      const char *doc;  /* 前置文档注释（描述），可空 */
+      bool is_ambient; /* declare 声明：编译期擦除，不产生绑定 */
+      const char *doc; /* 前置文档注释（描述），可空 */
     } var_decl;
+
     struct {
       MultiDeclVar *vars;
       int count;
@@ -307,10 +334,12 @@ struct AstNode {
       bool is_exported;
       bool is_module_root;
     } muti_var;
+
     struct {
       const char *name;
       AstNode *type_annotation; /* 可空 */
     } param;
+
     struct {
       const char *name;
       AstList params;
@@ -322,21 +351,24 @@ struct AstNode {
       bool is_exported;
       bool is_const;
       bool is_module_root;
-      bool is_ambient;  /* declare 声明：编译期擦除，body 为空 */
-      const char *doc;  /* 前置文档注释（描述），可空 */
+      bool is_ambient; /* declare 声明：编译期擦除，body 为空 */
+      const char *doc; /* 前置文档注释（描述），可空 */
     } func_decl;
+
     struct {
       AstNode *member_declaration;
       bool is_static;
     } class_member;
+
     struct {
       const char *name;
       AstList members;
       bool is_exported;
       bool is_module_root;
-      bool is_ambient;  /* declare 声明：编译期擦除 */
-      const char *doc;  /* 前置文档注释（描述），可空 */
+      bool is_ambient; /* declare 声明：编译期擦除 */
+      const char *doc; /* 前置文档注释（描述），可空 */
     } class_decl;
+
     struct {
       const char *module_path; /* declare from "<module_path>" */
       AstList members;         /* var_decl/func_decl/class_decl 节点，均 is_ambient=true */
@@ -347,18 +379,22 @@ struct AstNode {
     struct {
       PrimitiveTypeKind kind;
     } type_prim;
+
     /* NODE_TYPE_ANY / AUTO / FUNCTION_KW / COROUTINE_KW: 无负载 */
     struct {
       AstList types; /* NODE_TYPE_MULTIRETURN: 逗号分隔的返回类型列表；
                       * 空列表表示旧语法 -> vars（类型未知） */
     } type_multi;
+
     struct {
       AstNode *element; /* 可空（裸 list） */
     } type_list;
+
     struct {
       AstNode *key;   /* 可空（裸 map） */
       AstNode *value; /* 可空 */
     } type_map;
+
     struct {
       const char **parts; /* 限定名各部分，如 {"Module","Type"} */
       int count;

@@ -37,10 +37,10 @@ enum {
 ** 增量消息读取器（在内存缓冲上分帧）
 ** ------------------------------------------------------------------------- */
 typedef struct {
-  char *buf;   /* 已接收、尚未消费的原始字节 */
-  size_t len;  /* buf 有效长度 */
-  size_t cap;  /* buf 容量 */
-  char *msg;   /* 最近一条消息体（NUL 结尾，稳定到下一次 next/feed） */
+  char *buf;  /* 已接收、尚未消费的原始字节 */
+  size_t len; /* buf 有效长度 */
+  size_t cap; /* buf 容量 */
+  char *msg;  /* 最近一条消息体（NUL 结尾，稳定到下一次 next/feed） */
   size_t msg_len;
   size_t msg_cap;
 } RpcReader;

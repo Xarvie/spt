@@ -1211,10 +1211,10 @@ void luaV_finishOp(lua_State *L) {
     luai_threadyield(L);                                                                           \
   }
 
-#define sptjit_hot_check(ci, target_pc) \
-  (savepc(ci), sptjit_trace_hot(L, ci, (target_pc)) && \
-   (ci = L->ci, pc = ci->u.l.savedpc, cl = ci_func(ci), k = cl->p->k, \
-    updatebase(ci), updatetrap(ci), 1))
+#define sptjit_hot_check(ci, target_pc)                                                            \
+  (savepc(ci),                                                                                     \
+   sptjit_trace_hot(L, ci, (target_pc)) && (ci = L->ci, pc = ci->u.l.savedpc, cl = ci_func(ci),    \
+                                            k = cl->p->k, updatebase(ci), updatetrap(ci), 1))
 
 /* fetch an instruction and prepare its execution */
 #define vmfetch()                                                                                  \
@@ -1355,7 +1355,8 @@ returning: /* trap already set */
           Table *t = avalue(rb);
           if (l_likely(ttisinteger(rc))) {
             lua_Integer idx = ivalue(rc);
-            if (idx < 0) idx += t->loglen; /* 负索引从尾计 */
+            if (idx < 0)
+              idx += t->loglen; /* 负索引从尾计 */
             tag = luaH_getint(L, t, idx, s2v(ra));
           } else if (l_unlikely(ttisnumber(rc))) {
             luaG_runerror(L, "list index must be integer, not float");
@@ -1382,7 +1383,8 @@ returning: /* trap already set */
 
         if (ttisarray(rb)) {
           Table *t = avalue(rb);
-          if (c < 0) c += t->loglen; /* 负索引从尾计 */
+          if (c < 0)
+            c += t->loglen; /* 负索引从尾计 */
           lua_Unsigned ukey = l_castS2U(c);
           if (l_likely(c >= 0 && ukey < t->loglen)) {
             tag = *getArrTag(t, ukey);
@@ -1436,7 +1438,8 @@ returning: /* trap already set */
           Table *t = avalue(s2v(ra));
           if (l_likely(ttisinteger(rb))) {
             lua_Integer idx = ivalue(rb);
-            if (idx < 0) idx += t->loglen; /* 负索引从尾计 */
+            if (idx < 0)
+              idx += t->loglen; /* 负索引从尾计 */
             if (l_likely(idx >= 0 && idx < (lua_Integer)t->loglen)) {
               lu_byte *tagp = getArrTag(t, cast_uint(idx));
               if (l_likely(checknoTM(t->metatable, TM_NEWINDEX) || !tagisempty(*tagp))) {
@@ -1476,7 +1479,8 @@ returning: /* trap already set */
 
         if (ttisarray(s2v(ra))) {
           Table *t = avalue(s2v(ra));
-          if (b < 0) b += t->loglen; /* 负索引从尾计 */
+          if (b < 0)
+            b += t->loglen; /* 负索引从尾计 */
           lua_Unsigned ukey = l_castS2U(b);
 
           if (l_likely(b >= 0 && ukey < t->loglen)) {
@@ -1777,7 +1781,9 @@ returning: /* trap already set */
         int sj = GETARG_sJ(i);
         if (sj < 0) {
           /* Backward jump: loop back-edge. Check for hot loop. */
-          if (sptjit_hot_check(ci, pc + sj)) { vmbreak; }
+          if (sptjit_hot_check(ci, pc + sj)) {
+            vmbreak;
+          }
         }
         dojump(ci, i, 0);
         vmbreak;
@@ -1977,12 +1983,16 @@ returning: /* trap already set */
             idx = intop(+, idx, step);
             chgivalue(s2v(ra + 2), idx);
             /* Backward jump: check for hot loop. */
-            if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) { vmbreak; }
+            if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) {
+              vmbreak;
+            }
             pc -= GETARG_Bx(i);
           }
         } else if (floatforloop(ra)) {
           /* Backward jump: check for hot loop. */
-          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) { vmbreak; }
+          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) {
+            vmbreak;
+          }
           pc -= GETARG_Bx(i);
         }
         updatetrap(ci);
@@ -2035,7 +2045,9 @@ returning: /* trap already set */
         StkId ra = RA(i);
         if (!ttisnil(s2v(ra + 3))) {
           /* Backward jump: check for hot loop. */
-          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) { vmbreak; }
+          if (sptjit_hot_check(ci, pc - GETARG_Bx(i))) {
+            vmbreak;
+          }
           pc -= GETARG_Bx(i);
         }
         vmbreak;

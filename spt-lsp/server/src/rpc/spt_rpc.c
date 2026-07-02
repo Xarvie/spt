@@ -174,8 +174,14 @@ long rpc_write(FILE *out, const cJSON *v) {
 #ifdef _WIN32
   /* Windows: fwrite/fprintf 在管道上可能缓冲不刷新，用 _write 直接写 fd */
   int fd = _fileno(out);
-  if (_write(fd, hdr, hn) != hn) { free(body); return -1; }
-  if (_write(fd, body, (int)blen) != (int)blen) { free(body); return -1; }
+  if (_write(fd, hdr, hn) != hn) {
+    free(body);
+    return -1;
+  }
+  if (_write(fd, body, (int)blen) != (int)blen) {
+    free(body);
+    return -1;
+  }
 #else
   size_t wn = fwrite(hdr, 1, (size_t)hn, out);
   wn += fwrite(body, 1, blen, out);
@@ -214,9 +220,7 @@ char *rpc_frame_to_string(const cJSON *v, size_t *out_len) {
 /* ===========================================================================
 ** JSON-RPC 2.0
 ** ========================================================================= */
-cJSON *rpc_parse(const char *body, size_t len) {
-  return cJSON_ParseWithLength(body, len);
-}
+cJSON *rpc_parse(const char *body, size_t len) { return cJSON_ParseWithLength(body, len); }
 
 int rpc_is_request(const cJSON *msg) {
   return cJSON_GetObjectItemCaseSensitive((cJSON *)msg, "id") != NULL;
@@ -231,9 +235,7 @@ cJSON *rpc_params(const cJSON *msg) {
   return cJSON_GetObjectItemCaseSensitive((cJSON *)msg, "params");
 }
 
-cJSON *rpc_id(const cJSON *msg) {
-  return cJSON_GetObjectItemCaseSensitive((cJSON *)msg, "id");
-}
+cJSON *rpc_id(const cJSON *msg) { return cJSON_GetObjectItemCaseSensitive((cJSON *)msg, "id"); }
 
 cJSON *rpc_make_response(const cJSON *id, cJSON *result) {
   cJSON *resp = cJSON_CreateObject();

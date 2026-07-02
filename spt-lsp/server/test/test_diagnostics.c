@@ -8,12 +8,12 @@
 #include <string.h>
 
 static int failed = 0;
-#define CHECK(cond, msg)                                                                            \
+#define CHECK(cond, msg)                                                                           \
   do {                                                                                             \
     if (!(cond)) {                                                                                 \
       printf("  FAIL: %s\n", msg);                                                                 \
       failed++;                                                                                    \
-    }                                                                                             \
+    }                                                                                              \
   } while (0)
 
 /* 捕获服务器主动发出的消息（接管所有权）。 */
@@ -21,6 +21,7 @@ typedef struct {
   cJSON **msgs;
   int count, cap;
 } Capture;
+
 static void cap_emit(void *ctx, cJSON *msg) {
   Capture *c = (Capture *)ctx;
   if (c->count >= c->cap) {
@@ -29,11 +30,13 @@ static void cap_emit(void *ctx, cJSON *msg) {
   }
   c->msgs[c->count++] = msg;
 }
+
 static void cap_clear(Capture *c) {
   for (int i = 0; i < c->count; i++)
     cJSON_Delete(c->msgs[i]);
   c->count = 0;
 }
+
 /* 取最近一条指定方法的通知。 */
 static cJSON *cap_last(Capture *c, const char *method) {
   for (int i = c->count - 1; i >= 0; i--) {
@@ -43,6 +46,7 @@ static cJSON *cap_last(Capture *c, const char *method) {
   }
   return NULL;
 }
+
 static int diag_count_of(cJSON *publish) {
   if (!publish)
     return -1;
@@ -58,6 +62,7 @@ static cJSON *notif(const char *method, cJSON *params) {
   cJSON_AddItemToObject(o, "params", params);
   return o;
 }
+
 static cJSON *did_open(const char *uri, const char *text, int version) {
   cJSON *td = cJSON_CreateObject();
   cJSON_AddStringToObject(td, "uri", uri);
@@ -68,6 +73,7 @@ static cJSON *did_open(const char *uri, const char *text, int version) {
   cJSON_AddItemToObject(p, "textDocument", td);
   return notif("textDocument/didOpen", p);
 }
+
 static cJSON *did_change(const char *uri, const char *text, int version) {
   cJSON *td = cJSON_CreateObject();
   cJSON_AddStringToObject(td, "uri", uri);

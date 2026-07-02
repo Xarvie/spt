@@ -993,9 +993,9 @@ LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer fro
         *dtagp = tag;
         if (tag != LUA_VEMPTY) {
           TValue tmp;
-          farr2val(ft, cast_uint(srcidx), tag, &tmp); /* read source into TValue */
+          farr2val(ft, cast_uint(srcidx), tag, &tmp);     /* read source into TValue */
           *getArrVal(tt, cast_uint(dstidx)) = tmp.value_; /* copy value */
-          luaC_barrierback(L, obj2gco(tt), &tmp); /* GC write barrier */
+          luaC_barrierback(L, obj2gco(tt), &tmp);         /* GC write barrier */
         }
       } else {
         lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));
@@ -1013,9 +1013,9 @@ LUA_API void lua_movearray(lua_State *L, int fromidx, int toidx, lua_Integer fro
         *dtagp = tag;
         if (tag != LUA_VEMPTY) {
           TValue tmp;
-          farr2val(ft, cast_uint(srcidx), tag, &tmp); /* read source into TValue */
+          farr2val(ft, cast_uint(srcidx), tag, &tmp);     /* read source into TValue */
           *getArrVal(tt, cast_uint(dstidx)) = tmp.value_; /* copy value */
-          luaC_barrierback(L, obj2gco(tt), &tmp); /* GC write barrier */
+          luaC_barrierback(L, obj2gco(tt), &tmp);         /* GC write barrier */
         }
       } else {
         lu_byte *dtagp = getArrTag(tt, cast_uint(dstidx));

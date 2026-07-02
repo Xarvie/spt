@@ -11,8 +11,8 @@
 #include "spt_rpc.h"
 #include "trace.h"
 
-#include <string.h>
 #include <errno.h>
+#include <string.h>
 #ifdef _WIN32
 #include <io.h>
 #define spt_fileno _fileno
@@ -139,14 +139,17 @@ static cJSON *make_initialize_result(void) {
 static Document *get_doc(LspServer *s, const cJSON *params) {
   cJSON *td = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "textDocument");
   cJSON *uri = td ? cJSON_GetObjectItemCaseSensitive(td, "uri") : NULL;
-  if (!uri || !cJSON_IsString(uri)) return NULL;
+  if (!uri || !cJSON_IsString(uri))
+    return NULL;
   return doc_store_get(&s->docs, uri->valuestring);
 }
+
 static const char *get_uri(const cJSON *params) {
   cJSON *td = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "textDocument");
   cJSON *uri = td ? cJSON_GetObjectItemCaseSensitive(td, "uri") : NULL;
   return (uri && cJSON_IsString(uri)) ? uri->valuestring : NULL;
 }
+
 static LspPos get_pos(const cJSON *params) {
   return lsp_pos_from_json(cJSON_GetObjectItemCaseSensitive((cJSON *)params, "position"));
 }
@@ -166,13 +169,16 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
       for (int i = 0; i < n; i++) {
         cJSON *fo = cJSON_GetArrayItem(wf, i);
         cJSON *u = cJSON_GetObjectItemCaseSensitive(fo, "uri");
-        if (u && cJSON_IsString(u)) workspace_add_root_uri(&s->ws, u->valuestring);
+        if (u && cJSON_IsString(u))
+          workspace_add_root_uri(&s->ws, u->valuestring);
       }
     } else {
       cJSON *ru = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "rootUri");
       cJSON *rp = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "rootPath");
-      if (ru && cJSON_IsString(ru)) workspace_add_root_uri(&s->ws, ru->valuestring);
-      else if (rp && cJSON_IsString(rp)) workspace_add_root_path(&s->ws, rp->valuestring);
+      if (ru && cJSON_IsString(ru))
+        workspace_add_root_uri(&s->ws, ru->valuestring);
+      else if (rp && cJSON_IsString(rp))
+        workspace_add_root_path(&s->ws, rp->valuestring);
     }
     return rpc_make_response(id, make_initialize_result());
   }
@@ -202,21 +208,24 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
   }
   if (strcmp(method, "textDocument/definition") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_definition(d, get_pos(params), get_uri(params), &s->ws) : NULL);
+    return rpc_make_response(id, d ? feature_definition(d, get_pos(params), get_uri(params), &s->ws)
+                                   : NULL);
   }
   if (strcmp(method, "textDocument/references") == 0) {
     Document *d = get_doc(s, params);
     int incl = 1;
     cJSON *ctx = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "context");
     cJSON *idf = ctx ? cJSON_GetObjectItemCaseSensitive(ctx, "includeDeclaration") : NULL;
-    if (idf && cJSON_IsBool(idf)) incl = cJSON_IsTrue(idf);
-    return rpc_make_response(id, d ? feature_references(d, get_pos(params), get_uri(params),
-                                                          incl, &s->ws)
-                                   : cJSON_CreateArray());
+    if (idf && cJSON_IsBool(idf))
+      incl = cJSON_IsTrue(idf);
+    return rpc_make_response(
+        id, d ? feature_references(d, get_pos(params), get_uri(params), incl, &s->ws)
+              : cJSON_CreateArray());
   }
   if (strcmp(method, "textDocument/completion") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_completion(d, get_pos(params), &s->ws) : cJSON_CreateArray());
+    return rpc_make_response(id, d ? feature_completion(d, get_pos(params), &s->ws)
+                                   : cJSON_CreateArray());
   }
   if (strcmp(method, "textDocument/signatureHelp") == 0) {
     Document *d = get_doc(s, params);
@@ -226,9 +235,9 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
     Document *d = get_doc(s, params);
     cJSON *nn = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "newName");
     const char *new_name = (nn && cJSON_IsString(nn)) ? nn->valuestring : NULL;
-    return rpc_make_response(id, (d && new_name) ? feature_rename(d, get_pos(params),
-                                                                  get_uri(params), new_name, &s->ws)
-                                                 : NULL);
+    return rpc_make_response(
+        id, (d && new_name) ? feature_rename(d, get_pos(params), get_uri(params), new_name, &s->ws)
+                            : NULL);
   }
   if (strcmp(method, "textDocument/prepareRename") == 0) {
     Document *d = get_doc(s, params);
@@ -259,13 +268,13 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
   if (strcmp(method, "textDocument/inlayHint") == 0) {
     Document *d = get_doc(s, params);
     cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
-    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0, 0}, {0, 0}};
     return rpc_make_response(id, d ? feature_inlay_hints(d, r, &s->ws) : cJSON_CreateArray());
   }
   if (strcmp(method, "textDocument/codeAction") == 0) {
     Document *d = get_doc(s, params);
     cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
-    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0, 0}, {0, 0}};
     return rpc_make_response(id, d ? feature_code_action(d, r) : cJSON_CreateArray());
   }
 
@@ -276,21 +285,26 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
   }
   if (strcmp(method, "textDocument/declaration") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_declaration(d, get_pos(params), get_uri(params), &s->ws) : NULL);
+    return rpc_make_response(
+        id, d ? feature_declaration(d, get_pos(params), get_uri(params), &s->ws) : NULL);
   }
   if (strcmp(method, "textDocument/documentLink") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_document_link(d, get_uri(params), &s->ws) : cJSON_CreateArray());
+    return rpc_make_response(id, d ? feature_document_link(d, get_uri(params), &s->ws)
+                                   : cJSON_CreateArray());
   }
   if (strcmp(method, "textDocument/prepareCallHierarchy") == 0) {
     Document *d = get_doc(s, params);
-    return rpc_make_response(id, d ? feature_prepare_call_hierarchy(d, get_pos(params), get_uri(params)) : cJSON_CreateArray());
+    return rpc_make_response(id,
+                             d ? feature_prepare_call_hierarchy(d, get_pos(params), get_uri(params))
+                               : cJSON_CreateArray());
   }
   if (strcmp(method, "callHierarchy/incomingCalls") == 0) {
     cJSON *item = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "item");
     cJSON *name = item ? cJSON_GetObjectItemCaseSensitive(item, "name") : NULL;
     const char *fn_name = (name && cJSON_IsString(name)) ? name->valuestring : NULL;
-    return rpc_make_response(id, fn_name ? feature_call_hierarchy_incoming(&s->ws, fn_name) : cJSON_CreateArray());
+    return rpc_make_response(id, fn_name ? feature_call_hierarchy_incoming(&s->ws, fn_name)
+                                         : cJSON_CreateArray());
   }
   if (strcmp(method, "callHierarchy/outgoingCalls") == 0) {
     cJSON *item = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "item");
@@ -301,19 +315,21 @@ static cJSON *handle_request(LspServer *s, const char *method, const cJSON *id,
     Document *d = (item_uri && cJSON_IsString(item_uri))
                       ? doc_store_get(&s->docs, item_uri->valuestring)
                       : NULL;
-    return rpc_make_response(id, (d && fn_name) ? feature_call_hierarchy_outgoing(d, fn_name, &s->ws) : cJSON_CreateArray());
+    return rpc_make_response(id, (d && fn_name)
+                                     ? feature_call_hierarchy_outgoing(d, fn_name, &s->ws)
+                                     : cJSON_CreateArray());
   }
   if (strcmp(method, "textDocument/rangeFormatting") == 0) {
     Document *d = get_doc(s, params);
     cJSON *opts = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "options");
     cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
-    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0, 0}, {0, 0}};
     return rpc_make_response(id, d ? feature_range_formatting(d, r, opts) : NULL);
   }
   if (strcmp(method, "textDocument/semanticTokens/range") == 0) {
     Document *d = get_doc(s, params);
     cJSON *rng = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "range");
-    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0,0},{0,0}};
+    LspRange r = rng ? lsp_range_from_json(rng) : (LspRange){{0, 0}, {0, 0}};
     return rpc_make_response(id, d ? feature_semantic_tokens_range(d, r) : NULL);
   }
 
@@ -344,8 +360,8 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
     cJSON *text = td ? cJSON_GetObjectItemCaseSensitive(td, "text") : NULL;
     cJSON *ver = td ? cJSON_GetObjectItemCaseSensitive(td, "version") : NULL;
     if (uri && cJSON_IsString(uri) && text && cJSON_IsString(text)) {
-      doc_store_open(&s->docs, uri->valuestring, text->valuestring,
-                     strlen(text->valuestring), ver && cJSON_IsNumber(ver) ? ver->valueint : 0);
+      doc_store_open(&s->docs, uri->valuestring, text->valuestring, strlen(text->valuestring),
+                     ver && cJSON_IsNumber(ver) ? ver->valueint : 0);
       workspace_mark_doc_dirty(&s->ws, uri->valuestring);
       publish_diagnostics(s, uri->valuestring);
     }
@@ -363,7 +379,8 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
         cJSON *ch = cJSON_GetArrayItem(changes, i);
         cJSON *t = cJSON_GetObjectItemCaseSensitive(ch, "text");
         cJSON *rng = cJSON_GetObjectItemCaseSensitive(ch, "range");
-        if (!t || !cJSON_IsString(t)) continue;
+        if (!t || !cJSON_IsString(t))
+          continue;
         int version = ver && cJSON_IsNumber(ver) ? ver->valueint : 0;
         if (rng) {
           /* 增量变更：用 range 定位字节区间后替换。 */
@@ -372,13 +389,13 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
             LspRange r = lsp_range_from_json(rng);
             size_t s_off = doc_offset_at(d, r.start);
             size_t e_off = doc_offset_at(d, r.end);
-            doc_store_change_range(&s->docs, uri->valuestring, s_off, e_off,
-                                   t->valuestring, strlen(t->valuestring), version);
+            doc_store_change_range(&s->docs, uri->valuestring, s_off, e_off, t->valuestring,
+                                   strlen(t->valuestring), version);
           }
         } else {
           /* Full 变更（无 range 字段）：整篇替换。 */
-          doc_store_change(&s->docs, uri->valuestring, t->valuestring,
-                           strlen(t->valuestring), version);
+          doc_store_change(&s->docs, uri->valuestring, t->valuestring, strlen(t->valuestring),
+                           version);
         }
       }
       workspace_mark_doc_dirty(&s->ws, uri->valuestring);
@@ -442,7 +459,11 @@ cJSON *lsp_dispatch(LspServer *s, const cJSON *msg) {
 
   handle_notification(s, method, rpc_params(msg));
   dbg = spt_open_log();
-  if (dbg) { fprintf(dbg, "    NOTIF done: %s\n", method); fflush(dbg); fclose(dbg); }
+  if (dbg) {
+    fprintf(dbg, "    NOTIF done: %s\n", method);
+    fflush(dbg);
+    fclose(dbg);
+  }
   return NULL;
 }
 
@@ -460,20 +481,34 @@ int lsp_run(LspServer *s, FILE *in, FILE *out) {
   char chunk[8192];
 
   lsp_server_set_emit(s, stdio_emit, out);
-  if (dbg) { fprintf(dbg, "lsp_run: emit set, entering loop\n"); fflush(dbg); }
+  if (dbg) {
+    fprintf(dbg, "lsp_run: emit set, entering loop\n");
+    fflush(dbg);
+  }
 
   while (!s->should_exit) {
     const char *body;
     size_t blen;
     int rc = rpc_reader_next(&r, &body, &blen);
     if (rc == 1) {
-      if (dbg) { fprintf(dbg, "lsp_run: got msg, blen=%zu\n", blen); fflush(dbg); }
+      if (dbg) {
+        fprintf(dbg, "lsp_run: got msg, blen=%zu\n", blen);
+        fflush(dbg);
+      }
       /* 录制接收到的原始消息 */
       FILE *rec = spt_open_record();
-      if (rec) { fwrite(body, 1, blen, rec); fputc('\n', rec); fflush(rec); fclose(rec); }
+      if (rec) {
+        fwrite(body, 1, blen, rec);
+        fputc('\n', rec);
+        fflush(rec);
+        fclose(rec);
+      }
       cJSON *msg = rpc_parse(body, blen);
       if (!msg) {
-        if (dbg) { fprintf(dbg, "lsp_run: parse failed\n"); fflush(dbg); }
+        if (dbg) {
+          fprintf(dbg, "lsp_run: parse failed\n");
+          fflush(dbg);
+        }
         cJSON *err = rpc_make_error(NULL, RPC_PARSE_ERROR, "invalid JSON");
         rpc_write(out, err);
         cJSON_Delete(err);
@@ -481,30 +516,49 @@ int lsp_run(LspServer *s, FILE *in, FILE *out) {
       }
       cJSON *resp = lsp_dispatch(s, msg);
       if (resp) {
-        if (dbg) { fprintf(dbg, "lsp_run: dispatch done, writing resp\n"); fflush(dbg); }
+        if (dbg) {
+          fprintf(dbg, "lsp_run: dispatch done, writing resp\n");
+          fflush(dbg);
+        }
         rpc_write(out, resp);
         cJSON_Delete(resp);
       } else {
-        if (dbg) { fprintf(dbg, "lsp_run: dispatch returned null (notification)\n"); fflush(dbg); }
+        if (dbg) {
+          fprintf(dbg, "lsp_run: dispatch returned null (notification)\n");
+          fflush(dbg);
+        }
       }
       cJSON_Delete(msg);
       continue;
     }
     if (rc == -1) {
-      if (dbg) { fprintf(dbg, "lsp_run: rpc_reader_next error\n"); fflush(dbg); }
+      if (dbg) {
+        fprintf(dbg, "lsp_run: rpc_reader_next error\n");
+        fflush(dbg);
+      }
       break;
     }
-    if (dbg) { fprintf(dbg, "lsp_run: need more data, reading\n"); fflush(dbg); }
+    if (dbg) {
+      fprintf(dbg, "lsp_run: need more data, reading\n");
+      fflush(dbg);
+    }
     int fd = spt_fileno(in);
     int n = (int)spt_read(fd, chunk, sizeof(chunk));
-    if (dbg) { fprintf(dbg, "lsp_run: read n=%d errno=%d\n", n, errno); fflush(dbg); }
+    if (dbg) {
+      fprintf(dbg, "lsp_run: read n=%d errno=%d\n", n, errno);
+      fflush(dbg);
+    }
     if (n <= 0)
       break; /* EOF 或错误：客户端断开 */
     rpc_reader_feed(&r, chunk, (size_t)n);
   }
 
-  if (dbg) { fprintf(dbg, "lsp_run: loop exited, should_exit=%d\n", s->should_exit); fflush(dbg); }
+  if (dbg) {
+    fprintf(dbg, "lsp_run: loop exited, should_exit=%d\n", s->should_exit);
+    fflush(dbg);
+  }
   rpc_reader_free(&r);
-  if (dbg) fclose(dbg);
+  if (dbg)
+    fclose(dbg);
   return s->exit_code;
 }

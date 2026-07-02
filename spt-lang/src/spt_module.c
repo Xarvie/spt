@@ -14,8 +14,8 @@
 
 #include "spt_module.h"
 
-#include "spt_frontend.h"
 #include "spt_codegen.h"
+#include "spt_frontend.h"
 
 #define SPT_PATH_VAR "SPT_PATH"
 

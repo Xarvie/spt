@@ -22,9 +22,9 @@ typedef struct {
 } SemSlot;
 
 typedef struct {
-  SemSlot *slots;  /* 开放寻址槽位，容量为 2 的幂 */
-  int capacity;    /* 槽位总数 */
-  int count;       /* 已填充数（不含墓碑） */
+  SemSlot *slots; /* 开放寻址槽位，容量为 2 的幂 */
+  int capacity;   /* 槽位总数 */
+  int count;      /* 已填充数（不含墓碑） */
 } SemHash;
 
 typedef struct {

@@ -18,9 +18,9 @@
 #ifndef SPT_JIT_ASM_H
 #define SPT_JIT_ASM_H
 
-#include <stdint.h>
-#include <stddef.h>
 #include "spt_jit.h"
+#include <stddef.h>
+#include <stdint.h>
 
 /* =====================================================================
 ** x86-64 Registers
@@ -35,8 +35,8 @@ typedef enum {
   SPT_RBP = 5,
   SPT_RSI = 6,
   SPT_RDI = 7,
-  SPT_R8  = 8,
-  SPT_R9  = 9,
+  SPT_R8 = 8,
+  SPT_R9 = 9,
   SPT_R10 = 10,
   SPT_R11 = 11,
   SPT_R12 = 12,
@@ -56,19 +56,19 @@ typedef enum {
 ** trace emits a C call (luaD_call etc.).
 ** ===================================================================== */
 #if defined(_WIN32)
-#  define SPT_ABI_ARG0   SPT_RCX
-#  define SPT_ABI_ARG1   SPT_RDX
-#  define SPT_ABI_ARG2   SPT_R8
-#  define SPT_ABI_ARG3   SPT_R9
-#  define SPT_ABI_SHADOW 32
-#  define SPT_ABI_WIN64  1
+#define SPT_ABI_ARG0 SPT_RCX
+#define SPT_ABI_ARG1 SPT_RDX
+#define SPT_ABI_ARG2 SPT_R8
+#define SPT_ABI_ARG3 SPT_R9
+#define SPT_ABI_SHADOW 32
+#define SPT_ABI_WIN64 1
 #else
-#  define SPT_ABI_ARG0   SPT_RDI
-#  define SPT_ABI_ARG1   SPT_RSI
-#  define SPT_ABI_ARG2   SPT_RDX
-#  define SPT_ABI_ARG3   SPT_RCX
-#  define SPT_ABI_SHADOW 0
-#  define SPT_ABI_WIN64  0
+#define SPT_ABI_ARG0 SPT_RDI
+#define SPT_ABI_ARG1 SPT_RSI
+#define SPT_ABI_ARG2 SPT_RDX
+#define SPT_ABI_ARG3 SPT_RCX
+#define SPT_ABI_SHADOW 0
+#define SPT_ABI_WIN64 0
 #endif
 
 /* XMM registers (encoded as 0-15) */
@@ -85,22 +85,22 @@ typedef enum {
 
 /* Condition codes for Jcc/SETcc */
 typedef enum {
-  SPT_CC_O  = 0x0,  /* overflow */
+  SPT_CC_O = 0x0, /* overflow */
   SPT_CC_NO = 0x1,
-  SPT_CC_B  = 0x2,  /* below (unsigned <) */
+  SPT_CC_B = 0x2, /* below (unsigned <) */
   SPT_CC_NB = 0x3,
-  SPT_CC_E  = 0x4,  /* equal (==) */
+  SPT_CC_E = 0x4, /* equal (==) */
   SPT_CC_NE = 0x5,
-  SPT_CC_BE = 0x6,  /* below or equal (unsigned <=) */
-  SPT_CC_NBE= 0x7,
-  SPT_CC_S  = 0x8,  /* sign */
+  SPT_CC_BE = 0x6, /* below or equal (unsigned <=) */
+  SPT_CC_NBE = 0x7,
+  SPT_CC_S = 0x8, /* sign */
   SPT_CC_NS = 0x9,
-  SPT_CC_P  = 0xa,  /* parity */
+  SPT_CC_P = 0xa, /* parity */
   SPT_CC_NP = 0xb,
-  SPT_CC_L  = 0xc,  /* less (signed <) */
+  SPT_CC_L = 0xc, /* less (signed <) */
   SPT_CC_NL = 0xd,
-  SPT_CC_LE = 0xe,  /* less or equal (signed <=) */
-  SPT_CC_NLE= 0xf   /* greater (signed >) */
+  SPT_CC_LE = 0xe, /* less or equal (signed <=) */
+  SPT_CC_NLE = 0xf /* greater (signed >) */
 } SPTCC;
 
 /* =====================================================================
@@ -108,21 +108,22 @@ typedef enum {
 ** ===================================================================== */
 
 struct SPTAsm {
-  uint8_t *code;        /* code buffer */
-  size_t size;          /* current code size */
-  size_t cap;           /* buffer capacity */
+  uint8_t *code; /* code buffer */
+  size_t size;   /* current code size */
+  size_t cap;    /* buffer capacity */
 
   /* Pending label/relocation management */
-  int32_t *labels;      /* label -> code offset */
+  int32_t *labels; /* label -> code offset */
   int nlabels;
   int label_cap;
 
   /* Relocations: patches to apply after code is finalized */
   struct SPTReloc {
-    size_t code_offset;  /* where to patch */
-    int32_t label;       /* target label */
-    int type;            /* 0 = rel32, 1 = abs64 */
+    size_t code_offset; /* where to patch */
+    int32_t label;      /* target label */
+    int type;           /* 0 = rel32, 1 = abs64 */
   } *relocs;
+
   int nrelocs;
   int reloc_cap;
 };
@@ -134,12 +135,13 @@ void sptasm_reset(SPTAsm *a);
 
 /* Get pointer to generated code. */
 static inline const uint8_t *sptasm_code(const SPTAsm *a) { return a->code; }
+
 static inline size_t sptasm_size(const SPTAsm *a) { return a->size; }
 
 /* Labels */
-int32_t sptasm_label(SPTAsm *a);  /* create and place a label */
-int32_t sptasm_newlabel(SPTAsm *a);  /* create without placing */
-void sptasm_place(SPTAsm *a, int32_t label);  /* place label at current position */
+int32_t sptasm_label(SPTAsm *a);             /* create and place a label */
+int32_t sptasm_newlabel(SPTAsm *a);          /* create without placing */
+void sptasm_place(SPTAsm *a, int32_t label); /* place label at current position */
 
 /* ---- Raw byte emission ---- */
 void sptasm_byte(SPTAsm *a, uint8_t b);
@@ -235,8 +237,7 @@ void sptasm_movzx_r8(SPTAsm *a, SPTReg dst, SPTReg src);
 /* MOVZX reg, byte [base+disp] (zero-extend a memory byte to 64-bit) */
 void sptasm_movzx_rm8(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp);
 /* MOVZX reg, byte [base + index*scale + disp] (SIB variant for GETI tag guards) */
-void sptasm_movzx_rm8s(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index,
-                       int scale, int32_t disp);
+void sptasm_movzx_rm8s(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index, int scale, int32_t disp);
 
 /* ---- Control flow ---- */
 

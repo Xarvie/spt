@@ -378,7 +378,7 @@ static int io_lines(lua_State *L) {
     toclose = 0;                                  /* do not close it after iteration */
   } else {                                        /* open a new file */
     const char *filename = luaL_checkstring(L, 2);
-    lua_remove(L, 2);               /* [SPT] 移除 filename，让 format args 对齐 */
+    lua_remove(L, 2); /* [SPT] 移除 filename，让 format args 对齐 */
     opencheck(L, filename, "r");
     lua_replace(L, 1); /* put file at index 1 */
     toclose = 1;       /* close it after iteration */

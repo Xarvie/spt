@@ -11,8 +11,8 @@
  * 注意: Phase 1 仅测试显式 iter() 调用; parser 自动包语法糖在 Phase 2 实现。
  */
 
-#include "lua.h"
 #include "lauxlib.h"
+#include "lua.h"
 #include "lualib.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,10 +20,10 @@
 
 #define TEST(name) printf("Testing: %s... ", name)
 #define PASS() printf("PASS\n")
-#define FAIL(msg)                                                                                     \
-  do {                                                                                                \
-    printf("FAIL: %s\n", msg);                                                                        \
-    failed++;                                                                                         \
+#define FAIL(msg)                                                                                  \
+  do {                                                                                             \
+    printf("FAIL: %s\n", msg);                                                                     \
+    failed++;                                                                                      \
   } while (0)
 
 static int failed = 0;
@@ -57,12 +57,11 @@ int main(void) {
   /* ---- 1. iter(2, list) 2 变量 ---- */
   TEST("iter_list_2var");
   {
-    const char *code =
-        "list<int> l = [10, 20, 30];\n"
-        "int sk = 0; int sv = 0;\n"
-        "for (auto k, v : iter(2, l)) { sk += k; sv += v; }\n"
-        "assert(sk == 3, \"keys 0+1+2\");\n"
-        "assert(sv == 60, \"vals 10+20+30\");\n";
+    const char *code = "list<int> l = [10, 20, 30];\n"
+                       "int sk = 0; int sv = 0;\n"
+                       "for (auto k, v : iter(2, l)) { sk += k; sv += v; }\n"
+                       "assert(sk == 3, \"keys 0+1+2\");\n"
+                       "assert(sv == 60, \"vals 10+20+30\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("iter list 2var failed");
     else
@@ -75,11 +74,10 @@ int main(void) {
     /* iter 必须返回 (func, state, closing_var, control) 4 值;
        for-each 期望 4 个表达式 (compile_exprlist_n + adjust 4)。
        若只返回 3 值, closing_var 会是 nil 导致 tbc 错误。 */
-    const char *code =
-        "list<int> l = [1, 2];\n"
-        "int count = 0;\n"
-        "for (auto k, v : iter(2, l)) { count += 1; }\n"
-        "assert(count == 2, \"iter returns 4 values for SPT protocol\");\n";
+    const char *code = "list<int> l = [1, 2];\n"
+                       "int count = 0;\n"
+                       "for (auto k, v : iter(2, l)) { count += 1; }\n"
+                       "assert(count == 2, \"iter returns 4 values for SPT protocol\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("iter list 4-value protocol failed");
     else
@@ -89,13 +87,12 @@ int main(void) {
   /* ---- 3. iter(2, map) 2 变量 ---- */
   TEST("iter_map_2var");
   {
-    const char *code =
-        "map<int, int> m = {};\n"
-        "m[1] = 100; m[2] = 200; m[3] = 300;\n"
-        "int sk = 0; int sv = 0;\n"
-        "for (auto k, v : iter(2, m)) { sk += k; sv += v; }\n"
-        "assert(sk == 6, \"keys 1+2+3\");\n"
-        "assert(sv == 600, \"vals 100+200+300\");\n";
+    const char *code = "map<int, int> m = {};\n"
+                       "m[1] = 100; m[2] = 200; m[3] = 300;\n"
+                       "int sk = 0; int sv = 0;\n"
+                       "for (auto k, v : iter(2, m)) { sk += k; sv += v; }\n"
+                       "assert(sk == 6, \"keys 1+2+3\");\n"
+                       "assert(sv == 600, \"vals 100+200+300\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("iter map 2var failed");
     else
@@ -105,9 +102,8 @@ int main(void) {
   /* ---- 4. iter 错误: nvars=0 ---- */
   TEST("iter_bad_nvars_0");
   {
-    const char *code =
-        "list<int> l = [1];\n"
-        "for (auto k, v : iter(0, l)) { }\n";
+    const char *code = "list<int> l = [1];\n"
+                       "for (auto k, v : iter(0, l)) { }\n";
     if (run_spt(L, code) == LUA_OK)
       FAIL("iter(0, l) should error");
     else
@@ -117,9 +113,8 @@ int main(void) {
   /* ---- 5. iter 错误: nvars=3 ---- */
   TEST("iter_bad_nvars_3");
   {
-    const char *code =
-        "list<int> l = [1];\n"
-        "for (auto k, v : iter(3, l)) { }\n";
+    const char *code = "list<int> l = [1];\n"
+                       "for (auto k, v : iter(3, l)) { }\n";
     if (run_spt(L, code) == LUA_OK)
       FAIL("iter(3, l) should error");
     else
@@ -129,8 +124,7 @@ int main(void) {
   /* ---- 6. iter 错误: 不支持的类型 (int) ---- */
   TEST("iter_bad_type_int");
   {
-    const char *code =
-        "for (auto k, v : iter(2, 42)) { }\n";
+    const char *code = "for (auto k, v : iter(2, 42)) { }\n";
     if (run_spt(L, code) == LUA_OK)
       FAIL("iter(2, 42) should error");
     else
@@ -140,8 +134,7 @@ int main(void) {
   /* ---- 7. iter 错误: 不支持的类型 (string) ---- */
   TEST("iter_bad_type_str");
   {
-    const char *code =
-        "for (auto k, v : iter(2, \"hello\")) { }\n";
+    const char *code = "for (auto k, v : iter(2, \"hello\")) { }\n";
     if (run_spt(L, code) == LUA_OK)
       FAIL("iter(2, string) should error");
     else
@@ -151,11 +144,10 @@ int main(void) {
   /* ---- 8. iter 空列表 ---- */
   TEST("iter_empty_list");
   {
-    const char *code =
-        "list<int> l = [];\n"
-        "int count = 0;\n"
-        "for (auto k, v : iter(2, l)) { count += 1; }\n"
-        "assert(count == 0, \"empty list 0 iterations\");\n";
+    const char *code = "list<int> l = [];\n"
+                       "int count = 0;\n"
+                       "for (auto k, v : iter(2, l)) { count += 1; }\n"
+                       "assert(count == 0, \"empty list 0 iterations\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("iter empty list failed");
     else
@@ -165,11 +157,10 @@ int main(void) {
   /* ---- 9. iter 空 map ---- */
   TEST("iter_empty_map");
   {
-    const char *code =
-        "map<int, int> m = {};\n"
-        "int count = 0;\n"
-        "for (auto k, v : iter(2, m)) { count += 1; }\n"
-        "assert(count == 0, \"empty map 0 iterations\");\n";
+    const char *code = "map<int, int> m = {};\n"
+                       "int count = 0;\n"
+                       "for (auto k, v : iter(2, m)) { count += 1; }\n"
+                       "assert(count == 0, \"empty map 0 iterations\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("iter empty map failed");
     else
@@ -182,12 +173,11 @@ int main(void) {
     /* ipairs 必须返回 (func, state, closing_var, control) 4 值。
        若只返回 3 值, closing_var 为 nil 导致 for-each 崩溃。
        list 的 ipairs 之前会因 lua_geti 越界报错, 现已修复。 */
-    const char *code =
-        "list<int> l = [10, 20, 30];\n"
-        "int count = 0; int sv = 0;\n"
-        "for (auto i, v : ipairs(l)) { count += 1; sv += v; }\n"
-        "assert(count == 3, \"ipairs list 3 iterations\");\n"
-        "assert(sv == 60, \"ipairs list vals 10+20+30\");\n";
+    const char *code = "list<int> l = [10, 20, 30];\n"
+                       "int count = 0; int sv = 0;\n"
+                       "for (auto i, v : ipairs(l)) { count += 1; sv += v; }\n"
+                       "assert(count == 3, \"ipairs list 3 iterations\");\n"
+                       "assert(sv == 60, \"ipairs list vals 10+20+30\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("ipairs 4-value protocol over list failed");
     else
@@ -199,12 +189,11 @@ int main(void) {
   {
     /* ipairs 对 map: lua_geti 对 map 不越界报错 (返回 nil)。
        map 的 array 部分为空, ipairs 应立即停止。 */
-    const char *code =
-        "map<int, int> m = {};\n"
-        "m[5] = 50; m[10] = 100;\n"
-        "int count = 0;\n"
-        "for (auto i, v : ipairs(m)) { count += 1; }\n"
-        "assert(count == 0, \"ipairs map stops at first nil\");\n";
+    const char *code = "map<int, int> m = {};\n"
+                       "m[5] = 50; m[10] = 100;\n"
+                       "int count = 0;\n"
+                       "for (auto i, v : ipairs(m)) { count += 1; }\n"
+                       "assert(count == 0, \"ipairs map stops at first nil\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("ipairs over map failed");
     else
@@ -214,12 +203,11 @@ int main(void) {
   /* ---- 12. iter 单元素列表 ---- */
   TEST("iter_single_element");
   {
-    const char *code =
-        "list<int> l = [42];\n"
-        "int sk = 0; int sv = 0;\n"
-        "for (auto k, v : iter(2, l)) { sk = k; sv = v; }\n"
-        "assert(sk == 0, \"single element key 0\");\n"
-        "assert(sv == 42, \"single element value 42\");\n";
+    const char *code = "list<int> l = [42];\n"
+                       "int sk = 0; int sv = 0;\n"
+                       "for (auto k, v : iter(2, l)) { sk = k; sv = v; }\n"
+                       "assert(sk == 0, \"single element key 0\");\n"
+                       "assert(sv == 42, \"single element value 42\");\n";
     if (run_spt(L, code) != LUA_OK)
       FAIL("iter single element failed");
     else

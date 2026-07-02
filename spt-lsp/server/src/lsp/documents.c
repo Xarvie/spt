@@ -160,9 +160,15 @@ Document *doc_store_change_range(DocStore *s, const char *uri, size_t start_off,
   if (!d)
     return doc_store_open(s, uri, replacement, repl_len, version);
   /* 钳制范围。 */
-  if (start_off > d->text_len) start_off = d->text_len;
-  if (end_off > d->text_len) end_off = d->text_len;
-  if (start_off > end_off) { size_t t = start_off; start_off = end_off; end_off = t; }
+  if (start_off > d->text_len)
+    start_off = d->text_len;
+  if (end_off > d->text_len)
+    end_off = d->text_len;
+  if (start_off > end_off) {
+    size_t t = start_off;
+    start_off = end_off;
+    end_off = t;
+  }
 
   /* 规范化 replacement 的换行（CRLF/CR -> LF）。 */
   char *norm_repl = (char *)malloc(repl_len + 1);

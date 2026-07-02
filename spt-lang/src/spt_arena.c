@@ -10,9 +10,8 @@
 #define SPT_ARENA_DEFAULT_BLOCK (64 * 1024)
 
 /* 对齐到平台最大标量类型（避免 max_align_t，MSVC C11 支持不全）。 */
-#define SPT_ARENA_ALIGN (sizeof(long double) > sizeof(void(*)()) \
-                             ? sizeof(long double) \
-                             : sizeof(void(*)()))
+#define SPT_ARENA_ALIGN                                                                            \
+  (sizeof(long double) > sizeof(void (*)()) ? sizeof(long double) : sizeof(void (*)()))
 
 typedef struct SptArenaBlock {
   struct SptArenaBlock *next;
@@ -27,9 +26,7 @@ struct SptArena {
   size_t bytes_used;   /* 累计有效字节（统计用） */
 };
 
-static size_t align_up(size_t n, size_t align) {
-  return (n + (align - 1)) & ~(align - 1);
-}
+static size_t align_up(size_t n, size_t align) { return (n + (align - 1)) & ~(align - 1); }
 
 static SptArenaBlock *block_new(size_t cap) {
   SptArenaBlock *b = (SptArenaBlock *)malloc(sizeof(SptArenaBlock) + cap);
@@ -111,6 +108,4 @@ void spt_arena_destroy(SptArena *a) {
   free(a);
 }
 
-size_t spt_arena_bytes_used(const SptArena *a) {
-  return a ? a->bytes_used : 0;
-}
+size_t spt_arena_bytes_used(const SptArena *a) { return a ? a->bytes_used : 0; }

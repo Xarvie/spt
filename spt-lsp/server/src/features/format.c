@@ -17,9 +17,11 @@ cJSON *feature_format(const Document *d, const cJSON *options) {
   int insert_spaces = 1;
   if (options) {
     cJSON *ts = cJSON_GetObjectItemCaseSensitive((cJSON *)options, "tabSize");
-    if (ts && cJSON_IsNumber(ts) && ts->valueint > 0) tab_size = ts->valueint;
+    if (ts && cJSON_IsNumber(ts) && ts->valueint > 0)
+      tab_size = ts->valueint;
     cJSON *is = cJSON_GetObjectItemCaseSensitive((cJSON *)options, "insertSpaces");
-    if (is && cJSON_IsBool(is)) insert_spaces = cJSON_IsTrue(is) ? 1 : 0;
+    if (is && cJSON_IsBool(is))
+      insert_spaces = cJSON_IsTrue(is) ? 1 : 0;
   }
 
   /* 生成格式化后的文本 */
@@ -36,9 +38,14 @@ cJSON *feature_format(const Document *d, const cJSON *options) {
     int col = 0;
     while (i < d->text_len) {
       char c = d->text[i];
-      if (c == ' ') { col++; i++; }
-      else if (c == '\t') { col += tab_size - (col % tab_size); i++; }
-      else break;
+      if (c == ' ') {
+        col++;
+        i++;
+      } else if (c == '\t') {
+        col += tab_size - (col % tab_size);
+        i++;
+      } else
+        break;
     }
     /* 记录非空白起始 */
     size_t content_start = i;
@@ -50,10 +57,12 @@ cJSON *feature_format(const Document *d, const cJSON *options) {
     if (col > 0) {
       int aligned = ((col + tab_size - 1) / tab_size) * tab_size;
       if (insert_spaces) {
-        for (int k = 0; k < aligned; k++) out[w++] = ' ';
+        for (int k = 0; k < aligned; k++)
+          out[w++] = ' ';
       } else {
         int tabs = aligned / tab_size;
-        for (int k = 0; k < tabs; k++) out[w++] = '\t';
+        for (int k = 0; k < tabs; k++)
+          out[w++] = '\t';
       }
     }
 
@@ -63,7 +72,8 @@ cJSON *feature_format(const Document *d, const cJSON *options) {
       out[w++] = d->text[i++];
     }
     /* 去行尾空白 */
-    while (w > content_write_start && (out[w - 1] == ' ' || out[w - 1] == '\t')) w--;
+    while (w > content_write_start && (out[w - 1] == ' ' || out[w - 1] == '\t'))
+      w--;
 
     /* 4. 拷贝换行符 */
     if (i < d->text_len && d->text[i] == '\n') {
@@ -75,7 +85,8 @@ cJSON *feature_format(const Document *d, const cJSON *options) {
   }
 
   /* 末尾单换行 */
-  while (w > 0 && out[w - 1] == '\n') w--;
+  while (w > 0 && out[w - 1] == '\n')
+    w--;
   out[w++] = '\n';
 
   cJSON *res;

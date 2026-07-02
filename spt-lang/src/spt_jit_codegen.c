@@ -24,71 +24,81 @@
 **   Float: XMM0-XMM3
 */
 #include "spt_jit.h"
-#include "spt_jit_ir.h"
 #include "spt_jit_asm.h"
 #include "spt_jit_internal.h"
+#include "spt_jit_ir.h"
 
 /* VM internals */
-#include "lua.h"
 #include "lobject.h"
-#include "lstate.h"
 #include "lopcodes.h"
+#include "lstate.h"
 #include "ltable.h"
+#include "lua.h"
 
-#include <stdlib.h>
-#include <string.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Same offsets as in spt_jit.c */
-#define OFF_L_TOP       offsetof(lua_State, top)
-#define OFF_CI_FUNC     offsetof(CallInfo, func)
-#define OFF_CI_SAVEDPC  offsetof(CallInfo, u.l.savedpc)
-#define OFF_LCLOSURE_P  offsetof(LClosure, p)
-#define OFF_PROTO_K     offsetof(Proto, k)
-#define OFF_TVALUE_VAL  offsetof(TValue, value_)
-#define OFF_TVALUE_TT   offsetof(TValue, tt_)
+#define OFF_L_TOP offsetof(lua_State, top)
+#define OFF_CI_FUNC offsetof(CallInfo, func)
+#define OFF_CI_SAVEDPC offsetof(CallInfo, u.l.savedpc)
+#define OFF_LCLOSURE_P offsetof(LClosure, p)
+#define OFF_PROTO_K offsetof(Proto, k)
+#define OFF_TVALUE_VAL offsetof(TValue, value_)
+#define OFF_TVALUE_TT offsetof(TValue, tt_)
 #define OFF_TABLE_LOGLEN offsetof(Table, loglen)
 #define OFF_TABLE_ARRAY offsetof(Table, array)
-#define OFF_TABLE_MODE  offsetof(Table, mode)
+#define OFF_TABLE_MODE offsetof(Table, mode)
 #define OFF_TSTRING_SHRLEN offsetof(TString, shrlen)
 #define OFF_TSTRING_CONTENTS offsetof(TString, contents)
-#define OFF_TABLE_NODE      offsetof(Table, node)
+#define OFF_TABLE_NODE offsetof(Table, node)
 #define OFF_TABLE_LSIZENODE offsetof(Table, lsizenode)
 /* Node (hash slot) internal offsets, used by the inline GETFIELD fast path. */
-#define OFF_NODE_VAL    offsetof(Node, i_val.value_)   /* node value bits   */
+#define OFF_NODE_VAL offsetof(Node, i_val.value_)                       /* node value bits   */
 #define OFF_NODE_VAL_TT (offsetof(Node, i_val) + offsetof(TValue, tt_)) /* value tag */
-#define OFF_NODE_KEY_TT offsetof(Node, u.key_tt)       /* key tag byte      */
-#define OFF_NODE_KEY    offsetof(Node, u.key_val)      /* key value (gc ptr) */
-#define OFF_NODE_NEXT   offsetof(Node, u.next)         /* chain offset (int32) */
-#define SZ_NODE         ((int)sizeof(Node))
+#define OFF_NODE_KEY_TT offsetof(Node, u.key_tt)                        /* key tag byte      */
+#define OFF_NODE_KEY offsetof(Node, u.key_val)                          /* key value (gc ptr) */
+#define OFF_NODE_NEXT offsetof(Node, u.next)                            /* chain offset (int32) */
+#define SZ_NODE ((int)sizeof(Node))
 
 #define SLOT_SIZE 16
 
 /* Lua type tag values for writing to stack */
-#define TAG_NIL    0x00
-#define TAG_FALSE  0x01
-#define TAG_TRUE   0x11
-#define TAG_INT    0x03
-#define TAG_FLT    0x13
-#define TAG_STR    0x44
-#define TAG_ARR    0x49
-#define TAG_TAB    0x45
-#define TAG_FUNC   0x46
+#define TAG_NIL 0x00
+#define TAG_FALSE 0x01
+#define TAG_TRUE 0x11
+#define TAG_INT 0x03
+#define TAG_FLT 0x13
+#define TAG_STR 0x44
+#define TAG_ARR 0x49
+#define TAG_TAB 0x45
+#define TAG_FUNC 0x46
 
 /* Get the Lua tag for an SPT type. */
 static uint8_t spt_type_to_tag(SPTType t) {
   switch (t) {
-    case SPTT_NIL:   return TAG_NIL;
-    case SPTT_FALSE: return TAG_FALSE;
-    case SPTT_TRUE:  return TAG_TRUE;
-    case SPTT_INT:   return TAG_INT;
-    case SPTT_FLT:   return TAG_FLT;
-    case SPTT_STR:   return TAG_STR;
-    case SPTT_ARR:   return TAG_ARR;
-    case SPTT_TAB:   return TAG_TAB;
-    case SPTT_FUNC:  return TAG_FUNC;
-    default:         return TAG_NIL;
+  case SPTT_NIL:
+    return TAG_NIL;
+  case SPTT_FALSE:
+    return TAG_FALSE;
+  case SPTT_TRUE:
+    return TAG_TRUE;
+  case SPTT_INT:
+    return TAG_INT;
+  case SPTT_FLT:
+    return TAG_FLT;
+  case SPTT_STR:
+    return TAG_STR;
+  case SPTT_ARR:
+    return TAG_ARR;
+  case SPTT_TAB:
+    return TAG_TAB;
+  case SPTT_FUNC:
+    return TAG_FUNC;
+  default:
+    return TAG_NIL;
   }
 }
 
@@ -102,12 +112,12 @@ typedef struct {
   SPTJitState *js;
 
   /* Frame layout */
-  int frame_size;       /* total frame size (aligned to 16) */
-  int nspill_slots;     /* number of spill slots (one per IR ref) */
-  int shadow_space;     /* 32 bytes on Windows x64 */
+  int frame_size;   /* total frame size (aligned to 16) */
+  int nspill_slots; /* number of spill slots (one per IR ref) */
+  int shadow_space; /* 32 bytes on Windows x64 */
 
   /* Labels */
-  int32_t loop_label;   /* label for loop start */
+  int32_t loop_label;     /* label for loop start */
   int32_t epilogue_label; /* label for epilogue */
 
   /* Exit stub labels, indexed by snapshot index (each guard owns one
@@ -120,15 +130,15 @@ typedef struct {
   int nexits;
 
   /* ---- Linear-scan register allocation ---- */
-  int use_ra;                 /* 1 if register residency is active */
-  int ra_conflict_abort;      /* 1 if a loop-carried conflict makes this trace not
-                                 worth compiling (the spill path is correct but
-                                 pathologically slow, e.g. running-max/min) */
-  int8_t ref_reg[SPT_JIT_MAX_TRACE]; /* physical GPR per IR ref, or -1 (spilled) */
-  int8_t ref_xmm[SPT_JIT_MAX_TRACE]; /* physical XMM per IR ref, or -1 (spilled) */
+  int use_ra;                           /* 1 if register residency is active */
+  int ra_conflict_abort;                /* 1 if a loop-carried conflict makes this trace not
+                                           worth compiling (the spill path is correct but
+                                           pathologically slow, e.g. running-max/min) */
+  int8_t ref_reg[SPT_JIT_MAX_TRACE];    /* physical GPR per IR ref, or -1 (spilled) */
+  int8_t ref_xmm[SPT_JIT_MAX_TRACE];    /* physical XMM per IR ref, or -1 (spilled) */
   uint8_t ref_hoist[SPT_JIT_MAX_TRACE]; /* 1 if emitted in preheader, skipped in body */
-  int8_t slot_reg[256];       /* GPR holding each int-resident slot, or -1 */
-  int8_t slot_xmm[256];       /* XMM holding each float-resident slot, or -1 */
+  int8_t slot_reg[256];                 /* GPR holding each int-resident slot, or -1 */
+  int8_t slot_xmm[256];                 /* XMM holding each float-resident slot, or -1 */
 
   /* Current PC offset (for restoring savedpc on exit) */
   int cur_pc_offset;
@@ -140,9 +150,7 @@ typedef struct {
    are free). Excluded: R12=L, R13=ci, RBX=base, R14=k (fixed roles); RAX, RCX,
    RDX, and the XMMs are kept as scratch for loads, shifts, div/mod, and
    floats. */
-static const SPTReg RA_POOL[] = {
-  SPT_R15, SPT_RSI, SPT_RDI, SPT_R8, SPT_R9, SPT_R10, SPT_R11
-};
+static const SPTReg RA_POOL[] = {SPT_R15, SPT_RSI, SPT_RDI, SPT_R8, SPT_R9, SPT_R10, SPT_R11};
 #define RA_POOL_N ((int)(sizeof(RA_POOL) / sizeof(RA_POOL[0])))
 
 /* XMM registers for float residency. On the SysV ABI every XMM is
@@ -152,20 +160,14 @@ static const SPTReg RA_POOL[] = {
    volatile XMM4/XMM5. (To reclaim XMM6/7 on Win64, save/restore them in the
    prologue/epilogue.) */
 #if defined(_WIN32)
-static const SPTXmmReg XMM_POOL[] = {
-  SPT_XMM4, SPT_XMM5
-};
+static const SPTXmmReg XMM_POOL[] = {SPT_XMM4, SPT_XMM5};
 #else
-static const SPTXmmReg XMM_POOL[] = {
-  SPT_XMM4, SPT_XMM5, SPT_XMM6, SPT_XMM7
-};
+static const SPTXmmReg XMM_POOL[] = {SPT_XMM4, SPT_XMM5, SPT_XMM6, SPT_XMM7};
 #endif
 #define XMM_POOL_N ((int)(sizeof(XMM_POOL) / sizeof(XMM_POOL[0])))
 
 /* Spill slot offset for IR ref r. */
-static int spill_off(SPTCodeGen *cg, int r) {
-  return cg->shadow_space + r * 8;
-}
+static int spill_off(SPTCodeGen *cg, int r) { return cg->shadow_space + r * 8; }
 
 /* Get (creating on first use) the exit-stub label for a snapshot index. */
 static int32_t ensure_exit_label(SPTCodeGen *cg, int snap_idx) {
@@ -184,30 +186,63 @@ static int32_t ensure_exit_label(SPTCodeGen *cg, int snap_idx) {
    registers, so we disable register residency for traces containing them. */
 static int ra_op_is_safe(int op) {
   switch (op) {
-    case SPTIR_NIL: case SPTIR_FALSE: case SPTIR_TRUE:
-    case SPTIR_KINT: case SPTIR_KFLT: case SPTIR_KSTR:
-    case SPTIR_KPTR: case SPTIR_KGC:
-    case SPTIR_SLOAD: case SPTIR_SSTORE:
-    case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL: case SPTIR_DIV:
-    case SPTIR_MOD: case SPTIR_IDIV: case SPTIR_NEG:
-    case SPTIR_BAND: case SPTIR_BOR: case SPTIR_BXOR: case SPTIR_BNOT:
-    case SPTIR_SHL: case SPTIR_SHR:
-    case SPTIR_EQ: case SPTIR_NE: case SPTIR_LT: case SPTIR_LE:
-    case SPTIR_GT: case SPTIR_GE: case SPTIR_NOT:
-    case SPTIR_CMPSET:
-    case SPTIR_FCMPMASK: case SPTIR_FSELECT: case SPTIR_ICMPMASK:
-    case SPTIR_TOFLT: case SPTIR_TOINT:
-    case SPTIR_GUARD: case SPTIR_GUARD_LT: case SPTIR_GUARD_LE:
-    case SPTIR_GUARD_EQ: case SPTIR_GUARD_T: case SPTIR_GUARD_ULT:
-    case SPTIR_GETI: case SPTIR_LEN: case SPTIR_SETI:
-    case SPTIR_SLEN: case SPTIR_SBYTE:
-    case SPTIR_GETFIELD: case SPTIR_SETFIELD:
-    case SPTIR_LOOP: case SPTIR_PHI: case SPTIR_NOP:
-      return 1;
-    default:
-      /* POW (libm), ULOAD/USTORE, GETTABUP,
-         CALL, RETURN, EXIT: not safe / not handled here. */
-      return 0;
+  case SPTIR_NIL:
+  case SPTIR_FALSE:
+  case SPTIR_TRUE:
+  case SPTIR_KINT:
+  case SPTIR_KFLT:
+  case SPTIR_KSTR:
+  case SPTIR_KPTR:
+  case SPTIR_KGC:
+  case SPTIR_SLOAD:
+  case SPTIR_SSTORE:
+  case SPTIR_ADD:
+  case SPTIR_SUB:
+  case SPTIR_MUL:
+  case SPTIR_DIV:
+  case SPTIR_MOD:
+  case SPTIR_IDIV:
+  case SPTIR_NEG:
+  case SPTIR_BAND:
+  case SPTIR_BOR:
+  case SPTIR_BXOR:
+  case SPTIR_BNOT:
+  case SPTIR_SHL:
+  case SPTIR_SHR:
+  case SPTIR_EQ:
+  case SPTIR_NE:
+  case SPTIR_LT:
+  case SPTIR_LE:
+  case SPTIR_GT:
+  case SPTIR_GE:
+  case SPTIR_NOT:
+  case SPTIR_CMPSET:
+  case SPTIR_FCMPMASK:
+  case SPTIR_FSELECT:
+  case SPTIR_ICMPMASK:
+  case SPTIR_TOFLT:
+  case SPTIR_TOINT:
+  case SPTIR_GUARD:
+  case SPTIR_GUARD_LT:
+  case SPTIR_GUARD_LE:
+  case SPTIR_GUARD_EQ:
+  case SPTIR_GUARD_T:
+  case SPTIR_GUARD_ULT:
+  case SPTIR_GETI:
+  case SPTIR_LEN:
+  case SPTIR_SETI:
+  case SPTIR_SLEN:
+  case SPTIR_SBYTE:
+  case SPTIR_GETFIELD:
+  case SPTIR_SETFIELD:
+  case SPTIR_LOOP:
+  case SPTIR_PHI:
+  case SPTIR_NOP:
+    return 1;
+  default:
+    /* POW (libm), ULOAD/USTORE, GETTABUP,
+       CALL, RETURN, EXIT: not safe / not handled here. */
+    return 0;
   }
 }
 
@@ -228,8 +263,7 @@ static int ra_op_is_safe(int op) {
    or stays the stale live-in). Bounded against malformed chains. */
 static int ra_canon_ref(SPTIRBuilder *ir, int ref) {
   int guard = 0;
-  while (ref >= 0 && ref < ir->ninst &&
-         ir->insts[ref].op == SPTIR_NOP && guard++ < 256)
+  while (ref >= 0 && ref < ir->ninst && ir->insts[ref].op == SPTIR_NOP && guard++ < 256)
     ref = ir->insts[ref].op1;
   return ref;
 }
@@ -242,11 +276,16 @@ static void ra_analyze(SPTCodeGen *cg) {
     cg->ref_xmm[i] = -1;
     cg->ref_hoist[i] = 0;
   }
-  for (int s = 0; s < 256; s++) { cg->slot_reg[s] = -1; cg->slot_xmm[s] = -1; }
+  for (int s = 0; s < 256; s++) {
+    cg->slot_reg[s] = -1;
+    cg->slot_xmm[s] = -1;
+  }
 
   /* Only optimize loop traces (must end in a LOOP back-edge). */
-  if (!ir->have_loop) return;
-  if (ir->ninst > SPT_JIT_MAX_TRACE) return;
+  if (!ir->have_loop)
+    return;
+  if (ir->ninst > SPT_JIT_MAX_TRACE)
+    return;
 
   /* for-each (OP_TFORCALL) traces: the loop-carried key is incremented in place
      (newkey = key + 1) and the loop-continue guard / value GETI are emitted
@@ -258,25 +297,33 @@ static void ra_analyze(SPTCodeGen *cg) {
      slots, so its snapshots flush the correct old key. Keep for-each on the
      spill path (correct; still well ahead of the interpreter's per-element C
      call into luaB_next). RA residency for for-each is a future optimization. */
-  if (cg->trace->forin_iter_slot >= 0) return;
+  if (cg->trace->forin_iter_slot >= 0)
+    return;
 
   /* Bail on any non-scalar / call-bearing op. Also bail on float comparisons:
      the comparison codegen is integer-only, and a resident float operand would
      otherwise be read from a stale spill slot. */
   for (int i = 0; i < ir->ninst; i++) {
     SPTIRInst *in = &ir->insts[i];
-    if (in->flags & SPTIRF_DEAD) continue;
-    if (!ra_op_is_safe(in->op)) return;
+    if (in->flags & SPTIRF_DEAD)
+      continue;
+    if (!ra_op_is_safe(in->op))
+      return;
     switch (in->op) {
-      case SPTIR_EQ: case SPTIR_NE: case SPTIR_LT:
-      case SPTIR_LE: case SPTIR_GT: case SPTIR_GE: {
-        int o1 = in->op1, o2 = in->op2;
-        if ((o1 >= 0 && o1 < ir->ninst && ir->insts[o1].type == SPTT_FLT) ||
-            (o2 >= 0 && o2 < ir->ninst && ir->insts[o2].type == SPTT_FLT))
-          return;
-        break;
-      }
-      default: break;
+    case SPTIR_EQ:
+    case SPTIR_NE:
+    case SPTIR_LT:
+    case SPTIR_LE:
+    case SPTIR_GT:
+    case SPTIR_GE: {
+      int o1 = in->op1, o2 = in->op2;
+      if ((o1 >= 0 && o1 < ir->ninst && ir->insts[o1].type == SPTT_FLT) ||
+          (o2 >= 0 && o2 < ir->ninst && ir->insts[o2].type == SPTT_FLT))
+        return;
+      break;
+    }
+    default:
+      break;
     }
   }
 
@@ -286,32 +333,52 @@ static void ra_analyze(SPTCodeGen *cg) {
   int fslots[XMM_POOL_N], fsload[XMM_POOL_N], nflt = 0;
   for (int i = 0; i < ir->ninst; i++) {
     SPTIRInst *in = &ir->insts[i];
-    if (in->flags & SPTIRF_DEAD) continue;
-    if (in->op != SPTIR_SLOAD) continue;
+    if (in->flags & SPTIRF_DEAD)
+      continue;
+    if (in->op != SPTIR_SLOAD)
+      continue;
     int slot = (int)in->aux;
     if (in->type == SPTT_INT) {
       int seen = 0;
-      for (int k = 0; k < nint; k++) if (islots[k] == slot) { seen = 1; break; }
-      if (seen) continue;
-      if (nint >= RA_POOL_N) return;
-      islots[nint] = slot; isload[nint] = i; nint++;
+      for (int k = 0; k < nint; k++)
+        if (islots[k] == slot) {
+          seen = 1;
+          break;
+        }
+      if (seen)
+        continue;
+      if (nint >= RA_POOL_N)
+        return;
+      islots[nint] = slot;
+      isload[nint] = i;
+      nint++;
     } else if (in->type == SPTT_FLT) {
       int seen = 0;
-      for (int k = 0; k < nflt; k++) if (fslots[k] == slot) { seen = 1; break; }
-      if (seen) continue;
-      if (nflt >= XMM_POOL_N) return;
-      fslots[nflt] = slot; fsload[nflt] = i; nflt++;
+      for (int k = 0; k < nflt; k++)
+        if (fslots[k] == slot) {
+          seen = 1;
+          break;
+        }
+      if (seen)
+        continue;
+      if (nflt >= XMM_POOL_N)
+        return;
+      fslots[nflt] = slot;
+      fsload[nflt] = i;
+      nflt++;
     } else {
       /* Non-numeric live-in (e.g. an array reference for GETI). Leave it
          spilled and read from the stack each iteration -- safe only if it is
          read-only across the loop. A modified one would need the writeback we
          omit under residency, so bail in that case. */
       int slot = (int)in->aux;
-      if (ir->reg_map[slot] != i) return; /* modified -> bail */
-      continue;                           /* read-only -> skip (stays on stack) */
+      if (ir->reg_map[slot] != i)
+        return; /* modified -> bail */
+      continue; /* read-only -> skip (stays on stack) */
     }
   }
-  if (nint == 0 && nflt == 0) return; /* nothing to gain */
+  if (nint == 0 && nflt == 0)
+    return; /* nothing to gain */
 
   /* Bail if any slot's loop-end value is a *stale alias*: it is the live-in
      SLOAD of a DIFFERENT slot whose value is mutated in the loop. Under
@@ -325,11 +392,15 @@ static void ra_analyze(SPTCodeGen *cg) {
      and writes them back, so it handles this correctly. */
   for (int slot = 0; slot <= ir->maxslot; slot++) {
     int fref = ra_canon_ref(ir, ir->reg_map[slot]);
-    if (fref < 0 || fref >= ir->ninst) continue;
-    if (ir->insts[fref].op != SPTIR_SLOAD) continue;
+    if (fref < 0 || fref >= ir->ninst)
+      continue;
+    if (ir->insts[fref].op != SPTIR_SLOAD)
+      continue;
     int src = (int)ir->insts[fref].aux;
-    if (src == slot) continue;                 /* own read-only live-in: fine */
-    if (ra_canon_ref(ir, ir->reg_map[src]) != fref) return; /* src mutated -> bail */
+    if (src == slot)
+      continue; /* own read-only live-in: fine */
+    if (ra_canon_ref(ir, ir->reg_map[src]) != fref)
+      return; /* src mutated -> bail */
   }
 
   /* Bail if a resident slot's *old* value (its live-in SLOAD) is still read
@@ -348,22 +419,34 @@ static void ra_analyze(SPTCodeGen *cg) {
      each iteration, so it handles all of these correctly. */
   for (int k = 0; k < nint; k++) {
     int fr = ra_canon_ref(ir, ir->reg_map[islots[k]]);
-    if (fr < 0 || fr >= ir->ninst || fr == isload[k]) continue;
+    if (fr < 0 || fr >= ir->ninst || fr == isload[k])
+      continue;
     for (int u = fr + 1; u < ir->ninst; u++) {
-      if (ir->insts[u].flags & SPTIRF_DEAD) continue;
-      if (ir->insts[u].op == SPTIR_LOOP) continue; /* op1 is a position marker, not a value read */
+      if (ir->insts[u].flags & SPTIRF_DEAD)
+        continue;
+      if (ir->insts[u].op == SPTIR_LOOP)
+        continue; /* op1 is a position marker, not a value read */
       if (ra_canon_ref(ir, ir->insts[u].op1) == isload[k] ||
-          ra_canon_ref(ir, ir->insts[u].op2) == isload[k]) { cg->ra_conflict_abort = 1; return; }
+          ra_canon_ref(ir, ir->insts[u].op2) == isload[k]) {
+        cg->ra_conflict_abort = 1;
+        return;
+      }
     }
   }
   for (int k = 0; k < nflt; k++) {
     int fr = ra_canon_ref(ir, ir->reg_map[fslots[k]]);
-    if (fr < 0 || fr >= ir->ninst || fr == fsload[k]) continue;
+    if (fr < 0 || fr >= ir->ninst || fr == fsload[k])
+      continue;
     for (int u = fr + 1; u < ir->ninst; u++) {
-      if (ir->insts[u].flags & SPTIRF_DEAD) continue;
-      if (ir->insts[u].op == SPTIR_LOOP) continue; /* op1 is a position marker, not a value read */
+      if (ir->insts[u].flags & SPTIRF_DEAD)
+        continue;
+      if (ir->insts[u].op == SPTIR_LOOP)
+        continue; /* op1 is a position marker, not a value read */
       if (ra_canon_ref(ir, ir->insts[u].op1) == fsload[k] ||
-          ra_canon_ref(ir, ir->insts[u].op2) == fsload[k]) { cg->ra_conflict_abort = 1; return; }
+          ra_canon_ref(ir, ir->insts[u].op2) == fsload[k]) {
+        cg->ra_conflict_abort = 1;
+        return;
+      }
     }
   }
 
@@ -390,7 +473,7 @@ static void ra_analyze(SPTCodeGen *cg) {
     if (final_ref < 0 || final_ref >= ir->ninst || final_ref == isload[k])
       continue;
     if (cg->ref_reg[final_ref] >= 0 && cg->ref_reg[final_ref] != (int8_t)RA_POOL[k])
-      return;  /* loop-carried permutation/aliasing -> bail to spill path */
+      return; /* loop-carried permutation/aliasing -> bail to spill path */
     cg->ref_reg[final_ref] = (int8_t)RA_POOL[k];
   }
   /* Assign an XMM to each float-resident slot (same two-pass conflict check). */
@@ -407,7 +490,7 @@ static void ra_analyze(SPTCodeGen *cg) {
     if (final_ref < 0 || final_ref >= ir->ninst || final_ref == fsload[k])
       continue;
     if (cg->ref_xmm[final_ref] >= 0 && cg->ref_xmm[final_ref] != (int8_t)XMM_POOL[k])
-      return;  /* loop-carried permutation/aliasing -> bail to spill path */
+      return; /* loop-carried permutation/aliasing -> bail to spill path */
     cg->ref_xmm[final_ref] = (int8_t)XMM_POOL[k];
   }
 
@@ -415,8 +498,10 @@ static void ra_analyze(SPTCodeGen *cg) {
      which is valid once, before the loop; the value stays int thereafter). */
   for (int i = 0; i < ir->ninst; i++) {
     SPTIRInst *in = &ir->insts[i];
-    if (in->flags & SPTIRF_DEAD) continue;
-    if (in->op != SPTIR_GUARD_T) continue;
+    if (in->flags & SPTIRF_DEAD)
+      continue;
+    if (in->op != SPTIR_GUARD_T)
+      continue;
     int v = in->op1;
     if (v >= 0 && v < ir->ninst && cg->ref_hoist[v])
       cg->ref_hoist[i] = 1;
@@ -437,26 +522,37 @@ static void ra_analyze(SPTCodeGen *cg) {
    chain value, and snapshots reference the current ref at each guard point. */
 static void ra_coalesce_chain(SPTCodeGen *cg) {
   SPTIRBuilder *ir = &cg->trace->ir;
-  if (!cg->use_ra) return;
+  if (!cg->use_ra)
+    return;
 
   for (int s = 0; s < 256; s++) {
     int reg = cg->slot_reg[s];
-    if (reg < 0) continue;
+    if (reg < 0)
+      continue;
 
     /* Find the live-in SLOAD for this slot (assigned to this register). */
     int sload = -1;
     for (int i = 0; i < ir->ninst; i++) {
       SPTIRInst *in = &ir->insts[i];
-      if (in->flags & SPTIRF_DEAD) continue;
-      if (in->op != SPTIR_SLOAD) continue;
-      if ((int)in->aux != s) continue;
-      if (cg->ref_reg[i] == reg) { sload = i; break; }
+      if (in->flags & SPTIRF_DEAD)
+        continue;
+      if (in->op != SPTIR_SLOAD)
+        continue;
+      if ((int)in->aux != s)
+        continue;
+      if (cg->ref_reg[i] == reg) {
+        sload = i;
+        break;
+      }
     }
-    if (sload < 0) continue;
+    if (sload < 0)
+      continue;
 
     int final_ref = ra_canon_ref(ir, ir->reg_map[s]);
-    if (final_ref < 0 || final_ref >= ir->ninst || final_ref == sload) continue;
-    if (cg->ref_reg[final_ref] != reg) continue;
+    if (final_ref < 0 || final_ref >= ir->ninst || final_ref == sload)
+      continue;
+    if (cg->ref_reg[final_ref] != reg)
+      continue;
 
     /* The live-in SLOAD must have exactly one use in the loop body (the first
        ADD in the chain). Hoisted instructions (e.g. the SLOAD's type guard)
@@ -465,13 +561,19 @@ static void ra_coalesce_chain(SPTCodeGen *cg) {
     int sload_uses = 0;
     for (int u = 0; u < ir->ninst && sload_uses <= 1; u++) {
       SPTIRInst *in = &ir->insts[u];
-      if (in->flags & SPTIRF_DEAD) continue;
-      if (in->op == SPTIR_LOOP) continue;
-      if (cg->ref_hoist[u]) continue;  /* hoisted → preheader, skip */
-      if (ra_canon_ref(ir, in->op1) == sload) sload_uses++;
-      if (ra_canon_ref(ir, in->op2) == sload) sload_uses++;
+      if (in->flags & SPTIRF_DEAD)
+        continue;
+      if (in->op == SPTIR_LOOP)
+        continue;
+      if (cg->ref_hoist[u])
+        continue; /* hoisted → preheader, skip */
+      if (ra_canon_ref(ir, in->op1) == sload)
+        sload_uses++;
+      if (ra_canon_ref(ir, in->op2) == sload)
+        sload_uses++;
     }
-    if (sload_uses != 1) continue;
+    if (sload_uses != 1)
+      continue;
 
     /* Walk backwards from final_ref to sload, following op1.
        Collect intermediate refs and verify each supports two-address form. */
@@ -481,38 +583,60 @@ static void ra_coalesce_chain(SPTCodeGen *cg) {
     int guard = 0;
     while (cur != sload && chain_len < 64 && guard++ < 256) {
       SPTIRInst *ci = &ir->insts[cur];
-      if (ci->flags & SPTIRF_DEAD) { chain_len = 0; break; }
+      if (ci->flags & SPTIRF_DEAD) {
+        chain_len = 0;
+        break;
+      }
       int op = ci->op;
-      int safe_op = (op == SPTIR_ADD || op == SPTIR_SUB || op == SPTIR_MUL ||
-                     op == SPTIR_BAND || op == SPTIR_BOR || op == SPTIR_BXOR);
-      if (!safe_op) { chain_len = 0; break; }
+      int safe_op = (op == SPTIR_ADD || op == SPTIR_SUB || op == SPTIR_MUL || op == SPTIR_BAND ||
+                     op == SPTIR_BOR || op == SPTIR_BXOR);
+      if (!safe_op) {
+        chain_len = 0;
+        break;
+      }
       int prev = ra_canon_ref(ir, ci->op1);
-      if (prev < 0 || prev >= ir->ninst) { chain_len = 0; break; }
+      if (prev < 0 || prev >= ir->ninst) {
+        chain_len = 0;
+        break;
+      }
       chain[chain_len++] = cur;
-      if (prev == sload) break;
+      if (prev == sload)
+        break;
       cur = prev;
     }
-    if (chain_len <= 1) continue;  /* no intermediate refs to coalesce */
+    if (chain_len <= 1)
+      continue; /* no intermediate refs to coalesce */
 
     /* Verify each intermediate ref (except final_ref, already assigned) has
        exactly one use in the loop body. Also verify no conflicting register. */
     int ok = 1;
     for (int i = 0; i < chain_len && ok; i++) {
       int ref = chain[i];
-      if (ref == final_ref) continue;
-      if (cg->ref_reg[ref] >= 0 && cg->ref_reg[ref] != reg) { ok = 0; break; }
+      if (ref == final_ref)
+        continue;
+      if (cg->ref_reg[ref] >= 0 && cg->ref_reg[ref] != reg) {
+        ok = 0;
+        break;
+      }
       int uses = 0;
       for (int u = 0; u < ir->ninst && uses <= 1; u++) {
         SPTIRInst *in = &ir->insts[u];
-        if (in->flags & SPTIRF_DEAD) continue;
-        if (in->op == SPTIR_LOOP) continue;
-        if (cg->ref_hoist[u]) continue;  /* hoisted → preheader, skip */
-        if (ra_canon_ref(ir, in->op1) == ref) uses++;
-        if (ra_canon_ref(ir, in->op2) == ref) uses++;
+        if (in->flags & SPTIRF_DEAD)
+          continue;
+        if (in->op == SPTIR_LOOP)
+          continue;
+        if (cg->ref_hoist[u])
+          continue; /* hoisted → preheader, skip */
+        if (ra_canon_ref(ir, in->op1) == ref)
+          uses++;
+        if (ra_canon_ref(ir, in->op2) == ref)
+          uses++;
       }
-      if (uses != 1) ok = 0;
+      if (uses != 1)
+        ok = 0;
     }
-    if (!ok) continue;
+    if (!ok)
+      continue;
 
     /* Assign the register to all intermediate refs. */
     for (int i = 0; i < chain_len; i++) {
@@ -533,78 +657,101 @@ static void ra_coalesce_chain(SPTCodeGen *cg) {
    Only values not bound to a register are hoisted, so RA is left untouched. */
 static void ra_hoist_invariants(SPTCodeGen *cg) {
   SPTIRBuilder *ir = &cg->trace->ir;
-  if (!cg->use_ra) return;
+  if (!cg->use_ra)
+    return;
   uint8_t *inv = (uint8_t *)calloc(ir->ninst > 0 ? ir->ninst : 1, 1);
-  if (!inv) return;
+  if (!inv)
+    return;
 
   /* If the loop writes any array element, an invariant-looking array LOAD may
      be aliased by that write, so we must not hoist array loads. (Bounds guards
      and LEN stay safe: an in-bounds SETI never changes a length.) */
   int has_seti = 0;
   for (int i = 0; i < ir->ninst; i++) {
-    if ((ir->insts[i].flags & SPTIRF_DEAD)) continue;
-    if (ir->insts[i].op == SPTIR_SETI) { has_seti = 1; break; }
+    if ((ir->insts[i].flags & SPTIRF_DEAD))
+      continue;
+    if (ir->insts[i].op == SPTIR_SETI) {
+      has_seti = 1;
+      break;
+    }
   }
 
   for (int i = 0; i < ir->ninst; i++) {
     SPTIRInst *in = &ir->insts[i];
-    if (in->flags & SPTIRF_DEAD) continue;
+    if (in->flags & SPTIRF_DEAD)
+      continue;
     int is_inv = 0;
     int o1 = in->op1, o2 = in->op2;
     int o1ok = (o1 < 0) || inv[o1];
     int o2ok = (o2 < 0) || inv[o2];
     switch (in->op) {
-      case SPTIR_KINT: case SPTIR_KFLT: case SPTIR_KSTR:
-      case SPTIR_KPTR: case SPTIR_KGC: case SPTIR_NIL:
-      case SPTIR_TRUE: case SPTIR_FALSE:
-        is_inv = 1; break;
-      case SPTIR_SLOAD: {
-        int slot = (int)in->aux;     /* read-only slot: never modified in loop */
-        is_inv = (ir->reg_map[slot] == i);
-        break;
-      }
-      case SPTIR_GUARD_T:            /* guards an invariant value -> invariant */
-      case SPTIR_LEN:
-      case SPTIR_TOFLT: case SPTIR_TOINT:
-        is_inv = o1ok; break;
-      case SPTIR_GUARD_LT:
-      case SPTIR_GUARD_LE: {
-        /* Hoist a bounds guard only for a *constant* compared value with an
-           invariant bound -- i.e. the `c < LEN` or `c <= idx` guard of a
-           constant-index GETI. This excludes the FORLOOP count guard (bound =
-           live counter, not invariant) and variable-index guards (op1 not
-           constant), both of which break internal looping if hoisted. */
-        SPTIRInst *v = sptir_get(ir, o1);
-        int bnd = (int)in->aux;
-        int bndok = (bnd < 0) || inv[bnd];
-        is_inv = o1ok && bndok && v && v->op == SPTIR_KINT;
-        break;
-      }
-      case SPTIR_GETI: {
-        /* Loop-invariant array element load with a CONSTANT index (e.g.
-           base[0]). Constant index only: a hoisted variable-index load made the
-           trace stop looping internally (entries became per-iteration), a net
-           slowdown -- so we keep those in the loop. Also requires no aliasing
-           array write in the loop. ARR/TAB element types are excluded: hoisting
-           an array-producing GETI (the inner m[0] of a chained m[0][j]) gave
-           wrong results -- recompute it in the loop body like m[i][j] does. */
-        SPTIRInst *ix = sptir_get(ir, o2);
-        is_inv = !has_seti && o1ok && o2ok && ix && ix->op == SPTIR_KINT &&
-                 in->type != SPTT_ARR && in->type != SPTT_TAB;
-        break;
-      }
-      case SPTIR_ADD: case SPTIR_SUB: case SPTIR_MUL:
-      case SPTIR_BAND: case SPTIR_BOR: case SPTIR_BXOR:
-      case SPTIR_SHL: case SPTIR_SHR:
-        is_inv = o1ok && o2ok; break;
-      case SPTIR_NEG:
-        is_inv = o1ok; break;
-      default: is_inv = 0; break;    /* SETI/LOOP/cmp guards: no */
+    case SPTIR_KINT:
+    case SPTIR_KFLT:
+    case SPTIR_KSTR:
+    case SPTIR_KPTR:
+    case SPTIR_KGC:
+    case SPTIR_NIL:
+    case SPTIR_TRUE:
+    case SPTIR_FALSE:
+      is_inv = 1;
+      break;
+    case SPTIR_SLOAD: {
+      int slot = (int)in->aux; /* read-only slot: never modified in loop */
+      is_inv = (ir->reg_map[slot] == i);
+      break;
+    }
+    case SPTIR_GUARD_T: /* guards an invariant value -> invariant */
+    case SPTIR_LEN:
+    case SPTIR_TOFLT:
+    case SPTIR_TOINT:
+      is_inv = o1ok;
+      break;
+    case SPTIR_GUARD_LT:
+    case SPTIR_GUARD_LE: {
+      /* Hoist a bounds guard only for a *constant* compared value with an
+         invariant bound -- i.e. the `c < LEN` or `c <= idx` guard of a
+         constant-index GETI. This excludes the FORLOOP count guard (bound =
+         live counter, not invariant) and variable-index guards (op1 not
+         constant), both of which break internal looping if hoisted. */
+      SPTIRInst *v = sptir_get(ir, o1);
+      int bnd = (int)in->aux;
+      int bndok = (bnd < 0) || inv[bnd];
+      is_inv = o1ok && bndok && v && v->op == SPTIR_KINT;
+      break;
+    }
+    case SPTIR_GETI: {
+      /* Loop-invariant array element load with a CONSTANT index (e.g.
+         base[0]). Constant index only: a hoisted variable-index load made the
+         trace stop looping internally (entries became per-iteration), a net
+         slowdown -- so we keep those in the loop. Also requires no aliasing
+         array write in the loop. ARR/TAB element types are excluded: hoisting
+         an array-producing GETI (the inner m[0] of a chained m[0][j]) gave
+         wrong results -- recompute it in the loop body like m[i][j] does. */
+      SPTIRInst *ix = sptir_get(ir, o2);
+      is_inv = !has_seti && o1ok && o2ok && ix && ix->op == SPTIR_KINT && in->type != SPTT_ARR &&
+               in->type != SPTT_TAB;
+      break;
+    }
+    case SPTIR_ADD:
+    case SPTIR_SUB:
+    case SPTIR_MUL:
+    case SPTIR_BAND:
+    case SPTIR_BOR:
+    case SPTIR_BXOR:
+    case SPTIR_SHL:
+    case SPTIR_SHR:
+      is_inv = o1ok && o2ok;
+      break;
+    case SPTIR_NEG:
+      is_inv = o1ok;
+      break;
+    default:
+      is_inv = 0;
+      break; /* SETI/LOOP/cmp guards: no */
     }
     inv[i] = (uint8_t)is_inv;
     /* Hoist only if not register-resident (don't disturb RA's bindings). */
-    if (is_inv && i < SPT_JIT_MAX_TRACE &&
-        cg->ref_reg[i] < 0 && cg->ref_xmm[i] < 0) {
+    if (is_inv && i < SPT_JIT_MAX_TRACE && cg->ref_reg[i] < 0 && cg->ref_xmm[i] < 0) {
       cg->ref_hoist[i] = 1;
     }
   }
@@ -625,7 +772,8 @@ static void ra_hoist_invariants(SPTCodeGen *cg) {
    which sources from ref_reg, so snapshot restoration is correct. */
 static void ra_assign_geti_regs(SPTCodeGen *cg) {
   SPTIRBuilder *ir = &cg->trace->ir;
-  if (!cg->use_ra) return;
+  if (!cg->use_ra)
+    return;
 
   /* Find which RA_POOL registers are already in use (assigned to slots). */
   int reg_busy[16] = {0};
@@ -638,19 +786,26 @@ static void ra_assign_geti_regs(SPTCodeGen *cg) {
   SPTReg free_regs[RA_POOL_N];
   int nfree = 0;
   for (int i = 0; i < RA_POOL_N; i++) {
-    if (!reg_busy[RA_POOL[i]]) free_regs[nfree++] = RA_POOL[i];
+    if (!reg_busy[RA_POOL[i]])
+      free_regs[nfree++] = RA_POOL[i];
   }
-  if (nfree == 0) return;
+  if (nfree == 0)
+    return;
 
   /* Assign free registers to hoisted integer GETI results. */
   int next_reg = 0;
   for (int i = 0; i < ir->ninst && next_reg < nfree; i++) {
     SPTIRInst *in = &ir->insts[i];
-    if (in->flags & SPTIRF_DEAD) continue;
-    if (in->op != SPTIR_GETI) continue;
-    if (!cg->ref_hoist[i]) continue;       /* only hoisted GETIs */
-    if (cg->ref_reg[i] >= 0) continue;     /* already has a register */
-    if (in->type != SPTT_INT) continue;    /* only integer for GPR */
+    if (in->flags & SPTIRF_DEAD)
+      continue;
+    if (in->op != SPTIR_GETI)
+      continue;
+    if (!cg->ref_hoist[i])
+      continue; /* only hoisted GETIs */
+    if (cg->ref_reg[i] >= 0)
+      continue; /* already has a register */
+    if (in->type != SPTT_INT)
+      continue; /* only integer for GPR */
     cg->ref_reg[i] = (int8_t)free_regs[next_reg++];
   }
 }
@@ -685,18 +840,18 @@ static void gen_prologue(SPTCodeGen *cg) {
      RBX = base = ci->func.p + 1
      R14 = k (constants table)
   */
-  sptasm_mov_rr(a, SPT_R12, SPT_ABI_ARG0);  /* R12 = L */
-  sptasm_mov_rr(a, SPT_R13, SPT_ABI_ARG1);  /* R13 = ci */
+  sptasm_mov_rr(a, SPT_R12, SPT_ABI_ARG0); /* R12 = L */
+  sptasm_mov_rr(a, SPT_R13, SPT_ABI_ARG1); /* R13 = ci */
 
   /* base = ci->func.p + 1 */
-  sptasm_mov_rm(a, SPT_RAX, SPT_R13, OFF_CI_FUNC);  /* RAX = ci->func.p */
-  sptasm_lea(a, SPT_RBX, SPT_RAX, SLOT_SIZE);        /* RBX = base = func.p + 16 */
+  sptasm_mov_rm(a, SPT_RAX, SPT_R13, OFF_CI_FUNC); /* RAX = ci->func.p */
+  sptasm_lea(a, SPT_RBX, SPT_RAX, SLOT_SIZE);      /* RBX = base = func.p + 16 */
 
   /* k = ci_func(ci)->p->k */
   /* RAX = ci->func.p (StackValue*), [RAX] = value_.gc = LClosure* */
-  sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TVALUE_VAL);  /* RAX = LClosure* */
-  sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_LCLOSURE_P);  /* RAX = Proto* */
-  sptasm_mov_rm(a, SPT_R14, SPT_RAX, OFF_PROTO_K);     /* R14 = k */
+  sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TVALUE_VAL); /* RAX = LClosure* */
+  sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_LCLOSURE_P); /* RAX = Proto* */
+  sptasm_mov_rm(a, SPT_R14, SPT_RAX, OFF_PROTO_K);    /* R14 = k */
 }
 
 static void gen_epilogue(SPTCodeGen *cg) {
@@ -727,12 +882,14 @@ static void gen_load(SPTCodeGen *cg, SPTReg dst, int ref, SPTType type) {
   SPTAsm *a = &cg->asm_;
   SPTIRBuilder *ir = &cg->trace->ir;
   SPTIRInst *inst = sptir_get(ir, ref);
-  if (!inst) return;
+  if (!inst)
+    return;
 
   /* Register-resident value: it lives in a GPR, not in memory. */
   if (cg->use_ra && ref >= 0 && ref < ir->ninst && cg->ref_reg[ref] >= 0) {
     SPTReg src = (SPTReg)cg->ref_reg[ref];
-    if (dst != src) sptasm_mov_rr(a, dst, src);
+    if (dst != src)
+      sptasm_mov_rr(a, dst, src);
     return;
   }
   /* Resident in an XMM register (e.g. a float used as an array store value):
@@ -743,43 +900,43 @@ static void gen_load(SPTCodeGen *cg, SPTReg dst, int ref, SPTType type) {
   }
 
   switch (inst->op) {
-    case SPTIR_NOP:
-      /* CSE/algebraic simplification: redirect to op1 (the canonical ref). */
-      if (inst->op1 >= 0)
-        gen_load(cg, dst, inst->op1, type);
-      else
-        sptasm_xor_rr(a, dst, dst);
-      break;
-    case SPTIR_KINT:
-      sptasm_mov_ri64(a, dst, inst->aux);
-      break;
-    case SPTIR_KFLT: {
-      /* Load float constant from the spill slot (initialized by gen_inst). */
-      sptasm_mov_rm(a, dst, SPT_RSP, spill_off(cg, ref));
-      break;
-    }
-    case SPTIR_KSTR:
-    case SPTIR_KPTR:
-    case SPTIR_KGC:
-      sptasm_mov_ri64(a, dst, inst->aux);
-      break;
-    case SPTIR_NIL:
-    case SPTIR_FALSE:
+  case SPTIR_NOP:
+    /* CSE/algebraic simplification: redirect to op1 (the canonical ref). */
+    if (inst->op1 >= 0)
+      gen_load(cg, dst, inst->op1, type);
+    else
       sptasm_xor_rr(a, dst, dst);
-      break;
-    case SPTIR_TRUE:
-      sptasm_mov_ri32(a, dst, 1);
-      break;
-    case SPTIR_SLOAD:
-      /* Load from spill slot (cached at trace start by gen_inst).
-         This is correct for exit stubs where the stack may have been
-         modified, and for the loop body where the value hasn't changed. */
-      sptasm_mov_rm(a, dst, SPT_RSP, spill_off(cg, ref));
-      break;
-    default:
-      /* Load from spill slot. */
-      sptasm_mov_rm(a, dst, SPT_RSP, spill_off(cg, ref));
-      break;
+    break;
+  case SPTIR_KINT:
+    sptasm_mov_ri64(a, dst, inst->aux);
+    break;
+  case SPTIR_KFLT: {
+    /* Load float constant from the spill slot (initialized by gen_inst). */
+    sptasm_mov_rm(a, dst, SPT_RSP, spill_off(cg, ref));
+    break;
+  }
+  case SPTIR_KSTR:
+  case SPTIR_KPTR:
+  case SPTIR_KGC:
+    sptasm_mov_ri64(a, dst, inst->aux);
+    break;
+  case SPTIR_NIL:
+  case SPTIR_FALSE:
+    sptasm_xor_rr(a, dst, dst);
+    break;
+  case SPTIR_TRUE:
+    sptasm_mov_ri32(a, dst, 1);
+    break;
+  case SPTIR_SLOAD:
+    /* Load from spill slot (cached at trace start by gen_inst).
+       This is correct for exit stubs where the stack may have been
+       modified, and for the loop body where the value hasn't changed. */
+    sptasm_mov_rm(a, dst, SPT_RSP, spill_off(cg, ref));
+    break;
+  default:
+    /* Load from spill slot. */
+    sptasm_mov_rm(a, dst, SPT_RSP, spill_off(cg, ref));
+    break;
   }
 }
 
@@ -790,7 +947,8 @@ static void gen_store(SPTCodeGen *cg, int ref, SPTReg src) {
   SPTIRBuilder *ir = &cg->trace->ir;
   if (cg->use_ra && ref >= 0 && ref < ir->ninst && cg->ref_reg[ref] >= 0) {
     SPTReg dst = (SPTReg)cg->ref_reg[ref];
-    if (dst != src) sptasm_mov_rr(a, dst, src);
+    if (dst != src)
+      sptasm_mov_rr(a, dst, src);
     return;
   }
   sptasm_mov_mr(a, SPT_RSP, spill_off(cg, ref), src);
@@ -803,7 +961,8 @@ static void gen_load_xmm(SPTCodeGen *cg, SPTXmmReg dst, int ref) {
   SPTIRBuilder *ir = &cg->trace->ir;
   if (cg->use_ra && ref >= 0 && ref < ir->ninst && cg->ref_xmm[ref] >= 0) {
     SPTXmmReg src = (SPTXmmReg)cg->ref_xmm[ref];
-    if (dst != src) sptasm_movsd_rr(a, dst, src);
+    if (dst != src)
+      sptasm_movsd_rr(a, dst, src);
     return;
   }
   sptasm_movsd_rm(a, dst, SPT_RSP, spill_off(cg, ref));
@@ -815,7 +974,8 @@ static void gen_store_xmm(SPTCodeGen *cg, int ref, SPTXmmReg src) {
   SPTIRBuilder *ir = &cg->trace->ir;
   if (cg->use_ra && ref >= 0 && ref < ir->ninst && cg->ref_xmm[ref] >= 0) {
     SPTXmmReg dst = (SPTXmmReg)cg->ref_xmm[ref];
-    if (dst != src) sptasm_movsd_rr(a, dst, src);
+    if (dst != src)
+      sptasm_movsd_rr(a, dst, src);
     return;
   }
   sptasm_movsd_mr(a, SPT_RSP, spill_off(cg, ref), src);
@@ -875,7 +1035,6 @@ static void gen_exit_stub(SPTCodeGen *cg, int snap_idx) {
 
   sptasm_place(a, cg->exit_label_for_snap[snap_idx]);
 
-
   /* Get the snapshot for this exit. */
   if (snap_idx >= ir->nsnaps) {
     /* No snapshot: just go to epilogue. */
@@ -905,14 +1064,16 @@ static void gen_exit_stub(SPTCodeGen *cg, int snap_idx) {
   if (cg->use_ra) {
     for (int slot = 0; slot < 256; slot++) {
       int reg = cg->slot_reg[slot];
-      if (reg < 0) continue;
+      if (reg < 0)
+        continue;
       sptasm_mov_mr(a, SPT_RBX, slot * SLOT_SIZE, (SPTReg)reg);
       gen_write_tag(cg, slot, TAG_INT);
     }
     /* Same for float-resident slots: flush the XMM and tag it as float. */
     for (int slot = 0; slot < 256; slot++) {
       int xreg = cg->slot_xmm[slot];
-      if (xreg < 0) continue;
+      if (xreg < 0)
+        continue;
       sptasm_movsd_mr(a, SPT_RBX, slot * SLOT_SIZE, (SPTXmmReg)xreg);
       gen_write_tag(cg, slot, TAG_FLT);
     }
@@ -981,10 +1142,10 @@ static void gen_exit_stub(SPTCodeGen *cg, int snap_idx) {
        Stack is 16-byte aligned (JIT prologue guarantees it); the JIT frame's
        32-byte shadow space is available for the callee. Spill slots are dead
        (all live values already flushed to the interpreter stack). */
-    sptasm_mov_rr(a, SPT_ABI_ARG0, SPT_R12);   /* L */
-    sptasm_mov_rr(a, SPT_ABI_ARG1, SPT_R13);   /* ci */
-    sptasm_mov_ri64(a, SPT_ABI_ARG2, (int64_t)t);         /* trace */
-    sptasm_mov_ri32(a, SPT_ABI_ARG3, snap_idx);           /* snap_idx */
+    sptasm_mov_rr(a, SPT_ABI_ARG0, SPT_R12);      /* L */
+    sptasm_mov_rr(a, SPT_ABI_ARG1, SPT_R13);      /* ci */
+    sptasm_mov_ri64(a, SPT_ABI_ARG2, (int64_t)t); /* trace */
+    sptasm_mov_ri32(a, SPT_ABI_ARG3, snap_idx);   /* snap_idx */
     sptasm_mov_ri64(a, SPT_RAX, (int64_t)(uintptr_t)&sptjit_exit_resume);
     sptasm_call_r(a, SPT_RAX);
   } else if (exit_pc) {
@@ -1014,13 +1175,26 @@ static void emit_int_inplace(SPTCodeGen *cg, int op, SPTReg R, int srcref) {
   if (si && si->op == SPTIR_KINT && si->aux >= INT32_MIN && si->aux <= INT32_MAX) {
     int32_t imm = (int32_t)si->aux;
     switch (op) {
-      case SPTIR_ADD:  sptasm_add_ri(a, R, imm); return;
-      case SPTIR_SUB:  sptasm_sub_ri(a, R, imm); return;
-      case SPTIR_BAND: sptasm_and_ri(a, R, imm); return;
-      case SPTIR_BOR:  sptasm_or_ri(a, R, imm);  return;
-      case SPTIR_BXOR: sptasm_xor_ri(a, R, imm); return;
-      case SPTIR_MUL:  sptasm_imul_rri(a, R, R, imm); return;
-      default: break;
+    case SPTIR_ADD:
+      sptasm_add_ri(a, R, imm);
+      return;
+    case SPTIR_SUB:
+      sptasm_sub_ri(a, R, imm);
+      return;
+    case SPTIR_BAND:
+      sptasm_and_ri(a, R, imm);
+      return;
+    case SPTIR_BOR:
+      sptasm_or_ri(a, R, imm);
+      return;
+    case SPTIR_BXOR:
+      sptasm_xor_ri(a, R, imm);
+      return;
+    case SPTIR_MUL:
+      sptasm_imul_rri(a, R, R, imm);
+      return;
+    default:
+      break;
     }
   }
 
@@ -1028,13 +1202,26 @@ static void emit_int_inplace(SPTCodeGen *cg, int op, SPTReg R, int srcref) {
   if (cg->use_ra && srcref >= 0 && srcref < ir->ninst && cg->ref_reg[srcref] >= 0) {
     SPTReg S = (SPTReg)cg->ref_reg[srcref];
     switch (op) {
-      case SPTIR_ADD:  sptasm_add_rr(a, R, S); return;
-      case SPTIR_SUB:  sptasm_sub_rr(a, R, S); return;
-      case SPTIR_MUL:  sptasm_imul_rr(a, R, S); return;
-      case SPTIR_BAND: sptasm_and_rr(a, R, S); return;
-      case SPTIR_BOR:  sptasm_or_rr(a, R, S);  return;
-      case SPTIR_BXOR: sptasm_xor_rr(a, R, S); return;
-      default: break;
+    case SPTIR_ADD:
+      sptasm_add_rr(a, R, S);
+      return;
+    case SPTIR_SUB:
+      sptasm_sub_rr(a, R, S);
+      return;
+    case SPTIR_MUL:
+      sptasm_imul_rr(a, R, S);
+      return;
+    case SPTIR_BAND:
+      sptasm_and_rr(a, R, S);
+      return;
+    case SPTIR_BOR:
+      sptasm_or_rr(a, R, S);
+      return;
+    case SPTIR_BXOR:
+      sptasm_xor_rr(a, R, S);
+      return;
+    default:
+      break;
     }
   }
 
@@ -1049,20 +1236,31 @@ static void emit_int_inplace(SPTCodeGen *cg, int op, SPTReg R, int srcref) {
       /* Exclude constants (materialized on demand) and NOPs (no spill slot
          written). Computed values (GETI, ADD, SLOAD, etc.) write their result
          to the spill slot via gen_store, so reading [rsp+spill_off] is safe. */
-      if (cs->op != SPTIR_KINT && cs->op != SPTIR_KFLT &&
-          cs->op != SPTIR_KSTR && cs->op != SPTIR_KPTR &&
-          cs->op != SPTIR_KGC && cs->op != SPTIR_NIL &&
-          cs->op != SPTIR_FALSE && cs->op != SPTIR_TRUE &&
-          cs->op != SPTIR_NOP) {
+      if (cs->op != SPTIR_KINT && cs->op != SPTIR_KFLT && cs->op != SPTIR_KSTR &&
+          cs->op != SPTIR_KPTR && cs->op != SPTIR_KGC && cs->op != SPTIR_NIL &&
+          cs->op != SPTIR_FALSE && cs->op != SPTIR_TRUE && cs->op != SPTIR_NOP) {
         int off = spill_off(cg, canon);
         switch (op) {
-          case SPTIR_ADD:  sptasm_add_rm(a, R, SPT_RSP, off); return;
-          case SPTIR_SUB:  sptasm_sub_rm(a, R, SPT_RSP, off); return;
-          case SPTIR_MUL:  sptasm_imul_rm(a, R, SPT_RSP, off); return;
-          case SPTIR_BAND: sptasm_and_rm(a, R, SPT_RSP, off); return;
-          case SPTIR_BOR:  sptasm_or_rm(a, R, SPT_RSP, off);  return;
-          case SPTIR_BXOR: sptasm_xor_rm(a, R, SPT_RSP, off); return;
-          default: break;
+        case SPTIR_ADD:
+          sptasm_add_rm(a, R, SPT_RSP, off);
+          return;
+        case SPTIR_SUB:
+          sptasm_sub_rm(a, R, SPT_RSP, off);
+          return;
+        case SPTIR_MUL:
+          sptasm_imul_rm(a, R, SPT_RSP, off);
+          return;
+        case SPTIR_BAND:
+          sptasm_and_rm(a, R, SPT_RSP, off);
+          return;
+        case SPTIR_BOR:
+          sptasm_or_rm(a, R, SPT_RSP, off);
+          return;
+        case SPTIR_BXOR:
+          sptasm_xor_rm(a, R, SPT_RSP, off);
+          return;
+        default:
+          break;
         }
       }
     }
@@ -1071,13 +1269,26 @@ static void emit_int_inplace(SPTCodeGen *cg, int op, SPTReg R, int srcref) {
   /* Fallback: materialize/load the source into RAX, then op in place. */
   gen_load(cg, SPT_RAX, srcref, SPTT_INT);
   switch (op) {
-    case SPTIR_ADD:  sptasm_add_rr(a, R, SPT_RAX); break;
-    case SPTIR_SUB:  sptasm_sub_rr(a, R, SPT_RAX); break;
-    case SPTIR_MUL:  sptasm_imul_rr(a, R, SPT_RAX); break;
-    case SPTIR_BAND: sptasm_and_rr(a, R, SPT_RAX); break;
-    case SPTIR_BOR:  sptasm_or_rr(a, R, SPT_RAX);  break;
-    case SPTIR_BXOR: sptasm_xor_rr(a, R, SPT_RAX); break;
-    default: break;
+  case SPTIR_ADD:
+    sptasm_add_rr(a, R, SPT_RAX);
+    break;
+  case SPTIR_SUB:
+    sptasm_sub_rr(a, R, SPT_RAX);
+    break;
+  case SPTIR_MUL:
+    sptasm_imul_rr(a, R, SPT_RAX);
+    break;
+  case SPTIR_BAND:
+    sptasm_and_rr(a, R, SPT_RAX);
+    break;
+  case SPTIR_BOR:
+    sptasm_or_rr(a, R, SPT_RAX);
+    break;
+  case SPTIR_BXOR:
+    sptasm_xor_rr(a, R, SPT_RAX);
+    break;
+  default:
+    break;
   }
 }
 
@@ -1092,30 +1303,33 @@ static void emit_int_inplace(SPTCodeGen *cg, int op, SPTReg R, int srcref) {
    handling a freshly-inserted/rehashed/moved key correctly). The runtime table
    (op1) is guarded to be a map by its SLOAD. Clobbers RAX/RCX/RDX only, so the
    op stays RA-safe. `table_ref` is the map's IR ref. */
-static void gen_hash_find(SPTCodeGen *cg, int table_ref, TString *key,
-                          int32_t exlbl) {
+static void gen_hash_find(SPTCodeGen *cg, int table_ref, TString *key, int32_t exlbl) {
   SPTAsm *a = &cg->asm_;
   uint32_t khash = key->hash;
-  gen_load(cg, SPT_RAX, table_ref, SPTT_TAB);            /* RAX = Table* t */
-  sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx ecx, byte[rax+lsizenode] */
-  sptasm_byte(a, 0x48); sptasm_byte(a, OFF_TABLE_LSIZENODE);
-  sptasm_mov_rm(a, SPT_RDX, SPT_RAX, OFF_TABLE_NODE);    /* RDX = t->node */
+  gen_load(cg, SPT_RAX, table_ref, SPTT_TAB); /* RAX = Table* t */
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0xB6); /* movzx ecx, byte[rax+lsizenode] */
+  sptasm_byte(a, 0x48);
+  sptasm_byte(a, OFF_TABLE_LSIZENODE);
+  sptasm_mov_rm(a, SPT_RDX, SPT_RAX, OFF_TABLE_NODE); /* RDX = t->node */
   sptasm_mov_ri32(a, SPT_RAX, 1);
   sptasm_shl_cl(a, SPT_RAX);
   sptasm_sub_ri(a, SPT_RAX, 1);
-  sptasm_and_ri(a, SPT_RAX, (int32_t)khash);             /* RAX = main-position slot */
+  sptasm_and_ri(a, SPT_RAX, (int32_t)khash); /* RAX = main-position slot */
   sptasm_imul_rri(a, SPT_RAX, SPT_RAX, SZ_NODE);
-  sptasm_add_rr(a, SPT_RDX, SPT_RAX);                    /* RDX = &node[slot] */
+  sptasm_add_rr(a, SPT_RDX, SPT_RAX); /* RDX = &node[slot] */
   int32_t loop_top = sptasm_newlabel(a);
-  int32_t advance  = sptasm_newlabel(a);
-  int32_t found    = sptasm_newlabel(a);
+  int32_t advance = sptasm_newlabel(a);
+  int32_t found = sptasm_newlabel(a);
   sptasm_place(a, loop_top);
   /* if node holds a short-string key equal to ours -> found */
-  sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+key_tt] */
-  sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_KEY_TT);
+  sptasm_byte(a, 0x0F);
+  sptasm_byte(a, 0xB6); /* movzx eax, byte[rdx+key_tt] */
+  sptasm_byte(a, 0x42);
+  sptasm_byte(a, OFF_NODE_KEY_TT);
   sptasm_cmp_ri(a, SPT_RAX, ctb(LUA_VSHRSTR));
   sptasm_jcc(a, SPT_CC_NE, advance);
-  sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_KEY);      /* RAX = node key ptr */
+  sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_KEY); /* RAX = node key ptr */
   sptasm_mov_ri64(a, SPT_RCX, (int64_t)(intptr_t)key);
   sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
   sptasm_jcc(a, SPT_CC_E, found);
@@ -1124,18 +1338,21 @@ static void gen_hash_find(SPTCodeGen *cg, int table_ref, TString *key,
      side-exit; without a guard (exlbl < 0, multi-write mode: entry field-layout
      guard already verified the key) emit ud2 -- key absence is a fatal
      invariant violation that should never happen. */
-  sptasm_mov_rm32(a, SPT_RAX, SPT_RDX, OFF_NODE_NEXT);   /* eax = nx (signed) */
+  sptasm_mov_rm32(a, SPT_RAX, SPT_RDX, OFF_NODE_NEXT); /* eax = nx (signed) */
   sptasm_test_rr(a, SPT_RAX, SPT_RAX);
   if (exlbl >= 0) {
     sptasm_jcc(a, SPT_CC_E, exlbl);
   } else {
-    sptasm_byte(a, 0x0F); sptasm_byte(a, 0x0B);          /* ud2 */
+    sptasm_byte(a, 0x0F);
+    sptasm_byte(a, 0x0B); /* ud2 */
   }
-  sptasm_byte(a, 0x48); sptasm_byte(a, 0x63); sptasm_byte(a, 0xC0); /* movsxd rax, eax */
+  sptasm_byte(a, 0x48);
+  sptasm_byte(a, 0x63);
+  sptasm_byte(a, 0xC0); /* movsxd rax, eax */
   sptasm_imul_rri(a, SPT_RAX, SPT_RAX, SZ_NODE);
-  sptasm_add_rr(a, SPT_RDX, SPT_RAX);                    /* RDX = next node */
+  sptasm_add_rr(a, SPT_RDX, SPT_RAX); /* RDX = next node */
   sptasm_jmp(a, loop_top);
-  sptasm_place(a, found);                                /* RDX = &found node */
+  sptasm_place(a, found); /* RDX = &found node */
 }
 
 static void gen_inst(SPTCodeGen *cg, int idx) {
@@ -1144,795 +1361,889 @@ static void gen_inst(SPTCodeGen *cg, int idx) {
   SPTIRInst *inst = &ir->insts[idx];
 
   /* Skip dead instructions. */
-  if (inst->flags & SPTIRF_DEAD) return;
-  if (inst->op == SPTIR_NOP) return;
+  if (inst->flags & SPTIRF_DEAD)
+    return;
+  if (inst->op == SPTIR_NOP)
+    return;
 
   switch (inst->op) {
-    /* ---- Constants ----
-       gen_load (and the exit stub) re-materialize integer/pointer constants
-       and nil/true/false on demand, so storing them to a spill slot is dead
-       work. Only emit a store when the constant is bound to a register (which
-       the loop body may read across the back-edge). Float constants are the
-       exception: gen_load sources them from the spill slot, so they must be
-       written. */
-    case SPTIR_NIL:
-    case SPTIR_FALSE:
-      if (cg->use_ra && idx < ir->ninst && cg->ref_reg[idx] >= 0) {
-        sptasm_xor_rr(a, SPT_RAX, SPT_RAX);
-        gen_store(cg, idx, SPT_RAX);
-      }
-      break;
-    case SPTIR_TRUE:
-      if (cg->use_ra && idx < ir->ninst && cg->ref_reg[idx] >= 0) {
-        sptasm_mov_ri32(a, SPT_RAX, 1);
-        gen_store(cg, idx, SPT_RAX);
-      }
-      break;
-    case SPTIR_KINT:
-    case SPTIR_KSTR:
-    case SPTIR_KPTR:
-    case SPTIR_KGC:
-      if (cg->use_ra && idx < ir->ninst && cg->ref_reg[idx] >= 0) {
-        sptasm_mov_ri64(a, SPT_RAX, inst->aux);
-        gen_store(cg, idx, SPT_RAX);
-      }
-      break;
-    case SPTIR_KFLT:
-      /* Float constants are read from the spill slot by gen_load. */
-      sptasm_mov_ri64(a, SPT_RAX, inst->aux);
-      sptasm_mov_mr(a, SPT_RSP, spill_off(cg, idx), SPT_RAX);
-      break;
-
-    /* ---- Stack load ---- */
-    case SPTIR_SLOAD: {
-      int slot = (int)inst->aux;
-      if (cg->use_ra && idx < ir->ninst && cg->ref_xmm[idx] >= 0) {
-        /* Float-resident: load the double straight into its XMM register. */
-        sptasm_movsd_rm(a, (SPTXmmReg)cg->ref_xmm[idx], SPT_RBX, slot * SLOT_SIZE);
-      } else {
-        sptasm_mov_rm(a, SPT_RAX, SPT_RBX, slot * SLOT_SIZE);
-        gen_store(cg, idx, SPT_RAX);
-      }
-      break;
-    }
-
-    /* ---- Upvalue load ---- */
-    case SPTIR_ULOAD: {
-      /* Load upvalue: cl->upvals[aux]->v.p->value_ */
-      int uv_idx = (int)inst->aux;
-      /* cl = ci_func(ci) = s2v(ci->func.p)->value_.gc */
-      sptasm_mov_rm(a, SPT_RAX, SPT_R13, OFF_CI_FUNC); /* RAX = ci->func.p */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TVALUE_VAL); /* RAX = LClosure* */
-      /* RAX = cl->upvals[uv_idx] */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX,
-                    offsetof(LClosure, upvals) + uv_idx * 8);
-      /* RAX = upval->v.p (TValue*) */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, offsetof(UpVal, v));
-      /* RAX = *upval->v.p (the value) */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TVALUE_VAL);
+  /* ---- Constants ----
+     gen_load (and the exit stub) re-materialize integer/pointer constants
+     and nil/true/false on demand, so storing them to a spill slot is dead
+     work. Only emit a store when the constant is bound to a register (which
+     the loop body may read across the back-edge). Float constants are the
+     exception: gen_load sources them from the spill slot, so they must be
+     written. */
+  case SPTIR_NIL:
+  case SPTIR_FALSE:
+    if (cg->use_ra && idx < ir->ninst && cg->ref_reg[idx] >= 0) {
+      sptasm_xor_rr(a, SPT_RAX, SPT_RAX);
       gen_store(cg, idx, SPT_RAX);
-      break;
     }
+    break;
+  case SPTIR_TRUE:
+    if (cg->use_ra && idx < ir->ninst && cg->ref_reg[idx] >= 0) {
+      sptasm_mov_ri32(a, SPT_RAX, 1);
+      gen_store(cg, idx, SPT_RAX);
+    }
+    break;
+  case SPTIR_KINT:
+  case SPTIR_KSTR:
+  case SPTIR_KPTR:
+  case SPTIR_KGC:
+    if (cg->use_ra && idx < ir->ninst && cg->ref_reg[idx] >= 0) {
+      sptasm_mov_ri64(a, SPT_RAX, inst->aux);
+      gen_store(cg, idx, SPT_RAX);
+    }
+    break;
+  case SPTIR_KFLT:
+    /* Float constants are read from the spill slot by gen_load. */
+    sptasm_mov_ri64(a, SPT_RAX, inst->aux);
+    sptasm_mov_mr(a, SPT_RSP, spill_off(cg, idx), SPT_RAX);
+    break;
 
-    /* ---- Arithmetic (integer) ---- */
-    case SPTIR_ADD:
-    case SPTIR_SUB:
-    case SPTIR_MUL:
-    case SPTIR_BAND:
-    case SPTIR_BOR:
-    case SPTIR_BXOR: {
-      if (inst->type == SPTT_INT) {
-        /* Two-address coalescing: if the result is resident in R and its first
-           operand is the same register, compute in place (one instruction)
-           instead of load/load/op/store. Commutative ops also catch the case
-           where the second operand is the result register. */
-        int rr = (cg->use_ra && idx < ir->ninst) ? cg->ref_reg[idx] : -1;
-        int r1 = (cg->use_ra && inst->op1 >= 0 && inst->op1 < ir->ninst)
-                   ? cg->ref_reg[inst->op1] : -1;
-        int r2 = (cg->use_ra && inst->op2 >= 0 && inst->op2 < ir->ninst)
-                   ? cg->ref_reg[inst->op2] : -1;
-        int commutative = (inst->op == SPTIR_ADD || inst->op == SPTIR_MUL ||
-                           inst->op == SPTIR_BAND || inst->op == SPTIR_BOR ||
-                           inst->op == SPTIR_BXOR);
-        if (rr >= 0 && rr == r1) {
-          emit_int_inplace(cg, inst->op, (SPTReg)rr, inst->op2);
-        } else if (rr >= 0 && commutative && rr == r2) {
-          emit_int_inplace(cg, inst->op, (SPTReg)rr, inst->op1);
-        } else {
-          gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-          gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-          switch (inst->op) {
-            case SPTIR_ADD:  sptasm_add_rr(a, SPT_RAX, SPT_RCX); break;
-            case SPTIR_SUB:  sptasm_sub_rr(a, SPT_RAX, SPT_RCX); break;
-            case SPTIR_MUL:  sptasm_imul_rr(a, SPT_RAX, SPT_RCX); break;
-            case SPTIR_BAND: sptasm_and_rr(a, SPT_RAX, SPT_RCX); break;
-            case SPTIR_BOR:  sptasm_or_rr(a, SPT_RAX, SPT_RCX); break;
-            case SPTIR_BXOR: sptasm_xor_rr(a, SPT_RAX, SPT_RCX); break;
-          }
-          gen_store(cg, idx, SPT_RAX);
-        }
-      } else if (inst->type == SPTT_FLT) {
-        /* Float arithmetic in XMM, with two-address coalescing when the result
-           is XMM-resident and shares a register with op1 (commutative ops also
-           catch op2). Otherwise compute in XMM0 and store. */
-        int xr = (cg->use_ra && idx < ir->ninst) ? cg->ref_xmm[idx] : -1;
-        int x1 = (cg->use_ra && inst->op1 >= 0 && inst->op1 < ir->ninst)
-                   ? cg->ref_xmm[inst->op1] : -1;
-        int x2 = (cg->use_ra && inst->op2 >= 0 && inst->op2 < ir->ninst)
-                   ? cg->ref_xmm[inst->op2] : -1;
-        int commutative = (inst->op == SPTIR_ADD || inst->op == SPTIR_MUL);
-        int inplace = 0, srcref = -1;
-        if (xr >= 0 && xr == x1) { inplace = 1; srcref = inst->op2; }
-        else if (xr >= 0 && commutative && xr == x2) { inplace = 1; srcref = inst->op1; }
+  /* ---- Stack load ---- */
+  case SPTIR_SLOAD: {
+    int slot = (int)inst->aux;
+    if (cg->use_ra && idx < ir->ninst && cg->ref_xmm[idx] >= 0) {
+      /* Float-resident: load the double straight into its XMM register. */
+      sptasm_movsd_rm(a, (SPTXmmReg)cg->ref_xmm[idx], SPT_RBX, slot * SLOT_SIZE);
+    } else {
+      sptasm_mov_rm(a, SPT_RAX, SPT_RBX, slot * SLOT_SIZE);
+      gen_store(cg, idx, SPT_RAX);
+    }
+    break;
+  }
 
-        if (inplace) {
-          /* R = R <op> src. Use src's resident XMM, else load into XMM1. */
-          SPTXmmReg R = (SPTXmmReg)xr, S;
-          if (cg->use_ra && srcref >= 0 && srcref < ir->ninst &&
-              cg->ref_xmm[srcref] >= 0 && cg->ref_xmm[srcref] != xr) {
-            S = (SPTXmmReg)cg->ref_xmm[srcref];
-          } else {
-            gen_load_xmm(cg, SPT_XMM1, srcref);
-            S = SPT_XMM1;
-          }
-          switch (inst->op) {
-            case SPTIR_ADD: sptasm_addsd(a, R, S); break;
-            case SPTIR_SUB: sptasm_subsd(a, R, S); break;
-            case SPTIR_MUL: sptasm_mulsd(a, R, S); break;
-            case SPTIR_DIV: sptasm_divsd(a, R, S); break;
-          }
-        } else {
-          gen_load_xmm(cg, SPT_XMM0, inst->op1);
-          gen_load_xmm(cg, SPT_XMM1, inst->op2);
-          switch (inst->op) {
-            case SPTIR_ADD: sptasm_addsd(a, SPT_XMM0, SPT_XMM1); break;
-            case SPTIR_SUB: sptasm_subsd(a, SPT_XMM0, SPT_XMM1); break;
-            case SPTIR_MUL: sptasm_mulsd(a, SPT_XMM0, SPT_XMM1); break;
-            case SPTIR_DIV: sptasm_divsd(a, SPT_XMM0, SPT_XMM1); break;
-          }
-          gen_store_xmm(cg, idx, SPT_XMM0);
+  /* ---- Upvalue load ---- */
+  case SPTIR_ULOAD: {
+    /* Load upvalue: cl->upvals[aux]->v.p->value_ */
+    int uv_idx = (int)inst->aux;
+    /* cl = ci_func(ci) = s2v(ci->func.p)->value_.gc */
+    sptasm_mov_rm(a, SPT_RAX, SPT_R13, OFF_CI_FUNC);    /* RAX = ci->func.p */
+    sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TVALUE_VAL); /* RAX = LClosure* */
+    /* RAX = cl->upvals[uv_idx] */
+    sptasm_mov_rm(a, SPT_RAX, SPT_RAX, offsetof(LClosure, upvals) + uv_idx * 8);
+    /* RAX = upval->v.p (TValue*) */
+    sptasm_mov_rm(a, SPT_RAX, SPT_RAX, offsetof(UpVal, v));
+    /* RAX = *upval->v.p (the value) */
+    sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TVALUE_VAL);
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  /* ---- Arithmetic (integer) ---- */
+  case SPTIR_ADD:
+  case SPTIR_SUB:
+  case SPTIR_MUL:
+  case SPTIR_BAND:
+  case SPTIR_BOR:
+  case SPTIR_BXOR: {
+    if (inst->type == SPTT_INT) {
+      /* Two-address coalescing: if the result is resident in R and its first
+         operand is the same register, compute in place (one instruction)
+         instead of load/load/op/store. Commutative ops also catch the case
+         where the second operand is the result register. */
+      int rr = (cg->use_ra && idx < ir->ninst) ? cg->ref_reg[idx] : -1;
+      int r1 =
+          (cg->use_ra && inst->op1 >= 0 && inst->op1 < ir->ninst) ? cg->ref_reg[inst->op1] : -1;
+      int r2 =
+          (cg->use_ra && inst->op2 >= 0 && inst->op2 < ir->ninst) ? cg->ref_reg[inst->op2] : -1;
+      int commutative = (inst->op == SPTIR_ADD || inst->op == SPTIR_MUL || inst->op == SPTIR_BAND ||
+                         inst->op == SPTIR_BOR || inst->op == SPTIR_BXOR);
+      if (rr >= 0 && rr == r1) {
+        emit_int_inplace(cg, inst->op, (SPTReg)rr, inst->op2);
+      } else if (rr >= 0 && commutative && rr == r2) {
+        emit_int_inplace(cg, inst->op, (SPTReg)rr, inst->op1);
+      } else {
+        gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+        gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+        switch (inst->op) {
+        case SPTIR_ADD:
+          sptasm_add_rr(a, SPT_RAX, SPT_RCX);
+          break;
+        case SPTIR_SUB:
+          sptasm_sub_rr(a, SPT_RAX, SPT_RCX);
+          break;
+        case SPTIR_MUL:
+          sptasm_imul_rr(a, SPT_RAX, SPT_RCX);
+          break;
+        case SPTIR_BAND:
+          sptasm_and_rr(a, SPT_RAX, SPT_RCX);
+          break;
+        case SPTIR_BOR:
+          sptasm_or_rr(a, SPT_RAX, SPT_RCX);
+          break;
+        case SPTIR_BXOR:
+          sptasm_xor_rr(a, SPT_RAX, SPT_RCX);
+          break;
         }
+        gen_store(cg, idx, SPT_RAX);
       }
-      break;
-    }
+    } else if (inst->type == SPTT_FLT) {
+      /* Float arithmetic in XMM, with two-address coalescing when the result
+         is XMM-resident and shares a register with op1 (commutative ops also
+         catch op2). Otherwise compute in XMM0 and store. */
+      int xr = (cg->use_ra && idx < ir->ninst) ? cg->ref_xmm[idx] : -1;
+      int x1 =
+          (cg->use_ra && inst->op1 >= 0 && inst->op1 < ir->ninst) ? cg->ref_xmm[inst->op1] : -1;
+      int x2 =
+          (cg->use_ra && inst->op2 >= 0 && inst->op2 < ir->ninst) ? cg->ref_xmm[inst->op2] : -1;
+      int commutative = (inst->op == SPTIR_ADD || inst->op == SPTIR_MUL);
+      int inplace = 0, srcref = -1;
+      if (xr >= 0 && xr == x1) {
+        inplace = 1;
+        srcref = inst->op2;
+      } else if (xr >= 0 && commutative && xr == x2) {
+        inplace = 1;
+        srcref = inst->op1;
+      }
 
-    case SPTIR_DIV: {
-      if (inst->type == SPTT_FLT) {
+      if (inplace) {
+        /* R = R <op> src. Use src's resident XMM, else load into XMM1. */
+        SPTXmmReg R = (SPTXmmReg)xr, S;
+        if (cg->use_ra && srcref >= 0 && srcref < ir->ninst && cg->ref_xmm[srcref] >= 0 &&
+            cg->ref_xmm[srcref] != xr) {
+          S = (SPTXmmReg)cg->ref_xmm[srcref];
+        } else {
+          gen_load_xmm(cg, SPT_XMM1, srcref);
+          S = SPT_XMM1;
+        }
+        switch (inst->op) {
+        case SPTIR_ADD:
+          sptasm_addsd(a, R, S);
+          break;
+        case SPTIR_SUB:
+          sptasm_subsd(a, R, S);
+          break;
+        case SPTIR_MUL:
+          sptasm_mulsd(a, R, S);
+          break;
+        case SPTIR_DIV:
+          sptasm_divsd(a, R, S);
+          break;
+        }
+      } else {
         gen_load_xmm(cg, SPT_XMM0, inst->op1);
         gen_load_xmm(cg, SPT_XMM1, inst->op2);
-        sptasm_divsd(a, SPT_XMM0, SPT_XMM1);
+        switch (inst->op) {
+        case SPTIR_ADD:
+          sptasm_addsd(a, SPT_XMM0, SPT_XMM1);
+          break;
+        case SPTIR_SUB:
+          sptasm_subsd(a, SPT_XMM0, SPT_XMM1);
+          break;
+        case SPTIR_MUL:
+          sptasm_mulsd(a, SPT_XMM0, SPT_XMM1);
+          break;
+        case SPTIR_DIV:
+          sptasm_divsd(a, SPT_XMM0, SPT_XMM1);
+          break;
+        }
         gen_store_xmm(cg, idx, SPT_XMM0);
-      } else if (inst->type == SPTT_INT) {
-        /* Integer division: IDIV */
-        gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-        gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-        sptasm_cqo(a);      /* sign-extend RAX into RDX:RAX */
-        sptasm_idiv_r(a, SPT_RCX);
-        gen_store(cg, idx, SPT_RAX);
       }
-      break;
     }
+    break;
+  }
 
-    case SPTIR_MOD: {
-      if (inst->type == SPTT_INT) {
-        gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-        gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-        sptasm_cqo(a);
-        sptasm_idiv_r(a, SPT_RCX);
-        /* x86 idiv gives a TRUNCATED remainder (sign of the dividend); Lua's %
-           is FLOORED (sign of the divisor). Correct it:
-              r = m % n; if (r != 0 && (r ^ n) < 0) r += n;
-           (when r != 0, sign(r)==sign(m), so (r^n)<0 == (m^n)<0). */
-        sptasm_mov_rr(a, SPT_RAX, SPT_RDX);   /* rax = r (C remainder) */
-        int32_t done = sptasm_newlabel(a);
-        sptasm_test_rr(a, SPT_RAX, SPT_RAX);
-        sptasm_jcc(a, SPT_CC_E, done);        /* r == 0 -> no fixup */
-        sptasm_mov_rr(a, SPT_RDX, SPT_RAX);
-        sptasm_xor_rr(a, SPT_RDX, SPT_RCX);   /* rdx = r ^ n (sets SF) */
-        sptasm_jcc(a, SPT_CC_NS, done);       /* signs same -> no fixup */
-        sptasm_add_rr(a, SPT_RAX, SPT_RCX);   /* r += n */
-        sptasm_place(a, done);
-        gen_store(cg, idx, SPT_RAX);
-      }
-      break;
-    }
-
-    case SPTIR_IDIV: {
-      if (inst->type == SPTT_INT) {
-        gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-        gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-        sptasm_cqo(a);
-        sptasm_idiv_r(a, SPT_RCX);
-        /* idiv gives a TRUNCATED quotient; Lua's // (here ~/) is FLOORED:
-              q = m / n; if (r != 0 && (r ^ n) < 0) q -= 1;
-           r is in RDX after idiv; same sign reasoning as MOD above. */
-        int32_t done = sptasm_newlabel(a);
-        sptasm_test_rr(a, SPT_RDX, SPT_RDX);
-        sptasm_jcc(a, SPT_CC_E, done);        /* r == 0 -> exact, no fixup */
-        sptasm_xor_rr(a, SPT_RDX, SPT_RCX);   /* rdx = r ^ n (sets SF) */
-        sptasm_jcc(a, SPT_CC_NS, done);       /* signs same -> no fixup */
-        sptasm_sub_ri(a, SPT_RAX, 1);         /* q -= 1 */
-        sptasm_place(a, done);
-        gen_store(cg, idx, SPT_RAX);
-      }
-      break;
-    }
-
-    case SPTIR_NEG: {
-      if (inst->type == SPTT_INT) {
-        gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-        sptasm_neg_r(a, SPT_RAX);
-        gen_store(cg, idx, SPT_RAX);
-      } else if (inst->type == SPTT_FLT) {
-        /* Negate a double by flipping its sign bit. Move the bits into RAX
-           (dumping a resident XMM to its spill slot first), XOR the sign bit,
-           then write back to the result's home. */
-        if (cg->use_ra && inst->op1 >= 0 && inst->op1 < ir->ninst &&
-            cg->ref_xmm[inst->op1] >= 0) {
-          sptasm_movsd_mr(a, SPT_RSP, spill_off(cg, inst->op1),
-                          (SPTXmmReg)cg->ref_xmm[inst->op1]);
-        }
-        sptasm_mov_rm(a, SPT_RAX, SPT_RSP, spill_off(cg, inst->op1));
-        sptasm_mov_ri64(a, SPT_RCX, (int64_t)0x8000000000000000ULL);
-        sptasm_xor_rr(a, SPT_RAX, SPT_RCX);
-        sptasm_mov_mr(a, SPT_RSP, spill_off(cg, idx), SPT_RAX);
-        if (cg->use_ra && idx < ir->ninst && cg->ref_xmm[idx] >= 0) {
-          sptasm_movsd_rm(a, (SPTXmmReg)cg->ref_xmm[idx], SPT_RSP, spill_off(cg, idx));
-        }
-      }
-      break;
-    }
-
-    case SPTIR_BNOT: {
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-      sptasm_not_r(a, SPT_RAX);
-      gen_store(cg, idx, SPT_RAX);
-      break;
-    }
-
-    case SPTIR_SHL:
-    case SPTIR_SHR: {
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-      if (inst->op == SPTIR_SHL)
-        sptasm_shl_cl(a, SPT_RAX);
-      else
-        sptasm_shr_cl(a, SPT_RAX);
-      gen_store(cg, idx, SPT_RAX);
-      break;
-    }
-
-    case SPTIR_TOFLT: {
-      /* Convert int to float. */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-      sptasm_cvtsi2sd(a, SPT_XMM0, SPT_RAX);
-      gen_store_xmm(cg, idx, SPT_XMM0);
-      break;
-    }
-
-    case SPTIR_TOINT: {
-      /* Float -> integer with rounding (math.floor / math.ceil). aux = rounding
-         mode (1 = floor, 2 = ceil). roundsd produces an integral double; we then
-         guard that it fits a lua_Integer exactly -- Lua's lua_numbertointeger
-         range is [-2^63, 2^63). The guard is a convert-round-trip: cvtsd2si then
-         cvtsi2sd, and ucomisd the result against the rounded value. In range the
-         round-trip is exact (== holds, including the boundary -2^63); out of
-         range cvtsd2si saturates to INT64_MIN so the round-trip differs (and a
-         NaN input is unordered) -> side-exit, where the interpreter returns the
-         float, matching Lua. The integer result is the cvtsd2si value. */
-      gen_load_xmm(cg, SPT_XMM0, inst->op1);              /* XMM0 = x (float) */
-      uint8_t rmode = ((int)inst->aux == 2) ? 0x0A : 0x09; /* ceil : floor */
-      sptasm_roundsd(a, SPT_XMM0, SPT_XMM0, rmode);       /* XMM0 = round(x) */
-      sptasm_cvtsd2si(a, SPT_RAX, SPT_XMM0);              /* RAX = (int64)round(x) */
-      sptasm_cvtsi2sd(a, SPT_XMM1, SPT_RAX);              /* XMM1 = (double)RAX */
-      sptasm_ucomisd(a, SPT_XMM0, SPT_XMM1);              /* compare round-trip */
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      sptasm_jcc(a, SPT_CC_NE, exlbl);   /* not equal -> out of integer range */
-      sptasm_jcc(a, SPT_CC_P, exlbl);    /* unordered (NaN) -> out of range */
-      gen_store(cg, idx, SPT_RAX);
-      break;
-    }
-
-    case SPTIR_LEN: {
-      /* Get array length: Table->loglen */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);
-      /* loglen is a 4-byte unsigned int; a 64-bit load would pull in the
-         low bytes of the adjacent t->array pointer and make the value depend
-         on the heap address (ASLR), breaking the signed bounds compare. */
-      sptasm_mov_rm32(a, SPT_RAX, SPT_RAX, OFF_TABLE_LOGLEN);
-      gen_store(cg, idx, SPT_RAX);
-      break;
-    }
-
-    case SPTIR_SLEN: {
-      /* String length for SHORT strings. TString.shrlen is the length for a
-         short string (>=0, <= ~40) and NEGATIVE for a long string. Read it as
-         an unsigned byte: a short string gives 0..40 (high bit clear); a long
-         string gives 128..255 (high bit set). Guard short (cmp >= 0x80 -> side
-         exit), so long strings fall back to the interpreter, which is correct.
-         The guarded value IS the length. */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_STR);
-      sptasm_movzx_rm8(a, SPT_RCX, SPT_RAX, OFF_TSTRING_SHRLEN);
-      sptasm_cmp_ri(a, SPT_RCX, 0x80);
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      sptasm_jcc(a, SPT_CC_NB, exlbl);   /* unsigned >= 0x80 -> long string -> exit */
-      gen_store(cg, idx, SPT_RCX);
-      break;
-    }
-
-    case SPTIR_SBYTE: {
-      /* string.byte(s, i) for SHORT strings, 0-based. RAX = TString*, RCX =
-         shrlen (unsigned byte). Guard short (>= 0x80 -> exit), then guard the
-         index in [0, len): an UNSIGNED compare i >= len catches both i<0 (huge
-         unsigned) and i>=len. Short-string content is inline AT &ts->contents
-         (rawgetshrstr), so lea the content base, add the index, and read the
-         byte zero-extended. */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_STR);
-      sptasm_movzx_rm8(a, SPT_RCX, SPT_RAX, OFF_TSTRING_SHRLEN);
-      sptasm_cmp_ri(a, SPT_RCX, 0x80);
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      sptasm_jcc(a, SPT_CC_NB, exlbl);            /* long string -> exit */
-      gen_load(cg, SPT_RDX, inst->op2, SPTT_INT); /* RDX = index */
-      sptasm_cmp_rr(a, SPT_RDX, SPT_RCX);
-      sptasm_jcc(a, SPT_CC_NB, exlbl);            /* unsigned i >= len -> exit */
-      sptasm_lea(a, SPT_RAX, SPT_RAX, OFF_TSTRING_CONTENTS); /* RAX = content base */
-      sptasm_add_rr(a, SPT_RAX, SPT_RDX);                    /* RAX = content + i */
-      sptasm_movzx_rm8(a, SPT_RAX, SPT_RAX, 0);              /* RAX = byte */
-      gen_store(cg, idx, SPT_RAX);
-      break;
-    }
-
-    /* ---- Comparisons (as guards) ---- */
-    case SPTIR_EQ:
-    case SPTIR_NE:
-    case SPTIR_LT:
-    case SPTIR_LE:
-    case SPTIR_GT:
-    case SPTIR_GE: {
-      /* Comparison: if condition is FALSE, take side exit. */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
-
-      SPTCC cc;
-      switch (inst->op) {
-        case SPTIR_EQ: cc = SPT_CC_NE; break;  /* continue if ==, exit if != */
-        case SPTIR_NE: cc = SPT_CC_E; break;   /* continue if !=, exit if == */
-        case SPTIR_LT: cc = SPT_CC_NL; break;  /* if not less, exit */
-        case SPTIR_LE: cc = SPT_CC_NLE; break; /* if not le, exit */
-        case SPTIR_GT: cc = SPT_CC_LE; break;  /* if not gt, exit */
-        case SPTIR_GE: cc = SPT_CC_L; break;   /* if not ge, exit */
-        default: cc = SPT_CC_NE;
-      }
-
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      sptasm_jcc(a, cc, exlbl);
-      break;
-    }
-
-    case SPTIR_CMPSET: {
-      /* Materialize (op1 cmp op2) as a 0/1 integer -- no side exit. aux holds
-         the comparison SPTIROp. Integer operands only. Used by if-conversion. */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
-      SPTCC cc;
-      switch ((SPTIROp)inst->aux) {
-        case SPTIR_EQ: cc = SPT_CC_E;   break;
-        case SPTIR_NE: cc = SPT_CC_NE;  break;
-        case SPTIR_LT: cc = SPT_CC_L;   break;
-        case SPTIR_LE: cc = SPT_CC_LE;  break;
-        case SPTIR_GT: cc = SPT_CC_NLE; break;  /* greater (signed >) */
-        case SPTIR_GE: cc = SPT_CC_NL;  break;  /* >= (not less) */
-        default:       cc = SPT_CC_E;
-      }
-      sptasm_setcc(a, cc, SPT_RAX);          /* AL = 0/1 */
-      sptasm_movzx_r8(a, SPT_RAX, SPT_RAX);  /* RAX = zero-extended AL (0 or 1) */
-      gen_store(cg, idx, SPT_RAX);
-      break;
-    }
-
-    case SPTIR_FCMPMASK: {
-      /* (op1 cmp op2) on doubles -> all-ones/all-zeros bitmask. aux holds the
-         comparison SPTIROp; GT/GE were emitted by the recorder as swapped LT/LE,
-         so only EQ/NE/LT/LE reach here. Predicates chosen to match Lua's NaN
-         behavior (ordered for </<=/==, unordered for !=). Float if-conversion. */
+  case SPTIR_DIV: {
+    if (inst->type == SPTT_FLT) {
       gen_load_xmm(cg, SPT_XMM0, inst->op1);
       gen_load_xmm(cg, SPT_XMM1, inst->op2);
-      uint8_t pred;
-      switch ((SPTIROp)inst->aux) {
-        case SPTIR_EQ: pred = 0; break;  /* EQ_OQ  : NaN -> false */
-        case SPTIR_LT: pred = 1; break;  /* LT_OS  : NaN -> false */
-        case SPTIR_LE: pred = 2; break;  /* LE_OS  : NaN -> false */
-        case SPTIR_NE: pred = 4; break;  /* NEQ_UQ : NaN -> true  */
-        default:       pred = 0;
-      }
-      sptasm_cmpsd(a, SPT_XMM0, SPT_XMM1, pred);  /* XMM0 = mask */
+      sptasm_divsd(a, SPT_XMM0, SPT_XMM1);
       gen_store_xmm(cg, idx, SPT_XMM0);
-      break;
-    }
-
-    case SPTIR_ICMPMASK: {
-      /* (op1 cmp op2) on integers -> all-ones/all-zeros mask, lifted into XMM.
-         Integers are totally ordered, so the signed setcc senses (incl. GT/GE)
-         are used directly with no operand swap; -setcc turns 0/1 into 0/-1. */
+    } else if (inst->type == SPTT_INT) {
+      /* Integer division: IDIV */
       gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
       gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
-      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
-      SPTCC cc;
-      switch ((SPTIROp)inst->aux) {
-        case SPTIR_EQ: cc = SPT_CC_E;   break;
-        case SPTIR_NE: cc = SPT_CC_NE;  break;
-        case SPTIR_LT: cc = SPT_CC_L;   break;
-        case SPTIR_LE: cc = SPT_CC_LE;  break;
-        case SPTIR_GT: cc = SPT_CC_NLE; break;
-        case SPTIR_GE: cc = SPT_CC_NL;  break;
-        default:       cc = SPT_CC_E;
-      }
-      sptasm_setcc(a, cc, SPT_RAX);          /* AL = 0/1 */
-      sptasm_movzx_r8(a, SPT_RAX, SPT_RAX);  /* RAX = 0 or 1 */
-      sptasm_neg_r(a, SPT_RAX);              /* RAX = 0 or -1 (all-ones) */
-      sptasm_movq_gpr_to_xmm(a, SPT_XMM0, SPT_RAX); /* XMM0 = mask */
-      gen_store_xmm(cg, idx, SPT_XMM0);
-      break;
+      sptasm_cqo(a); /* sign-extend RAX into RDX:RAX */
+      sptasm_idiv_r(a, SPT_RCX);
+      gen_store(cg, idx, SPT_RAX);
     }
+    break;
+  }
 
-    case SPTIR_FSELECT: {
-      /* Bit-exact float select: result = (then & mask) | (else & ~mask).
-         op1=then, op2=else, aux=mask ref. Reproduces the chosen double exactly
-         (a B+(A-B)*c float select would round). Uses scratch XMM0/1/2. */
-      gen_load_xmm(cg, SPT_XMM0, inst->op1);          /* then */
-      gen_load_xmm(cg, SPT_XMM1, inst->op2);          /* else */
-      gen_load_xmm(cg, SPT_XMM2, (int)inst->aux);     /* mask */
-      sptasm_andpd(a, SPT_XMM0, SPT_XMM2);            /* XMM0 = then & mask */
-      sptasm_andnpd(a, SPT_XMM2, SPT_XMM1);          /* XMM2 = ~mask & else */
-      sptasm_orpd(a, SPT_XMM0, SPT_XMM2);            /* XMM0 = result */
-      gen_store_xmm(cg, idx, SPT_XMM0);
-      break;
-    }
-
-    /* ---- Guards ---- */
-    case SPTIR_GUARD_T: {
-      /* Check type tag of the value on the stack. */
-      int slot = -1;
-      SPTIRInst *val = sptir_get(ir, inst->op1);
-      if (val && val->op == SPTIR_SLOAD)
-        slot = (int)val->aux;
-
-      if (slot >= 0) {
-        /* Load the tag byte from [RBX + slot * 16 + 8] and compare. */
-        gen_load_tag(cg, slot);
-        sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag((SPTType)inst->aux));
-
-        int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-        sptasm_jcc(a, SPT_CC_NE, exlbl);
-      }
-      /* If we can't find the slot, skip the guard (conservative). */
-      break;
-    }
-
-    case SPTIR_GUARD_LT: {
-      /* Guard: op1 < aux (aux is an IR ref to the bound). The FORLOOP emits
-         this as KINT(0) < count; specialize a constant op1 to a single
-         test/cmp on the bound, dropping the constant materialization. */
-      SPTIRInst *o1 = sptir_get(ir, inst->op1);
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      if (o1 && o1->op == SPTIR_KINT && o1->aux >= INT32_MIN && o1->aux <= INT32_MAX) {
-        int bound = (int)inst->aux;
-        SPTReg br;
-        if (cg->use_ra && bound >= 0 && bound < ir->ninst && cg->ref_reg[bound] >= 0)
-          br = (SPTReg)cg->ref_reg[bound];
-        else { gen_load(cg, SPT_RAX, bound, SPTT_INT); br = SPT_RAX; }
-        int32_t c = (int32_t)o1->aux;
-        if (c == 0) sptasm_test_rr(a, br, br);
-        else sptasm_cmp_ri(a, br, c);
-        sptasm_jcc(a, SPT_CC_LE, exlbl); /* fail (exit) when bound <= c */
-      } else {
-        gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-        gen_load(cg, SPT_RCX, (int)inst->aux, SPTT_INT);
-        sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
-        sptasm_jcc(a, SPT_CC_NL, exlbl); /* if not <, exit */
-      }
-      break;
-    }
-
-    case SPTIR_GUARD_LE: {
-      SPTIRInst *o1 = sptir_get(ir, inst->op1);
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      if (o1 && o1->op == SPTIR_KINT && o1->aux >= INT32_MIN && o1->aux <= INT32_MAX) {
-        int bound = (int)inst->aux;
-        SPTReg br;
-        if (cg->use_ra && bound >= 0 && bound < ir->ninst && cg->ref_reg[bound] >= 0)
-          br = (SPTReg)cg->ref_reg[bound];
-        else { gen_load(cg, SPT_RAX, bound, SPTT_INT); br = SPT_RAX; }
-        sptasm_cmp_ri(a, br, (int32_t)o1->aux);
-        sptasm_jcc(a, SPT_CC_L, exlbl); /* op1<=bound fails when bound < op1 */
-      } else {
-        gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-        gen_load(cg, SPT_RCX, (int)inst->aux, SPTT_INT);
-        sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
-        sptasm_jcc(a, SPT_CC_NLE, exlbl); /* if not <=, exit */
-      }
-      break;
-    }
-
-    case SPTIR_GUARD_ULT: {
-      /* Guard: (unsigned)op1 < aux (an immediate constant). Used for shift
-         counts: a single unsigned compare rejects both negative (huge
-         unsigned) and >= aux. If it fails, side-exit. */
+  case SPTIR_MOD: {
+    if (inst->type == SPTT_INT) {
       gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
-      sptasm_cmp_ri(a, SPT_RAX, (int32_t)inst->aux);
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      sptasm_jcc(a, SPT_CC_NB, exlbl); /* if !(unsigned <), exit */
-      break;
-    }
-
-    case SPTIR_GUARD: {
-      /* Truthiness guard: if value is not truthy/falsy per aux, exit. */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_ANY);
+      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+      sptasm_cqo(a);
+      sptasm_idiv_r(a, SPT_RCX);
+      /* x86 idiv gives a TRUNCATED remainder (sign of the dividend); Lua's %
+         is FLOORED (sign of the divisor). Correct it:
+            r = m % n; if (r != 0 && (r ^ n) < 0) r += n;
+         (when r != 0, sign(r)==sign(m), so (r^n)<0 == (m^n)<0). */
+      sptasm_mov_rr(a, SPT_RAX, SPT_RDX); /* rax = r (C remainder) */
+      int32_t done = sptasm_newlabel(a);
       sptasm_test_rr(a, SPT_RAX, SPT_RAX);
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      if (inst->aux) {
-        /* Want truthy: exit if zero. */
-        sptasm_jcc(a, SPT_CC_E, exlbl);
-      } else {
-        /* Want falsy: exit if non-zero. */
-        sptasm_jcc(a, SPT_CC_NE, exlbl);
-      }
-      break;
-    }
-
-    /* ---- Array access ---- */
-    case SPTIR_GETI: {
-      /* R[A] = R[B][C] for arrays.  op1 = array ref, op2 = index ref.
-         Memory layout (see ltable.h): t->array points between values and tags.
-           value k = t->array[-(k+1)*8]            = [array - (k+1)*8]
-           tag   k = ((uint8_t*)t->array)[4 + k]   = [array + 4 + k]
-         This is a guarded load: check the element's tag against the recorded
-         type (inst->type) and side-exit on mismatch, then load the value.
-         Uses x86 SIB addressing ([base+index*scale+disp]) to compute both
-         the tag and value addresses in a single load instruction each,
-         avoiding LEA+ADD+IMUL chains. */
-      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);  /* RCX = index */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);  /* RAX = Table* */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
-
-      /* --- type guard: movzx edx, byte[rax + rcx*1 + 4] --- */
-      sptasm_movzx_rm8s(a, SPT_RDX, SPT_RAX, SPT_RCX, 0, 4);
-      sptasm_cmp_ri(a, SPT_RDX, spt_type_to_tag(inst->type));
-      {
-        int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-        sptasm_jcc(a, SPT_CC_NE, exlbl);
-      }
-
-      /* --- load value at [array - (index+1)*8] = [array + (-index)*8 - 8] ---
-         Negate index, then use SIB: mov rax, [rax + rcx*8 - 8]
-         SIB scale field: 0=×1, 1=×2, 2=×4, 3=×8 */
-      sptasm_neg_r(a, SPT_RCX);             /* RCX = -index */
-      sptasm_mov_rms(a, SPT_RAX, SPT_RAX, SPT_RCX, 3, -8); /* RAX = value */
+      sptasm_jcc(a, SPT_CC_E, done); /* r == 0 -> no fixup */
+      sptasm_mov_rr(a, SPT_RDX, SPT_RAX);
+      sptasm_xor_rr(a, SPT_RDX, SPT_RCX); /* rdx = r ^ n (sets SF) */
+      sptasm_jcc(a, SPT_CC_NS, done);     /* signs same -> no fixup */
+      sptasm_add_rr(a, SPT_RAX, SPT_RCX); /* r += n */
+      sptasm_place(a, done);
       gen_store(cg, idx, SPT_RAX);
-      break;
+    }
+    break;
+  }
+
+  case SPTIR_IDIV: {
+    if (inst->type == SPTT_INT) {
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+      sptasm_cqo(a);
+      sptasm_idiv_r(a, SPT_RCX);
+      /* idiv gives a TRUNCATED quotient; Lua's // (here ~/) is FLOORED:
+            q = m / n; if (r != 0 && (r ^ n) < 0) q -= 1;
+         r is in RDX after idiv; same sign reasoning as MOD above. */
+      int32_t done = sptasm_newlabel(a);
+      sptasm_test_rr(a, SPT_RDX, SPT_RDX);
+      sptasm_jcc(a, SPT_CC_E, done);      /* r == 0 -> exact, no fixup */
+      sptasm_xor_rr(a, SPT_RDX, SPT_RCX); /* rdx = r ^ n (sets SF) */
+      sptasm_jcc(a, SPT_CC_NS, done);     /* signs same -> no fixup */
+      sptasm_sub_ri(a, SPT_RAX, 1);       /* q -= 1 */
+      sptasm_place(a, done);
+      gen_store(cg, idx, SPT_RAX);
+    }
+    break;
+  }
+
+  case SPTIR_NEG: {
+    if (inst->type == SPTT_INT) {
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+      sptasm_neg_r(a, SPT_RAX);
+      gen_store(cg, idx, SPT_RAX);
+    } else if (inst->type == SPTT_FLT) {
+      /* Negate a double by flipping its sign bit. Move the bits into RAX
+         (dumping a resident XMM to its spill slot first), XOR the sign bit,
+         then write back to the result's home. */
+      if (cg->use_ra && inst->op1 >= 0 && inst->op1 < ir->ninst && cg->ref_xmm[inst->op1] >= 0) {
+        sptasm_movsd_mr(a, SPT_RSP, spill_off(cg, inst->op1), (SPTXmmReg)cg->ref_xmm[inst->op1]);
+      }
+      sptasm_mov_rm(a, SPT_RAX, SPT_RSP, spill_off(cg, inst->op1));
+      sptasm_mov_ri64(a, SPT_RCX, (int64_t)0x8000000000000000ULL);
+      sptasm_xor_rr(a, SPT_RAX, SPT_RCX);
+      sptasm_mov_mr(a, SPT_RSP, spill_off(cg, idx), SPT_RAX);
+      if (cg->use_ra && idx < ir->ninst && cg->ref_xmm[idx] >= 0) {
+        sptasm_movsd_rm(a, (SPTXmmReg)cg->ref_xmm[idx], SPT_RSP, spill_off(cg, idx));
+      }
+    }
+    break;
+  }
+
+  case SPTIR_BNOT: {
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+    sptasm_not_r(a, SPT_RAX);
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  case SPTIR_SHL:
+  case SPTIR_SHR: {
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+    gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+    if (inst->op == SPTIR_SHL)
+      sptasm_shl_cl(a, SPT_RAX);
+    else
+      sptasm_shr_cl(a, SPT_RAX);
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  case SPTIR_TOFLT: {
+    /* Convert int to float. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+    sptasm_cvtsi2sd(a, SPT_XMM0, SPT_RAX);
+    gen_store_xmm(cg, idx, SPT_XMM0);
+    break;
+  }
+
+  case SPTIR_TOINT: {
+    /* Float -> integer with rounding (math.floor / math.ceil). aux = rounding
+       mode (1 = floor, 2 = ceil). roundsd produces an integral double; we then
+       guard that it fits a lua_Integer exactly -- Lua's lua_numbertointeger
+       range is [-2^63, 2^63). The guard is a convert-round-trip: cvtsd2si then
+       cvtsi2sd, and ucomisd the result against the rounded value. In range the
+       round-trip is exact (== holds, including the boundary -2^63); out of
+       range cvtsd2si saturates to INT64_MIN so the round-trip differs (and a
+       NaN input is unordered) -> side-exit, where the interpreter returns the
+       float, matching Lua. The integer result is the cvtsd2si value. */
+    gen_load_xmm(cg, SPT_XMM0, inst->op1);               /* XMM0 = x (float) */
+    uint8_t rmode = ((int)inst->aux == 2) ? 0x0A : 0x09; /* ceil : floor */
+    sptasm_roundsd(a, SPT_XMM0, SPT_XMM0, rmode);        /* XMM0 = round(x) */
+    sptasm_cvtsd2si(a, SPT_RAX, SPT_XMM0);               /* RAX = (int64)round(x) */
+    sptasm_cvtsi2sd(a, SPT_XMM1, SPT_RAX);               /* XMM1 = (double)RAX */
+    sptasm_ucomisd(a, SPT_XMM0, SPT_XMM1);               /* compare round-trip */
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    sptasm_jcc(a, SPT_CC_NE, exlbl); /* not equal -> out of integer range */
+    sptasm_jcc(a, SPT_CC_P, exlbl);  /* unordered (NaN) -> out of range */
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  case SPTIR_LEN: {
+    /* Get array length: Table->loglen */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);
+    /* loglen is a 4-byte unsigned int; a 64-bit load would pull in the
+       low bytes of the adjacent t->array pointer and make the value depend
+       on the heap address (ASLR), breaking the signed bounds compare. */
+    sptasm_mov_rm32(a, SPT_RAX, SPT_RAX, OFF_TABLE_LOGLEN);
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  case SPTIR_SLEN: {
+    /* String length for SHORT strings. TString.shrlen is the length for a
+       short string (>=0, <= ~40) and NEGATIVE for a long string. Read it as
+       an unsigned byte: a short string gives 0..40 (high bit clear); a long
+       string gives 128..255 (high bit set). Guard short (cmp >= 0x80 -> side
+       exit), so long strings fall back to the interpreter, which is correct.
+       The guarded value IS the length. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_STR);
+    sptasm_movzx_rm8(a, SPT_RCX, SPT_RAX, OFF_TSTRING_SHRLEN);
+    sptasm_cmp_ri(a, SPT_RCX, 0x80);
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    sptasm_jcc(a, SPT_CC_NB, exlbl); /* unsigned >= 0x80 -> long string -> exit */
+    gen_store(cg, idx, SPT_RCX);
+    break;
+  }
+
+  case SPTIR_SBYTE: {
+    /* string.byte(s, i) for SHORT strings, 0-based. RAX = TString*, RCX =
+       shrlen (unsigned byte). Guard short (>= 0x80 -> exit), then guard the
+       index in [0, len): an UNSIGNED compare i >= len catches both i<0 (huge
+       unsigned) and i>=len. Short-string content is inline AT &ts->contents
+       (rawgetshrstr), so lea the content base, add the index, and read the
+       byte zero-extended. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_STR);
+    sptasm_movzx_rm8(a, SPT_RCX, SPT_RAX, OFF_TSTRING_SHRLEN);
+    sptasm_cmp_ri(a, SPT_RCX, 0x80);
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    sptasm_jcc(a, SPT_CC_NB, exlbl);            /* long string -> exit */
+    gen_load(cg, SPT_RDX, inst->op2, SPTT_INT); /* RDX = index */
+    sptasm_cmp_rr(a, SPT_RDX, SPT_RCX);
+    sptasm_jcc(a, SPT_CC_NB, exlbl);                       /* unsigned i >= len -> exit */
+    sptasm_lea(a, SPT_RAX, SPT_RAX, OFF_TSTRING_CONTENTS); /* RAX = content base */
+    sptasm_add_rr(a, SPT_RAX, SPT_RDX);                    /* RAX = content + i */
+    sptasm_movzx_rm8(a, SPT_RAX, SPT_RAX, 0);              /* RAX = byte */
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  /* ---- Comparisons (as guards) ---- */
+  case SPTIR_EQ:
+  case SPTIR_NE:
+  case SPTIR_LT:
+  case SPTIR_LE:
+  case SPTIR_GT:
+  case SPTIR_GE: {
+    /* Comparison: if condition is FALSE, take side exit. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+    gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+    sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+
+    SPTCC cc;
+    switch (inst->op) {
+    case SPTIR_EQ:
+      cc = SPT_CC_NE;
+      break; /* continue if ==, exit if != */
+    case SPTIR_NE:
+      cc = SPT_CC_E;
+      break; /* continue if !=, exit if == */
+    case SPTIR_LT:
+      cc = SPT_CC_NL;
+      break; /* if not less, exit */
+    case SPTIR_LE:
+      cc = SPT_CC_NLE;
+      break; /* if not le, exit */
+    case SPTIR_GT:
+      cc = SPT_CC_LE;
+      break; /* if not gt, exit */
+    case SPTIR_GE:
+      cc = SPT_CC_L;
+      break; /* if not ge, exit */
+    default:
+      cc = SPT_CC_NE;
     }
 
-    case SPTIR_GETFIELD: {
-      /* R[A] = map[K]  for a constant short-string key.  op1 = map ref,
-         aux = the key TString*.  Inline hash-slot fast path (LuaJIT-style):
-         search the key's main position and its collision chain (gen_hash_find),
-         then type-guard and load the found node's value. A key that is absent at
-         run time side-exits (gen_hash_find jumps to exlbl on chain end). No C
-         call; RA-safe (RAX/RCX/RDX scratch only).
-         Multi-write mode (SPTIRF_GUARD cleared): entry field-layout guard
-         already verified key + type, so no in-body guard/exit. gen_hash_find
-         with exlbl=-1 emits ud2 on key absence (fatal invariant violation). */
-      TString *key = (TString *)(intptr_t)inst->aux;
-      if (inst->flags & SPTIRF_GUARD) {
-        int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-        gen_hash_find(cg, inst->op1, key, exlbl);           /* RDX = &found node */
-        /* value type guard: node->i_val.tt_ == recorded type */
-        sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);          /* movzx eax, byte[rdx+val_tt] */
-        sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
-        sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag(inst->type));
-        sptasm_jcc(a, SPT_CC_NE, exlbl);
-      } else {
-        gen_hash_find(cg, inst->op1, key, -1);              /* guard-free, ud2 on miss */
-      }
-      /* load value bits */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL);      /* RAX = value bits   */
-      gen_store(cg, idx, SPT_RAX);
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    sptasm_jcc(a, cc, exlbl);
+    break;
+  }
+
+  case SPTIR_CMPSET: {
+    /* Materialize (op1 cmp op2) as a 0/1 integer -- no side exit. aux holds
+       the comparison SPTIROp. Integer operands only. Used by if-conversion. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+    gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+    sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+    SPTCC cc;
+    switch ((SPTIROp)inst->aux) {
+    case SPTIR_EQ:
+      cc = SPT_CC_E;
       break;
+    case SPTIR_NE:
+      cc = SPT_CC_NE;
+      break;
+    case SPTIR_LT:
+      cc = SPT_CC_L;
+      break;
+    case SPTIR_LE:
+      cc = SPT_CC_LE;
+      break;
+    case SPTIR_GT:
+      cc = SPT_CC_NLE;
+      break; /* greater (signed >) */
+    case SPTIR_GE:
+      cc = SPT_CC_NL;
+      break; /* >= (not less) */
+    default:
+      cc = SPT_CC_E;
     }
-    case SPTIR_GETTABUP: {
-      /* R[A] = UpVal[B][K]  for a constant short-string key (global / library
-         read). op1 = the ULOAD ref that yields the upvalue table; aux = key
-         TString*. Same inline hash-slot search + value load as GETFIELD, just
-         with the table coming from the ULOAD instead of a register operand.
-         GETTABUP is not RA-safe (see ra_op_is_safe), so these traces run with
-         RA disabled and the ULOAD result is read from its spill slot. */
-      TString *key = (TString *)(intptr_t)inst->aux;
+    sptasm_setcc(a, cc, SPT_RAX);         /* AL = 0/1 */
+    sptasm_movzx_r8(a, SPT_RAX, SPT_RAX); /* RAX = zero-extended AL (0 or 1) */
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  case SPTIR_FCMPMASK: {
+    /* (op1 cmp op2) on doubles -> all-ones/all-zeros bitmask. aux holds the
+       comparison SPTIROp; GT/GE were emitted by the recorder as swapped LT/LE,
+       so only EQ/NE/LT/LE reach here. Predicates chosen to match Lua's NaN
+       behavior (ordered for </<=/==, unordered for !=). Float if-conversion. */
+    gen_load_xmm(cg, SPT_XMM0, inst->op1);
+    gen_load_xmm(cg, SPT_XMM1, inst->op2);
+    uint8_t pred;
+    switch ((SPTIROp)inst->aux) {
+    case SPTIR_EQ:
+      pred = 0;
+      break; /* EQ_OQ  : NaN -> false */
+    case SPTIR_LT:
+      pred = 1;
+      break; /* LT_OS  : NaN -> false */
+    case SPTIR_LE:
+      pred = 2;
+      break; /* LE_OS  : NaN -> false */
+    case SPTIR_NE:
+      pred = 4;
+      break; /* NEQ_UQ : NaN -> true  */
+    default:
+      pred = 0;
+    }
+    sptasm_cmpsd(a, SPT_XMM0, SPT_XMM1, pred); /* XMM0 = mask */
+    gen_store_xmm(cg, idx, SPT_XMM0);
+    break;
+  }
+
+  case SPTIR_ICMPMASK: {
+    /* (op1 cmp op2) on integers -> all-ones/all-zeros mask, lifted into XMM.
+       Integers are totally ordered, so the signed setcc senses (incl. GT/GE)
+       are used directly with no operand swap; -setcc turns 0/1 into 0/-1. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+    gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);
+    sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+    SPTCC cc;
+    switch ((SPTIROp)inst->aux) {
+    case SPTIR_EQ:
+      cc = SPT_CC_E;
+      break;
+    case SPTIR_NE:
+      cc = SPT_CC_NE;
+      break;
+    case SPTIR_LT:
+      cc = SPT_CC_L;
+      break;
+    case SPTIR_LE:
+      cc = SPT_CC_LE;
+      break;
+    case SPTIR_GT:
+      cc = SPT_CC_NLE;
+      break;
+    case SPTIR_GE:
+      cc = SPT_CC_NL;
+      break;
+    default:
+      cc = SPT_CC_E;
+    }
+    sptasm_setcc(a, cc, SPT_RAX);                 /* AL = 0/1 */
+    sptasm_movzx_r8(a, SPT_RAX, SPT_RAX);         /* RAX = 0 or 1 */
+    sptasm_neg_r(a, SPT_RAX);                     /* RAX = 0 or -1 (all-ones) */
+    sptasm_movq_gpr_to_xmm(a, SPT_XMM0, SPT_RAX); /* XMM0 = mask */
+    gen_store_xmm(cg, idx, SPT_XMM0);
+    break;
+  }
+
+  case SPTIR_FSELECT: {
+    /* Bit-exact float select: result = (then & mask) | (else & ~mask).
+       op1=then, op2=else, aux=mask ref. Reproduces the chosen double exactly
+       (a B+(A-B)*c float select would round). Uses scratch XMM0/1/2. */
+    gen_load_xmm(cg, SPT_XMM0, inst->op1);      /* then */
+    gen_load_xmm(cg, SPT_XMM1, inst->op2);      /* else */
+    gen_load_xmm(cg, SPT_XMM2, (int)inst->aux); /* mask */
+    sptasm_andpd(a, SPT_XMM0, SPT_XMM2);        /* XMM0 = then & mask */
+    sptasm_andnpd(a, SPT_XMM2, SPT_XMM1);       /* XMM2 = ~mask & else */
+    sptasm_orpd(a, SPT_XMM0, SPT_XMM2);         /* XMM0 = result */
+    gen_store_xmm(cg, idx, SPT_XMM0);
+    break;
+  }
+
+  /* ---- Guards ---- */
+  case SPTIR_GUARD_T: {
+    /* Check type tag of the value on the stack. */
+    int slot = -1;
+    SPTIRInst *val = sptir_get(ir, inst->op1);
+    if (val && val->op == SPTIR_SLOAD)
+      slot = (int)val->aux;
+
+    if (slot >= 0) {
+      /* Load the tag byte from [RBX + slot * 16 + 8] and compare. */
+      gen_load_tag(cg, slot);
+      sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag((SPTType)inst->aux));
+
       int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
-      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+val_tt] */
-      sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
+      sptasm_jcc(a, SPT_CC_NE, exlbl);
+    }
+    /* If we can't find the slot, skip the guard (conservative). */
+    break;
+  }
+
+  case SPTIR_GUARD_LT: {
+    /* Guard: op1 < aux (aux is an IR ref to the bound). The FORLOOP emits
+       this as KINT(0) < count; specialize a constant op1 to a single
+       test/cmp on the bound, dropping the constant materialization. */
+    SPTIRInst *o1 = sptir_get(ir, inst->op1);
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    if (o1 && o1->op == SPTIR_KINT && o1->aux >= INT32_MIN && o1->aux <= INT32_MAX) {
+      int bound = (int)inst->aux;
+      SPTReg br;
+      if (cg->use_ra && bound >= 0 && bound < ir->ninst && cg->ref_reg[bound] >= 0)
+        br = (SPTReg)cg->ref_reg[bound];
+      else {
+        gen_load(cg, SPT_RAX, bound, SPTT_INT);
+        br = SPT_RAX;
+      }
+      int32_t c = (int32_t)o1->aux;
+      if (c == 0)
+        sptasm_test_rr(a, br, br);
+      else
+        sptasm_cmp_ri(a, br, c);
+      sptasm_jcc(a, SPT_CC_LE, exlbl); /* fail (exit) when bound <= c */
+    } else {
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+      gen_load(cg, SPT_RCX, (int)inst->aux, SPTT_INT);
+      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+      sptasm_jcc(a, SPT_CC_NL, exlbl); /* if not <, exit */
+    }
+    break;
+  }
+
+  case SPTIR_GUARD_LE: {
+    SPTIRInst *o1 = sptir_get(ir, inst->op1);
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    if (o1 && o1->op == SPTIR_KINT && o1->aux >= INT32_MIN && o1->aux <= INT32_MAX) {
+      int bound = (int)inst->aux;
+      SPTReg br;
+      if (cg->use_ra && bound >= 0 && bound < ir->ninst && cg->ref_reg[bound] >= 0)
+        br = (SPTReg)cg->ref_reg[bound];
+      else {
+        gen_load(cg, SPT_RAX, bound, SPTT_INT);
+        br = SPT_RAX;
+      }
+      sptasm_cmp_ri(a, br, (int32_t)o1->aux);
+      sptasm_jcc(a, SPT_CC_L, exlbl); /* op1<=bound fails when bound < op1 */
+    } else {
+      gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+      gen_load(cg, SPT_RCX, (int)inst->aux, SPTT_INT);
+      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+      sptasm_jcc(a, SPT_CC_NLE, exlbl); /* if not <=, exit */
+    }
+    break;
+  }
+
+  case SPTIR_GUARD_ULT: {
+    /* Guard: (unsigned)op1 < aux (an immediate constant). Used for shift
+       counts: a single unsigned compare rejects both negative (huge
+       unsigned) and >= aux. If it fails, side-exit. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_INT);
+    sptasm_cmp_ri(a, SPT_RAX, (int32_t)inst->aux);
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    sptasm_jcc(a, SPT_CC_NB, exlbl); /* if !(unsigned <), exit */
+    break;
+  }
+
+  case SPTIR_GUARD: {
+    /* Truthiness guard: if value is not truthy/falsy per aux, exit. */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_ANY);
+    sptasm_test_rr(a, SPT_RAX, SPT_RAX);
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    if (inst->aux) {
+      /* Want truthy: exit if zero. */
+      sptasm_jcc(a, SPT_CC_E, exlbl);
+    } else {
+      /* Want falsy: exit if non-zero. */
+      sptasm_jcc(a, SPT_CC_NE, exlbl);
+    }
+    break;
+  }
+
+  /* ---- Array access ---- */
+  case SPTIR_GETI: {
+    /* R[A] = R[B][C] for arrays.  op1 = array ref, op2 = index ref.
+       Memory layout (see ltable.h): t->array points between values and tags.
+         value k = t->array[-(k+1)*8]            = [array - (k+1)*8]
+         tag   k = ((uint8_t*)t->array)[4 + k]   = [array + 4 + k]
+       This is a guarded load: check the element's tag against the recorded
+       type (inst->type) and side-exit on mismatch, then load the value.
+       Uses x86 SIB addressing ([base+index*scale+disp]) to compute both
+       the tag and value addresses in a single load instruction each,
+       avoiding LEA+ADD+IMUL chains. */
+    gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);          /* RCX = index */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);          /* RAX = Table* */
+    sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
+
+    /* --- type guard: movzx edx, byte[rax + rcx*1 + 4] --- */
+    sptasm_movzx_rm8s(a, SPT_RDX, SPT_RAX, SPT_RCX, 0, 4);
+    sptasm_cmp_ri(a, SPT_RDX, spt_type_to_tag(inst->type));
+    {
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      sptasm_jcc(a, SPT_CC_NE, exlbl);
+    }
+
+    /* --- load value at [array - (index+1)*8] = [array + (-index)*8 - 8] ---
+       Negate index, then use SIB: mov rax, [rax + rcx*8 - 8]
+       SIB scale field: 0=×1, 1=×2, 2=×4, 3=×8 */
+    sptasm_neg_r(a, SPT_RCX);                            /* RCX = -index */
+    sptasm_mov_rms(a, SPT_RAX, SPT_RAX, SPT_RCX, 3, -8); /* RAX = value */
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+
+  case SPTIR_GETFIELD: {
+    /* R[A] = map[K]  for a constant short-string key.  op1 = map ref,
+       aux = the key TString*.  Inline hash-slot fast path (LuaJIT-style):
+       search the key's main position and its collision chain (gen_hash_find),
+       then type-guard and load the found node's value. A key that is absent at
+       run time side-exits (gen_hash_find jumps to exlbl on chain end). No C
+       call; RA-safe (RAX/RCX/RDX scratch only).
+       Multi-write mode (SPTIRF_GUARD cleared): entry field-layout guard
+       already verified key + type, so no in-body guard/exit. gen_hash_find
+       with exlbl=-1 emits ud2 on key absence (fatal invariant violation). */
+    TString *key = (TString *)(intptr_t)inst->aux;
+    if (inst->flags & SPTIRF_GUARD) {
+      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+      gen_hash_find(cg, inst->op1, key, exlbl); /* RDX = &found node */
+      /* value type guard: node->i_val.tt_ == recorded type */
+      sptasm_byte(a, 0x0F);
+      sptasm_byte(a, 0xB6); /* movzx eax, byte[rdx+val_tt] */
+      sptasm_byte(a, 0x42);
+      sptasm_byte(a, OFF_NODE_VAL_TT);
       sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag(inst->type));
       sptasm_jcc(a, SPT_CC_NE, exlbl);
-      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL);      /* RAX = value bits */
-      gen_store(cg, idx, SPT_RAX);
-      break;
+    } else {
+      gen_hash_find(cg, inst->op1, key, -1); /* guard-free, ud2 on miss */
     }
-    case SPTIR_GUARD_CFUNC: {
-      /* Guard table[key] == expected C closure. op1 = table ref (e.g. the math
-         library table from a GETTABUP), op2 = KPTR holding the key TString*,
-         aux = expected GCObject* (the CClosure). Look the key up in the table
-         (gen_hash_find -> side-exit if absent) and side-exit unless the found
-         value equals the expected function -- this pins e.g. math.sqrt to the
-         known C function before lowering the call to a direct libm call, so
-         reassigning the method (or the whole library table) side-exits. */
+    /* load value bits */
+    sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL); /* RAX = value bits   */
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+  case SPTIR_GETTABUP: {
+    /* R[A] = UpVal[B][K]  for a constant short-string key (global / library
+       read). op1 = the ULOAD ref that yields the upvalue table; aux = key
+       TString*. Same inline hash-slot search + value load as GETFIELD, just
+       with the table coming from the ULOAD instead of a register operand.
+       GETTABUP is not RA-safe (see ra_op_is_safe), so these traces run with
+       RA disabled and the ULOAD result is read from its spill slot. */
+    TString *key = (TString *)(intptr_t)inst->aux;
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    gen_hash_find(cg, inst->op1, key, exlbl); /* RDX = &found node */
+    sptasm_byte(a, 0x0F);
+    sptasm_byte(a, 0xB6); /* movzx eax, byte[rdx+val_tt] */
+    sptasm_byte(a, 0x42);
+    sptasm_byte(a, OFF_NODE_VAL_TT);
+    sptasm_cmp_ri(a, SPT_RAX, spt_type_to_tag(inst->type));
+    sptasm_jcc(a, SPT_CC_NE, exlbl);
+    sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL); /* RAX = value bits */
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
+  case SPTIR_GUARD_CFUNC: {
+    /* Guard table[key] == expected C closure. op1 = table ref (e.g. the math
+       library table from a GETTABUP), op2 = KPTR holding the key TString*,
+       aux = expected GCObject* (the CClosure). Look the key up in the table
+       (gen_hash_find -> side-exit if absent) and side-exit unless the found
+       value equals the expected function -- this pins e.g. math.sqrt to the
+       known C function before lowering the call to a direct libm call, so
+       reassigning the method (or the whole library table) side-exits. */
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    TString *key = (TString *)(intptr_t)ir->insts[inst->op2].aux;
+    gen_hash_find(cg, inst->op1, key, exlbl); /* RDX = &found node */
+    /* value must still be a light C function (tag) and the exact function */
+    sptasm_byte(a, 0x0F);
+    sptasm_byte(a, 0xB6); /* movzx eax, byte[rdx+val_tt] */
+    sptasm_byte(a, 0x42);
+    sptasm_byte(a, OFF_NODE_VAL_TT);
+    sptasm_cmp_ri(a, SPT_RAX, LUA_VLCF);
+    sptasm_jcc(a, SPT_CC_NE, exlbl);
+    sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL); /* RAX = value bits (fn ptr) */
+    sptasm_mov_ri64(a, SPT_RCX, (int64_t)inst->aux);  /* RCX = expected fn */
+    sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
+    sptasm_jcc(a, SPT_CC_NE, exlbl);
+    break;
+  }
+  case SPTIR_FMATH: {
+    /* result = libm_fn(arg). op1 = float arg ref, aux = double(*)(double).
+       A direct C call to a leaf libm function (no GC, no Lua callback). The
+       trace runs with RA disabled (FMATH is not in ra_op_is_safe), so the
+       infra registers (L/ci/base/k, callee-saved) survive the call and no
+       caller-saved loop value is live across it. The prologue's frame already
+       includes SPT_ABI_SHADOW (32 bytes on Windows) and leaves RSP == 0
+       (mod 16) -- both required for a direct CALL -- so no RSP adjustment is
+       needed here. (Previously a `sub rsp,8` was emitted for alignment, but
+       that was stale: the frame_size `+= 8` already aligns RSP to 0 mod 16,
+       so the extra sub misaligned RSP to 8 mod 16 before the CALL and shifted
+       the callee's shadow space below the allocated frame, crashing libm
+       functions that use aligned SSE or write to shadow space, e.g. tan.) */
+    gen_load_xmm(cg, SPT_XMM0, inst->op1);           /* XMM0 = arg */
+    sptasm_mov_ri64(a, SPT_RAX, (int64_t)inst->aux); /* RAX = libm fn */
+    sptasm_call_r(a, SPT_RAX);
+    gen_store_xmm(cg, idx, SPT_XMM0); /* result in XMM0 */
+    break;
+  }
+  case SPTIR_FMATH2: {
+    /* result = libm_fn(arg1, arg2). op1 = float arg1, op2 = float arg2,
+       aux = double(*)(double,double). Same RA-disabled / frame-alignment
+       reasoning as FMATH (§10.42); the only difference is a second XMM load
+       (XMM1 = arg2 per x64 SysV + Windows fastcall ABI). Used for math.pow
+       and float % (via the bit-exact spt_jit_luamodf wrapper). */
+    gen_load_xmm(cg, SPT_XMM0, inst->op1);           /* XMM0 = arg1 */
+    gen_load_xmm(cg, SPT_XMM1, inst->op2);           /* XMM1 = arg2 */
+    sptasm_mov_ri64(a, SPT_RAX, (int64_t)inst->aux); /* RAX = libm fn */
+    sptasm_call_r(a, SPT_RAX);
+    gen_store_xmm(cg, idx, SPT_XMM0); /* result in XMM0 */
+    break;
+  }
+
+  case SPTIR_SETFIELD: {
+    /* map[K] = val  for a constant short-string key, val an int/float.
+       op1 = map ref, op2 = value ref, aux = key TString*. Same inline
+       hash-slot search as GETFIELD (gen_hash_find: main position + collision
+       chain), then overwrite the found node's value bits + tag. The recorder
+       only emits this for a key that EXISTS (an insert isn't handled here, so
+       an absent key side-exits via gen_hash_find's chain-end). The value is
+       non-collectable (int/float, enforced at record time), so NO GC write
+       barrier is needed. Scratch RAX/RCX/RDX only -> RA-safe.
+       Multi-write mode (SPTIRF_GUARD cleared): entry field-layout guard
+       verified key exists, so no in-body guard/exit. */
+    TString *key = (TString *)(intptr_t)inst->aux;
+    if (inst->flags & SPTIRF_GUARD) {
       int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      TString *key = (TString *)(intptr_t)ir->insts[inst->op2].aux;
-      gen_hash_find(cg, inst->op1, key, exlbl);             /* RDX = &found node */
-      /* value must still be a light C function (tag) and the exact function */
-      sptasm_byte(a, 0x0F); sptasm_byte(a, 0xB6);            /* movzx eax, byte[rdx+val_tt] */
-      sptasm_byte(a, 0x42); sptasm_byte(a, OFF_NODE_VAL_TT);
-      sptasm_cmp_ri(a, SPT_RAX, LUA_VLCF);
-      sptasm_jcc(a, SPT_CC_NE, exlbl);
-      sptasm_mov_rm(a, SPT_RAX, SPT_RDX, OFF_NODE_VAL);      /* RAX = value bits (fn ptr) */
-      sptasm_mov_ri64(a, SPT_RCX, (int64_t)inst->aux);       /* RCX = expected fn */
-      sptasm_cmp_rr(a, SPT_RAX, SPT_RCX);
-      sptasm_jcc(a, SPT_CC_NE, exlbl);
-      break;
+      gen_hash_find(cg, inst->op1, key, exlbl); /* RDX = &found node */
+    } else {
+      gen_hash_find(cg, inst->op1, key, -1); /* guard-free, ud2 on miss */
     }
-    case SPTIR_FMATH: {
-      /* result = libm_fn(arg). op1 = float arg ref, aux = double(*)(double).
-         A direct C call to a leaf libm function (no GC, no Lua callback). The
-         trace runs with RA disabled (FMATH is not in ra_op_is_safe), so the
-         infra registers (L/ci/base/k, callee-saved) survive the call and no
-         caller-saved loop value is live across it. The prologue's frame already
-         includes SPT_ABI_SHADOW (32 bytes on Windows) and leaves RSP == 0
-         (mod 16) -- both required for a direct CALL -- so no RSP adjustment is
-         needed here. (Previously a `sub rsp,8` was emitted for alignment, but
-         that was stale: the frame_size `+= 8` already aligns RSP to 0 mod 16,
-         so the extra sub misaligned RSP to 8 mod 16 before the CALL and shifted
-         the callee's shadow space below the allocated frame, crashing libm
-         functions that use aligned SSE or write to shadow space, e.g. tan.) */
-      gen_load_xmm(cg, SPT_XMM0, inst->op1);                 /* XMM0 = arg */
-      sptasm_mov_ri64(a, SPT_RAX, (int64_t)inst->aux);       /* RAX = libm fn */
-      sptasm_call_r(a, SPT_RAX);
-      gen_store_xmm(cg, idx, SPT_XMM0);                      /* result in XMM0 */
-      break;
+    /* store value bits then tag (value is int/float -> no GC barrier) */
+    gen_load(cg, SPT_RAX, inst->op2, SPTT_ANY);       /* RAX = value bits */
+    sptasm_mov_mr(a, SPT_RDX, OFF_NODE_VAL, SPT_RAX); /* node->i_val.value_ = RAX */
+    {
+      uint8_t tag = spt_type_to_tag(sptir_type(ir, (int)inst->op2));
+      sptasm_byte(a, 0xC6);            /* MOV r/m8, imm8 */
+      sptasm_byte(a, 0x42);            /* mod=01 reg=000 rm=010(RDX) */
+      sptasm_byte(a, OFF_NODE_VAL_TT); /* disp8 = value tag offset (8) */
+      sptasm_byte(a, tag);
     }
-    case SPTIR_FMATH2: {
-      /* result = libm_fn(arg1, arg2). op1 = float arg1, op2 = float arg2,
-         aux = double(*)(double,double). Same RA-disabled / frame-alignment
-         reasoning as FMATH (§10.42); the only difference is a second XMM load
-         (XMM1 = arg2 per x64 SysV + Windows fastcall ABI). Used for math.pow
-         and float % (via the bit-exact spt_jit_luamodf wrapper). */
-      gen_load_xmm(cg, SPT_XMM0, inst->op1);                 /* XMM0 = arg1 */
-      gen_load_xmm(cg, SPT_XMM1, inst->op2);                 /* XMM1 = arg2 */
-      sptasm_mov_ri64(a, SPT_RAX, (int64_t)inst->aux);       /* RAX = libm fn */
-      sptasm_call_r(a, SPT_RAX);
-      gen_store_xmm(cg, idx, SPT_XMM0);                      /* result in XMM0 */
-      break;
-    }
+    break;
+  }
 
-    case SPTIR_SETFIELD: {
-      /* map[K] = val  for a constant short-string key, val an int/float.
-         op1 = map ref, op2 = value ref, aux = key TString*. Same inline
-         hash-slot search as GETFIELD (gen_hash_find: main position + collision
-         chain), then overwrite the found node's value bits + tag. The recorder
-         only emits this for a key that EXISTS (an insert isn't handled here, so
-         an absent key side-exits via gen_hash_find's chain-end). The value is
-         non-collectable (int/float, enforced at record time), so NO GC write
-         barrier is needed. Scratch RAX/RCX/RDX only -> RA-safe.
-         Multi-write mode (SPTIRF_GUARD cleared): entry field-layout guard
-         verified key exists, so no in-body guard/exit. */
-      TString *key = (TString *)(intptr_t)inst->aux;
-      if (inst->flags & SPTIRF_GUARD) {
-        int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-        gen_hash_find(cg, inst->op1, key, exlbl);           /* RDX = &found node */
-      } else {
-        gen_hash_find(cg, inst->op1, key, -1);              /* guard-free, ud2 on miss */
+  case SPTIR_SETI: {
+    /* R[A][B] = val.  op1 = array ref, op2 = index ref, aux = value ref.
+       Layout (ltable.h): value k at [array-(k+1)*8], tag k at [array+4+k].
+       Bounds are guarded by the recorder. Uses only RAX/RCX/RDX scratch via
+       SIB addressing, so this op is RA-safe (write loops keep residency). */
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);          /* RAX = Table* */
+    gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);          /* RCX = index */
+    gen_load(cg, SPT_RDX, (int)inst->aux, SPTT_ANY);     /* RDX = value bits */
+    sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
+
+    /* tag store: mov byte [RAX + RCX*1 + 4], tag  (uses index, before scaling) */
+    {
+      uint8_t tag = spt_type_to_tag(sptir_type(ir, (int)inst->aux));
+      sptasm_byte(a, 0xC6); /* MOV r/m8, imm8 */
+      sptasm_byte(a, 0x44); /* mod=01 reg=000 rm=100(SIB) */
+      sptasm_byte(a, 0x08); /* SIB: scale=1 index=RCX base=RAX */
+      sptasm_byte(a, 0x04); /* disp8 = +4 */
+      sptasm_byte(a, tag);
+    }
+    /* value store: mov [RAX + RCX*1 - 8], RDX, with RCX = -index*8 */
+    sptasm_imul_rri(a, SPT_RCX, SPT_RCX, 8); /* RCX = index*8 */
+    sptasm_neg_r(a, SPT_RCX);                /* RCX = -index*8 */
+    sptasm_byte(a, 0x48);                    /* REX.W */
+    sptasm_byte(a, 0x89);                    /* MOV r/m64, r64 */
+    sptasm_byte(a, 0x54);                    /* mod=01 reg=RDX rm=100(SIB) */
+    sptasm_byte(a, 0x08);                    /* SIB: scale=1 index=RCX base=RAX */
+    sptasm_byte(a, 0xF8);                    /* disp8 = -8 */
+    break;
+  }
+
+  /* ---- Loop back-edge ---- */
+  case SPTIR_LOOP: {
+    /* With register residency, all loop-carried values live in registers
+       and flow across the back-edge directly, so no stack writeback is
+       needed (side exits spill them via snapshots). Without residency, write
+       all live values back to the interpreter stack each iteration. */
+    if (!cg->use_ra) {
+      for (int slot = 0; slot <= ir->maxslot; slot++) {
+        int ref = ir->reg_map[slot];
+        if (ref < 0)
+          continue;
+        SPTType type = ir->reg_type[slot];
+        gen_load(cg, SPT_RAX, ref, type);
+        sptasm_mov_mr(a, SPT_RBX, slot * SLOT_SIZE, SPT_RAX);
+        gen_write_tag(cg, slot, spt_type_to_tag(type));
       }
-      /* store value bits then tag (value is int/float -> no GC barrier) */
-      gen_load(cg, SPT_RAX, inst->op2, SPTT_ANY);            /* RAX = value bits */
-      sptasm_mov_mr(a, SPT_RDX, OFF_NODE_VAL, SPT_RAX);      /* node->i_val.value_ = RAX */
-      {
-        uint8_t tag = spt_type_to_tag(sptir_type(ir, (int)inst->op2));
-        sptasm_byte(a, 0xC6);                  /* MOV r/m8, imm8 */
-        sptasm_byte(a, 0x42);                  /* mod=01 reg=000 rm=010(RDX) */
-        sptasm_byte(a, OFF_NODE_VAL_TT);       /* disp8 = value tag offset (8) */
-        sptasm_byte(a, tag);
-      }
-      break;
     }
+    /* Jump back to loop start. */
+    sptasm_jmp(a, cg->loop_label);
+    break;
+  }
 
-    case SPTIR_SETI: {
-      /* R[A][B] = val.  op1 = array ref, op2 = index ref, aux = value ref.
-         Layout (ltable.h): value k at [array-(k+1)*8], tag k at [array+4+k].
-         Bounds are guarded by the recorder. Uses only RAX/RCX/RDX scratch via
-         SIB addressing, so this op is RA-safe (write loops keep residency). */
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_ARR);      /* RAX = Table* */
-      gen_load(cg, SPT_RCX, inst->op2, SPTT_INT);      /* RCX = index */
-      gen_load(cg, SPT_RDX, (int)inst->aux, SPTT_ANY); /* RDX = value bits */
-      sptasm_mov_rm(a, SPT_RAX, SPT_RAX, OFF_TABLE_ARRAY); /* RAX = t->array */
-
-      /* tag store: mov byte [RAX + RCX*1 + 4], tag  (uses index, before scaling) */
-      {
-        uint8_t tag = spt_type_to_tag(sptir_type(ir, (int)inst->aux));
-        sptasm_byte(a, 0xC6);   /* MOV r/m8, imm8 */
-        sptasm_byte(a, 0x44);   /* mod=01 reg=000 rm=100(SIB) */
-        sptasm_byte(a, 0x08);   /* SIB: scale=1 index=RCX base=RAX */
-        sptasm_byte(a, 0x04);   /* disp8 = +4 */
-        sptasm_byte(a, tag);
-      }
-      /* value store: mov [RAX + RCX*1 - 8], RDX, with RCX = -index*8 */
-      sptasm_imul_rri(a, SPT_RCX, SPT_RCX, 8);  /* RCX = index*8 */
-      sptasm_neg_r(a, SPT_RCX);                 /* RCX = -index*8 */
-      sptasm_byte(a, 0x48);   /* REX.W */
-      sptasm_byte(a, 0x89);   /* MOV r/m64, r64 */
-      sptasm_byte(a, 0x54);   /* mod=01 reg=RDX rm=100(SIB) */
-      sptasm_byte(a, 0x08);   /* SIB: scale=1 index=RCX base=RAX */
-      sptasm_byte(a, 0xF8);   /* disp8 = -8 */
-      break;
+  /* ---- Return ---- */
+  case SPTIR_RETURN: {
+    if (inst->op1 >= 0) {
+      /* Load return value and store to R[A] (slot 0). */
+      gen_load(cg, SPT_RAX, inst->op1, inst->type);
+      sptasm_mov_mr(a, SPT_RBX, 0, SPT_RAX);
+      gen_write_tag(cg, 0, spt_type_to_tag(inst->type));
     }
+    /* Jump to epilogue. */
+    sptasm_jmp(a, cg->epilogue_label);
+    break;
+  }
 
-    /* ---- Loop back-edge ---- */
-    case SPTIR_LOOP: {
-      /* With register residency, all loop-carried values live in registers
-         and flow across the back-edge directly, so no stack writeback is
-         needed (side exits spill them via snapshots). Without residency, write
-         all live values back to the interpreter stack each iteration. */
-      if (!cg->use_ra) {
-        for (int slot = 0; slot <= ir->maxslot; slot++) {
-          int ref = ir->reg_map[slot];
-          if (ref < 0) continue;
-          SPTType type = ir->reg_type[slot];
-          gen_load(cg, SPT_RAX, ref, type);
-          sptasm_mov_mr(a, SPT_RBX, slot * SLOT_SIZE, SPT_RAX);
-          gen_write_tag(cg, slot, spt_type_to_tag(type));
-        }
-      }
-      /* Jump back to loop start. */
-      sptasm_jmp(a, cg->loop_label);
-      break;
-    }
+  /* ---- Unconditional side exit (side-trace tail) ----
+     Closes a side trace at a back-edge it cannot loop on. Jump unconditionally
+     to the snapshot's exit stub, which flushes live state to the interpreter
+     stack, sets ci->u.l.savedpc = exit_pc, and returns. Unlike a guard there is
+     no condition; control always leaves the trace here. The exit stub is
+     generated later (snap_emitted marks it) and reached via this jmp. */
+  case SPTIR_EXIT: {
+    int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
+    sptasm_jmp(a, exlbl);
+    break;
+  }
 
-    /* ---- Return ---- */
-    case SPTIR_RETURN: {
-      if (inst->op1 >= 0) {
-        /* Load return value and store to R[A] (slot 0). */
-        gen_load(cg, SPT_RAX, inst->op1, inst->type);
-        sptasm_mov_mr(a, SPT_RBX, 0, SPT_RAX);
-        gen_write_tag(cg, 0, spt_type_to_tag(inst->type));
-      }
-      /* Jump to epilogue. */
-      sptasm_jmp(a, cg->epilogue_label);
-      break;
-    }
+  case SPTIR_NOT: {
+    gen_load(cg, SPT_RAX, inst->op1, SPTT_ANY);
+    sptasm_test_rr(a, SPT_RAX, SPT_RAX);
+    sptasm_setcc(a, SPT_CC_E, SPT_RAX);
+    sptasm_movzx_r8(a, SPT_RAX, SPT_RAX);
+    gen_store(cg, idx, SPT_RAX);
+    break;
+  }
 
-    /* ---- Unconditional side exit (side-trace tail) ----
-       Closes a side trace at a back-edge it cannot loop on. Jump unconditionally
-       to the snapshot's exit stub, which flushes live state to the interpreter
-       stack, sets ci->u.l.savedpc = exit_pc, and returns. Unlike a guard there is
-       no condition; control always leaves the trace here. The exit stub is
-       generated later (snap_emitted marks it) and reached via this jmp. */
-    case SPTIR_EXIT: {
-      int32_t exlbl = ensure_exit_label(cg, inst->snap_idx);
-      sptasm_jmp(a, exlbl);
-      break;
-    }
-
-    case SPTIR_NOT: {
-      gen_load(cg, SPT_RAX, inst->op1, SPTT_ANY);
-      sptasm_test_rr(a, SPT_RAX, SPT_RAX);
-      sptasm_setcc(a, SPT_CC_E, SPT_RAX);
-      sptasm_movzx_r8(a, SPT_RAX, SPT_RAX);
-      gen_store(cg, idx, SPT_RAX);
-      break;
-    }
-
-    /* ---- Unhandled (treat as NOP) ---- */
-    default:
-      break;
+  /* ---- Unhandled (treat as NOP) ---- */
+  default:
+    break;
   }
 }
 
@@ -1987,7 +2298,8 @@ void sptjit_codegen_compile(SPTTrace *t, SPTJitState *js) {
      into their registers and run their type guards once, before the loop. */
   if (cg.use_ra) {
     for (int i = 0; i < ir->ninst; i++) {
-      if (cg.ref_hoist[i]) gen_inst(&cg, i);
+      if (cg.ref_hoist[i])
+        gen_inst(&cg, i);
     }
   }
 
@@ -1996,13 +2308,15 @@ void sptjit_codegen_compile(SPTTrace *t, SPTJitState *js) {
 
   /* Generate code for each IR instruction (skipping hoisted preheader ones). */
   for (int i = 0; i < ir->ninst; i++) {
-    if (cg.use_ra && cg.ref_hoist[i]) continue;
+    if (cg.use_ra && cg.ref_hoist[i])
+      continue;
     gen_inst(&cg, i);
   }
 
   /* Generate exit stubs, one per emitted snapshot. */
   for (int s = 0; s < SPT_JIT_MAX_SNAPSHOTS; s++) {
-    if (cg.snap_emitted[s]) gen_exit_stub(&cg, s);
+    if (cg.snap_emitted[s])
+      gen_exit_stub(&cg, s);
   }
 
   /* Generate epilogue. */

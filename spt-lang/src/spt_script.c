@@ -18,8 +18,8 @@
 #endif
 #endif
 
-#include "spt_frontend.h"
 #include "spt_codegen.h"
+#include "spt_frontend.h"
 
 #include "lauxlib.h"
 #include "lua.h"

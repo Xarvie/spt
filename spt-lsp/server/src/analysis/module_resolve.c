@@ -8,8 +8,8 @@
 #include "module_resolve.h"
 
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -33,14 +33,17 @@ static void dir_of(const char *path, char *out, size_t cap) {
   const char *slash = NULL;
   for (const char *p = path; *p; p++) {
 #ifdef _WIN32
-    if (*p == '\\' || *p == '/') slash = p;
+    if (*p == '\\' || *p == '/')
+      slash = p;
 #else
-    if (*p == '/') slash = p;
+    if (*p == '/')
+      slash = p;
 #endif
   }
   if (slash) {
     size_t n = (size_t)(slash - path);
-    if (n + 2 >= cap) n = cap - 2;
+    if (n + 2 >= cap)
+      n = cap - 2;
     memcpy(out, path, n);
     out[n] = '\0';
   } else {
@@ -51,18 +54,24 @@ static void dir_of(const char *path, char *out, size_t cap) {
 /* 拼接 dir + sep + name + ".spt" 到 out。 */
 static void join_spt(const char *dir, const char *name, char *out, size_t cap) {
 #ifdef _WIN32
-  char sep = (dir[0] && (dir[strlen(dir) - 1] == '\\' || dir[strlen(dir) - 1] == '/')) ? '\0' : '\\';
-  if (sep) snprintf(out, cap, "%s\\%s.spt", dir, name);
-  else snprintf(out, cap, "%s%s.spt", dir, name);
+  char sep =
+      (dir[0] && (dir[strlen(dir) - 1] == '\\' || dir[strlen(dir) - 1] == '/')) ? '\0' : '\\';
+  if (sep)
+    snprintf(out, cap, "%s\\%s.spt", dir, name);
+  else
+    snprintf(out, cap, "%s%s.spt", dir, name);
 #else
   char sep = (dir[0] && dir[strlen(dir) - 1] == '/') ? '\0' : '/';
-  if (sep) snprintf(out, cap, "%s/%s.spt", dir, name);
-  else snprintf(out, cap, "%s%s.spt", dir, name);
+  if (sep)
+    snprintf(out, cap, "%s/%s.spt", dir, name);
+  else
+    snprintf(out, cap, "%s%s.spt", dir, name);
 #endif
 }
 
 int resolve_module_path(const char *from_path, const char *module_name, char *out, size_t cap) {
-  if (!from_path || !module_name || !out || cap == 0) return 0;
+  if (!from_path || !module_name || !out || cap == 0)
+    return 0;
 
   /* 处理相对路径前缀 ./ 或 .\（可连续，如 ././mod）。
      也允许 subdir/mod 形式的相对子路径。 */
@@ -71,13 +80,15 @@ int resolve_module_path(const char *from_path, const char *module_name, char *ou
     name += 2;
   }
   /* 空名或绝对路径拒绝。 */
-  if (!name[0] || name[0] == '/' || name[0] == '\\') return 0;
+  if (!name[0] || name[0] == '/' || name[0] == '\\')
+    return 0;
 
   /* 1. script_dir/<module>.spt */
   char dir[4096];
   dir_of(from_path, dir, sizeof dir);
   join_spt(dir, name, out, cap);
-  if (file_exists(out)) return 1;
+  if (file_exists(out))
+    return 1;
 
   /* 2. $SPT_PATH 各分号段/<module>.spt */
   const char *spt_path = getenv("SPT_PATH");
@@ -90,16 +101,19 @@ int resolve_module_path(const char *from_path, const char *module_name, char *ou
         memcpy(dir, seg, len);
         dir[len] = '\0';
         join_spt(dir, name, out, cap);
-        if (file_exists(out)) return 1;
+        if (file_exists(out))
+          return 1;
       }
-      if (!semi) break;
+      if (!semi)
+        break;
       seg = semi + 1;
     }
   }
 
   /* 3. ./<module>.spt */
   join_spt(".", name, out, cap);
-  if (file_exists(out)) return 1;
+  if (file_exists(out))
+    return 1;
 
   out[0] = '\0';
   return 0;

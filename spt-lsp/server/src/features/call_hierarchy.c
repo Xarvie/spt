@@ -16,7 +16,8 @@
 /* 从函数声明节点构建 CallHierarchyItem（附加到 arr 或作为单个返回）。 */
 static cJSON *make_call_item(const SptLspUnit *u, const Document *d, const char *uri,
                              const AstNode *fn) {
-  if (!fn || fn->type != NODE_FUNCTION_DECL || !fn->u.func_decl.name) return NULL;
+  if (!fn || fn->type != NODE_FUNCTION_DECL || !fn->u.func_decl.name)
+    return NULL;
   const char *nm = fn->u.func_decl.name;
 
   /* selectionRange：函数名范围。 */
@@ -24,12 +25,17 @@ static cJSON *make_call_item(const SptLspUnit *u, const Document *d, const char 
   size_t decl_off = 0;
   /* 用 token 精确定位函数名。 */
   for (int i = 0; i < u->token_count; i++) {
-    if (u->tokens[i].kind != TOK_IDENTIFIER) continue;
-    if ((size_t)u->tokens[i].length != strlen(nm)) continue;
-    if (memcmp(u->tokens[i].lexeme, nm, strlen(nm)) != 0) continue;
+    if (u->tokens[i].kind != TOK_IDENTIFIER)
+      continue;
+    if ((size_t)u->tokens[i].length != strlen(nm))
+      continue;
+    if (memcmp(u->tokens[i].lexeme, nm, strlen(nm)) != 0)
+      continue;
     int li = u->tokens[i].line - 1;
-    if (li < 0) li = 0;
-    if (li >= d->line_count) continue;
+    if (li < 0)
+      li = 0;
+    if (li >= d->line_count)
+      continue;
     size_t s = d->line_starts[li] + (size_t)(u->tokens[i].column > 0 ? u->tokens[i].column - 1 : 0);
     /* 确认是函数声明处的名字（在 fn->loc 附近）。 */
     size_t decl_s = 0;
@@ -52,10 +58,9 @@ static cJSON *make_call_item(const SptLspUnit *u, const Document *d, const char 
       fn->u.func_decl.body->u.block.use_end) {
     int eli = fn->u.func_decl.body->u.block.end_loc.line - 1;
     if (eli >= 0 && eli < d->line_count) {
-      range_end = d->line_starts[eli] +
-                  (size_t)(fn->u.func_decl.body->u.block.end_loc.column > 0
-                               ? fn->u.func_decl.body->u.block.end_loc.column
-                               : 0);
+      range_end = d->line_starts[eli] + (size_t)(fn->u.func_decl.body->u.block.end_loc.column > 0
+                                                     ? fn->u.func_decl.body->u.block.end_loc.column
+                                                     : 0);
     }
   }
 
@@ -63,10 +68,8 @@ static cJSON *make_call_item(const SptLspUnit *u, const Document *d, const char 
   cJSON_AddStringToObject(item, "name", nm);
   cJSON_AddNumberToObject(item, "kind", LSP_SK_FUNCTION);
   cJSON_AddStringToObject(item, "uri", uri);
-  cJSON_AddItemToObject(item, "range",
-                        lsp_range_to_json(doc_range(d, decl_off, range_end)));
-  cJSON_AddItemToObject(item, "selectionRange",
-                        lsp_range_to_json(doc_range(d, fn_start, fn_end)));
+  cJSON_AddItemToObject(item, "range", lsp_range_to_json(doc_range(d, decl_off, range_end)));
+  cJSON_AddItemToObject(item, "selectionRange", lsp_range_to_json(doc_range(d, fn_start, fn_end)));
   return item;
 }
 
@@ -74,7 +77,8 @@ static cJSON *make_call_item(const SptLspUnit *u, const Document *d, const char 
 cJSON *feature_prepare_call_hierarchy(const Document *d, LspPos pos, const char *uri) {
   SptLspUnit *u = spt_lsp_parse(d->text, d->text_len);
   cJSON *arr = cJSON_CreateArray();
-  if (!u) return arr;
+  if (!u)
+    return arr;
 
   size_t off = doc_offset_at(d, pos);
   SemRef r = sem_resolve(u, d, off);
@@ -83,7 +87,8 @@ cJSON *feature_prepare_call_hierarchy(const Document *d, LspPos pos, const char 
     const AstNode *fn = sem_find_function(u, r.name);
     if (fn) {
       cJSON *item = make_call_item(u, d, uri, fn);
-      if (item) cJSON_AddItemToArray(arr, item);
+      if (item)
+        cJSON_AddItemToArray(arr, item);
     }
   }
 
@@ -149,33 +154,49 @@ static void outgoing_cb(void *ctx, const char *callee, size_t offset, int length
         cJSON *s = cJSON_GetArrayItem(syms, i);
         cJSON *name = cJSON_GetObjectItemCaseSensitive(s, "name");
         cJSON *kind = cJSON_GetObjectItemCaseSensitive(s, "kind");
-        if (!name || !cJSON_IsString(name)) continue;
-        if (strcmp(name->valuestring, callee) != 0) continue;
+        if (!name || !cJSON_IsString(name))
+          continue;
+        if (strcmp(name->valuestring, callee) != 0)
+          continue;
         /* 只接受函数类型（5=Function, 12=Function）。 */
         int k = (kind && cJSON_IsNumber(kind)) ? kind->valueint : 0;
-        if (k != LSP_SK_FUNCTION) continue;
+        if (k != LSP_SK_FUNCTION)
+          continue;
         cJSON *loc = cJSON_GetObjectItemCaseSensitive(s, "location");
-        if (!loc) continue;
+        if (!loc)
+          continue;
         cJSON *uri = cJSON_GetObjectItemCaseSensitive(loc, "uri");
         cJSON *rng = cJSON_GetObjectItemCaseSensitive(loc, "range");
-        if (!uri || !cJSON_IsString(uri) || !rng) continue;
+        if (!uri || !cJSON_IsString(uri) || !rng)
+          continue;
         WsSymbol wsym;
         wsym.name = (char *)callee;
         wsym.kind = k;
         wsym.uri = uri->valuestring;
         cJSON *st = cJSON_GetObjectItemCaseSensitive(rng, "start");
         cJSON *en = cJSON_GetObjectItemCaseSensitive(rng, "end");
-        wsym.range.start.line = (st && cJSON_GetObjectItemCaseSensitive(st, "line")) ? cJSON_GetObjectItemCaseSensitive(st, "line")->valueint : 0;
-        wsym.range.start.character = (st && cJSON_GetObjectItemCaseSensitive(st, "character")) ? cJSON_GetObjectItemCaseSensitive(st, "character")->valueint : 0;
-        wsym.range.end.line = (en && cJSON_GetObjectItemCaseSensitive(en, "line")) ? cJSON_GetObjectItemCaseSensitive(en, "line")->valueint : 0;
-        wsym.range.end.character = (en && cJSON_GetObjectItemCaseSensitive(en, "character")) ? cJSON_GetObjectItemCaseSensitive(en, "character")->valueint : 0;
+        wsym.range.start.line = (st && cJSON_GetObjectItemCaseSensitive(st, "line"))
+                                    ? cJSON_GetObjectItemCaseSensitive(st, "line")->valueint
+                                    : 0;
+        wsym.range.start.character =
+            (st && cJSON_GetObjectItemCaseSensitive(st, "character"))
+                ? cJSON_GetObjectItemCaseSensitive(st, "character")->valueint
+                : 0;
+        wsym.range.end.line = (en && cJSON_GetObjectItemCaseSensitive(en, "line"))
+                                  ? cJSON_GetObjectItemCaseSensitive(en, "line")->valueint
+                                  : 0;
+        wsym.range.end.character = (en && cJSON_GetObjectItemCaseSensitive(en, "character"))
+                                       ? cJSON_GetObjectItemCaseSensitive(en, "character")->valueint
+                                       : 0;
         wsym.container = NULL;
         to_item = make_call_item_from_symbol(&wsym);
       }
     }
-    if (syms) cJSON_Delete(syms);
+    if (syms)
+      cJSON_Delete(syms);
   }
-  if (!to_item) return;
+  if (!to_item)
+    return;
 
   cJSON *call = cJSON_CreateObject();
   cJSON_AddItemToObject(call, "to", to_item);
@@ -187,11 +208,12 @@ static void outgoing_cb(void *ctx, const char *callee, size_t offset, int length
 cJSON *feature_call_hierarchy_outgoing(const Document *d, const char *fn_name, Workspace *ws) {
   SptLspUnit *u = spt_lsp_parse(d->text, d->text_len);
   cJSON *arr = cJSON_CreateArray();
-  if (!u) return arr;
+  if (!u)
+    return arr;
 
   const AstNode *fn = sem_find_function(u, fn_name);
   if (fn) {
-    OutCtx c = { arr, u, d, "", ws };
+    OutCtx c = {arr, u, d, "", ws};
     sem_outgoing_calls(u, fn, outgoing_cb, &c);
   }
 
@@ -202,7 +224,7 @@ cJSON *feature_call_hierarchy_outgoing(const Document *d, const char *fn_name, W
 /* ---- incomingCalls ---- */
 typedef struct {
   Workspace *ws;
-  const char *target_name;  /* 被调用的函数名 */
+  const char *target_name; /* 被调用的函数名 */
   cJSON *arr;
 } InCtx;
 
@@ -214,24 +236,29 @@ static void incoming_occ_cb(void *ctx, const char *uri, size_t offset, int lengt
   char path[4096];
   spt_uri_to_path(uri, path, sizeof path);
   WsUnit wu = workspace_get_unit(c->ws, path);
-  if (!wu.unit || !wu.doc) return;
+  if (!wu.unit || !wu.doc)
+    return;
 
   /* 检查是否是函数调用（后跟 `(`）。 */
   /* 简化：检查 offset 处 token 后面是否是 `(`。 */
   int is_call = 0;
   for (int ti = 0; ti < wu.unit->token_count; ti++) {
-    if (wu.unit->tokens[ti].kind != TOK_IDENTIFIER) continue;
+    if (wu.unit->tokens[ti].kind != TOK_IDENTIFIER)
+      continue;
     int li = wu.unit->tokens[ti].line - 1;
-    if (li < 0 || li >= wu.doc->line_count) continue;
+    if (li < 0 || li >= wu.doc->line_count)
+      continue;
     size_t s = wu.doc->line_starts[li] +
                (size_t)(wu.unit->tokens[ti].column > 0 ? wu.unit->tokens[ti].column - 1 : 0);
-    if (s != offset) continue;
+    if (s != offset)
+      continue;
     /* 检查下一个 token 是否是 `(`。 */
     if (ti + 1 < wu.unit->token_count && wu.unit->tokens[ti + 1].kind == TOK_LPAREN)
       is_call = 1;
     break;
   }
-  if (!is_call) return;
+  if (!is_call)
+    return;
 
   /* 找包含此调用的函数。 */
   const AstNode *caller_fn = sem_enclosing_function(wu.unit, wu.doc, offset);
@@ -240,20 +267,22 @@ static void incoming_occ_cb(void *ctx, const char *uri, size_t offset, int lengt
 
   /* 构建 CallHierarchyItem（调用者）。 */
   cJSON *from_item = make_call_item(wu.unit, wu.doc, uri, caller_fn);
-  if (!from_item) return;
+  if (!from_item)
+    return;
 
   cJSON *call = cJSON_CreateObject();
   cJSON_AddItemToObject(call, "from", from_item);
   /* fromRanges：调用位置。 */
   cJSON *ranges = cJSON_CreateArray();
-  cJSON_AddItemToArray(ranges, lsp_range_to_json(doc_range(wu.doc, offset, offset + (size_t)length)));
+  cJSON_AddItemToArray(ranges,
+                       lsp_range_to_json(doc_range(wu.doc, offset, offset + (size_t)length)));
   cJSON_AddItemToObject(call, "fromRanges", ranges);
   cJSON_AddItemToArray(c->arr, call);
 }
 
 cJSON *feature_call_hierarchy_incoming(Workspace *ws, const char *fn_name) {
   cJSON *arr = cJSON_CreateArray();
-  InCtx c = { ws, fn_name, arr };
+  InCtx c = {ws, fn_name, arr};
   workspace_find_occurrences(ws, fn_name, incoming_occ_cb, &c);
   return arr;
 }

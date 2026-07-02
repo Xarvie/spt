@@ -184,9 +184,9 @@ static void init_registry(lua_State *L, global_State *g) {
     luaD_throw(L, LUA_ERRMEM);
   }
   g->registry_array.size = initial_size;
-  g->registry_array.freelist = -1;                     /* no freed slots yet */
+  g->registry_array.freelist = -1; /* no freed slots yet */
   /* 修改：跳过保留索引 0, 1, 2，从 LUA_RIDX_LAST + 1 (即 3) 开始分配 */
-  g->registry_array.firstfree = LUA_RIDX_LAST + 1;     /* first usable slot */
+  g->registry_array.firstfree = LUA_RIDX_LAST + 1; /* first usable slot */
   /* Initialize all array elements to nil */
   for (i = 0; i < initial_size; i++) {
     setnilvalue(&g->registry_array.arr[i]);

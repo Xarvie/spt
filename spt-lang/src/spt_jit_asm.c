@@ -23,7 +23,8 @@
 
 void sptasm_init(SPTAsm *a, size_t initial_cap) {
   memset(a, 0, sizeof(*a));
-  if (initial_cap < 256) initial_cap = 256;
+  if (initial_cap < 256)
+    initial_cap = 256;
   a->code = (uint8_t *)malloc(initial_cap);
   a->cap = initial_cap;
   a->label_cap = 64;
@@ -51,8 +52,10 @@ void sptasm_reset(SPTAsm *a) {
 
 /* Ensure code buffer has space. */
 static void asm_ensure(SPTAsm *a, size_t need) {
-  if (a->size + need <= a->cap) return;
-  while (a->cap < a->size + need) a->cap *= 2;
+  if (a->size + need <= a->cap)
+    return;
+  while (a->cap < a->size + need)
+    a->cap *= 2;
   a->code = (uint8_t *)realloc(a->code, a->cap);
 }
 
@@ -94,7 +97,8 @@ int32_t sptasm_newlabel(SPTAsm *a) {
   if (l >= a->label_cap) {
     a->label_cap *= 2;
     a->labels = (int32_t *)realloc(a->labels, a->label_cap * sizeof(int32_t));
-    for (int i = l; i < a->label_cap; i++) a->labels[i] = -1;
+    for (int i = l; i < a->label_cap; i++)
+      a->labels[i] = -1;
   }
   a->labels[l] = -1;
   return l;
@@ -107,7 +111,8 @@ int32_t sptasm_label(SPTAsm *a) {
 }
 
 void sptasm_place(SPTAsm *a, int32_t label) {
-  if (label < 0 || label >= a->nlabels) return;
+  if (label < 0 || label >= a->nlabels)
+    return;
   a->labels[label] = (int32_t)a->size;
 }
 
@@ -129,10 +134,14 @@ static void add_reloc(SPTAsm *a, int type, int32_t label) {
 
 void sptasm_rex(SPTAsm *a, int w, int r, int x, int b) {
   uint8_t rex = 0x40;
-  if (w) rex |= 0x08;
-  if (r) rex |= 0x04;
-  if (x) rex |= 0x02;
-  if (b) rex |= 0x01;
+  if (w)
+    rex |= 0x08;
+  if (r)
+    rex |= 0x04;
+  if (x)
+    rex |= 0x02;
+  if (b)
+    rex |= 0x01;
   /* Only emit REX if needed. */
   if (rex != 0x40 || w)
     sptasm_byte(a, rex);
@@ -159,7 +168,7 @@ static void emit_sib(SPTAsm *a, int scale, int index, int base) {
    RBP/R13 (needs disp8 even for 0 displacement). */
 static void emit_mem(SPTAsm *a, SPTReg reg, SPTReg base, int32_t disp) {
   int mod;
-  int need_sib = (base & 7) == 4; /* RSP/R12 */
+  int need_sib = (base & 7) == 4;  /* RSP/R12 */
   int need_disp = (base & 7) == 5; /* RBP/R13: needs displacement */
 
   if (disp == 0 && !need_disp) {
@@ -204,8 +213,8 @@ void sptasm_mov_ri64(SPTAsm *a, SPTReg dst, int64_t imm) {
      and improves instruction density for KINT-heavy traces (e.g. array index
      constants 0..7 in unrolled GETI sequences). */
   if (imm == (int64_t)(int32_t)imm) {
-    sptasm_rex(a, 1, 0, 0, (dst >> 3) & 1);  /* REX.W for 64-bit sign-extension */
-    sptasm_byte(a, 0xC7);                     /* MOV r/m64, imm32 */
+    sptasm_rex(a, 1, 0, 0, (dst >> 3) & 1); /* REX.W for 64-bit sign-extension */
+    sptasm_byte(a, 0xC7);                   /* MOV r/m64, imm32 */
     emit_modrm(a, 3, 0, dst);
     sptasm_dword(a, (uint32_t)(int32_t)imm);
   } else {
@@ -251,15 +260,20 @@ void sptasm_mov_mrs(SPTAsm *a, SPTReg base, SPTReg index, int scale, int32_t dis
   sptasm_byte(a, 0x89); /* MOV r/m64, r64 */
 
   int mod;
-  if (disp == 0 && (base & 7) != 5) mod = 0;
-  else if (disp >= -128 && disp <= 127) mod = 1;
-  else mod = 2;
+  if (disp == 0 && (base & 7) != 5)
+    mod = 0;
+  else if (disp >= -128 && disp <= 127)
+    mod = 1;
+  else
+    mod = 2;
 
   emit_modrm(a, mod, src, 4); /* SIB */
   emit_sib(a, scale, index, base);
 
-  if (mod == 1) sptasm_byte(a, (uint8_t)(disp & 0xff));
-  else if (mod == 2) sptasm_dword(a, (uint32_t)disp);
+  if (mod == 1)
+    sptasm_byte(a, (uint8_t)(disp & 0xff));
+  else if (mod == 2)
+    sptasm_dword(a, (uint32_t)disp);
 }
 
 /* The mov_mrs/mov_rms need a different approach. Let me redo them. */
@@ -271,15 +285,20 @@ void sptasm_mov_rms(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index, int scale,
   sptasm_byte(a, 0x8B); /* MOV r64, r/m64 */
 
   int mod;
-  if (disp == 0 && (base & 7) != 5) mod = 0;
-  else if (disp >= -128 && disp <= 127) mod = 1;
-  else mod = 2;
+  if (disp == 0 && (base & 7) != 5)
+    mod = 0;
+  else if (disp >= -128 && disp <= 127)
+    mod = 1;
+  else
+    mod = 2;
 
   emit_modrm(a, mod, dst, 4); /* SIB */
   emit_sib(a, scale, index, base);
 
-  if (mod == 1) sptasm_byte(a, (uint8_t)(disp & 0xff));
-  else if (mod == 2) sptasm_dword(a, (uint32_t)disp);
+  if (mod == 1)
+    sptasm_byte(a, (uint8_t)(disp & 0xff));
+  else if (mod == 2)
+    sptasm_dword(a, (uint32_t)disp);
 }
 
 void sptasm_lea(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
@@ -298,9 +317,13 @@ static void arith_rr(SPTAsm *a, uint8_t op, SPTReg dst, SPTReg src) {
 }
 
 void sptasm_add_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x01, dst, src); }
+
 void sptasm_or_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x09, dst, src); }
+
 void sptasm_and_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x21, dst, src); }
+
 void sptasm_sub_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x29, dst, src); }
+
 void sptasm_xor_rr(SPTAsm *a, SPTReg dst, SPTReg src) { arith_rr(a, 0x31, dst, src); }
 
 /* Generic r/m arithmetic: dst = dst <op> [base+disp].
@@ -314,11 +337,25 @@ static void arith_rm(SPTAsm *a, uint8_t op, SPTReg dst, SPTReg base, int32_t dis
   emit_mem(a, dst, base, disp);
 }
 
-void sptasm_add_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x03, dst, base, disp); }
-void sptasm_or_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x0B, dst, base, disp); }
-void sptasm_and_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x23, dst, base, disp); }
-void sptasm_sub_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x2B, dst, base, disp); }
-void sptasm_xor_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) { arith_rm(a, 0x33, dst, base, disp); }
+void sptasm_add_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  arith_rm(a, 0x03, dst, base, disp);
+}
+
+void sptasm_or_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  arith_rm(a, 0x0B, dst, base, disp);
+}
+
+void sptasm_and_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  arith_rm(a, 0x23, dst, base, disp);
+}
+
+void sptasm_sub_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  arith_rm(a, 0x2B, dst, base, disp);
+}
+
+void sptasm_xor_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
+  arith_rm(a, 0x33, dst, base, disp);
+}
 
 void sptasm_imul_rm(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
   emit_rex_rm(a, 1, dst, base);
@@ -342,9 +379,13 @@ static void arith_ri(SPTAsm *a, uint8_t subop, SPTReg dst, int32_t imm) {
 }
 
 void sptasm_add_ri(SPTAsm *a, SPTReg dst, int32_t imm) { arith_ri(a, 0, dst, imm); }
+
 void sptasm_or_ri(SPTAsm *a, SPTReg dst, int32_t imm) { arith_ri(a, 1, dst, imm); }
+
 void sptasm_and_ri(SPTAsm *a, SPTReg dst, int32_t imm) { arith_ri(a, 4, dst, imm); }
+
 void sptasm_sub_ri(SPTAsm *a, SPTReg dst, int32_t imm) { arith_ri(a, 5, dst, imm); }
+
 void sptasm_xor_ri(SPTAsm *a, SPTReg dst, int32_t imm) { arith_ri(a, 6, dst, imm); }
 
 void sptasm_imul_rr(SPTAsm *a, SPTReg dst, SPTReg src) {
@@ -380,12 +421,11 @@ void sptasm_div_r(SPTAsm *a, SPTReg src) {
 }
 
 void sptasm_cqo(SPTAsm *a) {
-  sptasm_byte(a, 0x48); sptasm_byte(a, 0x99); /* CQO */
+  sptasm_byte(a, 0x48);
+  sptasm_byte(a, 0x99); /* CQO */
 }
 
-void sptasm_cdq(SPTAsm *a) {
-  sptasm_byte(a, 0x99); /* CDQ */
-}
+void sptasm_cdq(SPTAsm *a) { sptasm_byte(a, 0x99); /* CDQ */ }
 
 void sptasm_neg_r(SPTAsm *a, SPTReg r) {
   sptasm_rex(a, 1, 0, 0, (r >> 3) & 1);
@@ -415,10 +455,15 @@ static void shift_ri(SPTAsm *a, uint8_t subop, SPTReg r, uint8_t count) {
 }
 
 void sptasm_shl_cl(SPTAsm *a, SPTReg r) { shift_cl(a, 4, r); }
+
 void sptasm_shr_cl(SPTAsm *a, SPTReg r) { shift_cl(a, 5, r); }
+
 void sptasm_sar_cl(SPTAsm *a, SPTReg r) { shift_cl(a, 7, r); }
+
 void sptasm_shl_ri(SPTAsm *a, SPTReg r, uint8_t c) { shift_ri(a, 4, r, c); }
+
 void sptasm_shr_ri(SPTAsm *a, SPTReg r, uint8_t c) { shift_ri(a, 5, r, c); }
+
 void sptasm_sar_ri(SPTAsm *a, SPTReg r, uint8_t c) { shift_ri(a, 7, r, c); }
 
 void sptasm_cmp_rr(SPTAsm *a, SPTReg r1, SPTReg r2) {
@@ -471,8 +516,7 @@ void sptasm_movzx_rm8(SPTAsm *a, SPTReg dst, SPTReg base, int32_t disp) {
 
 /* MOVZX r32, byte [base + index*scale + disp]: 0F B6 /r with SIB.
    Used by GETI tag guards: movzx edx, byte[array + idx*1 + 4]. */
-void sptasm_movzx_rm8s(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index,
-                       int scale, int32_t disp) {
+void sptasm_movzx_rm8s(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index, int scale, int32_t disp) {
   int r = (dst >> 3) & 1;
   int x = (index >> 3) & 1;
   int b = (base >> 3) & 1;
@@ -480,13 +524,18 @@ void sptasm_movzx_rm8s(SPTAsm *a, SPTReg dst, SPTReg base, SPTReg index,
   sptasm_byte(a, 0x0F);
   sptasm_byte(a, 0xB6);
   int mod;
-  if (disp == 0 && (base & 7) != 5) mod = 0;
-  else if (disp >= -128 && disp <= 127) mod = 1;
-  else mod = 2;
+  if (disp == 0 && (base & 7) != 5)
+    mod = 0;
+  else if (disp >= -128 && disp <= 127)
+    mod = 1;
+  else
+    mod = 2;
   emit_modrm(a, mod, dst, 4);
   emit_sib(a, scale, index, base);
-  if (mod == 1) sptasm_byte(a, (uint8_t)(disp & 0xff));
-  else if (mod == 2) sptasm_dword(a, (uint32_t)disp);
+  if (mod == 1)
+    sptasm_byte(a, (uint8_t)(disp & 0xff));
+  else if (mod == 2)
+    sptasm_dword(a, (uint32_t)disp);
 }
 
 /* =====================================================================
@@ -518,9 +567,7 @@ void sptasm_call_r(SPTAsm *a, SPTReg r) {
   emit_modrm(a, 3, 2, r);
 }
 
-void sptasm_ret(SPTAsm *a) {
-  sptasm_byte(a, 0xC3);
-}
+void sptasm_ret(SPTAsm *a) { sptasm_byte(a, 0xC3); }
 
 void sptasm_push(SPTAsm *a, SPTReg r) {
   sptasm_rex(a, 0, 0, 0, (r >> 3) & 1);
@@ -532,13 +579,9 @@ void sptasm_pop(SPTAsm *a, SPTReg r) {
   sptasm_byte(a, 0x58 + (r & 7));
 }
 
-void sptasm_sub_rsp(SPTAsm *a, int32_t imm) {
-  sptasm_sub_ri(a, SPT_RSP, imm);
-}
+void sptasm_sub_rsp(SPTAsm *a, int32_t imm) { sptasm_sub_ri(a, SPT_RSP, imm); }
 
-void sptasm_add_rsp(SPTAsm *a, int32_t imm) {
-  sptasm_add_ri(a, SPT_RSP, imm);
-}
+void sptasm_add_rsp(SPTAsm *a, int32_t imm) { sptasm_add_ri(a, SPT_RSP, imm); }
 
 /* =====================================================================
 ** SSE2 floating-point instructions
@@ -612,8 +655,11 @@ static void sse2_op_rr(SPTAsm *a, uint8_t opcode, SPTXmmReg dst, SPTXmmReg src) 
 }
 
 void sptasm_addsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op_rr(a, 0x58, dst, src); }
+
 void sptasm_subsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op_rr(a, 0x5C, dst, src); }
+
 void sptasm_mulsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op_rr(a, 0x59, dst, src); }
+
 void sptasm_divsd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op_rr(a, 0x5E, dst, src); }
 
 void sptasm_xorps(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) {
@@ -633,9 +679,14 @@ static void sse2_op66_rr(SPTAsm *a, uint8_t opcode, SPTXmmReg dst, SPTXmmReg src
   sptasm_byte(a, opcode);
   emit_modrm(a, 3, dst, src);
 }
-void sptasm_andpd (SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x54, dst, src); }
-void sptasm_andnpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x55, dst, src); } /* dst = ~dst & src */
-void sptasm_orpd  (SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x56, dst, src); }
+
+void sptasm_andpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x54, dst, src); }
+
+void sptasm_andnpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) {
+  sse2_op66_rr(a, 0x55, dst, src);
+} /* dst = ~dst & src */
+
+void sptasm_orpd(SPTAsm *a, SPTXmmReg dst, SPTXmmReg src) { sse2_op66_rr(a, 0x56, dst, src); }
 
 /* CMPSD xmm1, xmm2, imm8 (0xF2 0x0F 0xC2 /r ib): low 64 of dst = all-ones if
    (dst CMP src) else all-zeros; predicate imm8: 0=EQ 1=LT 2=LE 4=NEQ (all the
@@ -694,14 +745,15 @@ void *sptjit_alloc_exec(size_t size) {
 #if defined(_WIN32)
   return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 #else
-  void *p = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void *p =
+      mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   return (p == MAP_FAILED) ? NULL : p;
 #endif
 }
 
 void sptjit_free_exec(void *ptr, size_t size) {
-  if (!ptr) return;
+  if (!ptr)
+    return;
 #if defined(_WIN32)
   VirtualFree(ptr, 0, MEM_RELEASE);
   (void)size;
@@ -733,7 +785,8 @@ void sptjit_protect_rx(void *ptr, size_t size) {
 ** ===================================================================== */
 
 void *sptasm_finalize(SPTAsm *a, void *exec_mem, size_t exec_size) {
-  if (!exec_mem || a->size > exec_size) return NULL;
+  if (!exec_mem || a->size > exec_size)
+    return NULL;
 
   /* Copy code to executable memory. */
   memcpy(exec_mem, a->code, a->size);
@@ -742,9 +795,11 @@ void *sptasm_finalize(SPTAsm *a, void *exec_mem, size_t exec_size) {
   uint8_t *code = (uint8_t *)exec_mem;
   for (int i = 0; i < a->nrelocs; i++) {
     struct SPTReloc *r = &a->relocs[i];
-    if (r->label < 0 || r->label >= a->nlabels) continue;
+    if (r->label < 0 || r->label >= a->nlabels)
+      continue;
     int32_t target = a->labels[r->label];
-    if (target < 0) continue;
+    if (target < 0)
+      continue;
 
     if (r->type == 0) {
       /* rel32: target = target - (code_offset + 4) */

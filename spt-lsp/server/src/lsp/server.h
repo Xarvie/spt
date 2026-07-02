@@ -32,9 +32,9 @@ typedef struct {
   LspState state;
   bool should_exit; /* 收到 exit 后置位 */
   int exit_code;
-  DocStore docs;     /* 打开的文档 */
-  Workspace ws;      /* 跨文件符号索引 */
-  LspEmitFn emit;    /* 通知出口（可空：无出口时丢弃） */
+  DocStore docs;  /* 打开的文档 */
+  Workspace ws;   /* 跨文件符号索引 */
+  LspEmitFn emit; /* 通知出口（可空：无出口时丢弃） */
   void *emit_ctx;
 } LspServer;
 

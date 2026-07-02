@@ -27,12 +27,12 @@ typedef struct {
 } SptDiagEntry;
 
 typedef struct {
-  const char *filename;   /* 源文件名（用于 --> 行），不取所有权 */
-  const char *source;     /* 源码全文（用于打印出错行 + caret），不取所有权 */
+  const char *filename; /* 源文件名（用于 --> 行），不取所有权 */
+  const char *source;   /* 源码全文（用于打印出错行 + caret），不取所有权 */
   size_t source_len;
   SptDiagEntry entries[SPT_DIAG_MAX];
-  int count;              /* 已记录条数（可能因溢出而被截断到 SPT_DIAG_MAX） */
-  int overflow;           /* 是否发生过溢出 */
+  int count;    /* 已记录条数（可能因溢出而被截断到 SPT_DIAG_MAX） */
+  int overflow; /* 是否发生过溢出 */
 } SptDiag;
 
 /* 初始化诊断上下文。 */

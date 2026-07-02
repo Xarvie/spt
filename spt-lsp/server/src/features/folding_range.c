@@ -11,20 +11,28 @@
 /* 前端坐标（line1, col1，均 1 起，col 按字节）-> 字节偏移，钳制到合法范围。 */
 static size_t off_of_lc(const Document *d, int line1, int col1) {
   int l = line1 - 1;
-  if (l < 0) l = 0;
-  if (l >= d->line_count) return d->text_len;
+  if (l < 0)
+    l = 0;
+  if (l >= d->line_count)
+    return d->text_len;
   size_t off = d->line_starts[l] + (size_t)(col1 > 0 ? col1 - 1 : 0);
-  if (off > d->text_len) off = d->text_len;
+  if (off > d->text_len)
+    off = d->text_len;
   return off;
 }
 
-typedef struct { cJSON *arr; const Document *d; } FoldCtx;
+typedef struct {
+  cJSON *arr;
+  const Document *d;
+} FoldCtx;
 
 static void emit_fold(FoldCtx *c, size_t start_off, size_t end_off) {
-  if (end_off <= start_off) return;
+  if (end_off <= start_off)
+    return;
   LspPos a = doc_pos_at(c->d, start_off);
   LspPos b = doc_pos_at(c->d, end_off);
-  if (b.line <= a.line) return; /* 单行不折 */
+  if (b.line <= a.line)
+    return; /* 单行不折 */
   cJSON *it = cJSON_CreateObject();
   cJSON_AddNumberToObject(it, "startLine", a.line);
   cJSON_AddNumberToObject(it, "endLine", b.line);
@@ -33,7 +41,8 @@ static void emit_fold(FoldCtx *c, size_t start_off, size_t end_off) {
 
 /* 递归收集可折叠块。 */
 static void fold_walk(const AstNode *n, const Document *d, FoldCtx *c) {
-  if (!n) return;
+  if (!n)
+    return;
   switch (n->type) {
   case NODE_BLOCK: {
     if (n->u.block.use_end) {
@@ -42,7 +51,8 @@ static void fold_walk(const AstNode *n, const Document *d, FoldCtx *c) {
       emit_fold(c, s, e);
     }
     const AstList *st = &n->u.block.statements;
-    for (int i = 0; i < st->count; i++) fold_walk(st->items[i], d, c);
+    for (int i = 0; i < st->count; i++)
+      fold_walk(st->items[i], d, c);
     break;
   }
   case NODE_FUNCTION_DECL:
@@ -64,7 +74,8 @@ static void fold_walk(const AstNode *n, const Document *d, FoldCtx *c) {
       }
       emit_fold(c, s, e);
     }
-    for (int i = 0; i < m->count; i++) fold_walk(m->items[i], d, c);
+    for (int i = 0; i < m->count; i++)
+      fold_walk(m->items[i], d, c);
     break;
   }
   case NODE_CLASS_MEMBER:
@@ -74,7 +85,8 @@ static void fold_walk(const AstNode *n, const Document *d, FoldCtx *c) {
     fold_walk(n->u.if_stmt.then_block, d, c);
     {
       const AstList *ei = &n->u.if_stmt.else_if_clauses;
-      for (int i = 0; i < ei->count; i++) fold_walk(ei->items[i]->u.if_clause.body, d, c);
+      for (int i = 0; i < ei->count; i++)
+        fold_walk(ei->items[i]->u.if_clause.body, d, c);
     }
     fold_walk(n->u.if_stmt.else_block, d, c);
     break;
@@ -94,13 +106,16 @@ static void fold_walk(const AstNode *n, const Document *d, FoldCtx *c) {
     const AstList *mm = &n->u.declare_module.members;
     if (mm->count >= 1) {
       size_t s = off_of_lc(d, n->loc.line, n->loc.column);
-      size_t e = off_of_lc(d, mm->items[mm->count - 1]->loc.line, mm->items[mm->count - 1]->loc.column);
+      size_t e =
+          off_of_lc(d, mm->items[mm->count - 1]->loc.line, mm->items[mm->count - 1]->loc.column);
       emit_fold(c, s, e);
     }
-    for (int i = 0; i < mm->count; i++) fold_walk(mm->items[i], d, c);
+    for (int i = 0; i < mm->count; i++)
+      fold_walk(mm->items[i], d, c);
     break;
   }
-  default: break;
+  default:
+    break;
   }
 }
 

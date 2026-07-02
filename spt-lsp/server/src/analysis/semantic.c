@@ -23,9 +23,14 @@ static const char *g_idx_source = NULL;
 static SemIndex *g_idx = NULL;
 
 static SemIndex *sem_get_index(const SptLspUnit *u) {
-  if (!u || !u->root) return NULL;
-  if (g_idx_unit == u && g_idx_source == u->source && g_idx) return g_idx;
-  if (g_idx) { sem_index_free(g_idx); g_idx = NULL; }
+  if (!u || !u->root)
+    return NULL;
+  if (g_idx_unit == u && g_idx_source == u->source && g_idx)
+    return g_idx;
+  if (g_idx) {
+    sem_index_free(g_idx);
+    g_idx = NULL;
+  }
   g_idx = sem_index_build(u->root);
   g_idx_unit = u;
   g_idx_source = u->source;
@@ -37,10 +42,13 @@ static SemIndex *sem_get_index(const SptLspUnit *u) {
 ** ========================================================================= */
 static size_t off_of(const Document *d, int line1, int col1) {
   int l = line1 - 1;
-  if (l < 0) l = 0;
-  if (l >= d->line_count) return d->text_len;
+  if (l < 0)
+    l = 0;
+  if (l >= d->line_count)
+    return d->text_len;
   size_t off = d->line_starts[l] + (size_t)(col1 > 0 ? col1 - 1 : 0);
-  if (off > d->text_len) off = d->text_len;
+  if (off > d->text_len)
+    off = d->text_len;
   return off;
 }
 
@@ -51,39 +59,70 @@ static size_t line_end_off(const Document *d, int line1) {
 }
 
 static void sappend(char *buf, size_t cap, size_t *pos, const char *fmt, ...) {
-  if (cap == 0 || *pos >= cap) return;
+  if (cap == 0 || *pos >= cap)
+    return;
   va_list ap;
   va_start(ap, fmt);
   int n = vsnprintf(buf + *pos, cap - *pos, fmt, ap);
   va_end(ap);
-  if (n > 0) *pos += (size_t)n;
-  if (*pos >= cap) *pos = cap - 1;
+  if (n > 0)
+    *pos += (size_t)n;
+  if (*pos >= cap)
+    *pos = cap - 1;
 }
 
 /* ===========================================================================
 ** 类型 / 签名渲染
 ** ========================================================================= */
 void sem_type_string(const AstNode *t, char *out, size_t cap) {
-  if (cap == 0) return;
+  if (cap == 0)
+    return;
   out[0] = '\0';
-  if (!t) { snprintf(out, cap, "auto"); return; }
+  if (!t) {
+    snprintf(out, cap, "auto");
+    return;
+  }
   switch (t->type) {
   case NODE_TYPE_PRIMITIVE:
     switch (t->u.type_prim.kind) {
-    case PTK_INT: snprintf(out, cap, "int"); break;
-    case PTK_FLOAT: snprintf(out, cap, "float"); break;
-    case PTK_NUMBER: snprintf(out, cap, "number"); break;
-    case PTK_STRING: snprintf(out, cap, "str"); break;
-    case PTK_BOOL: snprintf(out, cap, "bool"); break;
-    case PTK_VOID: snprintf(out, cap, "void"); break;
-    case PTK_NULL: snprintf(out, cap, "null"); break;
-    default: snprintf(out, cap, "?"); break;
+    case PTK_INT:
+      snprintf(out, cap, "int");
+      break;
+    case PTK_FLOAT:
+      snprintf(out, cap, "float");
+      break;
+    case PTK_NUMBER:
+      snprintf(out, cap, "number");
+      break;
+    case PTK_STRING:
+      snprintf(out, cap, "str");
+      break;
+    case PTK_BOOL:
+      snprintf(out, cap, "bool");
+      break;
+    case PTK_VOID:
+      snprintf(out, cap, "void");
+      break;
+    case PTK_NULL:
+      snprintf(out, cap, "null");
+      break;
+    default:
+      snprintf(out, cap, "?");
+      break;
     }
     break;
-  case NODE_TYPE_ANY: snprintf(out, cap, "any"); break;
-  case NODE_TYPE_AUTO: snprintf(out, cap, "auto"); break;
-  case NODE_TYPE_FUNCTION_KW: snprintf(out, cap, "function"); break;
-  case NODE_TYPE_COROUTINE_KW: snprintf(out, cap, "coro"); break;
+  case NODE_TYPE_ANY:
+    snprintf(out, cap, "any");
+    break;
+  case NODE_TYPE_AUTO:
+    snprintf(out, cap, "auto");
+    break;
+  case NODE_TYPE_FUNCTION_KW:
+    snprintf(out, cap, "function");
+    break;
+  case NODE_TYPE_COROUTINE_KW:
+    snprintf(out, cap, "coro");
+    break;
   case NODE_TYPE_MULTIRETURN: {
     /* 有具体类型列表时渲染为 "int, str"；空列表 (旧语法 -> vars) 渲染为 "vars" */
     const AstList *tl = &t->u.type_multi.types;
@@ -94,7 +133,8 @@ void sem_type_string(const AstNode *t, char *out, size_t cap) {
         sem_type_string(tl->items[i], et, sizeof et);
         sappend(out, cap, &pos, "%s%s", i ? ", " : "", et);
       }
-      if (pos == 0) snprintf(out, cap, "vars");
+      if (pos == 0)
+        snprintf(out, cap, "vars");
     } else {
       snprintf(out, cap, "vars");
     }
@@ -105,7 +145,8 @@ void sem_type_string(const AstNode *t, char *out, size_t cap) {
       char el[256];
       sem_type_string(t->u.type_list.element, el, sizeof el);
       snprintf(out, cap, "list<%s>", el);
-    } else snprintf(out, cap, "list");
+    } else
+      snprintf(out, cap, "list");
     break;
   }
   case NODE_TYPE_MAP: {
@@ -114,17 +155,21 @@ void sem_type_string(const AstNode *t, char *out, size_t cap) {
       sem_type_string(t->u.type_map.key, k, sizeof k);
       sem_type_string(t->u.type_map.value, v, sizeof v);
       snprintf(out, cap, "map<%s,%s>", k, v);
-    } else snprintf(out, cap, "map");
+    } else
+      snprintf(out, cap, "map");
     break;
   }
   case NODE_TYPE_USER: {
     size_t pos = 0;
     for (int i = 0; i < t->u.type_user.count; i++)
       sappend(out, cap, &pos, "%s%s", i ? "." : "", t->u.type_user.parts[i]);
-    if (pos == 0) snprintf(out, cap, "?");
+    if (pos == 0)
+      snprintf(out, cap, "?");
     break;
   }
-  default: snprintf(out, cap, "?"); break;
+  default:
+    snprintf(out, cap, "?");
+    break;
   }
 }
 
@@ -150,10 +195,12 @@ static void build_func_detail(const AstNode *fn, char *out, size_t cap) {
 ** ========================================================================= */
 static int ident_token_at(const SptLspUnit *u, const Document *d, size_t off) {
   for (int i = 0; i < u->token_count; i++) {
-    if (u->tokens[i].kind != TOK_IDENTIFIER) continue;
+    if (u->tokens[i].kind != TOK_IDENTIFIER)
+      continue;
     size_t t = off_of(d, u->tokens[i].line, u->tokens[i].column);
     size_t e = t + (size_t)u->tokens[i].length;
-    if (off >= t && off <= e) return i;
+    if (off >= t && off <= e)
+      return i;
   }
   return -1;
 }
@@ -164,9 +211,11 @@ static int name_token_span(const SptLspUnit *u, const Document *d, size_t start_
   size_t nl = strlen(name);
   for (int i = 0; i < u->token_count; i++) {
     const SptToken *t = &u->tokens[i];
-    if (t->kind != TOK_IDENTIFIER) continue;
+    if (t->kind != TOK_IDENTIFIER)
+      continue;
     size_t toff = off_of(d, t->line, t->column);
-    if (toff < start_off) continue;
+    if (toff < start_off)
+      continue;
     if ((size_t)t->length == nl && memcmp(t->lexeme, name, nl) == 0) {
       *s0 = toff;
       *s1 = toff + (size_t)t->length;
@@ -184,10 +233,15 @@ typedef struct {
   int kind;            /* LSP SymbolKind */
   const AstNode *node; /* 定义节点（用于取名字位置/detail/doc） */
 } Def;
-typedef struct { Def *a; int n, cap; } Defs;
+
+typedef struct {
+  Def *a;
+  int n, cap;
+} Defs;
 
 static void defs_push(Defs *v, const char *name, int kind, const AstNode *node) {
-  if (!name) return;
+  if (!name)
+    return;
   if (v->n >= v->cap) {
     v->cap = v->cap ? v->cap * 2 : 16;
     v->a = (Def *)realloc(v->a, sizeof(Def) * (size_t)v->cap);
@@ -200,7 +254,8 @@ static void defs_push(Defs *v, const char *name, int kind, const AstNode *node) 
 
 /* 顶层定义（文件作用域名字）。 */
 static void collect_file_defs(const AstNode *root, Defs *out) {
-  if (!root || root->type != NODE_BLOCK) return;
+  if (!root || root->type != NODE_BLOCK)
+    return;
   const AstList *st = &root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
@@ -212,7 +267,8 @@ static void collect_file_defs(const AstNode *root, Defs *out) {
       defs_push(out, s->u.class_decl.name, LSP_SK_CLASS, s);
       break;
     case NODE_VARIABLE_DECL:
-      defs_push(out, s->u.var_decl.name, s->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE, s);
+      defs_push(out, s->u.var_decl.name, s->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE,
+                s);
       break;
     case NODE_MUTI_VARIABLE_DECL:
       for (int k = 0; k < s->u.muti_var.count; k++)
@@ -231,22 +287,26 @@ static void collect_file_defs(const AstNode *root, Defs *out) {
       }
       break;
     }
-    default: break;
+    default:
+      break;
     }
   }
 }
 
 /* 在作用域块内收集局部定义（不进入嵌套函数/lambda 体）。 */
 static void collect_locals(const AstNode *n, Defs *out) {
-  if (!n) return;
+  if (!n)
+    return;
   switch (n->type) {
   case NODE_BLOCK: {
     const AstList *st = &n->u.block.statements;
-    for (int i = 0; i < st->count; i++) collect_locals(st->items[i], out);
+    for (int i = 0; i < st->count; i++)
+      collect_locals(st->items[i], out);
     break;
   }
   case NODE_VARIABLE_DECL:
-    defs_push(out, n->u.var_decl.name, n->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE, n);
+    defs_push(out, n->u.var_decl.name, n->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE,
+              n);
     break;
   case NODE_MUTI_VARIABLE_DECL:
     for (int k = 0; k < n->u.muti_var.count; k++)
@@ -259,7 +319,8 @@ static void collect_locals(const AstNode *n, Defs *out) {
   case NODE_IF_STATEMENT: {
     collect_locals(n->u.if_stmt.then_block, out);
     const AstList *ei = &n->u.if_stmt.else_if_clauses;
-    for (int i = 0; i < ei->count; i++) collect_locals(ei->items[i]->u.if_clause.body, out);
+    for (int i = 0; i < ei->count; i++)
+      collect_locals(ei->items[i]->u.if_clause.body, out);
     collect_locals(n->u.if_stmt.else_block, out);
     break;
   }
@@ -281,7 +342,8 @@ static void collect_locals(const AstNode *n, Defs *out) {
   case NODE_DEFER_STATEMENT:
     collect_locals(n->u.defer_stmt.body, out);
     break;
-  default: break;
+  default:
+    break;
   }
 }
 
@@ -289,9 +351,10 @@ static void collect_locals(const AstNode *n, Defs *out) {
 ** 范围从函数声明起始位置（n->loc）到 body 结束位置，
 ** 这样参数列表也在函数范围内（修复参数名被误报"未定义"的问题）。
 */
-static void find_enclosing_fn(const AstNode *n, const Document *d, size_t off,
-                              const AstNode **best, size_t *best_span) {
-  if (!n) return;
+static void find_enclosing_fn(const AstNode *n, const Document *d, size_t off, const AstNode **best,
+                              size_t *best_span) {
+  if (!n)
+    return;
   if (n->type == NODE_FUNCTION_DECL && n->u.func_decl.body &&
       n->u.func_decl.body->type == NODE_BLOCK && n->u.func_decl.body->u.block.use_end) {
     const AstNode *b = n->u.func_decl.body;
@@ -299,35 +362,54 @@ static void find_enclosing_fn(const AstNode *n, const Document *d, size_t off,
     size_t e = off_of(d, b->u.block.end_loc.line, b->u.block.end_loc.column);
     if (off >= s && off <= e) {
       size_t span = e - s;
-      if (span < *best_span) { *best = n; *best_span = span; }
+      if (span < *best_span) {
+        *best = n;
+        *best_span = span;
+      }
     }
   }
   /* 递归子结构（覆盖能含函数的节点） */
   switch (n->type) {
   case NODE_BLOCK: {
     const AstList *st = &n->u.block.statements;
-    for (int i = 0; i < st->count; i++) find_enclosing_fn(st->items[i], d, off, best, best_span);
+    for (int i = 0; i < st->count; i++)
+      find_enclosing_fn(st->items[i], d, off, best, best_span);
     break;
   }
-  case NODE_FUNCTION_DECL: find_enclosing_fn(n->u.func_decl.body, d, off, best, best_span); break;
+  case NODE_FUNCTION_DECL:
+    find_enclosing_fn(n->u.func_decl.body, d, off, best, best_span);
+    break;
   case NODE_CLASS_DECL: {
     const AstList *m = &n->u.class_decl.members;
-    for (int i = 0; i < m->count; i++) find_enclosing_fn(m->items[i], d, off, best, best_span);
+    for (int i = 0; i < m->count; i++)
+      find_enclosing_fn(m->items[i], d, off, best, best_span);
     break;
   }
-  case NODE_CLASS_MEMBER: find_enclosing_fn(n->u.class_member.member_declaration, d, off, best, best_span); break;
+  case NODE_CLASS_MEMBER:
+    find_enclosing_fn(n->u.class_member.member_declaration, d, off, best, best_span);
+    break;
   case NODE_IF_STATEMENT: {
     find_enclosing_fn(n->u.if_stmt.then_block, d, off, best, best_span);
     const AstList *ei = &n->u.if_stmt.else_if_clauses;
-    for (int i = 0; i < ei->count; i++) find_enclosing_fn(ei->items[i]->u.if_clause.body, d, off, best, best_span);
+    for (int i = 0; i < ei->count; i++)
+      find_enclosing_fn(ei->items[i]->u.if_clause.body, d, off, best, best_span);
     find_enclosing_fn(n->u.if_stmt.else_block, d, off, best, best_span);
     break;
   }
-  case NODE_WHILE_STATEMENT: find_enclosing_fn(n->u.while_stmt.body, d, off, best, best_span); break;
-  case NODE_FOR_NUMERIC_STATEMENT: find_enclosing_fn(n->u.for_num.body, d, off, best, best_span); break;
-  case NODE_FOR_EACH_STATEMENT: find_enclosing_fn(n->u.for_each.body, d, off, best, best_span); break;
-  case NODE_DEFER_STATEMENT: find_enclosing_fn(n->u.defer_stmt.body, d, off, best, best_span); break;
-  default: break;
+  case NODE_WHILE_STATEMENT:
+    find_enclosing_fn(n->u.while_stmt.body, d, off, best, best_span);
+    break;
+  case NODE_FOR_NUMERIC_STATEMENT:
+    find_enclosing_fn(n->u.for_num.body, d, off, best, best_span);
+    break;
+  case NODE_FOR_EACH_STATEMENT:
+    find_enclosing_fn(n->u.for_each.body, d, off, best, best_span);
+    break;
+  case NODE_DEFER_STATEMENT:
+    find_enclosing_fn(n->u.defer_stmt.body, d, off, best, best_span);
+    break;
+  default:
+    break;
   }
 }
 
@@ -337,7 +419,8 @@ static const AstNode *find_member_in_class(const AstNode *cls, const char *name,
   for (int i = 0; i < m->count; i++) {
     AstNode *mem = m->items[i];
     AstNode *decl = mem->u.class_member.member_declaration;
-    if (!decl) continue;
+    if (!decl)
+      continue;
     if (decl->type == NODE_FUNCTION_DECL && decl->u.func_decl.name &&
         strcmp(decl->u.func_decl.name, name) == 0) {
       *kind = LSP_SK_METHOD;
@@ -354,13 +437,15 @@ static const AstNode *find_member_in_class(const AstNode *cls, const char *name,
 
 /* 在全文件所有类中按名查找成员。 */
 static const AstNode *find_member_anywhere(const AstNode *root, const char *name, int *kind) {
-  if (!root || root->type != NODE_BLOCK) return NULL;
+  if (!root || root->type != NODE_BLOCK)
+    return NULL;
   const AstList *st = &root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
     if (s->type == NODE_CLASS_DECL) {
       const AstNode *r = find_member_in_class(s, name, kind);
-      if (r) return r;
+      if (r)
+        return r;
     }
   }
   return NULL;
@@ -373,11 +458,13 @@ static const AstNode *find_member_anywhere(const AstNode *root, const char *name
 /* 按类名查找 class_decl 节点（顶层 + declare 模块内）。
    Phase 5a: 优先查哈希索引，未命中回退线性扫描（零回归）。 */
 static const AstNode *find_class_by_name(const SptLspUnit *u, const char *name) {
-  if (!u || !u->root || !name) return NULL;
+  if (!u || !u->root || !name)
+    return NULL;
   SemIndex *idx = sem_get_index(u);
   if (idx) {
     const AstNode *r = sem_index_lookup_class(idx, name);
-    if (r) return r;
+    if (r)
+      return r;
   }
   /* 回退线性扫描。 */
   const AstNode *root = u->root;
@@ -402,7 +489,8 @@ static const AstNode *find_class_by_name(const SptLspUnit *u, const char *name) 
 
 /* 从表达式推断其类型对应的 class_decl（仅用户类型）。基本类型返回 NULL。 */
 static const AstNode *infer_class_from_expr(const SptLspUnit *u, const AstNode *expr) {
-  if (!expr) return NULL;
+  if (!expr)
+    return NULL;
   switch (expr->type) {
   case NODE_FUNCTION_CALL: {
     /* ClassName(...) → ClassName 实例 */
@@ -418,7 +506,8 @@ static const AstNode *infer_class_from_expr(const SptLspUnit *u, const AstNode *
 
 /* 从定义节点（变量/参数）推断其类型对应的 class_decl。 */
 static const AstNode *infer_class_from_def(const SptLspUnit *u, const AstNode *def) {
-  if (!def || !u) return NULL;
+  if (!def || !u)
+    return NULL;
   const AstNode *type_ann = NULL;
   const AstNode *init = NULL;
   switch (def->type) {
@@ -437,17 +526,20 @@ static const AstNode *infer_class_from_def(const SptLspUnit *u, const AstNode *d
     const char *name = NULL;
     if (type_ann->u.type_user.count > 0)
       name = type_ann->u.type_user.parts[type_ann->u.type_user.count - 1];
-    if (name) return find_class_by_name(u, name);
+    if (name)
+      return find_class_by_name(u, name);
   }
   /* 从初始化表达式推断。 */
-  if (init) return infer_class_from_expr(u, init);
+  if (init)
+    return infer_class_from_expr(u, init);
   return NULL;
 }
 
 /* 按名查找标识符的定义节点（参数→局部→文件级）。byte_off 用于确定 enclosing function。 */
-static const AstNode *find_def_by_name(const SptLspUnit *u, const Document *d,
-                                        const char *name, size_t byte_off) {
-  if (!u || !u->root || !name) return NULL;
+static const AstNode *find_def_by_name(const SptLspUnit *u, const Document *d, const char *name,
+                                       size_t byte_off) {
+  if (!u || !u->root || !name)
+    return NULL;
   const AstNode *fn = NULL;
   size_t best = (size_t)-1;
   find_enclosing_fn(u->root, d, byte_off, &fn, &best);
@@ -472,7 +564,8 @@ static const AstNode *find_def_by_name(const SptLspUnit *u, const Document *d,
   SemIndex *idx = sem_get_index(u);
   if (idx) {
     const SemSlot *s = sem_index_lookup_def(idx, name);
-    if (s) return s->node;
+    if (s)
+      return s->node;
   }
   Defs files = {0};
   collect_file_defs(u->root, &files);
@@ -489,12 +582,15 @@ static const AstNode *find_def_by_name(const SptLspUnit *u, const Document *d,
 
 /* 从 token index 处标识符查找定义节点。 */
 static const AstNode *resolve_ident_def(const SptLspUnit *u, const Document *d, int ti) {
-  if (!u || ti < 0 || ti >= u->token_count) return NULL;
+  if (!u || ti < 0 || ti >= u->token_count)
+    return NULL;
   const SptToken *tok = &u->tokens[ti];
-  if (tok->kind != TOK_IDENTIFIER) return NULL;
+  if (tok->kind != TOK_IDENTIFIER)
+    return NULL;
   char name[256];
   size_t nl = (size_t)tok->length;
-  if (nl >= sizeof name) nl = sizeof name - 1;
+  if (nl >= sizeof name)
+    nl = sizeof name - 1;
   memcpy(name, tok->lexeme, nl);
   name[nl] = '\0';
   size_t byte_off = off_of(d, tok->line, tok->column);
@@ -504,33 +600,49 @@ static const AstNode *resolve_ident_def(const SptLspUnit *u, const Document *d, 
 /* 取定义节点的名字、detail、doc。 */
 static const char *def_node_name(const AstNode *n) {
   switch (n->type) {
-  case NODE_FUNCTION_DECL: return n->u.func_decl.name;
-  case NODE_CLASS_DECL: return n->u.class_decl.name;
-  case NODE_VARIABLE_DECL: return n->u.var_decl.name;
-  case NODE_PARAMETER_DECL: return n->u.param.name;
-  case NODE_IMPORT_SPECIFIER: return n->u.import_spec.alias ? n->u.import_spec.alias : n->u.import_spec.imported_name;
-  case NODE_IMPORT_NAMESPACE: return n->u.import_ns.alias;
-  default: return NULL;
+  case NODE_FUNCTION_DECL:
+    return n->u.func_decl.name;
+  case NODE_CLASS_DECL:
+    return n->u.class_decl.name;
+  case NODE_VARIABLE_DECL:
+    return n->u.var_decl.name;
+  case NODE_PARAMETER_DECL:
+    return n->u.param.name;
+  case NODE_IMPORT_SPECIFIER:
+    return n->u.import_spec.alias ? n->u.import_spec.alias : n->u.import_spec.imported_name;
+  case NODE_IMPORT_NAMESPACE:
+    return n->u.import_ns.alias;
+  default:
+    return NULL;
   }
 }
 
 /* 定义节点是否为 declare 外部符号（is_ambient）。 */
 static int node_is_ambient(const AstNode *n) {
-  if (!n) return 0;
+  if (!n)
+    return 0;
   switch (n->type) {
-  case NODE_VARIABLE_DECL: return n->u.var_decl.is_ambient;
-  case NODE_FUNCTION_DECL: return n->u.func_decl.is_ambient;
-  case NODE_CLASS_DECL:    return n->u.class_decl.is_ambient;
-  default: return 0;
+  case NODE_VARIABLE_DECL:
+    return n->u.var_decl.is_ambient;
+  case NODE_FUNCTION_DECL:
+    return n->u.func_decl.is_ambient;
+  case NODE_CLASS_DECL:
+    return n->u.class_decl.is_ambient;
+  default:
+    return 0;
   }
 }
 
 static const char *def_node_doc(const AstNode *n) {
   switch (n->type) {
-  case NODE_FUNCTION_DECL: return n->u.func_decl.doc;
-  case NODE_CLASS_DECL: return n->u.class_decl.doc;
-  case NODE_VARIABLE_DECL: return n->u.var_decl.doc;
-  default: return NULL;
+  case NODE_FUNCTION_DECL:
+    return n->u.func_decl.doc;
+  case NODE_CLASS_DECL:
+    return n->u.class_decl.doc;
+  case NODE_VARIABLE_DECL:
+    return n->u.var_decl.doc;
+  default:
+    return NULL;
   }
 }
 
@@ -538,8 +650,12 @@ static void def_node_detail(const AstNode *n, int kind, char *out, size_t cap) {
   out[0] = '\0';
   size_t pos = 0;
   switch (n->type) {
-  case NODE_FUNCTION_DECL: build_func_detail(n, out, cap); break;
-  case NODE_CLASS_DECL: sappend(out, cap, &pos, "class %s", n->u.class_decl.name ? n->u.class_decl.name : "?"); break;
+  case NODE_FUNCTION_DECL:
+    build_func_detail(n, out, cap);
+    break;
+  case NODE_CLASS_DECL:
+    sappend(out, cap, &pos, "class %s", n->u.class_decl.name ? n->u.class_decl.name : "?");
+    break;
   case NODE_VARIABLE_DECL: {
     char ty[256];
     sem_type_string(n->u.var_decl.type_annotation, ty, sizeof ty);
@@ -554,8 +670,12 @@ static void def_node_detail(const AstNode *n, int kind, char *out, size_t cap) {
     break;
   }
   case NODE_IMPORT_SPECIFIER:
-  case NODE_IMPORT_NAMESPACE: sappend(out, cap, &pos, "import"); break;
-  default: (void)kind; break;
+  case NODE_IMPORT_NAMESPACE:
+    sappend(out, cap, &pos, "import");
+    break;
+  default:
+    (void)kind;
+    break;
   }
 }
 
@@ -563,7 +683,8 @@ static void def_node_detail(const AstNode *n, int kind, char *out, size_t cap) {
 static void fill_def(SemRef *r, const SptLspUnit *u, const Document *d, const AstNode *defn,
                      int kind) {
   const char *nm = def_node_name(defn);
-  if (!nm) nm = r->name;
+  if (!nm)
+    nm = r->name;
   size_t s0, s1;
   size_t start = off_of(d, defn->loc.line, defn->loc.column);
   if (name_token_span(u, d, start, nm, &s0, &s1)) {
@@ -577,19 +698,23 @@ static void fill_def(SemRef *r, const SptLspUnit *u, const Document *d, const As
   r->is_ambient = node_is_ambient(defn);
   def_node_detail(defn, kind, r->detail, sizeof r->detail);
   const char *doc = def_node_doc(defn);
-  if (doc) snprintf(r->doc, sizeof r->doc, "%s", doc);
+  if (doc)
+    snprintf(r->doc, sizeof r->doc, "%s", doc);
 }
 
 SemRef sem_resolve(const SptLspUnit *u, const Document *d, size_t byte_off) {
   SemRef r;
   memset(&r, 0, sizeof r);
-  if (!u || !u->root) return r;
+  if (!u || !u->root)
+    return r;
 
   int ti = ident_token_at(u, d, byte_off);
-  if (ti < 0) return r;
+  if (ti < 0)
+    return r;
   const SptToken *tok = &u->tokens[ti];
   size_t nl = (size_t)tok->length;
-  if (nl >= sizeof r.name) nl = sizeof r.name - 1;
+  if (nl >= sizeof r.name)
+    nl = sizeof r.name - 1;
   memcpy(r.name, tok->lexeme, nl);
   r.name[nl] = '\0';
   r.found = 1;
@@ -601,7 +726,8 @@ SemRef sem_resolve(const SptLspUnit *u, const Document *d, size_t byte_off) {
   int member = 0;
   if (ti > 0) {
     SptTokenKind pk = u->tokens[ti - 1].kind;
-    if (pk == TOK_DOT || pk == TOK_COLON) member = 1;
+    if (pk == TOK_DOT || pk == TOK_COLON)
+      member = 1;
   }
   r.is_member = member;
 
@@ -614,14 +740,18 @@ SemRef sem_resolve(const SptLspUnit *u, const Document *d, size_t byte_off) {
         if (cls) {
           int kind = LSP_SK_FIELD;
           const AstNode *defn = find_member_in_class(cls, r.name, &kind);
-          if (defn) { fill_def(&r, u, d, defn, kind); return r; }
+          if (defn) {
+            fill_def(&r, u, d, defn, kind);
+            return r;
+          }
         }
       }
     }
     /* 兜底：全文件类成员。 */
     int kind = LSP_SK_FIELD;
     const AstNode *defn = find_member_anywhere(u->root, r.name, &kind);
-    if (defn) fill_def(&r, u, d, defn, kind);
+    if (defn)
+      fill_def(&r, u, d, defn, kind);
     return r;
   }
 
@@ -665,7 +795,8 @@ SemRef sem_resolve(const SptLspUnit *u, const Document *d, size_t byte_off) {
 int sem_references(const SptLspUnit *u, const Document *d, size_t byte_off, int include_decl,
                    void (*cb)(void *ctx, size_t start, size_t end), void *ctx) {
   SemRef r = sem_resolve(u, d, byte_off);
-  if (!r.found) return 0;
+  if (!r.found)
+    return 0;
 
   /* 局部/参数：限制在所在函数体内；否则全文件。 */
   size_t scope_s = 0, scope_e = d->text_len;
@@ -692,12 +823,16 @@ int sem_references(const SptLspUnit *u, const Document *d, size_t byte_off, int 
   int count = 0;
   for (int i = 0; i < u->token_count; i++) {
     const SptToken *t = &u->tokens[i];
-    if (t->kind != TOK_IDENTIFIER) continue;
-    if ((size_t)t->length != nl || memcmp(t->lexeme, r.name, nl) != 0) continue;
+    if (t->kind != TOK_IDENTIFIER)
+      continue;
+    if ((size_t)t->length != nl || memcmp(t->lexeme, r.name, nl) != 0)
+      continue;
     size_t s = off_of(d, t->line, t->column);
     size_t e = s + (size_t)t->length;
-    if (s < scope_s || e > scope_e) continue;
-    if (!include_decl && r.has_def && s == r.def_start) continue; /* 跳过定义本身 */
+    if (s < scope_s || e > scope_e)
+      continue;
+    if (!include_decl && r.has_def && s == r.def_start)
+      continue; /* 跳过定义本身 */
     cb(ctx, s, e);
     count++;
   }
@@ -711,11 +846,15 @@ static cJSON *mk_docsym(const Document *d, const char *name, const char *detail,
                         size_t r0, size_t r1, size_t s0, size_t s1) {
   cJSON *o = cJSON_CreateObject();
   cJSON_AddStringToObject(o, "name", name ? name : "?");
-  if (detail && detail[0]) cJSON_AddStringToObject(o, "detail", detail);
+  if (detail && detail[0])
+    cJSON_AddStringToObject(o, "detail", detail);
   cJSON_AddNumberToObject(o, "kind", kind);
-  if (r1 < r0) r1 = r0;
-  if (s0 < r0) s0 = r0;
-  if (s1 > r1) r1 = s1;
+  if (r1 < r0)
+    r1 = r0;
+  if (s0 < r0)
+    s0 = r0;
+  if (s1 > r1)
+    r1 = s1;
   cJSON_AddItemToObject(o, "range", lsp_range_to_json(doc_range(d, r0, r1)));
   cJSON_AddItemToObject(o, "selectionRange", lsp_range_to_json(doc_range(d, s0, s1)));
   return o;
@@ -736,7 +875,8 @@ static int decl_ranges(const SptLspUnit *u, const Document *d, const AstNode *n,
     const AstNode *b = n->u.func_decl.body;
     end = off_of(d, b->u.block.end_loc.line, b->u.block.end_loc.column);
   }
-  if (end < *s1) end = *s1;
+  if (end < *s1)
+    end = *s1;
   *r1 = end;
   return 1;
 }
@@ -752,22 +892,26 @@ static cJSON *docsym_for_class(const SptLspUnit *u, const Document *d, const Ast
   for (int i = 0; i < m->count; i++) {
     AstNode *mem = m->items[i];
     AstNode *decl = mem->u.class_member.member_declaration;
-    if (!decl) continue;
+    if (!decl)
+      continue;
     char detail[512];
     size_t cr0, cr1, cs0, cs1;
     if (decl->type == NODE_FUNCTION_DECL) {
       decl_ranges(u, d, decl, decl->u.func_decl.name, &cr0, &cr1, &cs0, &cs1);
       build_func_detail(decl, detail, sizeof detail);
-      cJSON_AddItemToArray(children, mk_docsym(d, decl->u.func_decl.name, detail,
-                                               mem->u.class_member.is_static ? LSP_SK_FUNCTION : LSP_SK_METHOD,
-                                               cr0, cr1, cs0, cs1));
-      if (cr1 > maxend) maxend = cr1;
+      cJSON_AddItemToArray(
+          children, mk_docsym(d, decl->u.func_decl.name, detail,
+                              mem->u.class_member.is_static ? LSP_SK_FUNCTION : LSP_SK_METHOD, cr0,
+                              cr1, cs0, cs1));
+      if (cr1 > maxend)
+        maxend = cr1;
     } else if (decl->type == NODE_VARIABLE_DECL) {
       decl_ranges(u, d, decl, decl->u.var_decl.name, &cr0, &cr1, &cs0, &cs1);
       def_node_detail(decl, LSP_SK_FIELD, detail, sizeof detail);
-      cJSON_AddItemToArray(children, mk_docsym(d, decl->u.var_decl.name, detail, LSP_SK_FIELD,
-                                               cr0, cr1, cs0, cs1));
-      if (cr1 > maxend) maxend = cr1;
+      cJSON_AddItemToArray(
+          children, mk_docsym(d, decl->u.var_decl.name, detail, LSP_SK_FIELD, cr0, cr1, cs0, cs1));
+      if (cr1 > maxend)
+        maxend = cr1;
     }
   }
   /* 用扩展后的 end 重写 range（保持 selectionRange 不变） */
@@ -779,7 +923,8 @@ static cJSON *docsym_for_class(const SptLspUnit *u, const Document *d, const Ast
 
 cJSON *sem_document_symbols(const SptLspUnit *u, const Document *d) {
   cJSON *arr = cJSON_CreateArray();
-  if (!u || !u->root || u->root->type != NODE_BLOCK) return arr;
+  if (!u || !u->root || u->root->type != NODE_BLOCK)
+    return arr;
   const AstList *st = &u->root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
@@ -789,7 +934,8 @@ cJSON *sem_document_symbols(const SptLspUnit *u, const Document *d) {
     case NODE_FUNCTION_DECL:
       decl_ranges(u, d, s, s->u.func_decl.name, &r0, &r1, &s0, &s1);
       build_func_detail(s, detail, sizeof detail);
-      cJSON_AddItemToArray(arr, mk_docsym(d, s->u.func_decl.name, detail, LSP_SK_FUNCTION, r0, r1, s0, s1));
+      cJSON_AddItemToArray(
+          arr, mk_docsym(d, s->u.func_decl.name, detail, LSP_SK_FUNCTION, r0, r1, s0, s1));
       break;
     case NODE_CLASS_DECL:
       cJSON_AddItemToArray(arr, docsym_for_class(u, d, s));
@@ -797,22 +943,27 @@ cJSON *sem_document_symbols(const SptLspUnit *u, const Document *d) {
     case NODE_VARIABLE_DECL:
       decl_ranges(u, d, s, s->u.var_decl.name, &r0, &r1, &s0, &s1);
       def_node_detail(s, LSP_SK_VARIABLE, detail, sizeof detail);
-      cJSON_AddItemToArray(arr, mk_docsym(d, s->u.var_decl.name, detail,
-                                          s->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE,
-                                          r0, r1, s0, s1));
+      cJSON_AddItemToArray(arr,
+                           mk_docsym(d, s->u.var_decl.name, detail,
+                                     s->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE, r0,
+                                     r1, s0, s1));
       break;
     case NODE_MUTI_VARIABLE_DECL:
       for (int k = 0; k < s->u.muti_var.count; k++) {
         const char *nm = s->u.muti_var.vars[k].name;
         r0 = off_of(d, s->loc.line, s->loc.column);
-        if (!name_token_span(u, d, r0, nm, &s0, &s1)) { s0 = r0; s1 = r0; }
+        if (!name_token_span(u, d, r0, nm, &s0, &s1)) {
+          s0 = r0;
+          s1 = r0;
+        }
         r1 = line_end_off(d, s->loc.line);
         cJSON_AddItemToArray(arr, mk_docsym(d, nm, "", LSP_SK_VARIABLE, r0, r1, s0, s1));
       }
       break;
     case NODE_DECLARE_MODULE: {
       r0 = off_of(d, s->loc.line, s->loc.column);
-      s0 = r0; s1 = r0;
+      s0 = r0;
+      s1 = r0;
       r1 = line_end_off(d, s->loc.line);
       const char *mp = s->u.declare_module.module_path;
       char nm[300];
@@ -828,13 +979,17 @@ cJSON *sem_document_symbols(const SptLspUnit *u, const Document *d) {
         if (decl->type == NODE_FUNCTION_DECL) {
           decl_ranges(u, d, decl, decl->u.func_decl.name, &cr0, &cr1, &cs0, &cs1);
           build_func_detail(decl, cdetail, sizeof cdetail);
-          cJSON_AddItemToArray(children, mk_docsym(d, decl->u.func_decl.name, cdetail, LSP_SK_FUNCTION, cr0, cr1, cs0, cs1));
-          if (cr1 > maxend) maxend = cr1;
+          cJSON_AddItemToArray(children, mk_docsym(d, decl->u.func_decl.name, cdetail,
+                                                   LSP_SK_FUNCTION, cr0, cr1, cs0, cs1));
+          if (cr1 > maxend)
+            maxend = cr1;
         } else if (decl->type == NODE_VARIABLE_DECL) {
           decl_ranges(u, d, decl, decl->u.var_decl.name, &cr0, &cr1, &cs0, &cs1);
           def_node_detail(decl, LSP_SK_VARIABLE, cdetail, sizeof cdetail);
-          cJSON_AddItemToArray(children, mk_docsym(d, decl->u.var_decl.name, cdetail, LSP_SK_VARIABLE, cr0, cr1, cs0, cs1));
-          if (cr1 > maxend) maxend = cr1;
+          cJSON_AddItemToArray(children, mk_docsym(d, decl->u.var_decl.name, cdetail,
+                                                   LSP_SK_VARIABLE, cr0, cr1, cs0, cs1));
+          if (cr1 > maxend)
+            maxend = cr1;
         } else if (decl->type == NODE_CLASS_DECL) {
           cJSON_AddItemToArray(children, docsym_for_class(u, d, decl));
         }
@@ -845,7 +1000,8 @@ cJSON *sem_document_symbols(const SptLspUnit *u, const Document *d) {
       cJSON_AddItemToArray(arr, node);
       break;
     }
-    default: break;
+    default:
+      break;
     }
   }
   return arr;
@@ -856,7 +1012,8 @@ cJSON *sem_document_symbols(const SptLspUnit *u, const Document *d) {
 ** ========================================================================= */
 void sem_visible_symbols(const SptLspUnit *u, const Document *d, size_t off, SemSymCb cb,
                          void *ctx) {
-  if (!u || !u->root) return;
+  if (!u || !u->root)
+    return;
   const AstNode *fn = NULL;
   size_t best = (size_t)-1;
   find_enclosing_fn(u->root, d, off, &fn, &best);
@@ -890,7 +1047,8 @@ static void emit_class_members(const AstNode *cls, SemSymCb cb, void *ctx) {
   const AstList *m = &cls->u.class_decl.members;
   for (int i = 0; i < m->count; i++) {
     AstNode *decl = m->items[i]->u.class_member.member_declaration;
-    if (!decl) continue;
+    if (!decl)
+      continue;
     char det[512];
     if (decl->type == NODE_FUNCTION_DECL) {
       build_func_detail(decl, det, sizeof det);
@@ -903,7 +1061,8 @@ static void emit_class_members(const AstNode *cls, SemSymCb cb, void *ctx) {
 }
 
 void sem_all_members(const SptLspUnit *u, SemSymCb cb, void *ctx) {
-  if (!u || !u->root || u->root->type != NODE_BLOCK) return;
+  if (!u || !u->root || u->root->type != NODE_BLOCK)
+    return;
   const AstList *st = &u->root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
@@ -930,20 +1089,24 @@ void sem_all_members(const SptLspUnit *u, SemSymCb cb, void *ctx) {
 
 /* Phase 2: 推断接收者类型，列出该类型的成员。成功返回 1，失败返回 0。
    recv_name 为接收者标识符名，dot_off 为点号字节位置（用于确定 enclosing function）。 */
-int sem_members_of_receiver(const SptLspUnit *u, const Document *d,
-                            const char *recv_name, size_t dot_off, SemSymCb cb, void *ctx) {
-  if (!u || !u->root || !d || !recv_name) return 0;
+int sem_members_of_receiver(const SptLspUnit *u, const Document *d, const char *recv_name,
+                            size_t dot_off, SemSymCb cb, void *ctx) {
+  if (!u || !u->root || !d || !recv_name)
+    return 0;
   const AstNode *recv_def = find_def_by_name(u, d, recv_name, dot_off);
-  if (!recv_def) return 0;
+  if (!recv_def)
+    return 0;
   const AstNode *cls = infer_class_from_def(u, recv_def);
-  if (!cls) return 0;
+  if (!cls)
+    return 0;
   emit_class_members(cls, cb, ctx);
   return 1;
 }
 
 /* 找包含 off 的最内层函数声明（供 signature/补全外部用）。返回节点或 NULL。 */
 const AstNode *sem_enclosing_function(const SptLspUnit *u, const Document *d, size_t off) {
-  if (!u || !u->root) return NULL;
+  if (!u || !u->root)
+    return NULL;
   const AstNode *fn = NULL;
   size_t best = (size_t)-1;
   find_enclosing_fn(u->root, d, off, &fn, &best);
@@ -954,11 +1117,13 @@ const AstNode *sem_enclosing_function(const SptLspUnit *u, const Document *d, si
    Phase 5a: 优先查哈希索引（O(1)），未命中回退线性扫描。
    这是诊断/inlayHint 遍历所有函数调用时的热点路径。 */
 const AstNode *sem_find_function(const SptLspUnit *u, const char *name) {
-  if (!u || !u->root || u->root->type != NODE_BLOCK || !name) return NULL;
+  if (!u || !u->root || u->root->type != NODE_BLOCK || !name)
+    return NULL;
   SemIndex *idx = sem_get_index(u);
   if (idx) {
     const AstNode *r = sem_index_lookup_func(idx, name);
-    if (r) return r;
+    if (r)
+      return r;
   }
   /* 回退线性扫描。 */
   const AstList *st = &u->root->u.block.statements;
@@ -996,7 +1161,8 @@ const AstNode *sem_find_function(const SptLspUnit *u, const char *name) {
 /* 收集顶层导出符号（is_exported && is_module_root）。与 collect_file_defs 类似，
    但筛选导出且不收集 import 节点（import 不是导出）。 */
 static void collect_exports(const AstNode *root, Defs *out) {
-  if (!root || root->type != NODE_BLOCK) return;
+  if (!root || root->type != NODE_BLOCK)
+    return;
   const AstList *st = &root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
@@ -1011,19 +1177,23 @@ static void collect_exports(const AstNode *root, Defs *out) {
       break;
     case NODE_VARIABLE_DECL:
       if (s->u.var_decl.is_exported && s->u.var_decl.is_module_root)
-        defs_push(out, s->u.var_decl.name, s->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE, s);
+        defs_push(out, s->u.var_decl.name,
+                  s->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE, s);
       break;
     case NODE_MUTI_VARIABLE_DECL:
       /* README §14.2：多变量 export 语法合法但不生效——不收集。 */
       break;
-    default: break;
+    default:
+      break;
     }
   }
 }
 
 int sem_resolve_export(const SptLspUnit *u, const Document *d, const char *name, SemRef *out) {
-  if (!out) return 0;
-  if (!u || !u->root || !name) return 0;
+  if (!out)
+    return 0;
+  if (!u || !u->root || !name)
+    return 0;
   Defs exps = {0};
   collect_exports(u->root, &exps);
   int found = 0;
@@ -1041,22 +1211,28 @@ int sem_resolve_export(const SptLspUnit *u, const Document *d, const char *name,
   return found;
 }
 
-int sem_resolve_declare_member(const SptLspUnit *u, const Document *d,
-                               const char *module_path, const char *symbol_name, SemRef *out) {
-  if (!out || !u || !u->root || !module_path || !symbol_name) return 0;
-  if (!symbol_name[0]) return 0; /* 命名空间别名本身无对应 declare 成员 */
-  if (u->root->type != NODE_BLOCK) return 0;
+int sem_resolve_declare_member(const SptLspUnit *u, const Document *d, const char *module_path,
+                               const char *symbol_name, SemRef *out) {
+  if (!out || !u || !u->root || !module_path || !symbol_name)
+    return 0;
+  if (!symbol_name[0])
+    return 0; /* 命名空间别名本身无对应 declare 成员 */
+  if (u->root->type != NODE_BLOCK)
+    return 0;
   const AstList *st = &u->root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
-    if (s->type != NODE_DECLARE_MODULE) continue;
+    if (s->type != NODE_DECLARE_MODULE)
+      continue;
     const char *mp = s->u.declare_module.module_path;
-    if (!mp || strcmp(mp, module_path) != 0) continue;
+    if (!mp || strcmp(mp, module_path) != 0)
+      continue;
     const AstList *mm = &s->u.declare_module.members;
     for (int k = 0; k < mm->count; k++) {
       AstNode *decl = mm->items[k];
       const char *nm = def_node_name(decl);
-      if (!nm || strcmp(nm, symbol_name) != 0) continue;
+      if (!nm || strcmp(nm, symbol_name) != 0)
+        continue;
       int kind = LSP_SK_FUNCTION;
       if (decl->type == NODE_VARIABLE_DECL)
         kind = decl->u.var_decl.is_const ? LSP_SK_CONSTANT : LSP_SK_VARIABLE;
@@ -1073,11 +1249,13 @@ int sem_resolve_declare_member(const SptLspUnit *u, const Document *d,
 }
 
 void sem_all_exports(const SptLspUnit *u, SemExportCb cb, void *ctx) {
-  if (!u || !u->root || !cb) return;
+  if (!u || !u->root || !cb)
+    return;
   Defs exps = {0};
   collect_exports(u->root, &exps);
   for (int i = 0; i < exps.n; i++) {
-    if (!exps.a[i].name) continue;
+    if (!exps.a[i].name)
+      continue;
     char detail[512];
     def_node_detail(exps.a[i].node, exps.a[i].kind, detail, sizeof detail);
     cb(ctx, exps.a[i].name, exps.a[i].kind, detail);
@@ -1088,8 +1266,10 @@ void sem_all_exports(const SptLspUnit *u, SemExportCb cb, void *ctx) {
 static int find_import_binding(const AstNode *root, const char *name, int is_recv,
                                SemImportTarget *out);
 
-int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *module_path, size_t cap) {
-  if (!u || !name || !module_path || cap == 0) return 0;
+int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *module_path,
+                              size_t cap) {
+  if (!u || !name || !module_path || cap == 0)
+    return 0;
   SemImportTarget t;
   memset(&t, 0, sizeof t);
   if (find_import_binding(u->root, name, 1, &t)) {
@@ -1101,9 +1281,9 @@ int sem_namespace_import_path(const SptLspUnit *u, const char *name, char *modul
 
 /* Phase 3: 按名查找具名导入绑定（import { name } from "mod"）的模块路径。
    用于跨文件签名帮助等按名查找场景。 */
-int sem_import_binding_path(const SptLspUnit *u, const char *name,
-                            char *module_path, size_t cap) {
-  if (!u || !name || !module_path || cap == 0) return 0;
+int sem_import_binding_path(const SptLspUnit *u, const char *name, char *module_path, size_t cap) {
+  if (!u || !name || !module_path || cap == 0)
+    return 0;
   SemImportTarget t;
   memset(&t, 0, sizeof t);
   if (find_import_binding(u->root, name, 0, &t)) {
@@ -1119,7 +1299,8 @@ int sem_import_binding_path(const SptLspUnit *u, const char *name,
    找到则填 module_path/symbol_name/is_namespace_self。 */
 static int find_import_binding(const AstNode *root, const char *name, int is_recv,
                                SemImportTarget *out) {
-  if (!root || root->type != NODE_BLOCK) return 0;
+  if (!root || root->type != NODE_BLOCK)
+    return 0;
   const AstList *st = &root->u.block.statements;
   for (int i = 0; i < st->count; i++) {
     AstNode *s = st->items[i];
@@ -1152,16 +1333,20 @@ static int find_import_binding(const AstNode *root, const char *name, int is_rec
 
 int sem_resolve_import_target(const SptLspUnit *u, const Document *d, size_t byte_off,
                               SemImportTarget *out) {
-  if (!out) return 0;
+  if (!out)
+    return 0;
   memset(out, 0, sizeof *out);
-  if (!u || !u->root) return 0;
+  if (!u || !u->root)
+    return 0;
 
   int ti = ident_token_at(u, d, byte_off);
-  if (ti < 0) return 0;
+  if (ti < 0)
+    return 0;
   const SptToken *tok = &u->tokens[ti];
   char name[256];
   size_t nl = (size_t)tok->length;
-  if (nl >= sizeof name) nl = sizeof name - 1;
+  if (nl >= sizeof name)
+    nl = sizeof name - 1;
   memcpy(name, tok->lexeme, nl);
   name[nl] = '\0';
 
@@ -1169,7 +1354,8 @@ int sem_resolve_import_target(const SptLspUnit *u, const Document *d, size_t byt
   int member = 0;
   if (ti > 0) {
     SptTokenKind pk = u->tokens[ti - 1].kind;
-    if (pk == TOK_DOT || pk == TOK_COLON) member = 1;
+    if (pk == TOK_DOT || pk == TOK_COLON)
+      member = 1;
   }
 
   if (member) {
@@ -1178,7 +1364,8 @@ int sem_resolve_import_target(const SptLspUnit *u, const Document *d, size_t byt
       const SptToken *rt = &u->tokens[ti - 2];
       char recv[256];
       size_t rl = (size_t)rt->length;
-      if (rl >= sizeof recv) rl = sizeof recv - 1;
+      if (rl >= sizeof recv)
+        rl = sizeof recv - 1;
       memcpy(recv, rt->lexeme, rl);
       recv[rl] = '\0';
       if (find_import_binding(u->root, recv, 1, out)) {
@@ -1206,20 +1393,24 @@ int sem_resolve_import_target(const SptLspUnit *u, const Document *d, size_t byt
 
 /* Phase 6a: 跳转到变量/参数类型注解对应的 class_decl。 */
 int sem_type_definition(const SptLspUnit *u, const Document *d, size_t byte_off, SemRef *out) {
-  if (!out || !u || !u->root) return 0;
+  if (!out || !u || !u->root)
+    return 0;
   memset(out, 0, sizeof *out);
 
   SemRef r = sem_resolve(u, d, byte_off);
-  if (!r.found || !r.has_def) return 0;
+  if (!r.found || !r.has_def)
+    return 0;
 
   /* r.kind 是定义的 SymbolKind；需要找到定义节点来推断类型。
      sem_resolve 内部已解析到定义节点，但 SemRef 不暴露节点指针。
      这里用 find_def_by_name 重新定位定义节点。 */
   const AstNode *def = find_def_by_name(u, d, r.name, byte_off);
-  if (!def) return 0;
+  if (!def)
+    return 0;
 
   const AstNode *cls = infer_class_from_def(u, def);
-  if (!cls) return 0;
+  if (!cls)
+    return 0;
 
   fill_def(out, u, d, cls, LSP_SK_CLASS);
   return out->has_def ? 1 : 0;
@@ -1227,7 +1418,8 @@ int sem_type_definition(const SptLspUnit *u, const Document *d, size_t byte_off,
 
 /* Phase 6d: 枚举函数体内的所有函数调用（outgoing calls）。 */
 static void outgoing_walk_expr(const AstNode *expr, CallEdgeCb cb, void *ctx) {
-  if (!expr) return;
+  if (!expr)
+    return;
   switch (expr->type) {
   case NODE_FUNCTION_CALL: {
     const AstNode *callee = expr->u.call.func;
@@ -1261,11 +1453,13 @@ static void outgoing_walk_expr(const AstNode *expr, CallEdgeCb cb, void *ctx) {
 }
 
 static void outgoing_walk_stmt(const AstNode *stmt, CallEdgeCb cb, void *ctx) {
-  if (!stmt) return;
+  if (!stmt)
+    return;
   switch (stmt->type) {
   case NODE_BLOCK: {
     const AstList *st = &stmt->u.block.statements;
-    for (int i = 0; i < st->count; i++) outgoing_walk_stmt(st->items[i], cb, ctx);
+    for (int i = 0; i < st->count; i++)
+      outgoing_walk_stmt(st->items[i], cb, ctx);
     break;
   }
   case NODE_EXPRESSION_STATEMENT:
@@ -1318,6 +1512,7 @@ static void outgoing_walk_stmt(const AstNode *stmt, CallEdgeCb cb, void *ctx) {
 }
 
 void sem_outgoing_calls(const SptLspUnit *u, const AstNode *fn, CallEdgeCb cb, void *ctx) {
-  if (!u || !fn || fn->type != NODE_FUNCTION_DECL || !fn->u.func_decl.body) return;
+  if (!u || !fn || fn->type != NODE_FUNCTION_DECL || !fn->u.func_decl.body)
+    return;
   outgoing_walk_stmt(fn->u.func_decl.body, cb, ctx);
 }

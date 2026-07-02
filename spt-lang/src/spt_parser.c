@@ -38,11 +38,17 @@ static const SptToken *tok_at(Parser *P, int i) {
     i = 0;
   return &P->toks[i];
 }
+
 static const SptToken *cur(Parser *P) { return tok_at(P, P->pos); }
+
 static const SptToken *peek(Parser *P, int k) { return tok_at(P, P->pos + k); }
+
 static SptTokenKind cur_kind(Parser *P) { return cur(P)->kind; }
+
 static SptTokenKind peek_kind(Parser *P, int k) { return peek(P, k)->kind; }
+
 static int at(Parser *P, SptTokenKind k) { return cur_kind(P) == k; }
+
 static int at_end(Parser *P) { return cur_kind(P) == TOK_EOF; }
 
 static SourceLocation loc_of(const SptToken *t) {
@@ -51,6 +57,7 @@ static SourceLocation loc_of(const SptToken *t) {
   l.column = t->column;
   return l;
 }
+
 static SourceLocation cur_loc(Parser *P) { return loc_of(cur(P)); }
 
 static const SptToken *advance(Parser *P) {
@@ -59,6 +66,7 @@ static const SptToken *advance(Parser *P) {
     P->pos++;
   return t;
 }
+
 static int accept(Parser *P, SptTokenKind k) {
   if (at(P, k)) {
     advance(P);
@@ -127,6 +135,7 @@ static void nv_init(NodeVec *v) {
   v->count = 0;
   v->cap = 0;
 }
+
 static void nv_push(NodeVec *v, AstNode *n) {
   if (v->count >= v->cap) {
     int nc = v->cap ? v->cap * 2 : 8;
@@ -138,6 +147,7 @@ static void nv_push(NodeVec *v, AstNode *n) {
   }
   v->data[v->count++] = n;
 }
+
 static AstList nv_finish(NodeVec *v, SptArena *a) {
   AstList l = spt_ast_list_from(a, v->data, v->count);
   free(v->data);
@@ -181,9 +191,12 @@ static const char *lexeme_cstr(Parser *P, const SptToken *t, char *buf, size_t b
 ** 其余未知转义原样透传（保留反斜杠 + 字符），与原 visitor 行为一致。
 ** 写入 arena，返回指针并通过 *out_len 给出字节长度。 */
 static int hex_digit_value(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
   return -1;
 }
 
@@ -197,7 +210,8 @@ static int utf8_encode(uint32_t cp, char *out) {
     out[1] = (char)(0x80 | (cp & 0x3F));
     return 2;
   } else if (cp <= 0xFFFF) {
-    if (cp >= 0xD800 && cp <= 0xDFFF) return 0; /* 代理对区间非法 */
+    if (cp >= 0xD800 && cp <= 0xDFFF)
+      return 0; /* 代理对区间非法 */
     out[0] = (char)(0xE0 | (cp >> 12));
     out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
     out[2] = (char)(0x80 | (cp & 0x3F));
@@ -227,14 +241,30 @@ static const char *process_string(Parser *P, const SptToken *t, int *out_len) {
       i++;
       char e = content[i];
       switch (e) {
-      case 'n': out[oi++] = '\n'; break;
-      case 't': out[oi++] = '\t'; break;
-      case 'b': out[oi++] = '\b'; break;
-      case 'f': out[oi++] = '\f'; break;
-      case 'r': out[oi++] = '\r'; break;
-      case '\\': out[oi++] = '\\'; break;
-      case '\'': out[oi++] = '\''; break;
-      case '"': out[oi++] = '"'; break;
+      case 'n':
+        out[oi++] = '\n';
+        break;
+      case 't':
+        out[oi++] = '\t';
+        break;
+      case 'b':
+        out[oi++] = '\b';
+        break;
+      case 'f':
+        out[oi++] = '\f';
+        break;
+      case 'r':
+        out[oi++] = '\r';
+        break;
+      case '\\':
+        out[oi++] = '\\';
+        break;
+      case '\'':
+        out[oi++] = '\'';
+        break;
+      case '"':
+        out[oi++] = '"';
+        break;
       case 'u': {
         /* \u{HEX+} —— 至少需要 "{...}" 两个字符 */
         if (i + 1 < clen && content[i + 1] == '{') {
@@ -243,11 +273,13 @@ static const char *process_string(Parser *P, const SptToken *t, int *out_len) {
           int digits = 0;
           while (j < clen && content[j] != '}') {
             int v = hex_digit_value(content[j]);
-            if (v < 0) break;
+            if (v < 0)
+              break;
             cp = (cp << 4) | (uint32_t)v;
             digits++;
             j++;
-            if (digits > 8) break; /* 防溢出 */
+            if (digits > 8)
+              break; /* 防溢出 */
           }
           if (j < clen && content[j] == '}' && digits > 0) {
             char ub[4];
@@ -351,14 +383,29 @@ static AstNode *parse_type(Parser *P) {
     AstNode *n = spt_ast_new(P->arena, NODE_TYPE_PRIMITIVE, loc);
     PrimitiveTypeKind pk = PTK_INT;
     switch (k) {
-    case TOK_INT: pk = PTK_INT; break;
-    case TOK_FLOAT: pk = PTK_FLOAT; break;
-    case TOK_NUMBER: pk = PTK_NUMBER; break;
-    case TOK_STR: pk = PTK_STRING; break;
-    case TOK_BOOL: pk = PTK_BOOL; break;
-    case TOK_VOID: pk = PTK_VOID; break;
-    case TOK_NULL: pk = PTK_NULL; break;
-    default: break;
+    case TOK_INT:
+      pk = PTK_INT;
+      break;
+    case TOK_FLOAT:
+      pk = PTK_FLOAT;
+      break;
+    case TOK_NUMBER:
+      pk = PTK_NUMBER;
+      break;
+    case TOK_STR:
+      pk = PTK_STRING;
+      break;
+    case TOK_BOOL:
+      pk = PTK_BOOL;
+      break;
+    case TOK_VOID:
+      pk = PTK_VOID;
+      break;
+    case TOK_NULL:
+      pk = PTK_NULL;
+      break;
+    default:
+      break;
     }
     n->u.type_prim.kind = pk;
     return n;
@@ -442,16 +489,46 @@ static BinOp peek_binary_op(Parser *P) {
   r.prec = -1;
   r.ntok = 1;
   switch (cur_kind(P)) {
-  case TOK_OR:      r.op = OPK_OR;       r.prec = 1;  break;
-  case TOK_AND:     r.op = OPK_AND;      r.prec = 2;  break;
-  case TOK_BIT_OR:  r.op = OPK_BW_OR;    r.prec = 3;  break;
-  case TOK_BIT_XOR: r.op = OPK_BW_XOR;   r.prec = 4;  break;
-  case TOK_BIT_AND: r.op = OPK_BW_AND;   r.prec = 5;  break;
-  case TOK_EQ:      r.op = OPK_EQ;       r.prec = 6;  break;
-  case TOK_NEQ:     r.op = OPK_NE;       r.prec = 6;  break;
-  case TOK_LT:      r.op = OPK_LT;       r.prec = 7;  break;
-  case TOK_LTE:     r.op = OPK_LE;       r.prec = 7;  break;
-  case TOK_GTE:     r.op = OPK_GE;       r.prec = 7;  break;
+  case TOK_OR:
+    r.op = OPK_OR;
+    r.prec = 1;
+    break;
+  case TOK_AND:
+    r.op = OPK_AND;
+    r.prec = 2;
+    break;
+  case TOK_BIT_OR:
+    r.op = OPK_BW_OR;
+    r.prec = 3;
+    break;
+  case TOK_BIT_XOR:
+    r.op = OPK_BW_XOR;
+    r.prec = 4;
+    break;
+  case TOK_BIT_AND:
+    r.op = OPK_BW_AND;
+    r.prec = 5;
+    break;
+  case TOK_EQ:
+    r.op = OPK_EQ;
+    r.prec = 6;
+    break;
+  case TOK_NEQ:
+    r.op = OPK_NE;
+    r.prec = 6;
+    break;
+  case TOK_LT:
+    r.op = OPK_LT;
+    r.prec = 7;
+    break;
+  case TOK_LTE:
+    r.op = OPK_LE;
+    r.prec = 7;
+    break;
+  case TOK_GTE:
+    r.op = OPK_GE;
+    r.prec = 7;
+    break;
   case TOK_GT:
     if (peek_kind(P, 1) == TOK_GT) { /* '>>' 右移 */
       r.op = OPK_BW_RSHIFT;
@@ -462,15 +539,40 @@ static BinOp peek_binary_op(Parser *P) {
       r.prec = 7;
     }
     break;
-  case TOK_LSHIFT:  r.op = OPK_BW_LSHIFT; r.prec = 8;  break;
-  case TOK_CONCAT:  r.op = OPK_CONCAT;    r.prec = 9;  break;
-  case TOK_ADD:     r.op = OPK_ADD;       r.prec = 10; break;
-  case TOK_SUB:     r.op = OPK_SUB;       r.prec = 10; break;
-  case TOK_MUL:     r.op = OPK_MUL;       r.prec = 11; break;
-  case TOK_DIV:     r.op = OPK_DIV;       r.prec = 11; break;
-  case TOK_IDIV:    r.op = OPK_IDIV;      r.prec = 11; break;
-  case TOK_MOD:     r.op = OPK_MOD;       r.prec = 11; break;
-  default: break;
+  case TOK_LSHIFT:
+    r.op = OPK_BW_LSHIFT;
+    r.prec = 8;
+    break;
+  case TOK_CONCAT:
+    r.op = OPK_CONCAT;
+    r.prec = 9;
+    break;
+  case TOK_ADD:
+    r.op = OPK_ADD;
+    r.prec = 10;
+    break;
+  case TOK_SUB:
+    r.op = OPK_SUB;
+    r.prec = 10;
+    break;
+  case TOK_MUL:
+    r.op = OPK_MUL;
+    r.prec = 11;
+    break;
+  case TOK_DIV:
+    r.op = OPK_DIV;
+    r.prec = 11;
+    break;
+  case TOK_IDIV:
+    r.op = OPK_IDIV;
+    r.prec = 11;
+    break;
+  case TOK_MOD:
+    r.op = OPK_MOD;
+    r.prec = 11;
+    break;
+  default:
+    break;
   }
   return r;
 }
@@ -504,11 +606,22 @@ static AstNode *parse_unary(Parser *P) {
   OperatorKind op;
   int is_un = 1;
   switch (k) {
-  case TOK_NOT: op = OPK_NOT; break;
-  case TOK_SUB: op = OPK_NEGATE; break; /* 一元负号 -> NEGATE */
-  case TOK_LEN: op = OPK_LENGTH; break;
-  case TOK_BIT_NOT: op = OPK_BW_NOT; break;
-  default: is_un = 0; op = OPK_NOT; break;
+  case TOK_NOT:
+    op = OPK_NOT;
+    break;
+  case TOK_SUB:
+    op = OPK_NEGATE;
+    break; /* 一元负号 -> NEGATE */
+  case TOK_LEN:
+    op = OPK_LENGTH;
+    break;
+  case TOK_BIT_NOT:
+    op = OPK_BW_NOT;
+    break;
+  default:
+    is_un = 0;
+    op = OPK_NOT;
+    break;
   }
   if (is_un) {
     SourceLocation loc = cur_loc(P);
@@ -896,14 +1009,29 @@ static int is_lvalue_node(const AstNode *n) {
 
 static int compound_op(SptTokenKind k, OperatorKind *op) {
   switch (k) {
-  case TOK_ADD_ASSIGN: *op = OPK_ASSIGN_ADD; return 1;
-  case TOK_SUB_ASSIGN: *op = OPK_ASSIGN_SUB; return 1;
-  case TOK_MUL_ASSIGN: *op = OPK_ASSIGN_MUL; return 1;
-  case TOK_DIV_ASSIGN: *op = OPK_ASSIGN_DIV; return 1;
-  case TOK_IDIV_ASSIGN: *op = OPK_ASSIGN_IDIV; return 1;
-  case TOK_MOD_ASSIGN: *op = OPK_ASSIGN_MOD; return 1;
-  case TOK_CONCAT_ASSIGN: *op = OPK_ASSIGN_CONCAT; return 1;
-  default: return 0;
+  case TOK_ADD_ASSIGN:
+    *op = OPK_ASSIGN_ADD;
+    return 1;
+  case TOK_SUB_ASSIGN:
+    *op = OPK_ASSIGN_SUB;
+    return 1;
+  case TOK_MUL_ASSIGN:
+    *op = OPK_ASSIGN_MUL;
+    return 1;
+  case TOK_DIV_ASSIGN:
+    *op = OPK_ASSIGN_DIV;
+    return 1;
+  case TOK_IDIV_ASSIGN:
+    *op = OPK_ASSIGN_IDIV;
+    return 1;
+  case TOK_MOD_ASSIGN:
+    *op = OPK_ASSIGN_MOD;
+    return 1;
+  case TOK_CONCAT_ASSIGN:
+    *op = OPK_ASSIGN_CONCAT;
+    return 1;
+  default:
+    return 0;
   }
 }
 
@@ -1188,9 +1316,8 @@ static int looks_like_type_start(Parser *P) {
 /* 带类型的多变量声明：已解析第一个 (type, name)，继续收集后续 (COMMA type? IDENT)*
  * type0/name0 是第一个变量的类型和名字。is_global0/is_const0 是第一个变量的修饰。
  * 语法：type0 name0, (type IDENT | IDENT)* (= expr)? ; */
-static AstNode *parse_typed_multi_var_decl(Parser *P, SourceLocation loc,
-                                           AstNode *type0, const char *name0,
-                                           int is_global0, int is_const0) {
+static AstNode *parse_typed_multi_var_decl(Parser *P, SourceLocation loc, AstNode *type0,
+                                           const char *name0, int is_global0, int is_const0) {
   int cap = 4, cnt = 0;
   MultiDeclVar *vars = (MultiDeclVar *)malloc(sizeof(MultiDeclVar) * (size_t)cap);
   /* 第一个变量 */
@@ -1528,8 +1655,7 @@ static AstNode *parse_for_var(Parser *P) {
 
 /* 构造 iter(nvars, expr) 的 NODE_FUNCTION_CALL AST 节点。
    用于 for-each 语法糖：右侧单个非 call 表达式自动包成 iter(2, expr)。 */
-static AstNode *build_iter_call(Parser *P, SourceLocation loc,
-                                int nvars, AstNode *expr) {
+static AstNode *build_iter_call(Parser *P, SourceLocation loc, int nvars, AstNode *expr) {
   /* func = identifier "iter" */
   AstNode *func = spt_ast_new(P->arena, NODE_IDENTIFIER, loc);
   func->u.ident.name = spt_arena_strndup(P->arena, "iter", 4);
@@ -1894,8 +2020,7 @@ static AstNode *parse_decl_member(Parser *P) {
   /* fn 函数签名（新语法）：fn qualifiedIdent ( params ) (-> retType)? ;
    * 仅当 fn IDENT 后跟 '(' 或 '.' 时才视为函数签名；否则 fn 作为类型 → 变量签名 */
   if (at(P, TOK_FUNCTION) && tok_at(P, P->pos + 1)->kind == TOK_IDENTIFIER &&
-      (tok_at(P, P->pos + 2)->kind == TOK_LPAREN ||
-       tok_at(P, P->pos + 2)->kind == TOK_DOT)) {
+      (tok_at(P, P->pos + 2)->kind == TOK_LPAREN || tok_at(P, P->pos + 2)->kind == TOK_DOT)) {
     advance(P); /* fn */
     const char *name = parse_qualified_name(P);
     expect2(P, TOK_LPAREN);

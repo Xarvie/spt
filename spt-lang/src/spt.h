@@ -40,10 +40,10 @@
 #define SPT_H
 
 /* ---- VM 层：Lua 5.5 核心 API ---- */
-#include "luaconf.h"
-#include "lua.h"
-#include "lualib.h"
 #include "lauxlib.h"
+#include "lua.h"
+#include "luaconf.h"
+#include "lualib.h"
 
 /* ---- 前端层：AST 数据结构 + 源码解析 ---- */
 #include "spt_ast.h"

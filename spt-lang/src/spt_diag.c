@@ -29,9 +29,7 @@ void spt_diag_error(SptDiag *d, int line, int column, const char *fmt, ...) {
   va_end(ap);
 }
 
-int spt_diag_has_error(const SptDiag *d) {
-  return d->count > 0;
-}
+int spt_diag_has_error(const SptDiag *d) { return d->count > 0; }
 
 /* 取第 line 行（1 起）在 source 中的 [begin,end) 字节范围。失败返回 0。 */
 static int find_line(const SptDiag *d, int line, size_t *begin, size_t *end) {
