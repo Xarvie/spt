@@ -24,7 +24,7 @@ typedef struct {
 /* JSON 互转 */
 cJSON *lsp_pos_to_json(LspPos p);
 cJSON *lsp_range_to_json(LspRange r);
-LspPos lsp_pos_from_json(const cJSON *o); /* 读取 {line,character}，缺失为 0 */
+LspPos lsp_pos_from_json(const cJSON *o);     /* 读取 {line,character}，缺失为 0 */
 LspRange lsp_range_from_json(const cJSON *o); /* 读取 {start,end}，子字段缺失则对应位置为 0。 */
 
 /* DiagnosticSeverity */

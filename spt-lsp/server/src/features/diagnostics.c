@@ -14,6 +14,7 @@
 #include "spt_lsp_bridge.h"
 #include "spt_token.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* 找前端坐标 (line1,col1) 处起始的 token，返回其字节长度；无则 0。 */

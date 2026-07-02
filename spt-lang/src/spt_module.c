@@ -19,6 +19,12 @@
 
 #define SPT_PATH_VAR "SPT_PATH"
 
+#ifdef _WIN32
+#define spt_strdup _strdup
+#else
+#define spt_strdup strdup
+#endif
+
 static char *spt_search_path = NULL;
 
 /* -----------------------------------------------------------------------
@@ -260,7 +266,7 @@ LUALIB_API void spt_register_module_loader(lua_State *L, const char *main_script
 
   if (spt_search_path)
     free(spt_search_path);
-  spt_search_path = strdup(lua_tostring(L, -1));
+  spt_search_path = spt_strdup(lua_tostring(L, -1));
   /* Normalize path separators to forward slashes */
   normalize_path(spt_search_path);
   lua_pop(L, 1);
@@ -272,7 +278,7 @@ LUALIB_API void spt_set_module_path(lua_State *L, const char *path) {
   (void)L;
   if (spt_search_path)
     free(spt_search_path);
-  spt_search_path = path ? strdup(path) : NULL;
+  spt_search_path = path ? spt_strdup(path) : NULL;
 }
 
 LUALIB_API const char *spt_get_module_path(lua_State *L) {

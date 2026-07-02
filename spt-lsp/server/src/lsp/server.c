@@ -12,6 +12,7 @@
 #include "trace.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
 #include <io.h>

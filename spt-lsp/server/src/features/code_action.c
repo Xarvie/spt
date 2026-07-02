@@ -9,6 +9,7 @@
 #include "spt_ast.h"
 #include "spt_lsp_bridge.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* 检查声明节点是否在字节范围内，且缺少 export 前缀。

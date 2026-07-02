@@ -11,6 +11,7 @@
 #include "spt_lsp_bridge.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <string.h>
 
 static const char *const KEYWORDS[] = {

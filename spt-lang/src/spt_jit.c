@@ -3861,7 +3861,7 @@ static int rec_inst(SPTRecCtx *rc) {
       rc->aborted = 1;
       return 0;
     }
-    TValue *kc = &rc->k[GETARG_C(i)];
+    const TValue *kc = &rc->k[GETARG_C(i)];
     if (!ttisshrstring(kc)) {
       rc->aborted = 1;
       return 0;

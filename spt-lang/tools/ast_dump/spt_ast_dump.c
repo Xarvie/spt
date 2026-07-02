@@ -26,7 +26,8 @@
 
 /* ---- 缩进打印 ---- */
 static void print_indent(int depth, bool is_last, const bool *branch) {
-  if (depth == 0) return;
+  if (depth == 0)
+    return;
   for (int i = 0; i < depth - 1; i++) {
     printf(branch[i] ? "   " : "│  ");
   }
@@ -40,21 +41,26 @@ static void dump_list(AstList list, int depth, const char *label, const bool *br
 /* ---- 类型名 ---- */
 static const char *prim_type_name(PrimitiveTypeKind k) {
   switch (k) {
-  case PTK_INT:    return "int";
-  case PTK_FLOAT:  return "float";
-  case PTK_NUMBER: return "number";
-  case PTK_STRING: return "str";
-  case PTK_BOOL:   return "bool";
-  case PTK_VOID:   return "void";
-  case PTK_NULL:   return "null";
+  case PTK_INT:
+    return "int";
+  case PTK_FLOAT:
+    return "float";
+  case PTK_NUMBER:
+    return "number";
+  case PTK_STRING:
+    return "str";
+  case PTK_BOOL:
+    return "bool";
+  case PTK_VOID:
+    return "void";
+  case PTK_NULL:
+    return "null";
   }
   return "?";
 }
 
 /* ---- 位置 ---- */
-static void print_loc(const AstNode *n) {
-  printf(" [%d:%d]", n->loc.line, n->loc.column);
-}
+static void print_loc(const AstNode *n) { printf(" [%d:%d]", n->loc.line, n->loc.column); }
 
 /* ---- 核心转储 ---- */
 static void dump_node(const AstNode *n, int depth, bool is_last, const bool *branch) {
@@ -71,7 +77,8 @@ static void dump_node(const AstNode *n, int depth, bool is_last, const bool *bra
   /* 更新分支状态 */
   bool new_branch[64];
   if (depth < 64) {
-    for (int i = 0; i < depth; i++) new_branch[i] = branch[i];
+    for (int i = 0; i < depth; i++)
+      new_branch[i] = branch[i];
     new_branch[depth] = is_last;
   }
 
@@ -201,8 +208,7 @@ static void dump_node(const AstNode *n, int depth, bool is_last, const bool *bra
     dump_list(n->u.return_stmt.values, depth + 1, NULL, new_branch);
     return;
   case NODE_IMPORT_NAMESPACE:
-    printf(" alias=%s module=%s\n",
-           n->u.import_ns.alias ? n->u.import_ns.alias : "(null)",
+    printf(" alias=%s module=%s\n", n->u.import_ns.alias ? n->u.import_ns.alias : "(null)",
            n->u.import_ns.module_path ? n->u.import_ns.module_path : "(null)");
     return;
   case NODE_IMPORT_NAMED:
@@ -223,10 +229,10 @@ static void dump_node(const AstNode *n, int depth, bool is_last, const bool *bra
   /* ---- 声明 ---- */
   case NODE_VARIABLE_DECL:
     printf(" name=%s const=%d global=%d static=%d exported=%d\n",
-           n->u.var_decl.name ? n->u.var_decl.name : "(null)",
-           n->u.var_decl.is_const, n->u.var_decl.is_global,
-           n->u.var_decl.is_static, n->u.var_decl.is_exported);
-    dump_node(n->u.var_decl.type_annotation, depth + 1, n->u.var_decl.initializer == NULL, new_branch);
+           n->u.var_decl.name ? n->u.var_decl.name : "(null)", n->u.var_decl.is_const,
+           n->u.var_decl.is_global, n->u.var_decl.is_static, n->u.var_decl.is_exported);
+    dump_node(n->u.var_decl.type_annotation, depth + 1, n->u.var_decl.initializer == NULL,
+              new_branch);
     dump_node(n->u.var_decl.initializer, depth + 1, true, new_branch);
     return;
   case NODE_MUTI_VARIABLE_DECL:
@@ -245,9 +251,8 @@ static void dump_node(const AstNode *n, int depth, bool is_last, const bool *bra
     return;
   case NODE_FUNCTION_DECL:
     printf(" name=%s global=%d static=%d variadic=%d exported=%d const=%d\n",
-           n->u.func_decl.name ? n->u.func_decl.name : "(null)",
-           n->u.func_decl.is_global, n->u.func_decl.is_static,
-           n->u.func_decl.is_variadic, n->u.func_decl.is_exported,
+           n->u.func_decl.name ? n->u.func_decl.name : "(null)", n->u.func_decl.is_global,
+           n->u.func_decl.is_static, n->u.func_decl.is_variadic, n->u.func_decl.is_exported,
            n->u.func_decl.is_const);
     dump_list(n->u.func_decl.params, depth + 1, "params", new_branch);
     dump_node(n->u.func_decl.return_type, depth + 1, false, new_branch);
@@ -258,8 +263,7 @@ static void dump_node(const AstNode *n, int depth, bool is_last, const bool *bra
     dump_node(n->u.class_member.member_declaration, depth + 1, true, new_branch);
     return;
   case NODE_CLASS_DECL:
-    printf(" name=%s exported=%d\n",
-           n->u.class_decl.name ? n->u.class_decl.name : "(null)",
+    printf(" name=%s exported=%d\n", n->u.class_decl.name ? n->u.class_decl.name : "(null)",
            n->u.class_decl.is_exported);
     dump_list(n->u.class_decl.members, depth + 1, NULL, new_branch);
     return;
@@ -286,7 +290,8 @@ static void dump_node(const AstNode *n, int depth, bool is_last, const bool *bra
   case NODE_TYPE_USER:
     printf(" parts=");
     for (int i = 0; i < n->u.type_user.count; i++) {
-      if (i > 0) printf(".");
+      if (i > 0)
+        printf(".");
       printf("%s", n->u.type_user.parts[i] ? n->u.type_user.parts[i] : "(null)");
     }
     break;
@@ -300,7 +305,8 @@ static void dump_list(AstList list, int depth, const char *label, const bool *br
   if (label) {
     print_indent(depth, list.count == 0, branch);
     printf("%s: %d items\n", label, list.count);
-    if (list.count == 0) return;
+    if (list.count == 0)
+      return;
     depth++;
   }
 
