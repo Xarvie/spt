@@ -1,5 +1,5 @@
 /*
-** ast_codegen.cpp
+** spt_codegen.c
 ** AST-to-Lua 5.5 bytecode compiler implementation.
 **
 ** This module replaces Lua's recursive-descent parser (lparser.c) with
@@ -10,8 +10,7 @@
 **
 ** Design notes
 ** ============
-** 1.  The AST is a C++ class hierarchy (see ast.h).  This file is
-**     compiled as C++ but wraps Lua's C headers with extern "C".
+** 1.  AST 使用 C 标签联合（见 spt_ast.h），直接调用 Lua C API。
 ** 2.  Every public symbol uses the prefix "astY_" to parallel "luaY_".
 ** 3.  Error reporting goes through luaK_semerror / luaX_syntaxerror
 **     equivalents that ultimately call luaD_throw.
@@ -786,7 +785,7 @@ static void compile_funcall(CompileCtx *C, AstNode *n, expdesc *e, int nresults)
   AstNode *funcExpr = n->u.call.func;
 
   /*---------- Scenario: obj:method(args) — MemberLookupNode ----------*/
-  // 1. obj:method() 形式 (保持不变)
+  // 1. obj:method() 形式：receiver 取 obj
   if (funcExpr->type == NODE_MEMBER_LOOKUP) {
     AstNode *ml = (funcExpr);
     compile_expression(C, ml->u.member.object, e);
@@ -797,7 +796,7 @@ static void compile_funcall(CompileCtx *C, AstNode *n, expdesc *e, int nresults)
     key.u.strval = mkstr(C, ml->u.member.member);
     luaK_self(fs, e, &key);
 
-    // 2. obj.method() 形式 (保持不变，已支持传递 obj)
+    // 2. obj.method() 形式：receiver 取 obj
   } else if (funcExpr->type == NODE_MEMBER_ACCESS) {
     AstNode *ma = (funcExpr);
     compile_expression(C, ma->u.member.object, e);
@@ -808,8 +807,7 @@ static void compile_funcall(CompileCtx *C, AstNode *n, expdesc *e, int nresults)
     key.u.strval = mkstr(C, ma->u.member.member);
     luaK_self(fs, e, &key);
 
-    // 3. [新增] obj[key]() 形式 (这里是这次的核心修改)
-    // 这会让 a[3]() 调用时，将 a 传给 self
+    // 3. obj[key]() 形式：receiver 取 obj（如 a[3]() 将 a 作为 self 传入）
   } else if (funcExpr->type == NODE_INDEX_ACCESS) {
     AstNode *ia = (funcExpr);
 
@@ -1214,10 +1212,12 @@ static void compile_var_decl(CompileCtx *C, AstNode *n) {
 /*-----------------------------------------------------------------------
  * Multi-variable declaration  (vars a, b, c = expr)
  *
- * ast.h: MutiVariableDeclarationNode has:
- *   std::vector<MultiDeclVariableInfo> variables;  // .name, .isGlobal, .isConst
- *   Expression *initializer;
- *   bool isExported;
+ * spt_ast.h: muti_var 结构包含：
+ *   MultiDeclVar *vars;   // .name, .type_annotation, .is_global, .is_const
+ *   int count;
+ *   AstNode *initializer; // 可空
+ *   bool is_exported;
+ *   bool is_module_root;
  *---------------------------------------------------------------------*/
 static void compile_multi_var_decl(CompileCtx *C, AstNode *n) {
   FuncState *fs = C->fs;
@@ -1345,10 +1345,10 @@ static void compile_assignment(CompileCtx *C, AstNode *n) {
 /*-----------------------------------------------------------------------
  * Update assignment  (a += expr, a -= expr, etc.)
  *
- * ast.h OperatorKind: ASSIGN_ADD, ASSIGN_SUB, ASSIGN_MUL, ASSIGN_DIV,
- *   ASSIGN_IDIV, ASSIGN_MOD, ASSIGN_CONCAT,
- *   ASSIGN_BW_AND, ASSIGN_BW_OR, ASSIGN_BW_XOR,
- *   ASSIGN_BW_LSHIFT, ASSIGN_BW_RSHIFT
+ * spt_ast.h OperatorKind: OPK_ASSIGN_ADD, OPK_ASSIGN_SUB, OPK_ASSIGN_MUL,
+ *   OPK_ASSIGN_DIV, OPK_ASSIGN_IDIV, OPK_ASSIGN_MOD, OPK_ASSIGN_CONCAT,
+ *   OPK_ASSIGN_BW_AND, OPK_ASSIGN_BW_OR, OPK_ASSIGN_BW_XOR,
+ *   OPK_ASSIGN_BW_LSHIFT, OPK_ASSIGN_BW_RSHIFT
  *---------------------------------------------------------------------*/
 static void compile_update_assignment(CompileCtx *C, AstNode *n) {
   FuncState *fs = C->fs;
@@ -1503,13 +1503,13 @@ static void compile_while(CompileCtx *C, AstNode *n) {
 /*-----------------------------------------------------------------------
  * Numeric for statement  (Lua-style)
  *
- * ast.h: ForNumericStatementNode has:
- *   std::string varName;
- *   AstType *typeAnnotation;    // nullable (untyped)
- *   Expression *startExpr;
- *   Expression *endExpr;
- *   Expression *stepExpr;       // nullable (default 1)
- *   BlockNode *body;
+ * spt_ast.h: for_num 结构包含：
+ *   const char *var_name;
+ *   AstNode *type_annotation; // 可空
+ *   AstNode *start;
+ *   AstNode *end;
+ *   AstNode *step;            // 可空（默认 1）
+ *   AstNode *body;
  *
  * Bytecode layout (matches Lua 5.5 numeric for):
  *   R[base+0] = start (for index)
@@ -1608,35 +1608,11 @@ static void compile_for_numeric(CompileCtx *C, AstNode *n) {
 /*-----------------------------------------------------------------------
  * For-each statement
  *
- * ast.h: ForEachStatementNode has:
- *   std::vector<ParameterDeclNode *> loopVariables;   // each has .name
- *   std::vector<Expression *> iterableExprs;
- *   BlockNode *body;
+ * spt_ast.h: for_each 结构包含：
+ *   AstList loop_variables;  // NODE_PARAMETER_DECL 列表（类型可空）
+ *   AstList iterable_exprs;
+ *   AstNode *body;
  *---------------------------------------------------------------------*/
-/* ========================================================================
- * COMPILER FIXES FOR GENERIC FOR LOOP WITH RECEIVER CALLING CONVENTION
- * ======================================================================== */
-
-/*
- * Replace the compile_for_each function in ast_codegen.cpp
- *
- * Key Changes:
- * 1. Need to reserve extra stack space for the receiver parameter
- * 2. checkstack needs to account for 3 extra slots (receiver + func + state + control)
- */
-
-/* ========================================================================
- * COMPILER FIXES FOR GENERIC FOR LOOP WITH RECEIVER CALLING CONVENTION
- * ======================================================================== */
-
-/*
- * Replace the compile_for_each function in ast_codegen.cpp
- *
- * Key Changes:
- * 1. Need to reserve extra stack space for the receiver parameter
- * 2. checkstack needs to account for 3 extra slots (receiver + func + state + control)
- */
-
 static void compile_for_each(CompileCtx *C, AstNode *n) {
   FuncState *fs = C->fs;
   setline(C, n->loc);

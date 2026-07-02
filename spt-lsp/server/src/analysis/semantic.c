@@ -328,8 +328,8 @@ static void collect_locals(const AstNode *n, Defs *out) {
     collect_locals(n->u.while_stmt.body, out);
     break;
   case NODE_FOR_NUMERIC_STATEMENT:
-    /* 循环变量也是局部 */
     /* var_name 节点不存在；以 for 节点承载 */
+    /* 遍历 body（循环变量未收集为局部） */
     collect_locals(n->u.for_num.body, out);
     break;
   case NODE_FOR_EACH_STATEMENT: {

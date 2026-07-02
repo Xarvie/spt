@@ -1,5 +1,5 @@
 /*
-** features.h — 各 LSP 功能的入口。
+** lsp_features.h — 各 LSP 功能的入口。
 **
 ** 约定：每个功能接收 Document（+ 需要的参数），内部容错解析，返回应放入响应
 ** result 的 cJSON（调用方拥有）。返回 NULL 表示 result 为 null。

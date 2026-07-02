@@ -158,7 +158,7 @@ static void outgoing_cb(void *ctx, const char *callee, size_t offset, int length
           continue;
         if (strcmp(name->valuestring, callee) != 0)
           continue;
-        /* 只接受函数类型（5=Function, 12=Function）。 */
+        /* 只接受函数类型（LSP_SK_FUNCTION）。 */
         int k = (kind && cJSON_IsNumber(kind)) ? kind->valueint : 0;
         if (k != LSP_SK_FUNCTION)
           continue;

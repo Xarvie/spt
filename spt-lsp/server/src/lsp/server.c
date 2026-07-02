@@ -65,8 +65,8 @@ static void publish_diagnostics(LspServer *s, const char *uri) {
 
 /* 构造 initialize 的结果：serverInfo + capabilities。
 ** 目前仅声明已实际接线的能力（诚实原则）：
-**   - textDocumentSync = 1（Full：变更时整篇重发；后续切增量再改 2）。
-** 随着 feature 落地（hover/definition/completion/...）逐步在此追加 capability。 */
+**   - textDocumentSync = 2（Incremental：增量同步）。
+** 各 feature（hover/definition/completion/...）的 capability 在此声明。 */
 static cJSON *make_initialize_result(void) {
   cJSON *result = cJSON_CreateObject();
 
@@ -353,7 +353,7 @@ static void handle_notification(LspServer *s, const char *method, const cJSON *p
   if (strcmp(method, "initialized") == 0)
     return;
 
-  /* 文档同步（Full）：didOpen/didChange 携带整篇文本。 */
+  /* 文档同步：didOpen 携带整篇文本；didChange 支持 Full + range 增量两种模式。 */
   if (strcmp(method, "textDocument/didOpen") == 0) {
     cJSON *td = cJSON_GetObjectItemCaseSensitive((cJSON *)params, "textDocument");
     cJSON *uri = td ? cJSON_GetObjectItemCaseSensitive(td, "uri") : NULL;

@@ -1,7 +1,6 @@
 /*
-** spt_script.c — SPT 解释器命令行入口（纯 C，移植自 sptscript.cpp）。
+** spt_script.c — SPT 解释器命令行入口（纯 C）。
 **   流程：读源码 -> spt_frontend_parse -> astY_compile -> lua_pcall。
-**   去除 iostream/filesystem，改用 stdio 与简易路径辅助。
 */
 #define _POSIX_C_SOURCE 200809L
 

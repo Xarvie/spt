@@ -67,8 +67,8 @@ void *spt_arena_alloc(SptArena *a, size_t size) {
     SptArenaBlock *nb = block_new(cap);
     if (!nb)
       return NULL;
-    /* 大块插到链表头之后，使标准块仍在头部供后续小分配复用？
-    ** 为简单与确定性，统一插入头部。 */
+    /* 大块插入链表头部，标准块仍在头部供后续小分配复用，
+    ** 统一插入头部以保证简单与确定性。 */
     nb->next = a->head;
     a->head = nb;
     b = nb;

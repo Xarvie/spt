@@ -78,7 +78,7 @@ static void build_line_index(Document *d) {
   free(d->line_starts);
   int cap = 16, n = 0;
   size_t *starts = (size_t *)malloc(sizeof(size_t) * (size_t)cap);
-  starts[n++] = 0; /* 第 0 行从 0 开始 */
+  starts[n++] = 0; /* line_starts[0] = 0：第 0 行起始字节偏移 */
   for (size_t i = 0; i < d->text_len; i++) {
     if (d->text[i] == '\n') {
       if (n >= cap) {

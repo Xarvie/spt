@@ -25,7 +25,7 @@ typedef enum {
   TOK_NULL,      /* null     */
   TOK_LIST,      /* list     */
   TOK_MAP,       /* map      */
-  TOK_FUNCTION,  /* function */
+  TOK_FUNCTION,  /* fn       */
   TOK_COROUTINE, /* coro     */
   TOK_VARS,      /* vars     */
 
